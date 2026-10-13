@@ -1,0 +1,288 @@
+// Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+// Licensed under GPL-2.0-only. No warranty.
+
+// Which disks are under which folder, so that no two workers read the same
+// disk at once. Two readers on one hard drive make it seek between them, and
+// both go slower than one would alone.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
+use std::fs;
+use std::os::unix::ffi::OsStringExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+#[derive(Debug, Clone)]
+pub struct Mount {
+	pub point: PathBuf,
+	pub fstype: String,
+	pub source: String,
+}
+
+// Mount points use octal escapes for space, tab, newline and backslash.
+fn unescape(s: &str) -> PathBuf {
+	let b = s.as_bytes();
+	let mut out = Vec::with_capacity(b.len());
+	let mut i = 0;
+	while i < b.len() {
+		if b[i] == b'\\'
+			&& i + 3 < b.len()
+			&& b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+		{
+			let v = (b[i + 1] - b'0') as u32 * 64
+				+ (b[i + 2] - b'0') as u32 * 8
+				+ (b[i + 3] - b'0') as u32;
+			out.push(v as u8);
+			i += 4;
+		} else {
+			out.push(b[i]);
+			i += 1;
+		}
+	}
+	PathBuf::from(OsString::from_vec(out))
+}
+
+pub fn parse_mountinfo(text: &str) -> Vec<Mount> {
+	let mut out = Vec::new();
+	for line in text.lines() {
+		let Some((left, right)) = line.split_once(" - ") else {
+			continue;
+		};
+		let l: Vec<&str> = left.split(' ').collect();
+		let r: Vec<&str> = right.split(' ').collect();
+		if l.len() < 5 || r.len() < 2 {
+			continue;
+		}
+		out.push(Mount {
+			point: unescape(l[4]),
+			fstype: r[0].to_string(),
+			source: r[1].to_string(),
+		});
+	}
+	out
+}
+
+pub fn read_mounts() -> Result<Vec<Mount>, String> {
+	let text = fs::read_to_string("/proc/self/mountinfo")
+		.map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
+	Ok(parse_mountinfo(&text))
+}
+
+// The mount a path is on. Later lines are mounted over earlier ones, so the
+// last of the longest matches is the one in effect.
+pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
+	let mut best: Option<&Mount> = None;
+	for m in mounts {
+		if path.starts_with(&m.point)
+			&& best.is_none_or(|b| m.point.as_os_str().len() >= b.point.as_os_str().len())
+		{
+			best = Some(m);
+		}
+	}
+	best
+}
+
+fn kname_of(dev: &str) -> Option<String> {
+	let real = fs::canonicalize(dev).ok()?;
+	Some(real.file_name()?.to_string_lossy().into_owned())
+}
+
+// Down through LUKS, LVM and partitions to whole disks.
+fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
+	let sys = Path::new("/sys/class/block").join(kname);
+	if let Ok(rd) = fs::read_dir(sys.join("slaves")) {
+		let mut any = false;
+		for e in rd.flatten() {
+			any = true;
+			base_disks(&e.file_name().to_string_lossy(), out);
+		}
+		if any {
+			return;
+		}
+	}
+	if sys.join("partition").exists() {
+		if let Some(parent) = fs::canonicalize(&sys)
+			.ok()
+			.and_then(|p| p.parent().map(|p| p.to_path_buf()))
+		{
+			if let Some(name) = parent.file_name() {
+				out.insert(name.to_string_lossy().into_owned());
+				return;
+			}
+		}
+	}
+	out.insert(kname.to_string());
+}
+
+fn zpool_disks(pool: &str, out: &mut BTreeSet<String>) -> Result<(), String> {
+	let o = Command::new("zpool")
+		.args(["list", "-v", "-H", "-P", pool])
+		.output()
+		.map_err(|e| format!("zpool: {e}"))?;
+	if !o.status.success() {
+		return Err(format!(
+			"zpool list {pool}: {}",
+			String::from_utf8_lossy(&o.stderr).trim()
+		));
+	}
+	for line in String::from_utf8_lossy(&o.stdout).lines() {
+		let f = line.trim_start().split('\t').next().unwrap_or("");
+		if f.starts_with("/dev/") {
+			if let Some(k) = kname_of(f) {
+				base_disks(&k, out);
+			}
+		}
+	}
+	Ok(())
+}
+
+// A btrfs can span several devices; /sys/fs/btrfs lists them all.
+fn btrfs_disks(kname: &str, out: &mut BTreeSet<String>) {
+	if let Ok(rd) = fs::read_dir("/sys/fs/btrfs") {
+		for fsdir in rd.flatten() {
+			let devs = fsdir.path().join("devices");
+			if devs.join(kname).exists() {
+				for d in fs::read_dir(devs).into_iter().flatten().flatten() {
+					base_disks(&d.file_name().to_string_lossy(), out);
+				}
+				return;
+			}
+		}
+	}
+	base_disks(kname, out);
+}
+
+pub fn disks_for(m: &Mount) -> Result<BTreeSet<String>, String> {
+	let mut out = BTreeSet::new();
+	match m.fstype.as_str() {
+		"zfs" => {
+			let pool = m.source.split('/').next().unwrap_or(&m.source);
+			zpool_disks(pool, &mut out)?;
+		}
+		_ if m.source.starts_with("/dev/") => {
+			let k = kname_of(&m.source).ok_or_else(|| format!("cannot resolve {}", m.source))?;
+			if m.fstype == "btrfs" {
+				btrfs_disks(&k, &mut out);
+			} else {
+				base_disks(&k, &mut out);
+			}
+		}
+		_ => {
+			return Err(format!(
+				"{} is {} from {}, not a local disk",
+				m.point.display(),
+				m.fstype,
+				m.source
+			))
+		}
+	}
+	if out.is_empty() {
+		return Err(format!("no disks found under {}", m.point.display()));
+	}
+	Ok(out)
+}
+
+pub fn rotational(disk: &str) -> bool {
+	fs::read_to_string(format!("/sys/block/{disk}/queue/rotational")).is_ok_and(|s| s.trim() == "1")
+}
+
+// One worker on anything with a hard drive in it, since one is all it takes
+// to make the whole set wait on seeks. A few on flash.
+pub fn default_threads(disks: &BTreeSet<String>) -> usize {
+	if disks.iter().any(|d| rotational(d)) {
+		1
+	} else if disks.iter().all(|d| d.starts_with("nvme")) {
+		4
+	} else {
+		2
+	}
+}
+
+// Roots that share any disk end up in one group.
+pub fn group_roots(roots: &[(PathBuf, BTreeSet<String>)]) -> Vec<(BTreeSet<String>, Vec<PathBuf>)> {
+	let mut groups: Vec<(BTreeSet<String>, Vec<PathBuf>)> = Vec::new();
+	for (root, disks) in roots {
+		let mut merged = (disks.clone(), vec![root.clone()]);
+		let mut keep = Vec::new();
+		for g in groups.drain(..) {
+			if g.0.is_disjoint(&merged.0) {
+				keep.push(g);
+			} else {
+				merged.0.extend(g.0);
+				let mut r = g.1;
+				r.extend(merged.1);
+				merged.1 = r;
+			}
+		}
+		keep.push(merged);
+		groups = keep;
+	}
+	groups
+}
+
+pub fn group_name(disks: &BTreeSet<String>) -> String {
+	disks.iter().cloned().collect::<Vec<_>>().join("+")
+}
+
+// Every mount point, for stopping a walk at the edge of its own filesystem.
+pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
+	mounts
+		.iter()
+		.map(|m| (m.point.clone(), m.fstype.clone()))
+		.collect()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	const SAMPLE: &str = "\
+22 1 0:21 /@ / rw,noatime shared:1 - btrfs /dev/mapper/luks-x rw
+50 22 0:45 / /home/u rw shared:9 - zfs zf10/secure_home/u rw,xattr
+51 50 0:46 / /home/u/.cache rw shared:9 - zfs zf10/secure_home/u/.cache rw,xattr
+60 22 8:33 / /mnt/my\\040disk rw - ext4 /dev/sdc1 rw
+61 22 8:33 / /mnt/ext rw - ext4 /dev/sdc1 rw
+";
+
+	#[test]
+	fn parses_and_unescapes() {
+		let m = parse_mountinfo(SAMPLE);
+		assert_eq!(m.len(), 5);
+		assert_eq!(m[3].point, PathBuf::from("/mnt/my disk"));
+		assert_eq!(m[1].fstype, "zfs");
+		assert_eq!(m[1].source, "zf10/secure_home/u");
+	}
+
+	#[test]
+	fn finds_deepest_mount() {
+		let m = parse_mountinfo(SAMPLE);
+		assert_eq!(
+			mount_for(&m, Path::new("/home/u/x")).unwrap().source,
+			"zf10/secure_home/u"
+		);
+		assert_eq!(
+			mount_for(&m, Path::new("/home/u/.cache/y")).unwrap().source,
+			"zf10/secure_home/u/.cache"
+		);
+		assert_eq!(
+			mount_for(&m, Path::new("/home/user2")).unwrap().fstype,
+			"btrfs"
+		);
+	}
+
+	#[test]
+	fn groups_share_disks() {
+		let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>();
+		let roots = vec![
+			(PathBuf::from("/a"), s(&["nvme0n1", "nvme1n1"])),
+			(PathBuf::from("/b"), s(&["sda"])),
+			(PathBuf::from("/c"), s(&["nvme1n1"])),
+			(PathBuf::from("/d"), s(&["sdb", "sda"])),
+		];
+		let g = group_roots(&roots);
+		assert_eq!(g.len(), 2);
+		assert_eq!(g[0].1, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
+		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);
+		assert_eq!(group_name(&g[1].0), "sda+sdb");
+	}
+}
