@@ -146,7 +146,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			dropped.push(format!("{}: inside {}", c.display(), other.display()));
 			continue;
 		}
-		let disks = mounts::disks_for(m)?;
+		let disks = mounts::disks_for(m, &mounts)?;
 		seen_ids.insert((md.dev(), md.ino()), c.clone());
 		kept.push((c, disks));
 	}

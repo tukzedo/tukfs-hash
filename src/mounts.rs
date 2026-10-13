@@ -152,7 +152,18 @@ fn btrfs_disks(kname: &str, out: &mut BTreeSet<String>) {
 	base_disks(kname, out);
 }
 
-pub fn disks_for(m: &Mount) -> Result<BTreeSet<String>, String> {
+// A loop device reads a file, so the disks that matter are the ones under it.
+fn loop_backing(kname: &str) -> Option<PathBuf> {
+	let s = fs::read_to_string(format!("/sys/block/{kname}/loop/backing_file")).ok()?;
+	let s = s.trim_end_matches('\n');
+	Some(PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(s)))
+}
+
+pub fn disks_for(m: &Mount, mounts: &[Mount]) -> Result<BTreeSet<String>, String> {
+	disks_under(m, mounts, 0)
+}
+
+fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<String>, String> {
 	let mut out = BTreeSet::new();
 	match m.fstype.as_str() {
 		"zfs" => {
@@ -179,7 +190,20 @@ pub fn disks_for(m: &Mount) -> Result<BTreeSet<String>, String> {
 	if out.is_empty() {
 		return Err(format!("no disks found under {}", m.point.display()));
 	}
-	Ok(out)
+	let mut real = BTreeSet::new();
+	for d in out {
+		match loop_backing(&d) {
+			Some(f) if depth < 4 => {
+				let bm = mount_for(mounts, &f)
+					.ok_or_else(|| format!("{d}: no mount found for {}", f.display()))?;
+				real.extend(disks_under(bm, mounts, depth + 1)?);
+			}
+			_ => {
+				real.insert(d);
+			}
+		}
+	}
+	Ok(real)
 }
 
 pub fn rotational(disk: &str) -> bool {
