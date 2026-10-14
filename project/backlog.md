@@ -173,6 +173,7 @@
 		- Exit 8 means some input or files weren't checked. 4 and 8 add up, the start of a bit scheme 2026101406340908 and ...09 can use.
 		- Missing files are an error for `zfs diff` on either side and for `find-new` on the new side. A `--list` may name anything, so missing there only counts toward "nothing compared".
 	- Branch: snapdiff2
+	- Commit: `cede460`
 	- Test case: Step 9 of `tests/integration.bash`, one check per case. Unit tests `zfs_diff_type_column`, `zfs_diff_link_count`, `zfs_diff_without_h`, `zfs_diff_replaced_files`, `zfs_diff_junk_and_outside`, `find_new_lines` and `names_stay_inside`.
 	- Verified: Step 9 failed all 12 of its checks against the old build and passes after, on ext4 and ZFS. Dropping the link count pop turns `zfs_diff_link_count` red. Unit tests, clippy and rustfmt pass. `root-steps.bash` passes shellcheck and was not run.
 	- Note: The `zfs diff` and `find-new` formats come from the OpenZFS and btrfs-progs sources. `zfs diff` needs root here, so no real output was parsed.
@@ -388,6 +389,7 @@
 		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
 		- README and help text say so.
 	- Branch: snapdiff2
+	- Commit: `cede460`
 	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
 	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
 	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
