@@ -1861,6 +1861,47 @@ mod tests {
 		fs::remove_dir_all(&d).unwrap();
 	}
 
+	// Dropbox files get ours too (backlog ...29), and Dropbox's own is left be.
+	#[test]
+	fn dropbox_files_get_attributes() {
+		let d = scratch("dropbox");
+		fs::write(d.join("a"), "synced").unwrap();
+		let dbx = c"user.com.dropbox.attrs";
+		let theirs = b"\x0a\x12opaque";
+		let fd = File::open(d.join("a")).unwrap();
+		if xattr::fset(fd.as_raw_fd(), dbx, theirs).is_err() {
+			eprintln!("no user xattrs here; skipped");
+			fs::remove_dir_all(&d).unwrap();
+			return;
+		}
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let mut buf = vec![0u8; 4096];
+		let mut logged = 0;
+		one_file(
+			&g,
+			&sh,
+			&job(&r, "a"),
+			None,
+			&mut buf,
+			&Links::default(),
+			&mut logged,
+		);
+		assert_eq!(g.stats.xattr_set.load(Relaxed), 1);
+		let on = OnFile::read(fd.as_raw_fd());
+		assert_eq!(on.b3, Some(*blake3::hash(b"synced").as_bytes()));
+		assert_eq!(
+			xattr::fget(fd.as_raw_fd(), dbx).unwrap().as_deref(),
+			Some(&theirs[..])
+		);
+		drop(sh);
+		drain.join().unwrap();
+		fs::remove_dir_all(&d).unwrap();
+	}
+
 	#[test]
 	fn the_link_map_is_capped() {
 		let mut m = LinkMap::default();
