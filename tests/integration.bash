@@ -395,6 +395,71 @@ fq "DROP TRIGGER refuse"
 check "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
 check "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '$wf/b' AND f.bytes = 12")" 1
 
+# 17. --verify reads every file with a stored checksum again, even the same
+# day, and nothing else. It leaves no attributes and records no new files.
+vt="$work/vt"; mkdir -p "$vt"
+head -c 40000 /dev/urandom > "$vt/k1"; head -c 70000 /dev/urandom > "$vt/k2"; printf 'edit me\n' > "$vt/k3"
+touch -d '2018-08-08 08:08:08.25' "$vt/k1"
+vdb="$work/db/vt.sqlite"
+vscan() { local rc=0; "$bin" scan --db "$vdb" --root "$vt" --progress 3600 "$@" > "$work/vt.txt" 2>&1 || rc=$?; echo "$rc"; }
+vq() { sqlite3 "$vdb" "$1"; }
+check "verify: first scan" "$(vscan)" 0
+check "verify: known files read the same day" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "$work/vt.txt" | head -1)" "0 hashed 3"
+printf 'new\n' > "$vt/n1"
+sleep 0.01; printf 'edited\n' >> "$vt/k3"
+flip1 "$vt/k2"
+k1c="$(stat -c %z "$vt/k1")"
+check "verify: exit and reads" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "$work/vt.txt" | head -1)" "4 hashed 2"
+check "verify: only the damaged file flagged" "$(vq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY kind)")" "b3-db-mismatch $vt/k2, b3-xattr-mismatch $vt/k2"
+check "verify: new file not recorded" "$(vq "SELECT count(*) FROM paths WHERE path = '$vt/n1'")" 0
+check "verify: no attribute written" "$(stat -c %z "$vt/k1")" "$k1c"
+check "verify: edited file's row left for the next scan" "$(vq "SELECT bytes FROM paths WHERE path = '$vt/k3'")" 8
+check "verify: every known name seen" "$(vq 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
+check "verify: --since refused" "$(vscan --verify --since "$tomorrow")" 1
+# --resume keeps the run's mode.
+vq "UPDATE runs SET status = 'stopped' WHERE id = (SELECT max(id) FROM runs)"
+check "verify: resumed as a full scan refused" "$(vscan --resume)" 1
+expect "says why" "message: $(cat "$work/vt.txt")" grep -q 'was a --verify run' "$work/vt.txt"
+check "verify: resumed" "$(vscan --verify --resume) $(grep -o 'hashed [0-9]*' "$work/vt.txt" | head -1) $(vq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "4 hashed 0 done"
+check "verify: then a full scan" "$(vscan --since "$tomorrow") $(vq "SELECT count(*) FROM paths WHERE path = '$vt/n1'")" "4 1"
+vq "UPDATE runs SET status = 'stopped' WHERE id = (SELECT max(id) FROM runs)"
+check "verify: a full scan resumed as a verify refused" "$(vscan --verify --resume)" 1
+expect "says why" "message: $(cat "$work/vt.txt")" grep -q 'was a full scan' "$work/vt.txt"
+check "verify: runs says which" "$("$bin" runs --db "$vdb" | grep -c ', verify$')" 2
+
+# 18. gone lists names a finished scan didn't see, and only those it would
+# have reached.
+gd="$work/gd"; mkdir -p "$gd/a/sub" "$gd/a/dlock" "$gd/b"
+for f in a/keep a/del a/locked a/sub/deep a/dlock/f b/other; do printf '%s\n' "$f" > "$gd/$f"; done
+gdb="$work/db/gd.sqlite"
+gscan() { local rc=0; "$bin" scan --db "$gdb" --no-xattrs --progress 3600 "$@" > "$work/gd.txt" 2>&1 || rc=$?; echo "$rc"; }
+gone() { local rc=0; "$bin" gone --db "$gdb" "$@" > "$work/gone.txt" 2>&1 || rc=$?; echo "$rc"; }
+gq() { sqlite3 "$gdb" "$1"; }
+gscan --root "$gd/a" > /dev/null
+gscan --root "$gd/b" > /dev/null
+# A deeper root, standing in for a mount that the walk from a/ stops at.
+gscan --root "$gd/a/sub" > /dev/null
+rm -f -- "$gd/a/del"
+chmod 000 "$gd/a/locked" "$gd/a/dlock"
+trap 'chmod 755 "$gd/a/dlock" 2> /dev/null; chmod 644 "$gd/a/locked" 2> /dev/null; rm -rf -- "$work"' EXIT
+check "gone: scan with an unreadable file and folder" "$(gscan --root "$gd/a" --exclude "$gd/a/sub" --since "$tomorrow")" 8
+chmod 755 "$gd/a/dlock"; chmod 644 "$gd/a/locked"
+check "gone: exit" "$(gone)" 0
+check "gone: only the deleted name" "$(grep -c '^gone' "$work/gone.txt") $(grep '^gone' "$work/gone.txt" | cut -f2)" "1 $gd/a/del"
+expect "gone: says what it didn't count" "output: $(cat "$work/gone.txt")" grep -q 'not counted: names under 1 folder' "$work/gone.txt"
+last="$(gq 'SELECT max(id) FROM runs')"
+gq "UPDATE runs SET status = 'stopped' WHERE id = $last"
+check "gone: a stopped run refused" "$(gone --run "$last")" 1
+check "gone: the newest finished run by default" "$(gone) $(head -1 "$work/gone.txt") $(grep -c '^gone' "$work/gone.txt")" "0 run $((last - 1)) 0"
+
+# 19. prune removes only contents no name points at.
+orphans="$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)')"
+paths_before="$(q 'SELECT count(*) FROM paths')"
+expect "prune: edits left contents behind ($orphans)" "nothing to prune" [ "$orphans" -gt 0 ]
+rc=0; "$bin" prune --db "$db" > "$work/prune.txt" 2>&1 || rc=$?
+check "prune: exit and count" "$rc $(cat "$work/prune.txt")" "0 removed $orphans content(s) no name points at"
+check "prune: none left, every name kept" "$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)') $(q 'SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id')" "0 $paths_before"
+
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"
 else

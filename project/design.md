@@ -24,6 +24,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Pages are 16 KiB, to match the dataset's recordsize.
 
+- Every edit leaves a `files` row no path points at. `prune` deletes those and nothing else. They're never looked up, since a lookup goes from the path. A content that comes back after a prune gets a new row. It takes the lock like a scan, and isn't a run.
+
 ## Reading files
 
 - Each root is walked on its own and the walk stops at every mount point, so bind mounts, snapshots and other filesystems are only read when they are listed.
@@ -76,6 +78,10 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A run that can't go on is marked `failed` and exits 1. That's a write the database refused, a worker that couldn't open the database, or a panic. The other workers stop, the events so far are kept, and the summary is still written. `--resume` takes it like a stopped one once the cause is fixed.
 
+- `scan --verify` reads every file that has a blake3 stored at its current size and time, in the database or on the file, and compares it the same way a scan does. Its skip date is its own start, so only what it already read in an earlier part is skipped. New and edited files aren't read. A clean read updates the database row, so a scan later that day skips it, but no attributes are written, so ctimes don't move.
+	- It's a scan flag rather than its own command, since it needs everything a scan has: the walk and its mount rules, workers per disk, the claim on hard links, stop and resume, events and exit codes. A command that went through the database's rows instead would read in name order, not disk order, and couldn't open files safely from their root.
+	- `runs.verify` marks these runs. `--resume` only continues one with `--verify`, and a full scan only without it. Otherwise one would finish the other with the wrong skip date and the wrong rules for attributes.
+
 - A resumed run doesn't read again what an earlier part already judged at the same size and time, mismatches included, so it doesn't report them twice.
 
 - The exit code comes from the run's events in the database, not from the counters of the process that ends it. A file reported by 2 parts counts once, so that way a resume doesn't double it.
@@ -92,6 +98,18 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make it mean nothing. An attribute that can't be written comes after the file was checked.
 
 - A folder that can't be listed, or stops listing part way, is a `dir-error`. The files in it aren't seen at all, so there's nothing else to count them by.
+
+## Gone
+
+- A path's `seen_run` is the last run that reached it, by reading it, skipping it as fresh, or flagging it. Every part of a resumed run has the same id. `gone` lists the paths a finished run, status `done`, didn't reach. A stopped or failed run never walked everything, so it isn't asked.
+
+- Only paths the run would have reached count:
+	- Under one of its roots.
+	- No event of their own in that run. A file that couldn't be opened or read was still there and also seen.
+	- Not under a folder with a `dir-error` in that run, since nothing below it was listed.
+	- Last seen from the same root or a shallower one. A scan stops at every mount, so a path another run reached from a deeper root may be on a filesystem this run didn't walk. A run with no root list, like `accept`'s, can't say, so it doesn't hold a path back.
+
+- `--exclude` isn't kept with the run, so a folder left out counts as not seen.
 
 ## Attributes
 
