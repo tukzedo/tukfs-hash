@@ -5,8 +5,8 @@
 // per name, the same split nemo-anywhere's cache uses, minus thumbnails.
 //
 // Unlike that cache this one is never thrown away and rebuilt. Its whole point
-// is to remember what a file read as last time, so a damaged or newer file is
-// refused and left alone.
+// is to remember what a file read as last time, so a damaged database, or one
+// with newer tables, is refused and left alone.
 
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, ToSql};
@@ -154,7 +154,9 @@ pub struct Prior {
 pub const LOOKUP: &str = "SELECT p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
-pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> Option<Prior> {
+// Only a missing row means nothing is known. A busy or broken database is not
+// the same as no record, and taking it for one would overwrite the row unseen.
+pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Result<Option<Prior>> {
 	stmt.query_row([PathKey(path)], |r| {
 		Ok(Prior {
 			bytes: r.get(0)?,
@@ -165,7 +167,7 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> Option<Prior> 
 			b3: r.get(5)?,
 		})
 	})
-	.ok()
+	.optional()
 }
 
 pub struct Hashed {
@@ -188,6 +190,52 @@ pub enum Msg {
 	},
 }
 
+// One message's rows, inside the caller's transaction.
+pub fn apply(
+	tx: &rusqlite::Transaction<'_>,
+	run_id: i64,
+	now: i64,
+	m: Msg,
+) -> rusqlite::Result<()> {
+	match m {
+		Msg::Hashed(h) => {
+			let b2: Option<&[u8]> = h.b2.as_ref().map(|b| &b[..]);
+			let id: i64 = tx
+				.prepare_cached(
+					"INSERT INTO files (b3, bytes, b2) VALUES (?1, ?2, ?3)
+					ON CONFLICT(b3) DO UPDATE SET bytes = excluded.bytes, b2 = coalesce(excluded.b2, files.b2)
+					RETURNING id",
+				)?
+				.query_row(params![&h.b3[..], h.bytes, b2], |r| r.get(0))?;
+			tx.prepare_cached(
+				"INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run)
+				VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+				ON CONFLICT(path) DO UPDATE SET file_id = excluded.file_id, bytes = excluded.bytes,
+				mtime_us = excluded.mtime_us, ino = excluded.ino, hashed_us = excluded.hashed_us,
+				seen_run = excluded.seen_run",
+			)?
+			.execute(params![
+				PathKey(&h.path),
+				id,
+				h.bytes,
+				h.mtime_us,
+				h.ino,
+				h.hashed_us,
+				run_id
+			])?;
+		}
+		Msg::Seen(p) => {
+			tx.prepare_cached("UPDATE paths SET seen_run = ?1 WHERE path = ?2")?
+				.execute(params![run_id, PathKey(&p)])?;
+		}
+		Msg::Event { kind, path, detail } => {
+			tx.prepare_cached("INSERT INTO events (run_id, at_us, kind, path, detail) VALUES (?1, ?2, ?3, ?4, ?5)")?
+				.execute(params![run_id, now, kind, PathKey(&path), detail])?;
+		}
+	}
+	Ok(())
+}
+
 // The only thread that writes. Batches go in one transaction each, at most a
 // second apart, so a stop or a crash loses little.
 pub fn writer(mut conn: Connection, run_id: i64, rx: Receiver<Msg>) -> Result<Connection, String> {
@@ -207,59 +255,9 @@ pub fn writer(mut conn: Connection, run_id: i64, rx: Receiver<Msg>) -> Result<Co
 			&& (done || pending.len() >= 20000 || last.elapsed() >= Duration::from_secs(1))
 		{
 			let tx = conn.transaction().map_err(e)?;
-			{
-				let mut up_file = tx
-					.prepare_cached(
-						"INSERT INTO files (b3, bytes, b2) VALUES (?1, ?2, ?3)
-						ON CONFLICT(b3) DO UPDATE SET bytes = excluded.bytes, b2 = coalesce(excluded.b2, files.b2)
-						RETURNING id",
-					)
-					.map_err(e)?;
-				let mut up_path = tx
-					.prepare_cached(
-						"INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run)
-						VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-						ON CONFLICT(path) DO UPDATE SET file_id = excluded.file_id, bytes = excluded.bytes,
-						mtime_us = excluded.mtime_us, ino = excluded.ino, hashed_us = excluded.hashed_us,
-						seen_run = excluded.seen_run",
-					)
-					.map_err(e)?;
-				let mut seen = tx
-					.prepare_cached("UPDATE paths SET seen_run = ?1 WHERE path = ?2")
-					.map_err(e)?;
-				let mut event = tx
-					.prepare_cached("INSERT INTO events (run_id, at_us, kind, path, detail) VALUES (?1, ?2, ?3, ?4, ?5)")
-					.map_err(e)?;
-				let now = crate::util::now_us();
-				for m in pending.drain(..) {
-					match m {
-						Msg::Hashed(h) => {
-							let b2: Option<&[u8]> = h.b2.as_ref().map(|b| &b[..]);
-							let id: i64 = up_file
-								.query_row(params![&h.b3[..], h.bytes, b2], |r| r.get(0))
-								.map_err(e)?;
-							up_path
-								.execute(params![
-									PathKey(&h.path),
-									id,
-									h.bytes,
-									h.mtime_us,
-									h.ino,
-									h.hashed_us,
-									run_id
-								])
-								.map_err(e)?;
-						}
-						Msg::Seen(p) => {
-							seen.execute(params![run_id, PathKey(&p)]).map_err(e)?;
-						}
-						Msg::Event { kind, path, detail } => {
-							event
-								.execute(params![run_id, now, kind, PathKey(&path), detail])
-								.map_err(e)?;
-						}
-					}
-				}
+			let now = crate::util::now_us();
+			for m in pending.drain(..) {
+				apply(&tx, run_id, now, m).map_err(e)?;
 			}
 			tx.commit().map_err(e)?;
 			last = Instant::now();
@@ -312,8 +310,8 @@ mod tests {
 			.unwrap();
 		assert_eq!(n, 2, "two names with one content share a files row");
 		let mut st = conn.prepare(LOOKUP).unwrap();
-		assert_eq!(lookup(&mut st, &odd).unwrap().b3, vec![2u8; 32]);
-		assert_eq!(lookup(&mut st, b"/x/a").unwrap().hashed_us, 100);
+		assert_eq!(lookup(&mut st, &odd).unwrap().unwrap().b3, vec![2u8; 32]);
+		assert_eq!(lookup(&mut st, b"/x/a").unwrap().unwrap().hashed_us, 100);
 		let typ: String = conn
 			.query_row(
 				"SELECT typeof(path) FROM paths WHERE path = '/x/a'",
@@ -322,6 +320,24 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(typ, "text");
+		drop(st);
+		close_rw(conn).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn lookup_error_is_not_no_row() {
+		let p = temp_db("lookup");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 3);
+			INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run)
+			VALUES ('/x/junk', 1, 'three', 9, 1, 100, 1);",
+		)
+		.unwrap();
+		let mut st = conn.prepare(LOOKUP).unwrap();
+		assert!(lookup(&mut st, b"/x/none").unwrap().is_none());
+		assert!(lookup(&mut st, b"/x/junk").is_err());
 		drop(st);
 		close_rw(conn).unwrap();
 		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();

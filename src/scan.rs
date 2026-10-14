@@ -12,10 +12,10 @@ use crate::util::{b64u_encode, fmt_local, hex, human_bytes, local_midnight_us, n
 use crate::xattr::{self, OnFile};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirEntryExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirEntryExt, FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -165,7 +165,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 	Ok(Plan { groups, dropped })
 }
 
-fn lock(db: &Path) -> Result<File, String> {
+pub fn lock(db: &Path) -> Result<File, String> {
 	let p = lock_path(db);
 	let f = OpenOptions::new()
 		.create(true)
@@ -182,7 +182,7 @@ fn lock(db: &Path) -> Result<File, String> {
 	Ok(f)
 }
 
-fn host() -> String {
+pub fn host() -> String {
 	fs::read_to_string("/proc/sys/kernel/hostname")
 		.map(|s| s.trim().to_string())
 		.unwrap_or_default()
@@ -190,7 +190,7 @@ fn host() -> String {
 
 // Hand the files back to whoever ran this through sudo, so reports and
 // queries need no root.
-fn give_back(paths: &[PathBuf]) {
+pub fn give_back(paths: &[PathBuf]) {
 	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
 	if let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) {
 		for p in paths {
@@ -217,7 +217,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	let started = now_us();
 	let (run_id, cutoff_us, run_started) = if o.resume {
 		conn.query_row(
-			"SELECT id, cutoff_us, started_us FROM runs WHERE status != 'done' ORDER BY id DESC LIMIT 1",
+			"SELECT id, cutoff_us, started_us FROM runs WHERE status IN ('running', 'stopped') ORDER BY id DESC LIMIT 1",
 			[],
 			|r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
 		)
@@ -402,15 +402,7 @@ pub fn lock_path(db: &Path) -> PathBuf {
 
 // The database may not exist yet, so only its folder can be resolved.
 pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
-	let parent = db
-		.parent()
-		.filter(|p| !p.as_os_str().is_empty())
-		.unwrap_or(Path::new("."));
-	let dir = fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-	let name = db
-		.file_name()
-		.ok_or_else(|| format!("{}: not a file name", db.display()))?;
-	Ok(dir.join(name))
+	crate::util::canonical_name(db)
 }
 
 // Depth first, files before folders. Folders go in name order; files go in
@@ -464,7 +456,7 @@ fn walk(root: &Path, sh: &Shared, stats: &Stats, jobs: &SyncSender<Job>) {
 	}
 }
 
-type LinkVal = (i64, i64, [u8; 32], Option<[u8; 64]>);
+type LinkVal = (i64, i64, Sums);
 
 // Each entry counts down the names still to come and goes when it hits zero,
 // so a backup tree full of hard links doesn't keep every inode in memory.
@@ -559,16 +551,23 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 		if sh.stop.load(Relaxed) {
 			continue;
 		}
-		let prior = db::lookup(&mut stmt, job.path.as_os_str().as_bytes());
+		let prior = match db::lookup(&mut stmt, job.path.as_os_str().as_bytes()) {
+			Ok(p) => p,
+			Err(e) => {
+				g.stats.other_err.fetch_add(1, Relaxed);
+				event(sh, "db-error", &job.path, e.to_string());
+				continue;
+			}
+		};
 		one_file(g, sh, &job, prior, &mut buf, links, &mut xattr_fail_logged);
 	}
 }
 
-fn mtime_us(md: &fs::Metadata) -> i64 {
+pub fn mtime_us(md: &fs::Metadata) -> i64 {
 	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
 }
 
-fn open_noatime(p: &Path) -> io::Result<File> {
+pub fn open_noatime(p: &Path) -> io::Result<File> {
 	let base = libc::O_NOFOLLOW | libc::O_NONBLOCK;
 	match OpenOptions::new()
 		.read(true)
@@ -581,6 +580,237 @@ fn open_noatime(p: &Path) -> io::Result<File> {
 		}
 		r => r,
 	}
+}
+
+/// What one read of a file came to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sums {
+	pub b3: [u8; 32],
+	pub b2: Option<[u8; 64]>,
+}
+
+#[derive(Debug)]
+pub enum ReadFail {
+	Stopped,
+	Io(io::Error, u64),
+	Unstable,
+}
+
+// Reads the whole file from the start. Its cached pages are dropped first, so
+// a scribble in the page cache isn't taken for what's on disk. ZFS ignores the
+// advice; see design.md, Reading files.
+pub fn read_sums(
+	file: &File,
+	before: &fs::Metadata,
+	want_b2: bool,
+	buf: &mut [u8],
+	stop: &AtomicBool,
+	read_bytes: &AtomicU64,
+) -> Result<Sums, ReadFail> {
+	let fd = file.as_raw_fd();
+	unsafe {
+		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
+		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+	}
+	let mut b3 = blake3::Hasher::new();
+	let mut b2 = want_b2.then(<blake2::Blake2b512 as blake2::Digest>::new);
+	let mut total: u64 = 0;
+	loop {
+		if stop.load(Relaxed) {
+			return Err(ReadFail::Stopped);
+		}
+		match file.read_at(buf, total) {
+			Ok(0) => break,
+			Ok(n) => {
+				b3.update(&buf[..n]);
+				if let Some(h) = b2.as_mut() {
+					blake2::Digest::update(h, &buf[..n]);
+				}
+				total += n as u64;
+			}
+			Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+			Err(e) => {
+				read_bytes.fetch_add(total, Relaxed);
+				return Err(ReadFail::Io(e, total));
+			}
+		}
+	}
+	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
+	read_bytes.fetch_add(total, Relaxed);
+	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;
+	if after.len() != before.len()
+		|| mtime_us(&after) != mtime_us(before)
+		|| after.ctime() != before.ctime()
+		|| after.ctime_nsec() != before.ctime_nsec()
+		|| total != before.len()
+	{
+		return Err(ReadFail::Unstable);
+	}
+	Ok(Sums {
+		b3: *b3.finalize().as_bytes(),
+		b2: b2.map(|h| blake2::Digest::finalize(h).into()),
+	})
+}
+
+fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
+	match fail {
+		ReadFail::Stopped => {}
+		// On ZFS an EIO here is a block that failed its checksum with no
+		// good copy left. That is the same news as a mismatch.
+		ReadFail::Io(e, at) => {
+			st.read_err.fetch_add(1, Relaxed);
+			event(sh, "read-error", path, format!("{e} at byte {at}"));
+		}
+		ReadFail::Unstable => {
+			st.unstable.fetch_add(1, Relaxed);
+			event(sh, "unstable", path, "changed while being read".into());
+		}
+	}
+}
+
+// What a file read as before, from each place that remembers. Only records
+// taken at the file's current size and time count.
+struct Refs<'a> {
+	xattr: Option<[u8; 32]>,
+	xattr_date: Option<i64>,
+	b2: Option<[u8; 64]>,
+	db: Option<&'a Prior>,
+}
+
+type Miss = (&'static str, String);
+
+impl<'a> Refs<'a> {
+	fn new(onfile: &OnFile, prior: Option<&'a Prior>, md: &fs::Metadata) -> Refs<'a> {
+		let (bytes, mt) = (md.len() as i64, mtime_us(md));
+		let mtime_s = md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9;
+		Refs {
+			xattr: onfile.b3_current(bytes, mt),
+			xattr_date: onfile.b3_date_us,
+			b2: onfile.b2_current(mtime_s),
+			db: prior.filter(|p| p.bytes == bytes && p.mtime_us == mt),
+		}
+	}
+
+	fn misses(&self, s: &Sums) -> Vec<Miss> {
+		let mut out = Vec::new();
+		if let Some(stored) = self.xattr.filter(|d| *d != s.b3) {
+			let when = self.xattr_date.map_or_else(|| "unknown".into(), fmt_local);
+			out.push((
+				"b3-xattr-mismatch",
+				format!(
+					"on file {} (taken {when}), read now {}",
+					b64u_encode(&stored),
+					b64u_encode(&s.b3)
+				),
+			));
+		}
+		if let (Some(stored), Some(now)) = (self.b2, s.b2) {
+			if stored != now {
+				out.push((
+					"b2-rmlint-mismatch",
+					format!("on file {}, read now {}", hex(&stored), hex(&now)),
+				));
+			}
+		}
+		if let Some(p) = self.db.filter(|p| p.b3 != s.b3) {
+			out.push((
+				"b3-db-mismatch",
+				format!(
+					"database {} (taken {}), read now {}",
+					b64u_encode(&p.b3),
+					fmt_local(p.hashed_us),
+					b64u_encode(&s.b3)
+				),
+			));
+		}
+		out
+	}
+
+	// Only for a read that agreed with all of them.
+	fn tally(&self, s: &Sums, st: &Stats) {
+		if self.xattr.is_some() {
+			st.b3_ok.fetch_add(1, Relaxed);
+		}
+		if self.b2.is_some() && s.b2.is_some() {
+			st.b2_ok.fetch_add(1, Relaxed);
+		}
+		if self.db.is_some() {
+			st.db_ok.fetch_add(1, Relaxed);
+		}
+	}
+}
+
+#[derive(Debug)]
+enum Verdict {
+	Clean(Sums),
+	// Wrong on the first read, right on a second one with the cache dropped.
+	CacheOnly {
+		first: Sums,
+		second: Sums,
+	},
+	Changed {
+		sums: Sums,
+		misses: Vec<Miss>,
+		note: String,
+	},
+}
+
+// A read that disagrees with what's stored is read once more before it's
+// believed, to tell a fault in memory from one on disk.
+fn judge(
+	refs: &Refs,
+	first: Sums,
+	reread: impl FnOnce() -> Result<Sums, ReadFail>,
+) -> Result<Verdict, ReadFail> {
+	if refs.misses(&first).is_empty() {
+		return Ok(Verdict::Clean(first));
+	}
+	let second = reread()?;
+	let misses = refs.misses(&second);
+	if misses.is_empty() {
+		return Ok(Verdict::CacheOnly { first, second });
+	}
+	let note = if second == first {
+		"; same on a second read".to_string()
+	} else {
+		format!("; the first read gave {}", b64u_encode(&first.b3))
+	};
+	Ok(Verdict::Changed {
+		sums: second,
+		misses,
+		note,
+	})
+}
+
+// A mismatch leaves every stored checksum as it was, so each later run reports
+// the file again until it's fixed or accepted.
+fn keep(
+	sh: &Shared,
+	st: &Stats,
+	path: &Path,
+	prior: Option<&Prior>,
+	misses: Vec<Miss>,
+	note: &str,
+) {
+	for (kind, detail) in misses {
+		st.mismatch.fetch_add(1, Relaxed);
+		event(sh, kind, path, format!("{detail}{note}"));
+	}
+	if prior.is_some_and(|p| p.seen_run != sh.run_id) {
+		send(sh, Msg::Seen(path.as_os_str().as_bytes().to_vec()));
+	}
+}
+
+fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
+	Msg::Hashed(Box::new(Hashed {
+		path: path.to_vec(),
+		b3: s.b3,
+		b2: s.b2,
+		bytes: md.len() as i64,
+		mtime_us: mtime_us(md),
+		ino: md.ino() as i64,
+		hashed_us,
+	}))
 }
 
 fn one_file(
@@ -636,29 +866,27 @@ fn one_file(
 		Ok(m) if m.file_type().is_file() => m,
 		_ => return,
 	};
-	let (bytes, mt, ino) = (before.len() as i64, mtime_us(&before), before.ino() as i64);
+	let (bytes, mt) = (before.len() as i64, mtime_us(&before));
 	let onfile = OnFile::read(fd);
+	let refs = Refs::new(&onfile, prior.as_ref(), &before);
 
-	if let Some((d, date)) = onfile.b3_fresh(
-		bytes,
-		mt,
-		before.dev(),
-		before.ino(),
-		sh.cutoff_us,
-		now_us(),
-	) {
+	// Another name for this inode may have left a fresh set without ever
+	// seeing this name's row, so the row gets a say.
+	if let Some((d, date)) = onfile
+		.b3_fresh(
+			bytes,
+			mt,
+			before.dev(),
+			before.ino(),
+			sh.cutoff_us,
+			now_us(),
+		)
+		.filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d))
+	{
 		st.skip_xattr.fetch_add(1, Relaxed);
 		send(
 			sh,
-			Msg::Hashed(Box::new(Hashed {
-				path: pbytes.to_vec(),
-				b3: d,
-				b2: None,
-				bytes,
-				mtime_us: mt,
-				ino,
-				hashed_us: date,
-			})),
+			hashed_msg(pbytes, &Sums { b3: d, b2: None }, &before, date),
 		);
 		return;
 	}
@@ -666,157 +894,71 @@ fn one_file(
 	let mut claim = None;
 	if before.nlink() > 1 {
 		match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
-			Claim::Done((_, _, d, b2)) => {
+			// Read once, but each name is held to its own records.
+			Claim::Done((_, _, sums)) => {
 				st.links.fetch_add(1, Relaxed);
-				send(
-					sh,
-					Msg::Hashed(Box::new(Hashed {
-						path: pbytes.to_vec(),
-						b3: d,
-						b2,
-						bytes,
-						mtime_us: mt,
-						ino,
-						hashed_us: now_us(),
-					})),
-				);
+				let misses = refs.misses(&sums);
+				if !misses.is_empty() {
+					keep(sh, st, path, prior.as_ref(), misses, "");
+					return;
+				}
+				refs.tally(&sums, st);
+				send(sh, hashed_msg(pbytes, &sums, &before, now_us()));
 				return;
 			}
 			Claim::Mine(g) => claim = Some(g),
 		}
 	}
 
-	let mtime_s = before.mtime() as f64 + before.mtime_nsec() as f64 / 1e9;
-	let want_b2 = onfile.b2_current(mtime_s);
-	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL) };
-	let mut b3 = blake3::Hasher::new();
-	let mut b2 = want_b2.map(|_| <blake2::Blake2b512 as blake2::Digest>::new());
-	let mut f = &file;
-	let mut total: u64 = 0;
-	loop {
-		if sh.stop.load(Relaxed) {
-			return;
-		}
-		match f.read(buf) {
-			Ok(0) => break,
-			Ok(n) => {
-				b3.update(&buf[..n]);
-				if let Some(h) = b2.as_mut() {
-					blake2::Digest::update(h, &buf[..n]);
-				}
-				total += n as u64;
-			}
-			Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-			Err(e) => {
-				// On ZFS an EIO here is a block that failed its checksum
-				// with no good copy left. That is the same news as a
-				// mismatch.
-				st.read_err.fetch_add(1, Relaxed);
-				event(sh, "read-error", path, format!("{e} at byte {total}"));
-				return;
-			}
-		}
-	}
-	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
-	st.bytes.fetch_add(total, Relaxed);
-
-	let after = match file.metadata() {
-		Ok(m) => m,
-		Err(_) => return,
+	let want_b2 = refs.b2.is_some();
+	let first = match read_sums(&file, &before, want_b2, buf, &sh.stop, &st.bytes) {
+		Ok(s) => s,
+		Err(f) => return report_fail(sh, st, path, f),
 	};
-	if after.len() != before.len()
-		|| mtime_us(&after) != mt
-		|| after.ctime() != before.ctime()
-		|| after.ctime_nsec() != before.ctime_nsec()
-		|| total != before.len()
-	{
-		st.unstable.fetch_add(1, Relaxed);
-		event(sh, "unstable", path, "changed while being read".into());
-		return;
-	}
 	st.hashed.fetch_add(1, Relaxed);
-	let digest: [u8; 32] = *b3.finalize().as_bytes();
-	let b2_digest: Option<[u8; 64]> = b2.map(|h| blake2::Digest::finalize(h).into());
-
-	if let Some(stored) = onfile.b3_current(bytes, mt) {
-		if stored == digest {
-			st.b3_ok.fetch_add(1, Relaxed);
-		} else {
+	let verdict = judge(&refs, first, || {
+		read_sums(&file, &before, want_b2, buf, &sh.stop, &st.bytes)
+	});
+	let sums = match verdict {
+		Err(f) => return report_fail(sh, st, path, f),
+		Ok(Verdict::Clean(s)) => s,
+		Ok(Verdict::CacheOnly { first, second }) => {
 			st.mismatch.fetch_add(1, Relaxed);
-			let when = onfile
-				.b3_date_us
-				.map(fmt_local)
-				.unwrap_or_else(|| "unknown".into());
 			event(
 				sh,
-				"b3-xattr-mismatch",
+				"cache-mismatch",
 				path,
 				format!(
-					"on file {} (taken {when}), read now {}",
-					b64u_encode(&stored),
-					b64u_encode(&digest)
+					"first read {}, then {} with the cache dropped, which matches what was stored",
+					b64u_encode(&first.b3),
+					b64u_encode(&second.b3)
 				),
 			);
+			second
 		}
-	}
-	if let (Some(stored), Some(now)) = (want_b2, b2_digest) {
-		if stored == now {
-			st.b2_ok.fetch_add(1, Relaxed);
-		} else {
-			st.mismatch.fetch_add(1, Relaxed);
-			event(
-				sh,
-				"b2-rmlint-mismatch",
-				path,
-				format!("on file {}, read now {}", hex(&stored), hex(&now)),
-			);
-		}
-	}
-	if let Some(p) = &prior {
-		if p.bytes == bytes && p.mtime_us == mt {
-			if p.b3 == digest {
-				st.db_ok.fetch_add(1, Relaxed);
-			} else {
-				st.mismatch.fetch_add(1, Relaxed);
-				event(
-					sh,
-					"b3-db-mismatch",
-					path,
-					format!(
-						"database {} (taken {}), read now {}",
-						b64u_encode(&p.b3),
-						fmt_local(p.hashed_us),
-						b64u_encode(&digest)
-					),
-				);
+		Ok(Verdict::Changed { sums, misses, note }) => {
+			if let Some(c) = claim {
+				c.fill((bytes, mt, sums));
 			}
+			keep(sh, st, path, prior.as_ref(), misses, &note);
+			return;
 		}
-	}
+	};
+	refs.tally(&sums, st);
 
 	let hashed_us = now_us();
 	if let Some(c) = claim {
-		c.fill((bytes, mt, digest, b2_digest));
+		c.fill((bytes, mt, sums));
 	}
-	send(
-		sh,
-		Msg::Hashed(Box::new(Hashed {
-			path: pbytes.to_vec(),
-			b3: digest,
-			b2: b2_digest,
-			bytes,
-			mtime_us: mt,
-			ino,
-			hashed_us,
-		})),
-	);
+	send(sh, hashed_msg(pbytes, &sums, &before, hashed_us));
 
 	// Not inside a git checkout: the files come and go with every checkout,
 	// git already checksums what it keeps, and a ctime change makes git
 	// look at each file again.
 	if sh.write_xattrs && !job.in_git && !sh.no_xattr.iter().any(|x| path.starts_with(x)) {
-		let only_date = onfile.b3_current(bytes, mt) == Some(digest);
+		let only_date = refs.xattr == Some(sums.b3);
 		let id = (before.dev(), before.ino());
-		match xattr::write_b3(fd, &digest, bytes, mt, hashed_us, id, only_date) {
+		match xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date) {
 			Ok(()) => {
 				st.xattr_set.fetch_add(1, Relaxed);
 			}
@@ -830,5 +972,100 @@ fn one_file(
 				}
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn sums(b: u8) -> Sums {
+		Sums {
+			b3: [b; 32],
+			b2: None,
+		}
+	}
+
+	fn refs(xattr: Option<u8>, db: Option<&Prior>) -> Refs<'_> {
+		Refs {
+			xattr: xattr.map(|b| [b; 32]),
+			xattr_date: None,
+			b2: None,
+			db,
+		}
+	}
+
+	fn prior(b: u8) -> Prior {
+		Prior {
+			bytes: 1,
+			mtime_us: 1,
+			ino: 1,
+			hashed_us: 0,
+			seen_run: 0,
+			b3: vec![b; 32],
+		}
+	}
+
+	#[test]
+	fn a_match_is_not_read_again() {
+		let p = prior(1);
+		let v = judge(&refs(Some(1), Some(&p)), sums(1), || panic!("read again")).unwrap();
+		assert!(matches!(v, Verdict::Clean(s) if s == sums(1)));
+		// Nothing stored to disagree with.
+		let v = judge(&refs(None, None), sums(5), || panic!("read again")).unwrap();
+		assert!(matches!(v, Verdict::Clean(_)));
+	}
+
+	#[test]
+	fn a_second_read_tells_cache_from_disk() {
+		let p = prior(1);
+		let r = refs(Some(1), Some(&p));
+		// Right the second time: only the first read was bad.
+		let v = judge(&r, sums(2), || Ok(sums(1))).unwrap();
+		assert!(
+			matches!(v, Verdict::CacheOnly { first, second } if first == sums(2) && second == sums(1))
+		);
+		// Wrong both times: on disk.
+		let v = judge(&r, sums(2), || Ok(sums(2))).unwrap();
+		let Verdict::Changed {
+			sums: s,
+			misses,
+			note,
+		} = v
+		else {
+			panic!("{v:?}")
+		};
+		assert_eq!(s, sums(2));
+		let kinds: Vec<_> = misses.iter().map(|m| m.0).collect();
+		assert_eq!(kinds, ["b3-xattr-mismatch", "b3-db-mismatch"]);
+		assert!(note.contains("same"));
+		// Wrong both times, differently.
+		let v = judge(&r, sums(2), || Ok(sums(3))).unwrap();
+		assert!(
+			matches!(v, Verdict::Changed { sums: s, ref note, .. } if s == sums(3) && note.contains("first read"))
+		);
+		// A failed second read is passed on, and nothing is judged.
+		assert!(matches!(
+			judge(&r, sums(2), || Err(ReadFail::Unstable)),
+			Err(ReadFail::Unstable)
+		));
+	}
+
+	#[test]
+	fn each_record_is_checked() {
+		let p = prior(1);
+		// The database agrees, the attribute doesn't.
+		let r = refs(Some(2), Some(&p));
+		let kinds: Vec<_> = r.misses(&sums(1)).iter().map(|m| m.0).collect();
+		assert_eq!(kinds, ["b3-xattr-mismatch"]);
+		let r = Refs {
+			b2: Some([7; 64]),
+			..refs(None, None)
+		};
+		let s = Sums {
+			b3: [1; 32],
+			b2: Some([8; 64]),
+		};
+		assert_eq!(r.misses(&s)[0].0, "b2-rmlint-mismatch");
 	}
 }

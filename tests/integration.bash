@@ -81,6 +81,9 @@ check "second scan exit" "$rc" 0
 check "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "$work/out.txt" | head -1)" "hashed 0"
 
 # 3. Change bytes, put the time back. All three references must notice.
+digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '$1'"; }
+x_before="$(xget "$tree/big.bin" user.blake3.b64u)"
+db_before="$(digest_of "$tree/big.bin")"
 python3 -I - "$tree/big.bin" "$tree/rm.txt" <<'EOF'
 import os, sys
 for p in sys.argv[1:]:
@@ -95,12 +98,33 @@ for p in sys.argv[1:]:
 EOF
 rc="$(scan --since "$tomorrow")"
 check "corruption exit code" "$rc" 4
-check "xattr mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-xattr-mismatch'")" 2
-check "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 2
+# Was 2 each. big.bin's hard link is now held to its own records too.
+# check "xattr mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-xattr-mismatch'")" 2
+# check "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 2
+check "xattr mismatch found" "$(q "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "$tree/big.bin $tree/rm.txt $tree/sub dir/big-link.bin"
+check "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 3
 check "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2-rmlint-mismatch'")" "$tree/rm.txt"
 "$bin" report --db "$db" > "$work/report.txt"
 expect "report lists it" "report misses big.bin" grep -q $'^b3-xattr-mismatch\t'"$tree/big.bin" "$work/report.txt"
 check "unchanged attributes keep their digest" "$(xget "$tree/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
+# The stored checksums stay, so the next run reports the same again, until
+# the files are accepted.
+check "damaged attribute kept" "$(xget "$tree/big.bin" user.blake3.b64u)" "$x_before"
+check "damaged database row kept" "$(digest_of "$tree/big.bin")" "$db_before"
+last_run() { q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) $1"; }
+rc="$(scan --since "$tomorrow")"
+check "reported again on the next run" "$rc $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
+check "attribute still kept" "$(xget "$tree/big.bin" user.blake3.b64u)" "$x_before"
+rc=0; (cd "$tree" && "$bin" accept --db "$db" ./big.bin "sub dir/big-link.bin" rm.txt) > "$work/accept.txt" 2>&1 || rc=$?
+check "accept exit" "$rc" 0
+check "accept logged" "$(last_run "AND kind = 'accepted'")" 3
+expect "accept names the other link" "accept output: $(cat "$work/accept.txt")" grep -q '1 other name' "$work/accept.txt"
+expect "accept replaced the attribute" "attribute unchanged" [ "$(xget "$tree/big.bin" user.blake3.b64u)" != "$x_before" ]
+check "accept dropped rmlint's old checksum" "$(xget "$tree/rm.txt" user.rmlint.blake2b.cksum)" ""
+rc=0; "$bin" accept --db "$db" "$tree/sub dir" "$tree/small.txt" > /dev/null 2>&1 || rc=$?
+check "accept of a folder fails" "$rc" 1
+rc="$(scan --since "$tomorrow")"
+check "clean after accept" "$rc $(last_run "")" "0 0"
 
 # 4. A real edit moves the time and is not a mismatch.
 sleep 0.01
@@ -235,6 +259,42 @@ flip "$rt/$tab"
 "$bin" scan --db "$work/db/rt.sqlite" --root "$rt" --no-xattrs --since "$tomorrow" --progress 3600 > /dev/null 2>&1 || true
 "$bin" report --db "$work/db/rt.sqlite" > "$work/report2.txt"
 check "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"$rt/t\\\\x09ab"$'\t' "$work/report2.txt")" 1
+
+# 11. Each name of a hard-linked file is held to its own row, with no
+# attributes to fall back on.
+hl="$work/hl"; mkdir -p "$hl"
+head -c 50000 /dev/urandom > "$hl/b_old"
+hscan() { local rc=0; "$bin" scan --db "$work/db/$1.sqlite" --root "$hl" --threads "$hl=1" --progress 3600 "${@:2}" > "$work/hl.txt" 2>&1 || rc=$?; echo "$rc"; }
+hq() { sqlite3 "$work/db/$1.sqlite" "$2"; }
+check "linked file first scan" "$(hscan hl --no-xattrs)" 0
+ln "$hl/b_old" "$hl/a_new"
+flip "$hl/b_old"
+check "other name compared with its own row" "$(hscan hl --no-xattrs --since "$tomorrow") $(hq hl "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch $hl/b_old"
+# A fresh set left through one name doesn't vouch for the other. The set's
+# digest is the damaged one, as nemo-anywhere would write after the damage,
+# and the row is from an earlier day.
+rm -f "$hl/a_new"
+head -c 50000 /dev/urandom > "$hl/b_old"
+check "linked file first scan, again" "$(hscan hl2 --no-xattrs)" 0
+hq hl2 "UPDATE paths SET hashed_us = hashed_us - 172800000000"
+flip "$hl/b_old"
+mkdir -p "$work/hlc"; cp -p "$hl/b_old" "$work/hlc/x"
+"$bin" scan --db "$work/db/hlc.sqlite" --root "$work/hlc" --progress 3600 > /dev/null 2>&1 || true
+setfattr -n user.blake3.b64u -v "$(xget "$work/hlc/x" user.blake3.b64u)" "$hl/b_old"
+setfattr -n user.blake3.bytes -v 50000 "$hl/b_old"
+setfattr -n user.blake3.mtime -v "$(stat -c %.6Y "$hl/b_old" | tr -d .)" "$hl/b_old"
+ln "$hl/b_old" "$hl/a_new"
+check "a fresh set from the other name" "$(hscan hl2) $(hq hl2 "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch $hl/b_old"
+
+# 12. A row the database can't read is an error, not "no record", and is
+# left as it was.
+lk="$work/lk"; mkdir -p "$lk"
+printf 'one\n' > "$lk/f"; printf 'two two\n' > "$lk/g"
+"$bin" scan --db "$work/db/lk.sqlite" --root "$lk" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
+sqlite3 "$work/db/lk.sqlite" "UPDATE paths SET bytes = 'junk' WHERE path = '$lk/f'"
+"$bin" scan --db "$work/db/lk.sqlite" --root "$lk" --no-xattrs --since "$tomorrow" --progress 3600 > /dev/null 2>&1 || true
+check "unreadable row reported" "$(sqlite3 "$work/db/lk.sqlite" "SELECT group_concat(kind || ' ' || path) FROM events")" "db-error $lk/f"
+check "unreadable row left alone" "$(sqlite3 "$work/db/lk.sqlite" "SELECT bytes FROM paths WHERE path = '$lk/f'")" junk
 
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"
