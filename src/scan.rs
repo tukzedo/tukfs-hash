@@ -127,7 +127,10 @@ fn exit_bits(counts: &[(String, i64)]) -> i32 {
 
 const EVENTS_LINE: &str = "events in the whole run:";
 
-fn events_line(counts: &[(String, i64)]) -> String {
+fn events_line(counts: Option<&[(String, i64)]>) -> String {
+	let Some(counts) = counts else {
+		return format!("{EVENTS_LINE} couldn't be counted");
+	};
 	if counts.is_empty() {
 		return format!("{EVENTS_LINE} none");
 	}
@@ -208,7 +211,7 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8]) -> Result<Resumed, Str
 	};
 	let id = run.id;
 	match status.as_str() {
-		"stopped" | "running" | "killed" => {}
+		"stopped" | "failed" | "running" | "killed" => {}
 		"done" => {
 			return Err(format!(
 				"--resume: the last scan, run {id}, finished. Start a new one without --resume."
@@ -227,7 +230,7 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8]) -> Result<Resumed, Str
 			roots_diff(&was, roots)
 		));
 	}
-	if status != "stopped" {
+	if status == "running" || status == "killed" {
 		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
 	}
 	Ok(run)
@@ -275,8 +278,32 @@ impl Stats {
 	}
 }
 
+// What ended a run early other than a stop: the writer failed, or a worker
+// couldn't open the database or panicked. The others stop, and the run is
+// marked failed.
+#[derive(Default)]
+struct Faults {
+	any: AtomicBool,
+	why: Mutex<Vec<String>>,
+}
+
+impl Faults {
+	fn halt(&self, stop: &AtomicBool) {
+		self.any.store(true, Relaxed);
+		stop.store(true, Relaxed);
+	}
+
+	fn add(&self, stop: &AtomicBool, why: String) {
+		if let Ok(mut v) = self.why.lock() {
+			v.push(why);
+		}
+		self.halt(stop);
+	}
+}
+
 struct Shared {
 	stop: Arc<AtomicBool>,
+	faults: Arc<Faults>,
 	run_id: i64,
 	cutoff_us: i64,
 	db: PathBuf,
@@ -387,14 +414,21 @@ pub fn host() -> String {
 }
 
 // Hand the files back to whoever ran this through sudo, so reports and
-// queries need no root.
-pub fn give_back(paths: &[PathBuf]) {
+// queries need no root. The WAL files are only there when leaving WAL mode
+// failed.
+pub fn give_back(db: &Path) {
 	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
-	if let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) {
-		for p in paths {
-			if let Ok(c) = crate::util::cpath(p) {
-				unsafe { libc::chown(c.as_ptr(), uid, gid) };
-			}
+	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
+		return;
+	};
+	let with = |sfx: &str| {
+		let mut s = db.as_os_str().to_owned();
+		s.push(sfx);
+		PathBuf::from(s)
+	};
+	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
+		if let Ok(c) = crate::util::cpath(&p) {
+			unsafe { libc::chown(c.as_ptr(), uid, gid) };
 		}
 	}
 }
@@ -440,12 +474,17 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 		fmt_local(cutoff_us)
 	);
 
+	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
-	let writer = std::thread::spawn(move || db::writer(conn, run_id, rx));
+	let writer = {
+		let (faults, stop) = (faults.clone(), stop.clone());
+		std::thread::spawn(move || db::writer(conn, run_id, rx, move || faults.halt(&stop)))
+	};
 
 	let mounts = mounts::read_mounts()?;
 	let shared = Arc::new(Shared {
 		stop: stop.clone(),
+		faults: faults.clone(),
 		run_id,
 		// Anything this run already read counts as fresh, even when --since
 		// is later than when the run began.
@@ -514,12 +553,20 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 		}
 	}
 	for h in handles {
-		h.join().map_err(|_| "a worker panicked".to_string())?;
+		// run_group catches its workers' panics; this is in case it can't.
+		if h.join().is_err() {
+			faults.add(&stop, "a group panicked".into());
+		}
 	}
-	let conn = writer
+	let (conn, written) = writer
 		.join()
-		.map_err(|_| "the database writer panicked".to_string())??;
-
+		.map_err(|_| "the database writer panicked".to_string())?;
+	let mut why: Vec<String> = faults
+		.why
+		.lock()
+		.map(|mut v| std::mem::take(&mut *v))
+		.unwrap_or_default();
+	why.extend(written.err());
 	let stopped = stop.load(Relaxed);
 	// The stored summary keeps every part's lines; the output shows this
 	// part's. The events line is the whole run's either way.
@@ -527,8 +574,10 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	for g in &groups {
 		part.push_str(&format!("{}: {}\n", g.name, g.stats.line()));
 	}
-	let counts = run_events(&conn, run_id).map_err(e)?;
-	part.push_str(&events_line(&counts));
+	let counts = run_events(&conn, run_id)
+		.map_err(|x| why.push(format!("database: {x}")))
+		.ok();
+	part.push_str(&events_line(counts.as_deref()));
 	let mut summary = String::new();
 	if let Some(prev) = earlier {
 		for l in prev.lines().filter(|l| !l.starts_with(EVENTS_LINE)) {
@@ -538,49 +587,88 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 		summary.push_str(&format!("resumed {}\n", fmt_local(started)));
 	}
 	summary.push_str(&part);
-	let status = if stopped { "stopped" } else { "done" };
-	conn.execute(
+	let mut status = if !why.is_empty() {
+		"failed"
+	} else if stopped {
+		"stopped"
+	} else {
+		"done"
+	};
+	if let Err(x) = conn.execute(
 		"UPDATE runs SET status = ?1, finished_us = ?2, summary = ?3 WHERE id = ?4",
 		rusqlite::params![status, now_us(), summary, run_id],
-	)
-	.map_err(e)?;
-	db::close_rw(conn).map_err(e)?;
-	give_back(&[db_path.clone(), lock_path(&db_path)]);
+	) {
+		why.push(format!("database: {x}"));
+		status = "failed";
+	}
+	// Everything is committed by now, so this can't change the result.
+	if let Err(x) = db::close_rw(conn) {
+		err!(
+			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
+			db_path.display()
+		);
+	}
+	give_back(&db_path);
 
 	out!(
 		"run {run_id} {status} after {}s\n{part}",
 		t0.elapsed().as_secs()
 	);
+	if !why.is_empty() {
+		why.dedup();
+		out!("Fix the cause, then continue it with the same command plus --resume.");
+		return Err(why.join("; "));
+	}
 	if stopped {
 		out!("Continue it with the same command plus --resume.");
 	}
 	// 2 adds to the others, so a stop says what was found before it.
-	Ok(exit_bits(&counts) | if stopped { 2 } else { 0 })
+	Ok(exit_bits(counts.as_deref().unwrap_or_default()) | if stopped { 2 } else { 0 })
+}
+
+struct DoneOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for DoneOnDrop<'_> {
+	fn drop(&mut self) {
+		self.0.store(true, Relaxed);
+	}
+}
+
+// A panic is a fault, not a hang: it stops the run and marks it failed.
+fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
+	if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
+		sh.faults.add(&sh.stop, format!("{who} panicked"));
+	}
 }
 
 fn run_group(g: &Group, sh: &Shared) {
+	let _done = DoneOnDrop(&g.done);
 	let (jtx, jrx) = sync_channel::<Job>(1024);
+	// Only the workers hold the receiver, so once the last one is gone the
+	// walk's send fails, rather than waiting on a full queue forever.
 	let jrx = Arc::new(Mutex::new(jrx));
-	let links = Arc::new(Links::default());
+	let links = Links::default();
 	std::thread::scope(|s| {
 		for _ in 0..g.threads {
 			let jrx = jrx.clone();
-			let links = links.clone();
-			s.spawn(move || hasher(g, sh, &jrx, &links));
+			let links = &links;
+			s.spawn(move || guarded(sh, "a worker", || hasher(g, sh, &jrx, links)));
 		}
-		for r in &g.roots {
-			if sh.stop.load(Relaxed) {
-				break;
+		drop(jrx);
+		guarded(sh, "a folder walk", || {
+			for r in &g.roots {
+				if sh.stop.load(Relaxed) {
+					break;
+				}
+				walk(r, sh, &g.stats, &jtx);
 			}
-			walk(r, sh, &g.stats, &jtx);
-		}
+		});
 		drop(jtx);
 	});
-	g.done.store(true, Relaxed);
 }
 
 fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
-	send(
+	_ = send(
 		sh,
 		Msg::Event {
 			kind: kind.name(),
@@ -601,10 +689,12 @@ fn excluded(sh: &Shared, p: &Path) -> bool {
 
 // A dead writer means nothing more can be recorded, so stop rather than read
 // files for nothing.
-fn send(sh: &Shared, m: Msg) {
+fn send(sh: &Shared, m: Msg) -> bool {
 	if sh.tx.send(m).is_err() {
-		sh.stop.store(true, Relaxed);
+		sh.faults.halt(&sh.stop);
+		return false;
 	}
+	true
 }
 
 pub fn lock_path(db: &Path) -> PathBuf {
@@ -774,13 +864,12 @@ impl Links {
 fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 	let conn = match db::open_ro(&sh.db) {
 		Ok(c) => c,
-		Err(e) => {
-			err!("{e}");
-			sh.stop.store(true, Relaxed);
-			return;
-		}
+		Err(e) => return sh.faults.add(&sh.stop, e),
 	};
-	let mut stmt = conn.prepare(db::LOOKUP).expect("lookup statement");
+	let mut stmt = match conn.prepare(db::LOOKUP) {
+		Ok(st) => st,
+		Err(e) => return sh.faults.add(&sh.stop, format!("{}: {e}", sh.db.display())),
+	};
 	let mut buf = vec![0u8; 1 << 20];
 	let mut xattr_fail_logged = 0;
 	loop {
@@ -1197,7 +1286,11 @@ fn one_file(
 	if let Some(c) = claim {
 		c.fill((bytes, mt, sums));
 	}
-	send(sh, hashed_msg(pbytes, &sums, &before, hashed_us));
+	// Once nothing more can be recorded, an attribute would vouch for a read
+	// the database never got.
+	if !send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) || sh.faults.any.load(Relaxed) {
+		return;
+	}
 
 	// Not inside a git checkout: the files come and go with every checkout,
 	// git already checksums what it keeps, and a ctime change makes git
@@ -1331,6 +1424,77 @@ mod tests {
 		// Every kind has a name of its own, which is what's stored.
 		let names: BTreeSet<_> = Kind::ALL.iter().map(|k| k.name()).collect();
 		assert_eq!(names.len(), Kind::ALL.len());
+	}
+
+	fn test_shared(db: PathBuf) -> (Shared, Receiver<Msg>) {
+		let (tx, rx) = sync_channel(64);
+		let sh = Shared {
+			stop: Arc::default(),
+			faults: Arc::default(),
+			run_id: 1,
+			cutoff_us: 0,
+			db,
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			mount_points: BTreeMap::new(),
+			write_xattrs: false,
+			tx,
+		};
+		(sh, rx)
+	}
+
+	// More files than the job queue holds, and no worker to take them.
+	#[test]
+	fn a_group_with_no_workers_ends() {
+		let dir = std::env::temp_dir().join(format!(
+			"test_tukfs-hash_scan_noworkers_{}",
+			std::process::id()
+		));
+		fs::create_dir_all(&dir).unwrap();
+		for i in 0..1500 {
+			File::create(dir.join(format!("f{i}"))).unwrap();
+		}
+		let (sh, _rx) = test_shared(dir.join("not here/t.sqlite"));
+		let g = Group {
+			name: "g".into(),
+			roots: vec![dir.clone()],
+			threads: 2,
+			stats: Stats::default(),
+			done: AtomicBool::new(false),
+		};
+		let (dtx, drx) = std::sync::mpsc::channel();
+		std::thread::spawn(move || {
+			run_group(&g, &sh);
+			let why = sh.faults.why.lock().unwrap().clone();
+			dtx.send((g.done.load(Relaxed), sh.stop.load(Relaxed), why))
+				.unwrap();
+		});
+		let (done, stopped, why) = drx
+			.recv_timeout(Duration::from_secs(20))
+			.expect("the group never ended");
+		assert!(done && stopped);
+		assert_eq!(why.len(), 2, "{why:?}");
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_panic_is_a_fault() {
+		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
+		let done = AtomicBool::new(false);
+		std::thread::scope(|s| {
+			let _done = DoneOnDrop(&done);
+			s.spawn(|| guarded(&sh, "a worker", || panic!("on purpose")));
+		});
+		assert!(done.load(Relaxed));
+		assert!(sh.faults.any.load(Relaxed) && sh.stop.load(Relaxed));
+		assert_eq!(*sh.faults.why.lock().unwrap(), ["a worker panicked"]);
+		// And a panic past the guard still marks the group done.
+		let done = AtomicBool::new(false);
+		let r = std::panic::catch_unwind(|| {
+			let _done = DoneOnDrop(&done);
+			panic!("on purpose");
+		});
+		assert!(r.is_err() && done.load(Relaxed));
 	}
 
 	#[test]

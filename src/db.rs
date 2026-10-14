@@ -150,9 +150,20 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 // folder can still open it read-only after a run as root. Leaving WAL mode
 // checkpoints on its own; an explicit TRUNCATE checkpoint after quick_check
 // fails with "table is locked" on SQLite 3.46 to 3.50.
-pub fn close_rw(conn: Connection) -> rusqlite::Result<()> {
-	conn.pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))?;
-	conn.close().map_err(|(_, e)| e)
+//
+// It needs the file to itself, so another reader makes it fail, at once or
+// after the busy wait. Everything is committed by then, so the caller only
+// warns, and a long wait would only hold up the result.
+pub fn close_rw(conn: Connection) -> Result<(), String> {
+	conn.busy_timeout(Duration::from_secs(5)).ok();
+	let mode = conn
+		.pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get::<_, String>(0))
+		.map_err(|e| e.to_string());
+	conn.close().map_err(|(_, e)| e.to_string())?;
+	match mode?.to_ascii_lowercase().as_str() {
+		"delete" => Ok(()),
+		other => Err(format!("still in {other} mode")),
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -250,34 +261,70 @@ pub fn apply(
 	Ok(())
 }
 
-// The only thread that writes. Batches go in one transaction each, at most a
-// second apart, so a stop or a crash loses little.
-pub fn writer(mut conn: Connection, run_id: i64, rx: Receiver<Msg>) -> Result<Connection, String> {
-	let e = |e: rusqlite::Error| format!("database write: {e}");
-	let mut pending: Vec<Msg> = Vec::with_capacity(4096);
+fn commit(conn: &mut Connection, run_id: i64, msgs: &mut Vec<Msg>) -> rusqlite::Result<()> {
+	if msgs.is_empty() {
+		return Ok(());
+	}
+	let tx = conn.transaction()?;
+	let now = crate::util::now_us();
+	for m in msgs.drain(..) {
+		apply(&tx, run_id, now, m)?;
+	}
+	tx.commit()
+}
+
+// The only thread that writes. Batches go in at most a second apart, so a stop
+// or a crash loses little. Events go first and on their own, so a bad row
+// among the rest can't take a mismatch down with it.
+//
+// After a failure the rest are dropped, but events are still kept, until one
+// of those fails too. `halt` is called once, to stop the workers.
+pub fn writer(
+	mut conn: Connection,
+	run_id: i64,
+	rx: Receiver<Msg>,
+	halt: impl Fn(),
+) -> (Connection, Result<(), String>) {
+	let mut events: Vec<Msg> = Vec::new();
+	let mut rest: Vec<Msg> = Vec::with_capacity(4096);
+	let mut failed: Option<String> = None;
+	let mut events_ok = true;
 	let mut last = Instant::now();
 	loop {
 		let done = match rx.recv_timeout(Duration::from_millis(250)) {
+			Ok(m @ Msg::Event { .. }) => {
+				if events_ok {
+					events.push(m);
+				}
+				false
+			}
 			Ok(m) => {
-				pending.push(m);
+				if failed.is_none() {
+					rest.push(m);
+				}
 				false
 			}
 			Err(RecvTimeoutError::Timeout) => false,
 			Err(RecvTimeoutError::Disconnected) => true,
 		};
-		if !pending.is_empty()
-			&& (done || pending.len() >= 20000 || last.elapsed() >= Duration::from_secs(1))
-		{
-			let tx = conn.transaction().map_err(e)?;
-			let now = crate::util::now_us();
-			for m in pending.drain(..) {
-				apply(&tx, run_id, now, m).map_err(e)?;
+		let n = events.len() + rest.len();
+		if n > 0 && (done || n >= 20000 || last.elapsed() >= Duration::from_secs(1)) {
+			let r = commit(&mut conn, run_id, &mut events);
+			if r.is_err() {
+				events_ok = false;
 			}
-			tx.commit().map_err(e)?;
+			if let Err(x) = r.and_then(|()| commit(&mut conn, run_id, &mut rest)) {
+				events.clear();
+				rest.clear();
+				if failed.is_none() {
+					failed = Some(format!("database write: {x}"));
+					halt();
+				}
+			}
 			last = Instant::now();
 		}
 		if done {
-			return Ok(conn);
+			return (conn, failed.map_or(Ok(()), Err));
 		}
 	}
 }
@@ -299,7 +346,7 @@ mod tests {
 		let p = temp_db("rt");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
-		let t = std::thread::spawn(move || writer(conn, 1, rx));
+		let t = std::thread::spawn(move || writer(conn, 1, rx, || {}));
 		let odd = b"/x/caf\xe9".to_vec();
 		for (path, d) in [
 			(b"/x/a".to_vec(), 1u8),
@@ -318,7 +365,8 @@ mod tests {
 			.unwrap();
 		}
 		drop(tx);
-		let conn = t.join().unwrap().unwrap();
+		let (conn, r) = t.join().unwrap();
+		r.unwrap();
 		let n: i64 = conn
 			.query_row("SELECT count(*) FROM files", [], |r| r.get(0))
 			.unwrap();
@@ -336,6 +384,78 @@ mod tests {
 		assert_eq!(typ, "text");
 		drop(st);
 		close_rw(conn).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	fn hashed(path: &[u8], d: u8) -> Msg {
+		Msg::Hashed(Box::new(Hashed {
+			path: path.to_vec(),
+			b3: [d; 32],
+			b2: None,
+			bytes: 3,
+			mtime_us: 9,
+			ino: 1,
+			hashed_us: 100,
+		}))
+	}
+
+	fn ev(path: &[u8]) -> Msg {
+		Msg::Event {
+			kind: "b3-db-mismatch",
+			path: path.to_vec(),
+			detail: String::new(),
+		}
+	}
+
+	#[test]
+	fn a_bad_row_keeps_the_events() {
+		let p = temp_db("wfail");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"CREATE TRIGGER boom BEFORE INSERT ON paths BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+		)
+		.unwrap();
+		let halts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+		let h = halts.clone();
+		let (tx, rx) = sync_channel(16);
+		let t = std::thread::spawn(move || {
+			writer(conn, 1, rx, move || {
+				h.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			})
+		});
+		// The row comes first in the batch, and still doesn't take the event
+		// with it.
+		tx.send(hashed(b"/x/a", 1)).unwrap();
+		tx.send(ev(b"/x/b")).unwrap();
+		std::thread::sleep(Duration::from_millis(1500));
+		// After the failure: rows are dropped, events still kept.
+		tx.send(hashed(b"/x/c", 2)).unwrap();
+		tx.send(ev(b"/x/d")).unwrap();
+		drop(tx);
+		let (conn, r) = t.join().unwrap();
+		assert!(r.unwrap_err().contains("boom"));
+		assert_eq!(halts.load(std::sync::atomic::Ordering::Relaxed), 1);
+		let n = |q: &str| -> i64 { conn.query_row(q, [], |r| r.get(0)).unwrap() };
+		assert_eq!(n("SELECT count(*) FROM events"), 2);
+		assert_eq!(n("SELECT count(*) FROM paths"), 0);
+		close_rw(conn).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn close_rw_says_when_wal_stays() {
+		let p = temp_db("walstays");
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		let conn = open_rw(&p).unwrap();
+		let other = Connection::open(&p).unwrap();
+		other
+			.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0))
+			.unwrap();
+		assert!(close_rw(conn).is_err());
+		assert!(p.with_extension("sqlite-wal").exists());
+		drop(other);
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		assert!(!p.with_extension("sqlite-wal").exists());
 		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
