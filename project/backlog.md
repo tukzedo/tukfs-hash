@@ -29,16 +29,6 @@
 
 ## Issues
 
-- Should the main scan write xattrs on Dropbox files?
-	- ID: 2026101406340929
-	- Type: Task
-	- Status: Waiting for answers
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
-	- Answer: Yes
-
 - `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
 	- ID: 2026101406340911
 	- Type: Bug
@@ -594,6 +584,19 @@
 	- Swept: No other step resets anything.
 	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- Should the main scan write xattrs on Dropbox files?
+	- ID: 2026101406340929
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
+	- Answer: Yes
+	- Actual fix: Nothing to change, since the scan already writes them there. A test checks a file with Dropbox's attribute gets ours and keeps its own, and design.md says why.
+	- Acceptance signoff: Self-closed: per the answer. The test fails when the scan skips such files.
+	- Closed: 20261014-104500
 
 - The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
 	- ID: 2026101406340925

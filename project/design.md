@@ -117,6 +117,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - None are written in git work trees. Files come and go with each checkout, git checksums what it keeps, and a ctime change makes git look at each file again.
 
+- Dropbox folders get them like any other. Dropbox already keeps its own attribute on each file, and rmlint's attributes have sat on most of them without trouble. Other attributes on a file are left as they are.
+
 - Nothing is written to NTFS, APFS or HFS+, not attributes and not the database. Linux's drivers for them aren't reliable enough to trust with writes, and this tool only runs on Linux. They're still read and recorded.
 	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway.
 	- The walk stays on its root's device, so a root's filesystem decides for every file under it.
