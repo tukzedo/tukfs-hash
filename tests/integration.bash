@@ -133,22 +133,31 @@ rc="$(scan --since "$tomorrow")"
 check "edit is not corruption" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '$tree/small.txt'")" 0
 check "edit updates the size attribute" "$(xget "$tree/small.txt" user.blake3.bytes)" 13
 
-# 5. Stop part way, then resume.
+# 5. Stop part way, then resume. A damaged file in the top folder is read
+# before the stop, and the stop and the resumed part both have to say so.
 mkdir -p "$tree/many"
 for i in $(seq 1 400); do head -c $((i * 16384)) /dev/urandom > "$tree/many/f$i"; done
 runs_before="$(q 'SELECT count(*) FROM runs')"
+flip1() { python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); b=f.read(1); f.seek(0); f.write(bytes([b[0]^1])); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "$1"; }
+flip1 "$tree/rm-stale.txt"
 "$bin" scan --db "$db" --root "$tree" --since "$tomorrow" --threads "$tree=1" --progress 3600 > "$work/stop.txt" 2>&1 &
 pid=$!
 wait_started "$work/stop.txt" || bad "scan never started"
 sleep 0.1
 kill -INT "$pid"
 rc=0; wait "$pid" || rc=$?
-check "stopped exit code" "$rc" 2
+# Was 2. A stop now adds 2 to what was found before it.
+# check "stopped exit code" "$rc" 2
+check "stopped exit code, with the damage found" "$rc" 6
 check "run marked stopped" "$(q 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" stopped
 part="$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")"
 expect "stopped before the end ($part of 400)" "did not stop early ($part)" [ "$part" -lt 400 ]
 rc="$(scan --resume)"
-check "resume exit" "$rc" 0
+# Was 0. The damage found before the stop still counts.
+# check "resume exit" "$rc" 0
+check "resume exit" "$rc" 4
+check "resume didn't report it twice" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '$tree/rm-stale.txt'")" 2
+expect "summary counts the whole run" "summary: $(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1, b3-xattr-mismatch 1$' <<< "$(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
 check "resume finished the rest" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")" 400
 check "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_before + 1))"
 skipped="$(grep -o 'skipped [0-9]*' "$work/out.txt" | head -1 | cut -d' ' -f2)"
@@ -295,6 +304,53 @@ sqlite3 "$work/db/lk.sqlite" "UPDATE paths SET bytes = 'junk' WHERE path = '$lk/
 "$bin" scan --db "$work/db/lk.sqlite" --root "$lk" --no-xattrs --since "$tomorrow" --progress 3600 > /dev/null 2>&1 || true
 check "unreadable row reported" "$(sqlite3 "$work/db/lk.sqlite" "SELECT group_concat(kind || ' ' || path) FROM events")" "db-error $lk/f"
 check "unreadable row left alone" "$(sqlite3 "$work/db/lk.sqlite" "SELECT bytes FROM paths WHERE path = '$lk/f'")" junk
+rc=0; "$bin" scan --db "$work/db/lk.sqlite" --root "$lk" --no-xattrs --since "$tomorrow" --progress 3600 > /dev/null 2>&1 || rc=$?
+check "unreadable row exits 8" "$rc" 8
+
+# 13. A folder or file that can't be read is reported and exits 8, or 12
+# with a mismatch too.
+ud="$work/ud"; mkdir -p "$ud/locked" "$ud/open"
+printf 'a\n' > "$ud/open/a"; printf 'b\n' > "$ud/locked/b"; printf 'c\n' > "$ud/open/c"
+uscan() { local rc=0; "$bin" scan --db "$work/db/ud.sqlite" --root "$ud" --no-xattrs --progress 3600 "$@" > "$work/ud.txt" 2>&1 || rc=$?; echo "$rc"; }
+uq() { sqlite3 "$work/db/ud.sqlite" "$1"; }
+check "readable tree" "$(uscan)" 0
+chmod 000 "$ud/locked" "$ud/open/c"
+# Put back on any exit, or the cleanup can't remove them.
+trap 'chmod 755 "$ud/locked" 2> /dev/null; chmod 644 "$ud/open/c" 2> /dev/null; rm -rf -- "$work"' EXIT
+check "unreadable folder and file" "$(uscan --since "$tomorrow") $(uq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY path)")" "8 dir-error $ud/locked, open-error $ud/open/c"
+flip1 "$ud/open/a"
+rc="$(uscan --since "$tomorrow")"
+chmod 755 "$ud/locked"; chmod 644 "$ud/open/c"
+check "and a mismatch" "$rc" 12
+
+# 14. --resume takes only the newest scan, only if it didn't finish, and only
+# over the same roots.
+rs="$work/rs"; mkdir -p "$rs/x" "$rs/y"
+printf 'x\n' > "$rs/x/f"; printf 'y\n' > "$rs/y/f"
+rscan() { local rc=0; "$bin" scan --db "$work/db/rs.sqlite" --no-xattrs --progress 3600 "$@" > "$work/rs.txt" 2>&1 || rc=$?; echo "$rc"; }
+rq() { sqlite3 "$work/db/rs.sqlite" "$1"; }
+newest="(SELECT max(id) FROM runs WHERE status != 'accept')"
+rscan --root "$rs/x" > /dev/null
+rq "UPDATE runs SET status = 'stopped'"
+rscan --root "$rs/x" > /dev/null
+check "an older stopped run isn't resumed" "$(rscan --root "$rs/x" --resume) $(rq "SELECT count(*) FROM runs WHERE status = 'stopped'")" "1 1"
+expect "says why" "message: $(cat "$work/rs.txt")" grep -q 'finished' "$work/rs.txt"
+rq "UPDATE runs SET status = 'stopped' WHERE id = $newest"
+check "other roots refused" "$(rscan --root "$rs/y" --resume)" 1
+expect "says which" "message: $(cat "$work/rs.txt")" grep -q "other roots (not given now: $rs/x; not in that run: $rs/y)" "$work/rs.txt"
+n="$(rq 'SELECT count(*) FROM runs')"
+check "same roots resumed" "$(rscan --root "$rs/x" --resume) $(rq "SELECT status FROM runs WHERE id = $newest") $(rq 'SELECT count(*) FROM runs')" "0 done $n"
+# A run killed hard is still marked running. Resume takes it; a new run
+# marks it killed.
+rq "UPDATE runs SET status = 'running' WHERE id = $newest"
+check "a killed run resumed" "$(rscan --root "$rs/x" --resume) $(rq "SELECT status FROM runs WHERE id = $newest")" "0 done"
+rq "UPDATE runs SET status = 'running' WHERE id = $newest"
+killed="$(rq "SELECT max(id) FROM runs")"
+check "a new run marks it killed" "$(rscan --root "$rs/x") $(rq "SELECT status FROM runs WHERE id = $killed")" "0 killed"
+# accept's own runs don't hide a stopped scan.
+rq "UPDATE runs SET status = 'stopped' WHERE id = $newest"
+"$bin" accept --db "$work/db/rs.sqlite" "$rs/x/f" > /dev/null 2>&1 || bad "accept failed"
+check "resumed past an accept" "$(rscan --root "$rs/x" --resume) $(rq "SELECT status FROM runs WHERE id = $newest")" "0 done"
 
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"

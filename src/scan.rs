@@ -8,8 +8,11 @@
 
 use crate::db::{self, Hashed, Msg, Prior};
 use crate::mounts;
-use crate::util::{b64u_encode, fmt_local, hex, human_bytes, local_midnight_us, now_us};
+use crate::util::{
+	b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us,
+};
 use crate::xattr::{self, OnFile};
+use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -33,6 +36,201 @@ pub struct Opts {
 	pub write_xattrs: bool,
 	pub progress_secs: u64,
 	pub args: String,
+}
+
+/// What an event says about a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+	XattrMismatch,
+	RmlintMismatch,
+	DbMismatch,
+	CacheMismatch,
+	ReadError,
+	Unstable,
+	DirError,
+	StatError,
+	OpenError,
+	DbError,
+	XattrError,
+}
+
+impl Kind {
+	const ALL: [Kind; 11] = [
+		Kind::XattrMismatch,
+		Kind::RmlintMismatch,
+		Kind::DbMismatch,
+		Kind::CacheMismatch,
+		Kind::ReadError,
+		Kind::Unstable,
+		Kind::DirError,
+		Kind::StatError,
+		Kind::OpenError,
+		Kind::DbError,
+		Kind::XattrError,
+	];
+
+	pub fn name(self) -> &'static str {
+		match self {
+			Kind::XattrMismatch => "b3-xattr-mismatch",
+			Kind::RmlintMismatch => "b2-rmlint-mismatch",
+			Kind::DbMismatch => "b3-db-mismatch",
+			Kind::CacheMismatch => "cache-mismatch",
+			Kind::ReadError => "read-error",
+			Kind::Unstable => "unstable",
+			Kind::DirError => "dir-error",
+			Kind::StatError => "stat-error",
+			Kind::OpenError => "open-error",
+			Kind::DbError => "db-error",
+			Kind::XattrError => "xattr-error",
+		}
+	}
+
+	// 4 is something flagged, 8 is something left unchecked. Unstable files
+	// are live ones, like a running VM's disk, and would set 8 on every run.
+	// A failed attribute write comes after the check.
+	fn exit_bits(self) -> i32 {
+		match self {
+			Kind::XattrMismatch
+			| Kind::RmlintMismatch
+			| Kind::DbMismatch
+			| Kind::CacheMismatch
+			| Kind::ReadError => 4,
+			Kind::DirError | Kind::StatError | Kind::OpenError | Kind::DbError => 8,
+			Kind::Unstable | Kind::XattrError => 0,
+		}
+	}
+}
+
+// Every part of a resumed run counts, and a file reported again by a later
+// part counts once.
+fn run_events(conn: &rusqlite::Connection, run_id: i64) -> rusqlite::Result<Vec<(String, i64)>> {
+	conn.prepare(
+		"SELECT kind, count(DISTINCT path) FROM events WHERE run_id = ?1 GROUP BY kind ORDER BY kind",
+	)?
+	.query_map([run_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+	.collect()
+}
+
+// A kind this version doesn't know can't be called harmless.
+fn exit_bits(counts: &[(String, i64)]) -> i32 {
+	counts
+		.iter()
+		.filter(|(_, n)| *n > 0)
+		.map(|(k, _)| {
+			Kind::ALL
+				.iter()
+				.find(|x| x.name() == k)
+				.map_or(8, |x| x.exit_bits())
+		})
+		.fold(0, |a, b| a | b)
+}
+
+const EVENTS_LINE: &str = "events in the whole run:";
+
+fn events_line(counts: &[(String, i64)]) -> String {
+	if counts.is_empty() {
+		return format!("{EVENTS_LINE} none");
+	}
+	let each: Vec<String> = counts.iter().map(|(k, n)| format!("{k} {n}")).collect();
+	format!("{EVENTS_LINE} {}", each.join(", "))
+}
+
+// Roots as plan() kept them, sorted, so 2 runs over the same folders match.
+fn roots_key(groups: &[(String, Vec<PathBuf>, usize)]) -> Vec<u8> {
+	let mut roots: Vec<&[u8]> = groups
+		.iter()
+		.flat_map(|(_, rs, _)| rs.iter().map(|r| r.as_os_str().as_bytes()))
+		.collect();
+	roots.sort_unstable();
+	roots.join(&0u8)
+}
+
+fn roots_diff(was: &[u8], now: &[u8]) -> String {
+	let split = |b: &[u8]| -> BTreeSet<Vec<u8>> {
+		b.split(|&c| c == 0)
+			.filter(|r| !r.is_empty())
+			.map(<[u8]>::to_vec)
+			.collect()
+	};
+	let (was, now) = (split(was), split(now));
+	let show = |set: Vec<&Vec<u8>>| {
+		let mut v: Vec<String> = set.iter().take(3).map(|r| escape_name(r)).collect();
+		if set.len() > 3 {
+			v.push(format!("and {} more", set.len() - 3));
+		}
+		v.join(", ")
+	};
+	let mut out = Vec::new();
+	let gone: Vec<_> = was.difference(&now).collect();
+	let added: Vec<_> = now.difference(&was).collect();
+	if !gone.is_empty() {
+		out.push(format!("not given now: {}", show(gone)));
+	}
+	if !added.is_empty() {
+		out.push(format!("not in that run: {}", show(added)));
+	}
+	out.join("; ")
+}
+
+struct Resumed {
+	id: i64,
+	cutoff_us: i64,
+	started_us: i64,
+	summary: Option<String>,
+}
+
+// Only the newest scan, only if it didn't finish, and only over the same
+// roots. An older stopped run would bring back an old skip date, and the
+// other wrapper's run would be finished over the wrong roots.
+fn pick_resume(conn: &rusqlite::Connection, roots: &[u8]) -> Result<Resumed, String> {
+	let row = conn
+		.query_row(
+			"SELECT id, status, cutoff_us, started_us, roots, summary FROM runs
+			WHERE status != 'accept' ORDER BY id DESC LIMIT 1",
+			[],
+			|r| {
+				Ok((
+					Resumed {
+						id: r.get(0)?,
+						cutoff_us: r.get(2)?,
+						started_us: r.get(3)?,
+						summary: r.get(5)?,
+					},
+					r.get::<_, String>(1)?,
+					r.get::<_, Option<Vec<u8>>>(4)?,
+				))
+			},
+		)
+		.optional()
+		.map_err(|e| format!("database: {e}"))?;
+	let Some((run, status, was)) = row else {
+		return Err("--resume: no scan to resume".into());
+	};
+	let id = run.id;
+	match status.as_str() {
+		"stopped" | "running" | "killed" => {}
+		"done" => {
+			return Err(format!(
+				"--resume: the last scan, run {id}, finished. Start a new one without --resume."
+			))
+		}
+		other => return Err(format!("--resume: run {id} is {other}; can't resume it")),
+	}
+	let Some(was) = was else {
+		return Err(format!(
+			"--resume: run {id} is from an older version, which kept no root list. Start a new one without --resume."
+		));
+	};
+	if was != roots {
+		return Err(format!(
+			"--resume: run {id} was over other roots ({}). Resume it with the same roots, or start a new one without --resume.",
+			roots_diff(&was, roots)
+		));
+	}
+	if status != "stopped" {
+		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
+	}
+	Ok(run)
 }
 
 #[derive(Default)]
@@ -215,21 +413,25 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
 
 	let started = now_us();
-	let (run_id, cutoff_us, run_started) = if o.resume {
-		conn.query_row(
-			"SELECT id, cutoff_us, started_us FROM runs WHERE status IN ('running', 'stopped') ORDER BY id DESC LIMIT 1",
-			[],
-			|r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
-		)
-		.map_err(|_| "no unfinished run to resume".to_string())?
+	let roots = roots_key(&plan.groups);
+	let (run_id, cutoff_us, run_started, earlier) = if o.resume {
+		let r = pick_resume(&conn, &roots)?;
+		(r.id, r.cutoff_us, r.started_us, r.summary)
 	} else {
-		let cutoff = o.since.unwrap_or_else(|| local_midnight_us(started));
+		// The lock is held, so a run still marked running died without a
+		// word. A new run means it won't be resumed.
 		conn.execute(
-			"INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?2, 'running', ?3, ?4)",
-			rusqlite::params![started, cutoff, host(), o.args],
+			"UPDATE runs SET status = 'killed' WHERE status = 'running'",
+			[],
 		)
 		.map_err(e)?;
-		(conn.last_insert_rowid(), cutoff, started)
+		let cutoff = o.since.unwrap_or_else(|| local_midnight_us(started));
+		conn.execute(
+			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots) VALUES (?1, ?2, 'running', ?3, ?4, ?5)",
+			rusqlite::params![started, cutoff, host(), o.args, roots],
+		)
+		.map_err(e)?;
+		(conn.last_insert_rowid(), cutoff, started, None)
 	};
 	conn.execute("UPDATE runs SET status = 'running' WHERE id = ?1", [run_id])
 		.map_err(e)?;
@@ -319,12 +521,23 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 		.map_err(|_| "the database writer panicked".to_string())??;
 
 	let stopped = stop.load(Relaxed);
-	let mut summary = String::new();
-	let mut bad = 0;
+	// The stored summary keeps every part's lines; the output shows this
+	// part's. The events line is the whole run's either way.
+	let mut part = String::new();
 	for g in &groups {
-		summary.push_str(&format!("{}: {}\n", g.name, g.stats.line()));
-		bad += g.stats.mismatch.load(Relaxed) + g.stats.read_err.load(Relaxed);
+		part.push_str(&format!("{}: {}\n", g.name, g.stats.line()));
 	}
+	let counts = run_events(&conn, run_id).map_err(e)?;
+	part.push_str(&events_line(&counts));
+	let mut summary = String::new();
+	if let Some(prev) = earlier {
+		for l in prev.lines().filter(|l| !l.starts_with(EVENTS_LINE)) {
+			summary.push_str(l);
+			summary.push('\n');
+		}
+		summary.push_str(&format!("resumed {}\n", fmt_local(started)));
+	}
+	summary.push_str(&part);
 	let status = if stopped { "stopped" } else { "done" };
 	conn.execute(
 		"UPDATE runs SET status = ?1, finished_us = ?2, summary = ?3 WHERE id = ?4",
@@ -335,14 +548,14 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	give_back(&[db_path.clone(), lock_path(&db_path)]);
 
 	out!(
-		"run {run_id} {status} after {}s\n{summary}",
+		"run {run_id} {status} after {}s\n{part}",
 		t0.elapsed().as_secs()
 	);
 	if stopped {
 		out!("Continue it with the same command plus --resume.");
-		return Ok(2);
 	}
-	Ok(if bad > 0 { 4 } else { 0 })
+	// 2 adds to the others, so a stop says what was found before it.
+	Ok(exit_bits(&counts) | if stopped { 2 } else { 0 })
 }
 
 fn run_group(g: &Group, sh: &Shared) {
@@ -366,11 +579,11 @@ fn run_group(g: &Group, sh: &Shared) {
 	g.done.store(true, Relaxed);
 }
 
-fn event(sh: &Shared, kind: &'static str, path: &Path, detail: String) {
+fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
 	send(
 		sh,
 		Msg::Event {
-			kind,
+			kind: kind.name(),
 			path: path.as_os_str().as_bytes().to_vec(),
 			detail,
 		},
@@ -415,21 +628,48 @@ fn walk(root: &Path, sh: &Shared, stats: &Stats, jobs: &SyncSender<Job>) {
 		}
 		let rd = match fs::read_dir(&dir) {
 			Ok(rd) => rd,
+			// Gone since it was listed, like a file that goes before it's
+			// opened.
+			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
 			Err(e) => {
 				stats.other_err.fetch_add(1, Relaxed);
-				event(sh, "dir-error", &dir, e.to_string());
+				event(sh, Kind::DirError, &dir, e.to_string());
 				continue;
 			}
 		};
 		let mut files: Vec<(u64, PathBuf)> = Vec::new();
 		let mut dirs: Vec<PathBuf> = Vec::new();
 		let mut in_git = git_above;
-		for ent in rd.flatten() {
+		for ent in rd {
+			// std ends the listing at an error, so the rest of the folder
+			// goes unread. An EIO in a damaged folder block is the case.
+			let ent = match ent {
+				Ok(ent) => ent,
+				Err(e) => {
+					stats.other_err.fetch_add(1, Relaxed);
+					let n = files.len() + dirs.len();
+					event(
+						sh,
+						Kind::DirError,
+						&dir,
+						format!("{e}, after {n} entries; the rest weren't read"),
+					);
+					break;
+				}
+			};
 			let name = ent.file_name();
 			if name == ".git" {
 				in_git = true;
 			}
-			let Ok(ft) = ent.file_type() else { continue };
+			let ft = match ent.file_type() {
+				Ok(ft) => ft,
+				Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+				Err(e) => {
+					stats.other_err.fetch_add(1, Relaxed);
+					event(sh, Kind::StatError, &ent.path(), e.to_string());
+					continue;
+				}
+			};
 			let p = ent.path();
 			if ft.is_dir() {
 				if name == ".zfs" && sh.mount_points.get(&dir).is_some_and(|t| t == "zfs") {
@@ -555,7 +795,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 			Ok(p) => p,
 			Err(e) => {
 				g.stats.other_err.fetch_add(1, Relaxed);
-				event(sh, "db-error", &job.path, e.to_string());
+				event(sh, Kind::DbError, &job.path, e.to_string());
 				continue;
 			}
 		};
@@ -659,11 +899,11 @@ fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 		// good copy left. That is the same news as a mismatch.
 		ReadFail::Io(e, at) => {
 			st.read_err.fetch_add(1, Relaxed);
-			event(sh, "read-error", path, format!("{e} at byte {at}"));
+			event(sh, Kind::ReadError, path, format!("{e} at byte {at}"));
 		}
 		ReadFail::Unstable => {
 			st.unstable.fetch_add(1, Relaxed);
-			event(sh, "unstable", path, "changed while being read".into());
+			event(sh, Kind::Unstable, path, "changed while being read".into());
 		}
 	}
 }
@@ -677,7 +917,7 @@ struct Refs<'a> {
 	db: Option<&'a Prior>,
 }
 
-type Miss = (&'static str, String);
+type Miss = (Kind, String);
 
 impl<'a> Refs<'a> {
 	fn new(onfile: &OnFile, prior: Option<&'a Prior>, md: &fs::Metadata) -> Refs<'a> {
@@ -696,7 +936,7 @@ impl<'a> Refs<'a> {
 		if let Some(stored) = self.xattr.filter(|d| *d != s.b3) {
 			let when = self.xattr_date.map_or_else(|| "unknown".into(), fmt_local);
 			out.push((
-				"b3-xattr-mismatch",
+				Kind::XattrMismatch,
 				format!(
 					"on file {} (taken {when}), read now {}",
 					b64u_encode(&stored),
@@ -707,14 +947,14 @@ impl<'a> Refs<'a> {
 		if let (Some(stored), Some(now)) = (self.b2, s.b2) {
 			if stored != now {
 				out.push((
-					"b2-rmlint-mismatch",
+					Kind::RmlintMismatch,
 					format!("on file {}, read now {}", hex(&stored), hex(&now)),
 				));
 			}
 		}
 		if let Some(p) = self.db.filter(|p| p.b3 != s.b3) {
 			out.push((
-				"b3-db-mismatch",
+				Kind::DbMismatch,
 				format!(
 					"database {} (taken {}), read now {}",
 					b64u_encode(&p.b3),
@@ -831,7 +1071,7 @@ fn one_file(
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
 		Err(e) => {
 			st.other_err.fetch_add(1, Relaxed);
-			event(sh, "stat-error", path, e.to_string());
+			event(sh, Kind::StatError, path, e.to_string());
 			return;
 		}
 	};
@@ -839,7 +1079,9 @@ fn one_file(
 	let (bytes, mt) = (md.len() as i64, mtime_us(&md));
 
 	if let Some(p) = &prior {
-		if p.hashed_us >= sh.cutoff_us
+		// An earlier part of this run already judged it, mismatch or not, so
+		// a resumed run doesn't read and report it twice.
+		if (p.hashed_us >= sh.cutoff_us || p.seen_run == sh.run_id)
 			&& p.bytes == bytes
 			&& p.mtime_us == mt
 			&& p.ino == md.ino() as i64
@@ -857,14 +1099,19 @@ fn one_file(
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
 		Err(e) => {
 			st.other_err.fetch_add(1, Relaxed);
-			event(sh, "open-error", path, e.to_string());
+			event(sh, Kind::OpenError, path, e.to_string());
 			return;
 		}
 	};
 	let fd = file.as_raw_fd();
 	let before = match file.metadata() {
 		Ok(m) if m.file_type().is_file() => m,
-		_ => return,
+		Ok(_) => return,
+		Err(e) => {
+			st.other_err.fetch_add(1, Relaxed);
+			event(sh, Kind::StatError, path, e.to_string());
+			return;
+		}
 	};
 	let (bytes, mt) = (before.len() as i64, mtime_us(&before));
 	let onfile = OnFile::read(fd);
@@ -926,7 +1173,7 @@ fn one_file(
 			st.mismatch.fetch_add(1, Relaxed);
 			event(
 				sh,
-				"cache-mismatch",
+				Kind::CacheMismatch,
 				path,
 				format!(
 					"first read {}, then {} with the cache dropped, which matches what was stored",
@@ -968,7 +1215,7 @@ fn one_file(
 				// file. A few events are enough to say so.
 				if *xattr_fail_logged < 20 {
 					*xattr_fail_logged += 1;
-					event(sh, "xattr-error", path, e.to_string());
+					event(sh, Kind::XattrError, path, e.to_string());
 				}
 			}
 		}
@@ -1036,7 +1283,7 @@ mod tests {
 			panic!("{v:?}")
 		};
 		assert_eq!(s, sums(2));
-		let kinds: Vec<_> = misses.iter().map(|m| m.0).collect();
+		let kinds: Vec<_> = misses.iter().map(|m| m.0.name()).collect();
 		assert_eq!(kinds, ["b3-xattr-mismatch", "b3-db-mismatch"]);
 		assert!(note.contains("same"));
 		// Wrong both times, differently.
@@ -1056,7 +1303,7 @@ mod tests {
 		let p = prior(1);
 		// The database agrees, the attribute doesn't.
 		let r = refs(Some(2), Some(&p));
-		let kinds: Vec<_> = r.misses(&sums(1)).iter().map(|m| m.0).collect();
+		let kinds: Vec<_> = r.misses(&sums(1)).iter().map(|m| m.0.name()).collect();
 		assert_eq!(kinds, ["b3-xattr-mismatch"]);
 		let r = Refs {
 			b2: Some([7; 64]),
@@ -1066,6 +1313,36 @@ mod tests {
 			b3: [1; 32],
 			b2: Some([8; 64]),
 		};
-		assert_eq!(r.misses(&s)[0].0, "b2-rmlint-mismatch");
+		assert_eq!(r.misses(&s)[0].0.name(), "b2-rmlint-mismatch");
+	}
+
+	#[test]
+	fn exit_bits_add_up() {
+		let c =
+			|k: &[&str]| -> Vec<(String, i64)> { k.iter().map(|k| (k.to_string(), 1)).collect() };
+		assert_eq!(exit_bits(&c(&[])), 0);
+		assert_eq!(exit_bits(&c(&["unstable", "xattr-error"])), 0);
+		assert_eq!(exit_bits(&c(&["cache-mismatch"])), 4);
+		assert_eq!(exit_bits(&c(&["read-error", "b3-db-mismatch"])), 4);
+		assert_eq!(exit_bits(&c(&["dir-error"])), 8);
+		assert_eq!(exit_bits(&c(&["db-error", "b2-rmlint-mismatch"])), 12);
+		assert_eq!(exit_bits(&c(&["from-a-newer-version"])), 8);
+		assert_eq!(exit_bits(&[("dir-error".into(), 0)]), 0);
+		// Every kind has a name of its own, which is what's stored.
+		let names: BTreeSet<_> = Kind::ALL.iter().map(|k| k.name()).collect();
+		assert_eq!(names.len(), Kind::ALL.len());
+	}
+
+	#[test]
+	fn roots_key_ignores_order() {
+		let g = |rs: &[&str]| vec![("g".to_string(), rs.iter().map(PathBuf::from).collect(), 1)];
+		let a = roots_key(&[g(&["/b", "/a"]), g(&["/c"])].concat());
+		let b = roots_key(&[g(&["/c"]), g(&["/a", "/b"])].concat());
+		assert_eq!(a, b);
+		assert_ne!(a, roots_key(&g(&["/a", "/b"])));
+		assert_eq!(
+			roots_diff(&a, &roots_key(&g(&["/a", "/d"]))),
+			"not given now: /b, /c; not in that run: /d"
+		);
 	}
 }

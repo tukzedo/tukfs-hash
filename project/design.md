@@ -60,6 +60,29 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A resumed run keeps its original skip date. Anything it already read counts as fresh even when `--since` is later than when it began.
 
+## Runs and exit codes
+
+- `--resume` only continues the newest scan, and only when it didn't finish and has the same roots. An older stopped run would bring back its old skip date, and 2 wrappers share one database, so one could finish the other's run over the wrong roots. Roots are compared as `plan` keeps them, so the order they're given in doesn't matter. Runs from before the root list was kept can't be resumed.
+
+- A run still marked `running` when the next one starts was killed, since the lock is held. It's marked `killed`. If it's the newest, `--resume` takes it like a stopped one.
+
+- A resumed run doesn't read again what an earlier part already judged at the same size and time, mismatches included, so it doesn't report them twice.
+
+- The exit code comes from the run's events in the database, not from the counters of the process that ends it. A file reported by 2 parts counts once, so that way a resume doesn't double it.
+
+- Each event kind sets one exit code bit, and the bits add up with 2 for a stop. This table is the rule:
+
+	| Event                                                                                       | Bit
+	| :---                                                                                        | :---
+	| `b3-xattr-mismatch`, `b2-rmlint-mismatch`, `b3-db-mismatch`, `cache-mismatch`, `read-error` | 4
+	| `dir-error`, `stat-error`, `open-error`, `db-error`                                         | 8
+	| `unstable`, `xattr-error`                                                                   | none
+	| a kind this version doesn't know                                                            | 8
+
+- `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make it mean nothing. An attribute that can't be written comes after the file was checked.
+
+- A folder that can't be listed, or stops listing part way, is a `dir-error`. The files in it aren't seen at all, so there's nothing else to count them by.
+
 ## Attributes
 
 - The names and formats match nemo-anywhere, so either program can use what the other left. The date and inode are new; nemo-anywhere ignores them.

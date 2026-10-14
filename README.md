@@ -25,7 +25,7 @@ It's a utility under tukfs, part of tukzedo.
 
 - Runs one worker per set of disks, so no disk is read by two at once, and more on flash. It never crosses into another mount.
 
-- Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again.
+- Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again. `--resume` only takes the newest scan, and only with the same roots, so 2 scripts sharing one database can't finish each other's runs.
 
 - `snapdiff` takes the change list from `zfs diff` or `btrfs subvolume find-new` and flags files that changed between 2 snapshots with the same size and time.
 
@@ -60,7 +60,7 @@ tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-ne
 
 `accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. Each name of a hard-linked file has its own record, so name each one.
 
-Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8 add up to 12 when both happen. `accept` exits 1 if any file wasn't taken.
+Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files or folders couldn't be checked, or input wasn't understood (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both kinds found. A resumed scan counts what its earlier parts found too. `accept` exits 1 if any file wasn't taken.
 
 Names that aren't plain text are printed with `\xHH` escapes, and a backslash as `\\`, so 2 names never print the same.
 
