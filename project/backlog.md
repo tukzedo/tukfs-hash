@@ -518,39 +518,6 @@
 	- Swept: `run_group` is the only place workers start. `hasher`'s `expect` on its statement is now a fault too. The writer is a plain thread, and its panic still ends the run with an error.
 	- Acceptance signoff: Needs signoff. A worker that can't open the database was a stop with exit 2 and is now a failed run with exit 1.
 
-- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
-	- ID: 2026101406340911
-	- Type: Bug
-	- Status: Waiting for testing
-	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
-	- Incorrect behavior [Bug]:
-		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
-		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
-		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
-		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
-	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
-	- Actual fix [Bug]:
-		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
-		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
-		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
-		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
-		- `--shutdown` shuts all guests down together as well.
-	- Branch: vmscan (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified:
-		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
-		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
-		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
-	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
-	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
-	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
-
 - The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
 	- ID: 2026101406340921
 	- Type: Bug
@@ -613,6 +580,39 @@
 	- Note: Unverified: a root run of `scan` and `vm-scan` on b23, and the fallback on a real kernel before 5.6.
 	- Swept: `accept` opens the paths it's given by name, which a person typed, so it was left. `snapdiff` reads snapshots, which can't change under it, and already compares devices in its inode walk.
 	- Acceptance signoff: Needs signoff. It changes what the scan reads and touches security.
+
+- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
+	- ID: 2026101406340911
+	- Type: Bug
+	- Status: Waiting for testing
+	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
+	- Incorrect behavior [Bug]:
+		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
+		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
+		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
+		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
+	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
+	- Actual fix [Bug]:
+		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
+		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
+		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
+		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
+		- `--shutdown` shuts all guests down together as well.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified:
+		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
+		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
+		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
+	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
+	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
+	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
 
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
