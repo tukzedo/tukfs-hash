@@ -51,8 +51,13 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 		],
 	)
 	.map_err(e)?;
-	db::close_rw(conn).map_err(e)?;
-	scan::give_back(&[db_path.clone(), scan::lock_path(&db_path)]);
+	if let Err(x) = db::close_rw(conn) {
+		err!(
+			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
+			show_path(&db_path)
+		);
+	}
+	scan::give_back(&db_path);
 	out!("run {run_id}: accepted {taken} of {}", paths.len());
 	Ok(if taken == paths.len() { 0 } else { 1 })
 }

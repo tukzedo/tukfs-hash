@@ -59,7 +59,10 @@ setfattr -n user.rmlint.blake2b.mtime -v "1000.5" "$tree/rm-stale.txt"
 rc="$(scan)"
 check "first scan exit" "$rc" 0
 check "paths recorded" "$(q 'SELECT count(*) FROM paths')" $((9 + odd))
-check "hard link read once" "$(grep -o 'links [0-9]*' "$work/out.txt" | head -1)" "links 1"
+# Was "links 1". When the first name's attribute is written before a worker
+# opens the second name, that name skips through it instead, so count reads.
+# check "hard link read once" "$(grep -o 'links [0-9]*' "$work/out.txt" | head -1)" "links 1"
+check "hard link read once" "$(grep -o 'hashed [0-9]*' "$work/out.txt" | head -1)" "hashed $((8 + odd))"
 check "empty file digest" "$(xget "$tree/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
 check "size attribute" "$(xget "$tree/small.txt" user.blake3.bytes)" 6
 check "mtime attribute in microseconds" "$(xget "$tree/small.txt" user.blake3.mtime)" "$(date -d '2020-02-03 04:05:06.123456' +%s)123456"
@@ -351,6 +354,45 @@ check "a new run marks it killed" "$(rscan --root "$rs/x") $(rq "SELECT status F
 rq "UPDATE runs SET status = 'stopped' WHERE id = $newest"
 "$bin" accept --db "$work/db/rs.sqlite" "$rs/x/f" > /dev/null 2>&1 || bad "accept failed"
 check "resumed past an accept" "$(rscan --root "$rs/x" --resume) $(rq "SELECT status FROM runs WHERE id = $newest")" "0 done"
+
+# 15. Something else with the database open doesn't cost the result. It stays
+# in WAL mode until a run finds it free.
+wl="$work/wl"; mkdir -p "$wl"; printf 'w\n' > "$wl/f"
+wdb="$work/db/wl.sqlite"
+wscan() { local rc=0; "$bin" scan --db "$wdb" --root "$wl" --no-xattrs --progress 3600 "$@" > "$work/wl.txt" 2>&1 || rc=$?; echo "$rc"; }
+wscan > /dev/null
+sqlite3 "$wdb" 'PRAGMA journal_mode=WAL' > /dev/null
+python3 -I -c 'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("SELECT count(*) FROM runs").fetchall(); print("open", flush=True); time.sleep(120)' "$wdb" > "$work/holder.txt" &
+holder=$!
+for _ in $(seq 1 200); do grep -q open "$work/holder.txt" && break; sleep 0.05; done
+flip1 "$wl/f"
+rc="$(wscan --since "$tomorrow")"
+kill "$holder"; wait "$holder" 2> /dev/null || true
+check "held open: exit" "$rc" 4
+expect "held open: summary" "output: $(cat "$work/wl.txt")" grep -q '^events in the whole run: b3-db-mismatch 1$' "$work/wl.txt"
+expect "held open: warns" "output: $(cat "$work/wl.txt")" grep -q 'left in WAL mode' "$work/wl.txt"
+check "held open: run recorded" "$(sqlite3 "$wdb" 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "done"
+check "free again: back in rollback mode" "$(wscan --since "$tomorrow") $(sqlite3 "$wdb" 'PRAGMA journal_mode')" "4 delete"
+
+# 16. A row the database refuses doesn't take the events with it. The run
+# stops, is marked failed, and can be resumed.
+wf="$work/wf"; mkdir -p "$wf"
+printf 'one\n' > "$wf/a"; printf 'two\n' > "$wf/b"
+fdb="$work/db/wf.sqlite"
+fscan() { local rc=0; "$bin" scan --db "$fdb" --root "$wf" --no-xattrs --progress 3600 "$@" > "$work/wf.txt" 2>&1 || rc=$?; echo "$rc"; }
+fq() { sqlite3 "$fdb" "$1"; }
+fscan > /dev/null
+flip1 "$wf/a"
+sleep 0.01; printf 'two, edited\n' > "$wf/b"
+fq "CREATE TRIGGER refuse BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;"
+check "a refused row fails the run" "$(fscan --since "$tomorrow") $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "1 failed"
+check "its events kept" "$(fq "SELECT group_concat(kind || ' ' || path) FROM events WHERE run_id = (SELECT max(id) FROM runs)")" "b3-db-mismatch $wf/a"
+expect "summary kept" "summary: $(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1$' <<< "$(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
+expect "says why" "output: $(cat "$work/wf.txt")" grep -q 'refused by the test' "$work/wf.txt"
+check "failed run left in rollback mode" "$(fq 'PRAGMA journal_mode')" delete
+fq "DROP TRIGGER refuse"
+check "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
+check "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '$wf/b' AND f.bytes = 12")" 1
 
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"
