@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-pub const SCHEMA: i64 = 1;
+pub const SCHEMA: i64 = 2;
 
 // Matches the dataset's recordsize, so a page write is one record write.
 const PAGE_SIZE: i64 = 16384;
@@ -29,7 +29,8 @@ CREATE TABLE runs (
 	status      TEXT NOT NULL,
 	host        TEXT,
 	args        TEXT,
-	summary     TEXT
+	summary     TEXT,
+	roots       BLOB
 );
 CREATE TABLE files (
 	id    INTEGER PRIMARY KEY,
@@ -106,6 +107,19 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		})
 		.optional()
 		.map_err(e)?;
+	// 2 added runs.roots, for --resume. Older runs have none, and can't be
+	// resumed.
+	if schema == Some(1) {
+		conn.execute_batch(
+			"BEGIN;
+			ALTER TABLE runs ADD COLUMN roots BLOB;
+			UPDATE meta SET value = 2 WHERE key = 'schema';
+			COMMIT;",
+		)
+		.map_err(e)?;
+		drop(conn);
+		return open_rw(path);
+	}
 	if schema != Some(SCHEMA) {
 		return Err(format!(
 			"{}: tables are version {schema:?}, this program knows {SCHEMA}",
@@ -340,6 +354,29 @@ mod tests {
 		assert!(lookup(&mut st, b"/x/junk").is_err());
 		drop(st);
 		close_rw(conn).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn takes_schema_1_forward() {
+		let p = temp_db("schema1");
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		let c = Connection::open(&p).unwrap();
+		c.execute_batch(
+			"ALTER TABLE runs DROP COLUMN roots;
+			INSERT INTO runs (started_us, cutoff_us, status) VALUES (1, 1, 'stopped');
+			UPDATE meta SET value = 1 WHERE key = 'schema';",
+		)
+		.unwrap();
+		drop(c);
+		let c = open_rw(&p).unwrap();
+		let (n, roots): (i64, Option<Vec<u8>>) = c
+			.query_row("SELECT count(*), roots FROM runs", [], |r| {
+				Ok((r.get(0)?, r.get(1)?))
+			})
+			.unwrap();
+		assert_eq!((n, roots), (1, None));
+		close_rw(c).unwrap();
 		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 

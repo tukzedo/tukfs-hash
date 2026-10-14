@@ -47,7 +47,8 @@ scan options:
 	--no-xattrs         Leave no attributes anywhere.
 	--threads DIR=N     Workers for the disks under DIR. Default 1 with a hard drive, else 2, or 4 on NVMe.
 	--since YYYY-MM-DD  Skip files checksummed since then with the same size and time. Default today.
-	--resume            Continue the last run that didn't finish, with its date.
+	--resume            Continue the last scan, if it didn't finish, with its date.
+	                    Refused when its roots differ.
 	--progress SECS     Seconds between progress lines. Default 30.
 
 A scan never crosses into another mount. Each root's mount is walked on its
@@ -82,8 +83,10 @@ Names that aren't plain text are printed with \\xHH escapes, and a backslash
 as \\\\.
 
 Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
-8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8
-add up to 12 when both happen. accept exits 1 if any file wasn't taken.
+8 some files or folders couldn't be checked, or input wasn't understood
+(snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both
+kinds found. A resumed scan counts what its earlier parts found too. accept
+exits 1 if any file wasn't taken.
 ";
 
 fn take_value<'a>(

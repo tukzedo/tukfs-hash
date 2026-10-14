@@ -201,6 +201,103 @@
 	- Swept: `Hashed` is sent from the xattr skip, the `Done` path and the normal path. All 3 now hold a name to its own row. The DB skip already checks the name's own row.
 	- Acceptance signoff: Needs signoff. The xattr skip change goes past the item, and the step 3 counts changed.
 
+- A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
+	- ID: 2026101406340908
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Exit code confirmed with a mode-000 directory. The mid-directory case is from reading std's `ReadDir`, not run.
+	- Incorrect behavior [Bug]:
+		- `walk` in `src/scan.rs` uses `rd.flatten()` (about line 435), which throws away an error partway through a directory. std then ends the stream, so the rest of the directory is skipped silently. An EIO on a damaged ZFS directory block is the case that matters here.
+		- `ent.file_type()` errors are skipped the same way (about line 440).
+		- `run` counts only mismatches and read errors toward exit 4 (about line 326). `dir-error`, `open-error` and `stat-error` still exit 0.
+	- Expected behavior [Bug]: Every directory error is an event, and any error event makes the exit code non-zero.
+	- Note: A separate exit code bit for "some files weren't checked" would keep it from reading as clean.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. Step 13 of `tests/integration.bash` against the old build: a mode-000 folder and a mode-000 file gave a `dir-error` and an `open-error` and exit 0. Step 12's `db-error` exited 0 too.
+	- Actual cause [Bug]: The exit code counted only mismatches and read errors. The walk dropped listing and type errors with no event.
+	- Decisions:
+		- Exit 8 means some files weren't checked, the same bit snapdiff uses. A `db-error` counts toward it.
+	- Actual fix [Bug]:
+		- An error partway through a folder listing is a `dir-error` that says how many entries were read. A type error on an entry is a `stat-error`. So is an fstat that fails after open, which used to return without a word.
+		- `dir-error`, `stat-error`, `open-error` and `db-error` set 8. The mismatches, `cache-mismatch` and `read-error` set 4.
+		- `unstable` and `xattr-error` set nothing. Live files like a running VM's disk would set 8 on every main scan, and an attribute write comes after the check. A kind this version doesn't know sets 8.
+		- A folder or entry that's gone by the time it's read is skipped without an event, like a file that's gone before it's opened.
+		- Event kinds are one enum, each with its bit, and design.md has the table.
+	- Branch: runexit
+	- Commit: `11847b0`
+	- Test case: Step 13 of `tests/integration.bash`: an unreadable folder and file exit 8, and 12 with a mismatch. The exit check added to step 12. Unit test `exit_bits_add_up`. An error partway through a listing, or on an entry's type, needs a damaged filesystem, so neither has a test.
+	- Verified: Step 13's 2 checks and step 12's exit check failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
+	- Swept: Every `event` call in `src/scan.rs` takes a kind, so each one has a bit. `walk`'s `read_dir`, entry and type errors, and `one_file`'s stat, open and fstat errors. A worker that can't open the database still stops the run with exit 2, which is 2026101406340920's area. snapdiff already had 8.
+	- Acceptance signoff: Needs signoff. It changes exit codes, and leaving `unstable` and `xattr-error` out of 8 is a choice.
+
+- A stopped run exits 2 even with mismatches found, and `--resume` then reports 0 for them.
+	- ID: 2026101406340909
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A real scan and vm-scan as root, stopped and resumed.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Incorrect behavior [Bug]:
+		- `run` returns 2 for a stopped run whatever it found (about line 341).
+		- The resumed process starts its stats at zero and replaces `runs.summary`. It exited 0 with "MISMATCH 0" while the earlier part's events sat in the table.
+	- Expected behavior [Bug]: The exit code and summary count every event the run has, from all its parts. And also a stop with mismatches still says so.
+	- Probable fix [Bug]: Count from the `events` table for the run id at the end.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. Step 5 of `tests/integration.bash` against the old build: a stop after a mismatch exited 2, the resumed part read the damaged file again and logged its 2 events a second time, and the summary had only that part's counts.
+	- Actual cause [Bug]: `run` made the exit code from the counters of the process that ended it, and returned 2 for a stop before looking at them.
+	- Decisions:
+		- Count from the `events` table for the run id at the end.
+		- 2 adds to 4 and 8, the same way 4 and 8 add to 12. 6 is a stop after a mismatch, 10 a stop after files that couldn't be checked, and 14 both. --help, README and design.md say so.
+	- Actual fix [Bug]:
+		- The exit code, and a new "events in the whole run" line in the summary, come from the `events` table for the run id. Each file counts once per kind.
+		- A resumed run doesn't read again a file an earlier part already judged at the same size, time and inode. Before, it read every mismatched file again and reported it twice.
+		- The stored summary keeps the earlier parts' lines, with a "resumed" line between. The output shows this part's lines and the whole run's events line.
+		- Both wrappers take the database snapshot on 0, 4, 8 and 12. vm-scan keeps its mounts and snapshots on 4, 8 and 12, and takes any other code, 6 included, as a stop to resume.
+	- Branch: runexit
+	- Commit: `11847b0`
+	- Test case: Step 5 of `tests/integration.bash`: a damaged file before the stop, exit 6 on the stop and 4 on the resume, 2 events and not 4, and the whole run's line in the summary. The old checks for exit 2 and 0 are commented out with the reason.
+	- Verified: Step 5's 3 new checks failed against the old build and pass after, on ext4 and ZFS. The vm-scan wrapper's exit handling does the right thing for every code from 0 to 14 and for 130. Both wrappers pass shellcheck. Neither was run, since both need root.
+	- Swept: `run` is the only place scan's exit code is made. `report` and `runs` already read the table. The 2 exit code tests in the vm-scan wrapper and the 1 in the main wrapper. `root-steps.bash` checks only snapdiff's codes and hands scan's through with `exec`.
+	- Acceptance signoff: Needs signoff. It changes exit codes and the summary, and the skip for files this run already judged goes past the item.
+
+- `--resume` can pick the wrong run.
+	- ID: 2026101406340910
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `run` in `src/scan.rs` about line 220. Confirmed from the query.
+	- Incorrect behavior [Bug]:
+		- `WHERE status != 'done' ORDER BY id DESC` takes an older stopped run even when a newer run finished. The old cutoff is used, and events go under the old id, which `report` doesn't show by default.
+		- The main scan and `vm-scan` share the DB, so either one's `--resume` can carry on the other's run with the wrong roots and mark it done.
+		- A run killed hard stays `running` forever.
+	- Expected behavior [Bug]: `--resume` continues only the newest run, only if it isn't done, and only with the same roots. Otherwise it refuses and says why.
+	- Probable fix [Bug]: Compare `runs.args` roots, or store a run label that each wrapper passes.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. Step 14 of `tests/integration.bash` against the old build: an older stopped run was resumed past a newer finished one, a run over other roots was resumed, and a run left `running` stayed that way after a new run.
+	- Actual cause [Bug]: The query took the newest unfinished run, whatever came after it, and nothing recorded which roots a run covered.
+	- Decisions:
+		- Continue only the newest run, only if it isn't done, and only with the same roots. Otherwise refuse and say why.
+		- Runs with status `accept` are never resumed.
+	- Actual fix [Bug]:
+		- `--resume` takes the newest run that isn't an `accept` run. It refuses if that run finished, if its roots differ, or if it's from before roots were kept. A roots refusal names up to 3 on each side.
+		- Roots are kept per run as `plan` keeps them, sorted, in a new `runs.roots` column. Comparing the roots was picked over a label from each wrapper, since it needs nothing from the caller. The table version goes to 2. A version 1 database gets the column the first time it's opened, and its runs can't be resumed.
+		- A new scan marks any run still `running` as `killed`. The lock means nothing else is using it. A newest run left `running` can still be resumed, with a note that it was likely killed.
+		- Both wrappers' usage comments say `--resume` only takes the last run, and only when it was that script's.
+	- Branch: runexit
+	- Commit: `11847b0`
+	- Test case: Step 14 of `tests/integration.bash`. Unit tests `roots_key_ignores_order` and `takes_schema_1_forward`.
+	- Verified: 6 of step 14's 8 checks failed against the old build. All pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass, and shellcheck on both wrappers.
+	- Note: No live database existed yet, so the version 1 to 2 step has only run on test files.
+	- Swept: `run`'s query was the only reader of `--resume`. `accept` opens through `open_rw`, so it takes the new version too. `runs` prints `killed` as it is. Neither wrapper had its own idea of which run to resume.
+	- Acceptance signoff: Needs signoff. It changes the database layout and adds a run status.
+
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
 	- ID: 2026101406340915
 	- Type: Bug
@@ -263,56 +360,6 @@
 	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
 	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
 	- Acceptance signoff: Needs signoff. It changes how names print.
-
-- A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
-	- ID: 2026101406340908
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Exit code confirmed with a mode-000 directory. The mid-directory case is from reading std's `ReadDir`, not run.
-	- Incorrect behavior [Bug]:
-		- `walk` in `src/scan.rs` uses `rd.flatten()` (about line 435), which throws away an error partway through a directory. std then ends the stream, so the rest of the directory is skipped silently. An EIO on a damaged ZFS directory block is the case that matters here.
-		- `ent.file_type()` errors are skipped the same way (about line 440).
-		- `run` counts only mismatches and read errors toward exit 4 (about line 326). `dir-error`, `open-error` and `stat-error` still exit 0.
-	- Expected behavior [Bug]: Every directory error is an event, and any error event makes the exit code non-zero.
-	- Note: A separate exit code bit for "some files weren't checked" would keep it from reading as clean.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Mode-000 directory in `tests/integration.bash`.
-
-- A stopped run exits 2 even with mismatches found, and `--resume` then reports 0 for them.
-	- ID: 2026101406340909
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced.
-	- Incorrect behavior [Bug]:
-		- `run` returns 2 for a stopped run whatever it found (about line 341).
-		- The resumed process starts its stats at zero and replaces `runs.summary`. It exited 0 with "MISMATCH 0" while the earlier part's events sat in the table.
-	- Expected behavior [Bug]: The exit code and summary count every event the run has, from all its parts. And also a stop with mismatches still says so.
-	- Probable fix [Bug]: Count from the `events` table for the run id at the end.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Extend step 5 of `tests/integration.bash` with a damaged file before the stop.
-
-- `--resume` can pick the wrong run.
-	- ID: 2026101406340910
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `run` in `src/scan.rs` about line 220. Confirmed from the query.
-	- Incorrect behavior [Bug]:
-		- `WHERE status != 'done' ORDER BY id DESC` takes an older stopped run even when a newer run finished. The old cutoff is used, and events go under the old id, which `report` doesn't show by default.
-		- The main scan and `vm-scan` share the DB, so either one's `--resume` can carry on the other's run with the wrong roots and mark it done.
-		- A run killed hard stays `running` forever.
-	- Expected behavior [Bug]: `--resume` continues only the newest run, only if it isn't done, and only with the same roots. Otherwise it refuses and says why.
-	- Probable fix [Bug]: Compare `runs.args` roots, or store a run label that each wrapper passes.
-	- Note: Blocks the b23 check.
-	- Test case: None yet.
 
 - `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
 	- ID: 2026101406340911
@@ -386,6 +433,15 @@
 	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
 	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
 	- Test case: None. Needs root.
+
+- Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
+	- ID: 2026101407522499
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-075224
+	- Opened by: test run
+	- Note: Seen once in 5 ZFS runs on `runexit`, and not in 24 runs of step 1's tree alone with the old and new builds. Probable cause: when the first name's attribute write ends before the second name is opened, the second name skips through that fresh set and counts as skipped, not as a link. The file is still read once, so the scan is right and the check is timing-bound.
 
 - The scan can hang forever if every worker in a group fails to start, or if a worker panics.
 	- ID: 2026101406340920
