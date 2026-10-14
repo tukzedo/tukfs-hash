@@ -27,6 +27,55 @@
 
 ## Issues
 
+- Should the main scan write xattrs on Dropbox files?
+	- ID: 2026101406340929
+	- Type: Task
+	- Status: Waiting for answers
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
+
+- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
+	- ID: 2026101406340913
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A real `vm-scan` run as root.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
+	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
+	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
+	- Actual fix [Bug]: Exit 4 keeps the snapshots and also leaves the images mounted, since the flagged paths are under the mounts. It says so and points at `--cleanup`. The DB snapshot is still taken. Exit 0 and a stopped run are as before. The script's header and the root steps' `vm-scan` line say the same.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: On exit 4 it unmounted and destroyed the snapshots before the fix, and does neither after. Exit 0 still drops both, and exit 2 still unmounts and keeps the snapshots. Lint passes.
+	- Swept: The main scan wrapper keeps nothing temporary, so it has no twin.
+	- Acceptance signoff: Waiting: leaving the mounts in place goes past what the item asked.
+
+- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
+	- ID: 2026101406340925
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
+	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
+	- Actual fix [Bug]:
+		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
+		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
+	- Branch: scriptfix (backlog only; the scripts are outside the repo)
+	- Test case: None in the repo, since the scripts live outside it.
+	- Verified:
+		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
+		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
+		- Lint passes on both.
+	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
+	- Acceptance signoff: Waiting: the fix picked one of the 2 ways the item gave.
+
 - A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
 	- ID: 2026101406340901
 	- Type: Bug
@@ -75,36 +124,6 @@
 	- Note: Blocks the b23 check.
 	- Test case: None yet. Add the `cp -a` case to `tests/integration.bash`.
 
-- `vm-scan` stops at the first disk image, after the guests are already frozen or shut down and the snapshots taken.
-	- ID: 2026101406340903
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, written 2026-10-13, never run. Confirmed.
-	- Incorrect behavior [Bug]: In `attach_all`, `tr -c 'A-Za-z0-9._-\n' _` reads `_-\n` as a backwards range. `tr` exits 1, and `set -e` with `pipefail` ends the script inside `name="$(...)"`.
-	- Expected behavior [Bug]: Image names are cleaned and the scan goes on.
-	- Probable fix [Bug]: Put the `-` last: `'A-Za-z0-9._\n-'`.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Run `attach_all`'s name line on a name with a space.
-
-- `diffs` writes the root filesystem's btrfs results and bf7's to the same file names, so bf7's overwrite the root's.
-	- ID: 2026101406340904
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `root-steps.bash`, `step_diffs`, about line 162. Confirmed.
-	- Incorrect behavior [Bug]:
-		- The name is built from `basename "$(dirname "$sv")"`, which is `bsnaps` for both `/opt/bsnaps/@` and `/mnt/bfs/bf7/bsnaps/@`.
-		- 32 of 41 day pairs share names. bf7 runs second, so the root's pairs get compared against bf7's file lists. Those paths mostly don't exist on the root and are skipped, and nothing is reported.
-	- Expected behavior [Bug]: Each subvolume's pair gets its own file.
-	- Probable fix [Bug]: Build the name from the full path, such as `${sv//\//_}`.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Check that the manifest has no duplicate output names.
-
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
 	- Type: Bug
@@ -137,19 +156,6 @@
 	- Expected behavior [Bug]: Each name is compared with its own DB row.
 	- Note: It matters where no xattr baseline exists: `--no-xattrs`, `--no-xattr` dirs, git trees, read-only or immutable files, and filesystems without xattrs. That covers every `vm-scan` file. Blocks the b23 check.
 	- Test case: None yet. Add the repro to `tests/integration.bash`.
-
-- `status` reads only the current boot's kernel log, so it misses checksum errors from before the bad RAM was fenced off.
-	- ID: 2026101406340907
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `root-steps.bash`, `step_status`. Confirmed: `journalctl -k` implies `-b` per its man page.
-	- Incorrect behavior [Bug]: `kernel-checksum-lines.txt` starts at the 2026-10-12 boot. The journal has 11 boots.
-	- Expected behavior [Bug]: All boots in the journal are searched.
-	- Probable fix [Bug]: Use `journalctl _TRANSPORT=kernel`, which reaches back to 2026-10-06 here. Older kernel logs are in the journal copies under `/opt/bsnaps/@var~log`.
-	- Test case: None. One-off script; check the first line's date.
 
 - A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
 	- ID: 2026101406340908
@@ -235,18 +241,6 @@
 	- Note: Blocks the b23 check.
 	- Test case: None. One-off script.
 
-- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
-	- ID: 2026101406340913
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
-	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
-	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
-	- Test case: None. Needs root.
-
 - The scan's last step fails with exit 1 when anything else has the database open.
 	- ID: 2026101406340914
 	- Type: Bug
@@ -286,18 +280,6 @@
 	- Expected behavior [Bug]: Events are written in their own transaction ahead of the rest, a writer failure stops the workers, and the run is marked failed.
 	- Test case: None yet.
 
-- `vm-scan` freezes guests and takes snapshots before finding out the main scan has the database locked.
-	- ID: 2026101406340917
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`. Confirmed from the code.
-	- Incorrect behavior [Bug]: The lock is only met when `tukfs-hash scan` starts, after the freeze, snapshots, mounts adn fsck runs. The script then says the snapshots are kept for `--resume`, though no run was made.
-	- Expected behavior [Bug]: Check the lock first, such as `flock -n "$db.lock" true`, and stop before touching any guest.
-	- Test case: None. Needs root.
-
 - `vm-scan` skips a partition it can't mount when another partition in the same image mounts, so that partition is never checked at all.
 	- ID: 2026101406340918
 	- Type: Bug
@@ -309,18 +291,6 @@
 	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
 	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
 	- Test case: None. Needs root.
-
-- `clear-btrfs` zeroes the btrfs error counters without saving them first.
-	- ID: 2026101406340919
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `root-steps.bash`, `step_clear_btrfs`. Confirmed from the code.
-	- Incorrect behavior [Bug]: The counts survive only if `status` ran first.
-	- Expected behavior [Bug]: Save the counters to `out/` with a timestamp before zeroing.
-	- Test case: None. One-off script.
 
 - The scan can hang forever if every worker in a group fails to start, or if a worker panics.
 	- ID: 2026101406340920
@@ -388,17 +358,6 @@
 	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
 	- Test case: None yet.
 
-- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
-	- ID: 2026101406340925
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
-	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
-	- Test case: None.
-
 - `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
 	- ID: 2026101406340926
 	- Type: Bug
@@ -421,24 +380,16 @@
 	- Expected behavior [Bug]: Check whether `Gen at creation` is the right base for `find-new`, and use it if so.
 	- Test case: None.
 
-- The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
-	- ID: 2026101406340928
-	- Type: Task
+- `vm-scan` names mount folders and fsck logs after the image file name alone, so 2 images with one name in different subfolders of a dataset share them.
+	- ID: 2026101414100001
+	- Type: Bug
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Note: On OpenZFS 2.3.9, `xattr=on` already means `sa` per the local man page, and `dnodesize=auto` is set on all 3 pools. Remove the step, or fix the comment about a hidden folder per file.
-	- Test case: None.
-
-- Should the main scan write xattrs on Dropbox files?
-	- ID: 2026101406340929
-	- Type: Task
-	- Status: Waiting for answers
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
+	- Opened: 20261014-141000
+	- Opened by: backlog round
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Read only; no dataset has 2 such images today.
+	- Expected behavior [Bug]: Build the name from the image's path within its dataset.
+	- Related IDs: 2026101406340904
 
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
@@ -461,6 +412,120 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
 	- Note: Every content change orphans a row, which only inflates the "distinct contents" count.
+
+- `vm-scan` stops at the first disk image, after the guests are already frozen or shut down and the snapshots taken.
+	- ID: 2026101406340903
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, written 2026-10-13, never run. Confirmed.
+	- Incorrect behavior [Bug]: In `attach_all`, `tr -c 'A-Za-z0-9._-\n' _` reads `_-\n` as a backwards range. `tr` exits 1, and `set -e` with `pipefail` ends the script inside `name="$(...)"`.
+	- Expected behavior [Bug]: Image names are cleaned and the scan goes on.
+	- Probable fix [Bug]: Put the `-` last: `'A-Za-z0-9._\n-'`.
+	- Note: Blocks the b23 check.
+	- Actual fix [Bug]: The `-` moved last, as above.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: `attach_all`'s name line on `my disk (1).img`: `tr` exits 1 before the fix, and gives `my_disk__1_.img` after. Lint passes.
+	- Swept: The `tr` line is the only character set in the 3 scripts.
+	- Acceptance signoff: Self-closed: mechanical, test failed before and passes after.
+	- Closed: 20261014-065308
+
+- `diffs` writes the root filesystem's btrfs results and bf7's to the same file names, so bf7's overwrite the root's.
+	- ID: 2026101406340904
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`, about line 162. Confirmed.
+	- Incorrect behavior [Bug]:
+		- The name is built from `basename "$(dirname "$sv")"`, which is `bsnaps` for both `/opt/bsnaps/@` and `/mnt/bfs/bf7/bsnaps/@`.
+		- 32 of 41 day pairs share names. bf7 runs second, so the root's pairs get compared against bf7's file lists. Those paths mostly don't exist on the root and are skipped, and nothing is reported.
+	- Expected behavior [Bug]: Each subvolume's pair gets its own file.
+	- Probable fix [Bug]: Build the name from the full path, such as `${sv//\//_}`.
+	- Note: Blocks the b23 check.
+	- Actual fix [Bug]: The name is built from the full path, `${sv//\//_}`.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: Over today's snapshot folders: 33 duplicate names in 503 pairs before the fix, none after. Lint passes.
+	- Swept: The zfs names already use the full dataset name. In `vm-scan`, the mount folder and fsck log use the image's base name within its dataset, so 2 images of one name in different subfolders would share them. No dataset has 2 such images today.
+	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
+	- Closed: 20261014-065308
+
+- `status` reads only the current boot's kernel log, so it misses checksum errors from before the bad RAM was fenced off.
+	- ID: 2026101406340907
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_status`. Confirmed: `journalctl -k` implies `-b` per its man page.
+	- Incorrect behavior [Bug]: `kernel-checksum-lines.txt` starts at the 2026-10-12 boot. The journal has 11 boots.
+	- Expected behavior [Bug]: All boots in the journal are searched.
+	- Probable fix [Bug]: Use `journalctl _TRANSPORT=kernel`, which reaches back to 2026-10-06 here. Older kernel logs are in the journal copies under `/opt/bsnaps/@var~log`.
+	- Actual fix [Bug]: `journalctl _TRANSPORT=kernel` in place of `-k`. The older copies under `/opt/bsnaps/@var~log` aren't searched.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None. One-off script outside the repo.
+	- Verified: The first kernel line is from 2026-10-12 before the fix, and 2026-10-06 after. Lint passes.
+	- Swept: No other `journalctl` call in the 3 scripts.
+	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
+	- Closed: 20261014-065308
+
+- `vm-scan` freezes guests and takes snapshots before finding out the main scan has the database locked.
+	- ID: 2026101406340917
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`. Confirmed from the code.
+	- Incorrect behavior [Bug]: The lock is only met when `tukfs-hash scan` starts, after the freeze, snapshots, mounts adn fsck runs. The script then says the snapshots are kept for `--resume`, though no run was made.
+	- Expected behavior [Bug]: Check the lock first, such as `flock -n "$db.lock" true`, and stop before touching any guest.
+	- Actual fix [Bug]: `flock -n "$db.lock" true` right after the options are read. A held lock stops the script with exit 1 before any unmount, freeze or snapshot. `--cleanup` doesn't check it.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: With the lock held, it froze a guest and took snapshots before the fix, and touched nothing after. The installed `tukfs-hash` refuses a lock held by `flock`, so both use the same lock. Lint passes.
+	- Swept: The main scan wrapper touches nothing before `tukfs-hash` takes the lock.
+	- Acceptance signoff: Self-closed: the expected fix as written, test failed before and passes after.
+	- Closed: 20261014-065308
+
+- `clear-btrfs` zeroes the btrfs error counters without saving them first.
+	- ID: 2026101406340919
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_clear_btrfs`. Confirmed from the code.
+	- Incorrect behavior [Bug]: The counts survive only if `status` ran first.
+	- Expected behavior [Bug]: Save the counters to `out/` with a timestamp before zeroing.
+	- Actual fix [Bug]: `btrfs device stats -z` prints the counts it zeroes, so its output goes to `out/btrfs-stats-zeroed_<time>.txt` in place of `/dev/null`.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None. One-off script outside the repo.
+	- Verified: After a "y": no file before the fix, both mounts' counts saved after. Lint passes.
+	- Swept: No other step resets anything.
+	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
+	- Closed: 20261014-065308
+
+- The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
+	- ID: 2026101406340928
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Note: On OpenZFS 2.3.9, `xattr=on` already means `sa` per the local man page, and `dnodesize=auto` is set on all 3 pools. Remove the step, or fix the comment about a hidden folder per file.
+	- Decisions:
+		- Keep the step and fix its comment.
+	- Done: The step's usage line and its inline comment say it changes nothing on OpenZFS 2.3. The hidden-folder claim is gone.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None. Comment only.
+	- Verified: No child dataset sets `xattr` itself, apart from the tukfs one, which is `on`. Lint passes.
+	- Acceptance signoff: Self-closed: comment fix per the decision.
+	- Closed: 20261014-065308
 
 ## Template
 
