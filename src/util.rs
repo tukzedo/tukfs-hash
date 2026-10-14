@@ -118,7 +118,9 @@ pub fn parse_date(s: &str) -> Option<i64> {
 	tm.tm_mday = d;
 	tm.tm_isdst = -1;
 	let t = unsafe { libc::mktime(&mut tm) };
-	(t != -1).then_some(t as i64 * 1_000_000)
+	// mktime rolls Feb 31 over into March, and says so only in tm.
+	let same_day = tm.tm_year == y - 1900 && tm.tm_mon == m - 1 && tm.tm_mday == d;
+	(t != -1 && same_day).then_some(t as i64 * 1_000_000)
 }
 
 pub fn fmt_local(us: i64) -> String {
@@ -204,6 +206,11 @@ mod tests {
 		assert_eq!(local_midnight_us(d + 5 * 3600 * 1_000_000), d);
 		assert!(fmt_local(d).starts_with("2026-10-13 00:00:00"));
 		assert!(parse_date("2026-13-01").is_none());
+		assert!(parse_date("2026-02-31").is_none());
+		assert!(parse_date("2026-04-31").is_none());
+		assert!(parse_date("2026-02-29").is_none());
+		assert!(parse_date("2028-02-29").is_some());
+		assert!(parse_date("2026-12-31").is_some());
 		assert!(parse_date("yesterday").is_none());
 	}
 }

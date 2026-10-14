@@ -55,6 +55,7 @@ Attributes, as nemo-anywhere reads them:
 	user.blake3.bytes   size it was taken at
 	user.blake3.mtime   modified time it was taken at, microseconds since 1970
 	user.blake3.date    when it was taken, microseconds since 1970
+	user.blake3.inode   device:inode:checksum of the file it was taken from
 rmlint's user.rmlint.blake2b.* are checked when present and current.
 
 Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found.

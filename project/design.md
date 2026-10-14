@@ -28,12 +28,15 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 ## Skipping
 
-- A file is skipped when the database or its attributes say it was read on or after the skip date with the same size and time. The default skip date is the start of today, so a rerun the same day is cheap and a run on a later day reads everything again and compares.
+- A file is skipped when the database or its attributes say it was read on or after the skip date with the same size, time and inode. The default skip date is the start of today, so a rerun the same day is cheap and a run on a later day reads everything again and compares.
+- The attributes only skip a file when `user.blake3.inode` names the file's own device and inode, and the checksum beside it. `cp -a` and `rsync -aX` copy the attributes, but the copy gets another inode. The checksum in it means a later one written by nemo-anywhere, which writes no date, doesn't get to use ours.
+- A date later than now never skips. Otherwise a wrong clock or a flipped bit would skip the file forever.
+- Device numbers can change at a reboot or remount, as `sdX` names do. That only costs a second read.
 - A resumed run keeps its original skip date. Anything it already read counts as fresh even when `--since` is later than when it began.
 
 ## Attributes
 
-- The names and formats match nemo-anywhere, so either program can use what the other left. The date is new; nemo-anywhere ignores it.
+- The names and formats match nemo-anywhere, so either program can use what the other left. The date and inode are new; nemo-anywhere ignores them.
 - None are written in git work trees. Files come and go with each checkout, git checksums what it keeps, and a ctime change makes git look at each file again.
 - Writing changes ctime, and Linux has no call to set it back. Only changing the system clock or editing the inode on an unmounted ext4 could, and neither is safe to do per file.
 - On ZFS with `xattr=on`, each file's attributes are a hidden folder plus a file per name. `xattr=sa` keeps them in the inode and is much faster.
