@@ -84,7 +84,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A resumed run doesn't read again what an earlier part already judged at the same size and time, mismatches included, so it doesn't report them twice.
 
-- The exit code comes from the run's events in the database, not from the counters of the process that ends it. A file reported by 2 parts counts once, so that way a resume doesn't double it.
+- The exit code comes from the run's events in the database, not from the counters of the process that ends it. A file reported by 2 parts counts once, so a resume doesn't double it.
 
 - Each event kind sets one exit code bit, and the bits add up with 2 for a stop. This table is the rule:
 
