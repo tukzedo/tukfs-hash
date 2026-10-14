@@ -138,7 +138,7 @@ cp -p "$work/old/a" "$work/new/a"
 printf 'same\n' > "$work/old/b"; cp -p "$work/old/b" "$work/new/b"
 printf 'v1\n' > "$work/old/c"; printf 'v2 longer\n' > "$work/new/c"
 touch -d '2001-01-01' "$work/old/c"
-python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(4096); f.write(b"\0"*16); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "$work/new/a"
+python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(4096); b=f.read(16); f.seek(4096); f.write(bytes(x^255 for x in b)); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "$work/new/a"
 printf 'a\nb\nc\nmissing\n' > "$work/list"
 rc=0; "$bin" snapdiff --old "$work/old" --new "$work/new" --list "$work/list" > "$work/sd.txt" 2> /dev/null || rc=$?
 check "snapdiff exit" "$rc" 4
