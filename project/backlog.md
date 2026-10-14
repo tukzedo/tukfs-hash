@@ -369,6 +369,63 @@
 	- Swept: `attach_all` is the only place images are left out. A whole disk with a partition table shows no type and isn't listed.
 	- Acceptance signoff: Needs signoff. It picked hashing the image whole over raw partitions, so such an image is read twice.
 
+- The scan's last step fails with exit 1 when anything else has the database open.
+	- ID: 2026101406340914
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A scan as root through sudo with a reader open, to see the WAL files handed back too.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `close_rw` in `src/db.rs`. Confirmed, reproduced with an idle `sqlite3` shell.
+	- Incorrect behavior [Bug]:
+		- Leaving WAL mode needs sole access. With another reader open, such as `report` stalled in a pager, it fails after the 30 s busy timeout.
+		- The result is exit 1 in place of 4, no summary printed, `give_back` never run, and the DB left in WAL mode and owned by root, which a normal user then can't open.
+		- `pragma_update_and_check` never checks that the mode came back as `delete`.
+	- Expected behavior [Bug]: The run's result is printed and returned whatever happens to the mode switch. A failed switch is a warning, and ownership is still handed back.
+	- Reproduced [Bug]: Yes. Step 15 of `tests/integration.bash` against the old build: exit 1, "database is locked", no summary. A Python reader made it fail at once. An idle second connection made it wait out the whole 30 s.
+	- Actual cause [Bug]: `close_rw`'s error went up through `?` before the summary, `give_back` and the exit code.
+	- Actual fix [Bug]:
+		- `close_rw` checks that the mode came back as `delete`. Any failure there is a warning that names the file, and the run goes on to print and return its result.
+		- `give_back` also hands back the `-wal` and `-shm` files, which are only there when the switch failed.
+		- The switch waits 5 s for a reader, not 30. Everything is committed by then, so a longer wait only holds up the result.
+		- `accept` gets the same treatment.
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Step 15 of `tests/integration.bash`, and unit test `close_rw_says_when_wal_stays`.
+	- Verified: Step 15's exit and output checks failed against the old build and pass after, on ext4 and ZFS. The next run puts the file back in rollback mode.
+	- Note: Unverified: the ownership hand-back, which needs a run as root.
+	- Swept: `close_rw` and `give_back` have 2 callers each, `scan` and `accept`. `accept` still returns early on a failed `runs` update before closing, which is a database error and not this case.
+	- Acceptance signoff: Needs signoff. It leaves the file in WAL mode with a warning, and the 5 s wait is a choice.
+
+- A writer error throws away its batch of events, and the run never records a summary.
+	- ID: 2026101406340916
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `writer` in `src/db.rs` and its caller in `run`. Confirmed from the code.
+	- Incorrect behavior [Bug]: One failed statement rolls back the whole batch, mismatch events included. `run` returns an error before the summary, and the run stays `running`. Workers keep writing xattrs after `send` starts failing.
+	- Expected behavior [Bug]: Events are written in their own transaction ahead of the rest, a writer failure stops the workers, and the run is marked failed.
+	- Reproduced [Bug]: Yes. Step 16 of `tests/integration.bash` against the old build, with a trigger that refuses new `files` rows: exit 1, the mismatch event gone, the run left `running` with no summary, and the file left in WAL mode.
+	- Actual cause [Bug]: Each batch was one transaction, and the writer's error went up through `?` past the summary and status update.
+	- Decisions:
+		- A run status `failed`, beside `running`, `stopped`, `killed`, `accept` and `done`. `--resume` takes it like a stopped one: newest, same roots, not done.
+		- A failed run exits 1, as any error does. Its events are in the table and its summary is printed and stored, so the 4 and 8 bits aren't added to it.
+	- Actual fix [Bug]:
+		- Each batch's events go in first, in their own transaction. After a failure the other rows are dropped, but events are still kept until one of those fails too.
+		- A writer failure stops the workers at once, and no attribute is written for a file once nothing more can be recorded.
+		- The run is marked `failed` with its summary, prints it, says to fix the cause and resume, and exits 1 with the reason.
+		- design.md says so under Database and Runs.
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Step 16 of `tests/integration.bash`, which also resumes the failed run. Unit test `a_bad_row_keeps_the_events`.
+	- Verified: 4 of step 16's checks failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
+	- Note: Not covered by a test: the attribute skip after a failure, since which files were queued before it is timing.
+	- Swept: `writer` is scan's only writer. `accept` writes each file's row and event in one transaction on purpose, since a refused row means nothing was accepted. Of the 5 `send` callers, only the one before the attribute write needs its answer. Per 2026101406340909's notes, both wrappers already treat exit 1 as not finished.
+	- Acceptance signoff: Needs signoff. It adds a run status and picks exit 1 for it.
+
 - The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
 	- ID: 2026101406340925
 	- Type: Bug
@@ -435,6 +492,32 @@
 	- Swept: Datasets sit one level under the 2 parents, so their cleaned names can't clash. The `tr` line is still the only character set in the 3 scripts.
 	- Acceptance signoff: Needs signoff. The fsck logs moved into a folder per dataset, past what the item asked.
 
+- The scan can hang forever if every worker in a group fails to start, or if a worker panics.
+	- ID: 2026101406340920
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `run_group` and the main loop in `src/scan.rs`. Confirmed from the code.
+	- Incorrect behavior [Bug]:
+		- If every hasher's `open_ro` fails, the walker blocks on the full job channel. `run_group` still has a receiver, so the send never fails.
+		- A panic in the scope skips `g.done.store(true)`, and the main loop waits forever. Only a second signal ends it.
+	- Expected behavior [Bug]: Both cases end the group with an error.
+	- Reproduced [Bug]: Yes, both. With a panic put into a worker for the test, the old build hung until killed, with the run left `running`. Unit test `a_group_with_no_workers_ends` hung on the old `run_group`.
+	- Actual cause [Bug]: `run_group` kept its own copy of the job receiver, so the walk's send waited forever once every worker was gone. A panic made the scope panic in turn, which skipped marking the group done.
+	- Actual fix [Bug]:
+		- Only the workers hold the receiver, so the walk's send fails once the last one ends.
+		- A worker or walk that panics, or a worker that can't open the database, is a fault. It stops the run, which is marked `failed` and exits 1, per 2026101406340916.
+		- The group is marked done on any way out, panics included.
+	- Related IDs: 2026101406340916
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Unit tests `a_group_with_no_workers_ends` and `a_panic_is_a_fault`.
+	- Verified: `a_group_with_no_workers_ends` timed out on the old `run_group` and passes after. With the panic put in, the new build exited 1 with the run `failed` and the file in rollback mode.
+	- Swept: `run_group` is the only place workers start. `hasher`'s `expect` on its statement is now a fault too. The writer is a plain thread, and its panic still ends the run with an error.
+	- Acceptance signoff: Needs signoff. A worker that can't open the database was a stop with exit 2 and is now a failed run with exit 1.
+
 - `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
 	- ID: 2026101406340911
 	- Type: Bug
@@ -467,107 +550,6 @@
 	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
 	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
 	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
-
-- The scan's last step fails with exit 1 when anything else has the database open.
-	- ID: 2026101406340914
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A scan as root through sudo with a reader open, to see the WAL files handed back too.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `close_rw` in `src/db.rs`. Confirmed, reproduced with an idle `sqlite3` shell.
-	- Incorrect behavior [Bug]:
-		- Leaving WAL mode needs sole access. With another reader open, such as `report` stalled in a pager, it fails after the 30 s busy timeout.
-		- The result is exit 1 in place of 4, no summary printed, `give_back` never run, and the DB left in WAL mode and owned by root, which a normal user then can't open.
-		- `pragma_update_and_check` never checks that the mode came back as `delete`.
-	- Expected behavior [Bug]: The run's result is printed and returned whatever happens to the mode switch. A failed switch is a warning, and ownership is still handed back.
-	- Reproduced [Bug]: Yes. Step 15 of `tests/integration.bash` against the old build: exit 1, "database is locked", no summary. A Python reader made it fail at once. An idle second connection made it wait out the whole 30 s.
-	- Actual cause [Bug]: `close_rw`'s error went up through `?` before the summary, `give_back` and the exit code.
-	- Actual fix [Bug]:
-		- `close_rw` checks that the mode came back as `delete`. Any failure there is a warning that names the file, and the run goes on to print and return its result.
-		- `give_back` also hands back the `-wal` and `-shm` files, which are only there when the switch failed.
-		- The switch waits 5 s for a reader, not 30. Everything is committed by then, so a longer wait only holds up the result.
-		- `accept` gets the same treatment.
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Step 15 of `tests/integration.bash`, and unit test `close_rw_says_when_wal_stays`.
-	- Verified: Step 15's exit and output checks failed against the old build and pass after, on ext4 and ZFS. The next run puts the file back in rollback mode.
-	- Note: Unverified: the ownership hand-back, which needs a run as root.
-	- Swept: `close_rw` and `give_back` have 2 callers each, `scan` and `accept`. `accept` still returns early on a failed `runs` update before closing, which is a database error and not this case.
-	- Acceptance signoff: Needs signoff. It leaves the file in WAL mode with a warning, and the 5 s wait is a choice.
-
-- A writer error throws away its batch of events, and the run never records a summary.
-	- ID: 2026101406340916
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `writer` in `src/db.rs` and its caller in `run`. Confirmed from the code.
-	- Incorrect behavior [Bug]: One failed statement rolls back the whole batch, mismatch events included. `run` returns an error before the summary, and the run stays `running`. Workers keep writing xattrs after `send` starts failing.
-	- Expected behavior [Bug]: Events are written in their own transaction ahead of the rest, a writer failure stops the workers, and the run is marked failed.
-	- Reproduced [Bug]: Yes. Step 16 of `tests/integration.bash` against the old build, with a trigger that refuses new `files` rows: exit 1, the mismatch event gone, the run left `running` with no summary, and the file left in WAL mode.
-	- Actual cause [Bug]: Each batch was one transaction, and the writer's error went up through `?` past the summary and status update.
-	- Decisions:
-		- A run status `failed`, beside `running`, `stopped`, `killed`, `accept` and `done`. `--resume` takes it like a stopped one: newest, same roots, not done.
-		- A failed run exits 1, as any error does. Its events are in the table and its summary is printed and stored, so the 4 and 8 bits aren't added to it.
-	- Actual fix [Bug]:
-		- Each batch's events go in first, in their own transaction. After a failure the other rows are dropped, but events are still kept until one of those fails too.
-		- A writer failure stops the workers at once, and no attribute is written for a file once nothing more can be recorded.
-		- The run is marked `failed` with its summary, prints it, says to fix the cause and resume, and exits 1 with the reason.
-		- design.md says so under Database and Runs.
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Step 16 of `tests/integration.bash`, which also resumes the failed run. Unit test `a_bad_row_keeps_the_events`.
-	- Verified: 4 of step 16's checks failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
-	- Note: Not covered by a test: the attribute skip after a failure, since which files were queued before it is timing.
-	- Swept: `writer` is scan's only writer. `accept` writes each file's row and event in one transaction on purpose, since a refused row means nothing was accepted. Of the 5 `send` callers, only the one before the attribute write needs its answer. Per 2026101406340909's notes, both wrappers already treat exit 1 as not finished.
-	- Acceptance signoff: Needs signoff. It adds a run status and picks exit 1 for it.
-
-- Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
-	- ID: 2026101407522499
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-075224
-	- Opened by: test run
-	- Note: Seen once in 5 ZFS runs on `runexit`, and not in 24 runs of step 1's tree alone with the old and new builds. Probable cause: when the first name's attribute write ends before the second name is opened, the second name skips through that fresh set and counts as skipped, not as a link. The file is still read once, so the scan is right and the check is timing-bound.
-	- Reproduced [Bug]: Yes. Step 1's tree on ZFS gave links 0 in 2 of 40 runs, and in 5 of 5 with one worker, every time with hashed 8 and skipped 1.
-	- Actual cause [Bug]: As the note says. The check counted which way the second name went, not how many times the file was read.
-	- Actual fix [Bug]: Step 1 checks the number of files read. The old check is commented out with the reason.
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Step 1 of `tests/integration.bash`, "hard link read once".
-	- Verified: The new check held in 50 runs of step 1's tree on ZFS, 10 of them with one worker, and in the whole suite 3 times on ext4 and 6 on ZFS.
-	- Acceptance signoff: Self-closed: test only, cause shown.
-	- Closed: 20261014-084129
-
-- The scan can hang forever if every worker in a group fails to start, or if a worker panics.
-	- ID: 2026101406340920
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `run_group` and the main loop in `src/scan.rs`. Confirmed from the code.
-	- Incorrect behavior [Bug]:
-		- If every hasher's `open_ro` fails, the walker blocks on the full job channel. `run_group` still has a receiver, so the send never fails.
-		- A panic in the scope skips `g.done.store(true)`, and the main loop waits forever. Only a second signal ends it.
-	- Expected behavior [Bug]: Both cases end the group with an error.
-	- Reproduced [Bug]: Yes, both. With a panic put into a worker for the test, the old build hung until killed, with the run left `running`. Unit test `a_group_with_no_workers_ends` hung on the old `run_group`.
-	- Actual cause [Bug]: `run_group` kept its own copy of the job receiver, so the walk's send waited forever once every worker was gone. A panic made the scope panic in turn, which skipped marking the group done.
-	- Actual fix [Bug]:
-		- Only the workers hold the receiver, so the walk's send fails once the last one ends.
-		- A worker or walk that panics, or a worker that can't open the database, is a fault. It stops the run, which is marked `failed` and exits 1, per 2026101406340916.
-		- The group is marked done on any way out, panics included.
-	- Related IDs: 2026101406340916
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Unit tests `a_group_with_no_workers_ends` and `a_panic_is_a_fault`.
-	- Verified: `a_group_with_no_workers_ends` timed out on the old `run_group` and passes after. With the panic put in, the new build exited 1 with the run `failed` and the file in rollback mode.
-	- Swept: `run_group` is the only place workers start. `hasher`'s `expect` on its statement is now a fault too. The writer is a plain thread, and its panic still ends the run with an error.
-	- Acceptance signoff: Needs signoff. A worker that can't open the database was a stop with exit 2 and is now a failed run with exit 1.
 
 - The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
 	- ID: 2026101406340921
@@ -716,6 +698,24 @@
 	- Swept: No other step resets anything.
 	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
+	- ID: 2026101407522499
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-075224
+	- Opened by: test run
+	- Note: Seen once in 5 ZFS runs on `runexit`, and not in 24 runs of step 1's tree alone with the old and new builds. Probable cause: when the first name's attribute write ends before the second name is opened, the second name skips through that fresh set and counts as skipped, not as a link. The file is still read once, so the scan is right and the check is timing-bound.
+	- Reproduced [Bug]: Yes. Step 1's tree on ZFS gave links 0 in 2 of 40 runs, and in 5 of 5 with one worker, every time with hashed 8 and skipped 1.
+	- Actual cause [Bug]: As the note says. The check counted which way the second name went, not how many times the file was read.
+	- Actual fix [Bug]: Step 1 checks the number of files read. The old check is commented out with the reason.
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Step 1 of `tests/integration.bash`, "hard link read once".
+	- Verified: The new check held in 50 runs of step 1's tree on ZFS, 10 of them with one worker, and in the whole suite 3 times on ext4 and 6 on ZFS.
+	- Acceptance signoff: Self-closed: test only, cause shown.
+	- Closed: 20261014-084129
 
 - `diffs` uses a btrfs snapshot's current generation, so changes could be missed if a balance touched the older snapshot.
 	- ID: 2026101406340927
