@@ -201,69 +201,6 @@
 	- Swept: `Hashed` is sent from the xattr skip, the `Done` path and the normal path. All 3 now hold a name to its own row. The DB skip already checks the name's own row.
 	- Acceptance signoff: Needs signoff. The xattr skip change goes past the item, and the step 3 counts changed.
 
-- A failed DB lookup counts as "no prior record", which skips the DB comparison.
-	- ID: 2026101406340915
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
-	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
-	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
-	- Reproduced [Bug]: Yes. A row with text in its size column was overwritten with no event by the old build.
-	- Actual fix [Bug]: `lookup` returns an error for anything but a missing row. The scan logs it as `db-error`, counts it under other-err, and skips the file. `accept` stops on it for that file. The exit code is left to 2026101406340908.
-	- Branch: keepgood
-	- Commit: `eb111ff`
-	- Test case: Step 12 of `tests/integration.bash`, and unit test `lookup_error_is_not_no_row`.
-	- Verified: Step 12 failed on the old build and passes after, on ext4 and ZFS. The unit test fails with the old `.ok()` put back.
-	- Swept: `lookup` has 2 callers, `hasher` in `src/scan.rs` and `accept`. No other `.ok()` reads the database. `report` and `scan --resume` turn any query error into "no runs yet" or "no unfinished run to resume", but both still exit 1 and nothing is written, so they were left alone.
-	- Acceptance signoff: Needs signoff. It adds an event kind users see.
-
-- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
-	- ID: 2026101406340925
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
-	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
-	- Actual fix [Bug]:
-		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
-		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
-	- Branch: scriptfix (backlog only; the scripts are outside the repo)
-	- Test case: None in the repo, since the scripts live outside it.
-	- Verified:
-		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
-		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
-		- Lint passes on both.
-	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
-	- Acceptance signoff: Waiting: the fix picked one of the 2 ways the item gave.
-
-- A path argument that isn't valid UTF-8 panics.
-	- ID: 2026101406340924
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
-	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
-	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
-	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
-	- Actual fix [Bug]:
-		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
-		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
-		- README and help text say so.
-	- Branch: snapdiff2
-	- Commit: `cede460`
-	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
-	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
-	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
-	- Acceptance signoff: Needs signoff. It changes how names print.
-
 - A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
 	- ID: 2026101406340908
 	- Type: Bug
@@ -361,14 +298,68 @@
 	- Swept: `run`'s query was the only reader of `--resume`. `accept` opens through `open_rw`, so it takes the new version too. `runs` prints `killed` as it is. Neither wrapper had its own idea of which run to resume.
 	- Acceptance signoff: Needs signoff. It changes the database layout and adds a run status.
 
-- Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
-	- ID: 2026101407522499
+- A failed DB lookup counts as "no prior record", which skips the DB comparison.
+	- ID: 2026101406340915
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
+	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
+	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
+	- Reproduced [Bug]: Yes. A row with text in its size column was overwritten with no event by the old build.
+	- Actual fix [Bug]: `lookup` returns an error for anything but a missing row. The scan logs it as `db-error`, counts it under other-err, and skips the file. `accept` stops on it for that file. The exit code is left to 2026101406340908.
+	- Branch: keepgood
+	- Commit: `eb111ff`
+	- Test case: Step 12 of `tests/integration.bash`, and unit test `lookup_error_is_not_no_row`.
+	- Verified: Step 12 failed on the old build and passes after, on ext4 and ZFS. The unit test fails with the old `.ok()` put back.
+	- Swept: `lookup` has 2 callers, `hasher` in `src/scan.rs` and `accept`. No other `.ok()` reads the database. `report` and `scan --resume` turn any query error into "no runs yet" or "no unfinished run to resume", but both still exit 1 and nothing is written, so they were left alone.
+	- Acceptance signoff: Needs signoff. It adds an event kind users see.
+
+- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
+	- ID: 2026101406340925
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-075224
-	- Opened by: test run
-	- Note: Seen once in 5 ZFS runs on `runexit`, and not in 24 runs of step 1's tree alone with the old and new builds. Probable cause: when the first name's attribute write ends before the second name is opened, the second name skips through that fresh set and counts as skipped, not as a link. The file is still read once, so the scan is right and the check is timing-bound.
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
+	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
+	- Actual fix [Bug]:
+		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
+		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
+	- Branch: scriptfix (backlog only; the scripts are outside the repo)
+	- Test case: None in the repo, since the scripts live outside it.
+	- Verified:
+		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
+		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
+		- Lint passes on both.
+	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
+	- Acceptance signoff: Waiting: the fix picked one of the 2 ways the item gave.
+
+- A path argument that isn't valid UTF-8 panics.
+	- ID: 2026101406340924
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
+	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
+	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
+	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
+	- Actual fix [Bug]:
+		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
+		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
+		- README and help text say so.
+	- Branch: snapdiff2
+	- Commit: `cede460`
+	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
+	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
+	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
+	- Acceptance signoff: Needs signoff. It changes how names print.
 
 - `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
 	- ID: 2026101406340911
@@ -442,6 +433,15 @@
 	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
 	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
 	- Test case: None. Needs root.
+
+- Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
+	- ID: 2026101407522499
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-075224
+	- Opened by: test run
+	- Note: Seen once in 5 ZFS runs on `runexit`, and not in 24 runs of step 1's tree alone with the old and new builds. Probable cause: when the first name's attribute write ends before the second name is opened, the second name skips through that fresh set and counts as skipped, not as a link. The file is still read once, so the scan is right and the check is timing-bound.
 
 - The scan can hang forever if every worker in a group fails to start, or if a worker panics.
 	- ID: 2026101406340920
