@@ -106,7 +106,7 @@
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -122,7 +122,20 @@
 	- Expected behavior [Bug]: A file is skipped only when this tool read that exact inode since the cutoff.
 	- Probable fix [Bug]: Store the inode and device in the xattr set, or drop the xattr skip and rely on the DB skip, which already checks the inode. Also reject a `date` later than now.
 	- Note: Blocks the b23 check.
-	- Test case: None yet. Add the `cp -a` case to `tests/integration.bash`.
+	- Decisions:
+		- Add the inode and device to the xattr set under a new `user.blake3.*` name. Skip only when they match the file's current inode and device. Refuse a `user.blake3.date` later than now. Old sets without the new name don't skip.
+	- Reproduced [Bug]: Yes. Step 8 of `tests/integration.bash` showed "hashed 0" and exit 0 for a `cp -a` copy with a flipped byte.
+	- Actual fix [Bug]:
+		- New `user.blake3.inode`, written last, holding `device:inode:checksum`. The skip needs it to match the file and the checksum beside it, and the date to fall between the cutoff and now.
+		- The checksum in it goes a little past the decision. It covers the nemo-anywhere case above, where an in-place edit keeps the inode and nemo writes a new checksum but no date.
+		- Device numbers can change at a reboot or remount. That costs a second read, not a wrong skip.
+		- README, help text and design.md list the new name.
+	- Branch: xattrskip
+	- Commit: `ab22859`
+	- Test case: Step 8 of `tests/integration.bash`: a `cp -a` copy, a set with no inode name, and a future date are each read again and reported. Unit test `b3_fresh_needs_our_inode_and_a_sane_date`.
+	- Verified: Step 8 failed 4 checks before the fix and passes after, on ext4 and ZFS. Dropping the date bound or the inode match each turns it red again. Unit tests, clippy and rustfmt pass.
+	- Swept: The skip at `one_file` is the only place the xattr date is trusted. The mismatch check and the `only_date` write use the size and time alone, which is right for a compare. The DB skip already checks the inode.
+	- Acceptance signoff: Needs signoff. It changes what's written to disk, and the checksum in the new name goes past the decision.
 
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
@@ -338,13 +351,20 @@
 - `--since` takes impossible dates such as 2026-02-31.
 	- ID: 2026101406340923
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
 	- Origin: `f05c368`, `parse_date` in `src/util.rs`. Confirmed: `mktime` turns it into March 3.
 	- Expected behavior [Bug]: Refuse a date that doesn't round-trip.
-	- Test case: None yet. Add to the `dates` unit test.
+	- Actual fix [Bug]: `parse_date` compares the year, month and day `mktime` hands back with what was asked for.
+	- Branch: xattrskip
+	- Commit: `ab22859`
+	- Test case: `dates` unit test, with Feb 31, Apr 31 and Feb 29 in a non-leap year.
+	- Verified: The test failed before the fix and passes after.
+	- Swept: `parse_date` is the only parser for user dates. `local_midnight_us` rolls over on purpose.
+	- Acceptance signoff: Self-closed: intent clear, test failed before and passes after.
+	- Closed: 20261014-070500
 
 - A path argument that isn't valid UTF-8 panics.
 	- ID: 2026101406340924
