@@ -573,7 +573,7 @@
 		- What stays by design: a folder's subfolder names are all held until it's done, for the name order. In a folder over a million files, inode order holds within each part only.
 	- Against: design.md, Reading files, "files in inode order". It now says so for big folders.
 	- Branch: walkfix
-	- Commit:
+	- Commit: 9120949
 	- Test case: `scan::tests::skipped_links_count_down` and `scan::tests::the_link_map_is_capped`. The batching has none, since it needs a folder of over a million files.
 	- Verified:
 		- `skipped_links_count_down` fails with the skip sites' countdown taken out, and passes with it.
@@ -603,7 +603,7 @@
 		- A path that's no longer what the walk saw, gone or now a symlink, a file or a new mount, is skipped like a file deleted mid-scan.
 		- Loop mounts are unchanged. Each root is compared with its own device, and grouping still comes from the disks under the backing file.
 	- Branch: walkfix
-	- Commit:
+	- Commit: 9120949
 	- Test case: `beneath::tests::a_symlink_on_the_way_is_not_followed`, `beneath::tests::another_filesystem_is_not_entered`, `scan::tests::a_swapped_folder_is_not_followed` and `scan::tests::the_walk_stays_on_the_root_device`.
 	- Verified:
 		- `a_swapped_folder_is_not_followed` fails with the old open, and `the_walk_stays_on_the_root_device` fails with the device check and the mount rule taken out. Both pass with them.
