@@ -6,6 +6,7 @@
 // file, and the database. A file whose size and time didn't change but whose
 // contents did is the thing this is looking for.
 
+use crate::beneath::{self, Root};
 use crate::db::{self, Hashed, Msg, Prior};
 use crate::mounts;
 use crate::util::{
@@ -13,12 +14,13 @@ use crate::util::{
 };
 use crate::xattr::{self, OnFile};
 use rusqlite::OptionalExtension;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirEntryExt, FileExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -325,6 +327,7 @@ struct Group {
 struct Job {
 	path: PathBuf,
 	in_git: bool,
+	root: Arc<Root>,
 }
 
 pub struct Plan {
@@ -708,82 +711,156 @@ pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
 	crate::util::canonical_name(db)
 }
 
+// A folder with more files than this is queued in parts, each in inode order,
+// so its list doesn't grow without end.
+const FILES_BATCH: usize = 1 << 20;
+
+// Subfolders still to walk, last name first, so each pop frees one.
+struct Frame {
+	dir: PathBuf,
+	in_git: bool,
+	subdirs: Vec<Box<OsStr>>,
+}
+
+// The workers are gone.
+struct Closed;
+
 // Depth first, files before folders. Folders go in name order; files go in
 // inode order, which on most filesystems is close to the order on disk.
 fn walk(root: &Path, sh: &Shared, stats: &Stats, jobs: &SyncSender<Job>) {
-	let mut stack: Vec<(PathBuf, bool)> = vec![(root.to_path_buf(), false)];
-	while let Some((dir, git_above)) = stack.pop() {
-		if sh.stop.load(Relaxed) {
+	let root = match Root::open(root) {
+		Ok(r) => Arc::new(r),
+		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+		Err(e) => {
+			stats.other_err.fetch_add(1, Relaxed);
+			event(sh, Kind::DirError, root, e.to_string());
 			return;
 		}
-		let rd = match fs::read_dir(&dir) {
-			Ok(rd) => rd,
-			// Gone since it was listed, like a file that goes before it's
-			// opened.
+	};
+	let mut stack: Vec<Frame> = Vec::new();
+	let mut next = Some((root.path.clone(), false));
+	while !sh.stop.load(Relaxed) {
+		if let Some((dir, git_above)) = next.take() {
+			match list_dir(&root, dir, git_above, sh, stats, jobs) {
+				Ok(Some(f)) => stack.push(f),
+				Ok(None) => {}
+				Err(Closed) => return,
+			}
+		}
+		let Some(top) = stack.last_mut() else {
+			return;
+		};
+		match top.subdirs.pop() {
+			Some(name) => next = Some((top.dir.join(&*name), top.in_git)),
+			None => _ = stack.pop(),
+		}
+	}
+}
+
+fn list_dir(
+	root: &Arc<Root>,
+	dir: PathBuf,
+	git_above: bool,
+	sh: &Shared,
+	stats: &Stats,
+	jobs: &SyncSender<Job>,
+) -> Result<Option<Frame>, Closed> {
+	let opened = root
+		.open_at(root.rel(&dir), libc::O_RDONLY | libc::O_DIRECTORY)
+		.and_then(|f| Ok((f.metadata()?.dev(), f)));
+	let list = match opened.and_then(|(dev, f)| Ok((dev, beneath::List::new(f)?))) {
+		// A btrfs subvolume, or something mounted since the scan began. The
+		// mount table only knows what was there at the start.
+		Ok((dev, _)) if dev != root.dev => return Ok(None),
+		Ok((_, l)) => l,
+		Err(e) if beneath::moved(&e) => return Ok(None),
+		Err(e) => {
+			stats.other_err.fetch_add(1, Relaxed);
+			event(sh, Kind::DirError, &dir, e.to_string());
+			return Ok(None);
+		}
+	};
+	// Asked first, since a big folder's files are queued before the listing
+	// ends.
+	let mut in_git = git_above || list.has(".git");
+	let mut files: Vec<(u64, Box<OsStr>)> = Vec::new();
+	let mut subdirs = Vec::new();
+	for (seen, ent) in list.enumerate() {
+		// The rest of the folder goes unread after an error. An EIO in a
+		// damaged folder block is the case.
+		let ent = match ent {
+			Ok(ent) => ent,
+			Err(e) => {
+				stats.other_err.fetch_add(1, Relaxed);
+				event(
+					sh,
+					Kind::DirError,
+					&dir,
+					format!("{e}, after {seen} entries; the rest weren't read"),
+				);
+				break;
+			}
+		};
+		if &*ent.name == ".git" {
+			in_git = true;
+		}
+		let kind = match ent.kind {
+			Ok(k) => k,
 			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
 			Err(e) => {
 				stats.other_err.fetch_add(1, Relaxed);
-				event(sh, Kind::DirError, &dir, e.to_string());
+				event(sh, Kind::StatError, &dir.join(&*ent.name), e.to_string());
 				continue;
 			}
 		};
-		let mut files: Vec<(u64, PathBuf)> = Vec::new();
-		let mut dirs: Vec<PathBuf> = Vec::new();
-		let mut in_git = git_above;
-		for ent in rd {
-			// std ends the listing at an error, so the rest of the folder
-			// goes unread. An EIO in a damaged folder block is the case.
-			let ent = match ent {
-				Ok(ent) => ent,
-				Err(e) => {
-					stats.other_err.fetch_add(1, Relaxed);
-					let n = files.len() + dirs.len();
-					event(
-						sh,
-						Kind::DirError,
-						&dir,
-						format!("{e}, after {n} entries; the rest weren't read"),
-					);
-					break;
-				}
-			};
-			let name = ent.file_name();
-			if name == ".git" {
-				in_git = true;
-			}
-			let ft = match ent.file_type() {
-				Ok(ft) => ft,
-				Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-				Err(e) => {
-					stats.other_err.fetch_add(1, Relaxed);
-					event(sh, Kind::StatError, &ent.path(), e.to_string());
-					continue;
-				}
-			};
-			let p = ent.path();
-			if ft.is_dir() {
-				if name == ".zfs" && sh.mount_points.get(&dir).is_some_and(|t| t == "zfs") {
-					continue;
-				}
-				if sh.mount_points.contains_key(&p) || excluded(sh, &p) {
-					continue;
-				}
-				dirs.push(p);
-			} else if ft.is_file() && !excluded(sh, &p) {
-				files.push((ent.ino(), p));
-			}
+		if kind == beneath::Kind::Other {
+			continue;
 		}
-		files.sort_unstable();
-		for (_, p) in files {
-			if jobs.send(Job { path: p, in_git }).is_err() {
-				return;
-			}
+		if kind == beneath::Kind::Dir
+			&& &*ent.name == ".zfs"
+			&& sh.mount_points.get(&dir).is_some_and(|t| t == "zfs")
+		{
+			continue;
 		}
-		dirs.sort_unstable();
-		for d in dirs.into_iter().rev() {
-			stack.push((d, in_git));
+		let p = dir.join(&*ent.name);
+		if sh.mount_points.contains_key(&p) || excluded(sh, &p) {
+			continue;
+		}
+		if kind == beneath::Kind::Dir {
+			subdirs.push(ent.name);
+			continue;
+		}
+		files.push((ent.ino, ent.name));
+		if files.len() >= FILES_BATCH {
+			queue(root, &dir, &mut files, in_git, jobs)?;
 		}
 	}
+	queue(root, &dir, &mut files, in_git, jobs)?;
+	subdirs.sort_unstable_by(|a, b| b.cmp(a));
+	Ok(Some(Frame {
+		dir,
+		in_git,
+		subdirs,
+	}))
+}
+
+fn queue(
+	root: &Arc<Root>,
+	dir: &Path,
+	files: &mut Vec<(u64, Box<OsStr>)>,
+	in_git: bool,
+	jobs: &SyncSender<Job>,
+) -> Result<(), Closed> {
+	files.sort_unstable();
+	for (_, name) in files.drain(..) {
+		let job = Job {
+			path: dir.join(&*name),
+			in_git,
+			root: root.clone(),
+		};
+		jobs.send(job).map_err(|_| Closed)?;
+	}
+	Ok(())
 }
 
 type LinkVal = (i64, i64, Sums);
@@ -792,14 +869,50 @@ type LinkVal = (i64, i64, Sums);
 // so a backup tree full of hard links doesn't keep every inode in memory.
 type LinkEntry = Option<(LinkVal, u64)>;
 
+// A name outside the roots or excluded never comes to count down, so only the
+// newest results are kept. A later name of an older one is read again.
+const LINKS_KEPT: usize = 1 << 18;
+
 // Hard links to one file. The first worker to reach an inode claims it, and
 // any other name for it waits for that result rather than reading the file a
 // second time. Reading it alongside would also see the first worker's xattr
 // write move the ctime, and call the file unstable.
 #[derive(Default)]
 struct Links {
-	map: Mutex<HashMap<(u64, u64), LinkEntry>>,
+	map: Mutex<LinkMap>,
 	cv: Condvar,
+}
+
+#[derive(Default)]
+struct LinkMap {
+	entries: HashMap<(u64, u64), LinkEntry>,
+	// Filled keys, oldest first. A key can be here twice, or after its
+	// entry went; dropping a newer entry early only costs a read.
+	filled: VecDeque<(u64, u64)>,
+}
+
+impl LinkMap {
+	fn fill(&mut self, key: (u64, u64), v: LinkVal, others: u64) {
+		self.entries.insert(key, Some((v, others)));
+		self.filled.push_back(key);
+		while self.filled.len() > LINKS_KEPT {
+			let Some(old) = self.filled.pop_front() else {
+				break;
+			};
+			if matches!(self.entries.get(&old), Some(Some(_))) {
+				self.entries.remove(&old);
+			}
+		}
+	}
+
+	fn count_down(&mut self, key: (u64, u64)) {
+		if let Some(Some((_, left))) = self.entries.get_mut(&key) {
+			*left = left.saturating_sub(1);
+			if *left == 0 {
+				self.entries.remove(&key);
+			}
+		}
+	}
 }
 
 enum Claim<'a> {
@@ -819,7 +932,7 @@ impl ClaimGuard<'_> {
 			.map
 			.lock()
 			.unwrap()
-			.insert(self.key, Some((v, self.others)));
+			.fill(self.key, v, self.others);
 	}
 }
 
@@ -827,8 +940,8 @@ impl Drop for ClaimGuard<'_> {
 	// Unfilled means the read failed or was stopped; let the next name try.
 	fn drop(&mut self) {
 		let mut m = self.links.map.lock().unwrap();
-		if matches!(m.get(&self.key), Some(None)) {
-			m.remove(&self.key);
+		if matches!(m.entries.get(&self.key), Some(None)) {
+			m.entries.remove(&self.key);
 		}
 		self.links.cv.notify_all();
 	}
@@ -838,18 +951,15 @@ impl Links {
 	fn claim(&self, key: (u64, u64), nlink: u64, bytes: i64, mt: i64) -> Claim<'_> {
 		let mut m = self.map.lock().unwrap();
 		loop {
-			match m.get_mut(&key) {
-				Some(Some((v, left))) if v.0 == bytes && v.1 == mt => {
+			match m.entries.get(&key) {
+				Some(Some((v, _))) if v.0 == bytes && v.1 == mt => {
 					let v = *v;
-					*left = left.saturating_sub(1);
-					if *left == 0 {
-						m.remove(&key);
-					}
+					m.count_down(key);
 					return Claim::Done(v);
 				}
 				Some(None) => m = self.cv.wait(m).unwrap(),
 				_ => {
-					m.insert(key, None);
+					m.entries.insert(key, None);
 					return Claim::Mine(ClaimGuard {
 						links: self,
 						key,
@@ -857,6 +967,13 @@ impl Links {
 					});
 				}
 			}
+		}
+	}
+
+	// A name skipped without a claim still counts as seen.
+	fn passed(&self, md: &fs::Metadata) {
+		if md.nlink() > 1 {
+			self.map.lock().unwrap().count_down((md.dev(), md.ino()));
 		}
 	}
 }
@@ -1154,10 +1271,15 @@ fn one_file(
 	let st = &g.stats;
 	let path = &job.path;
 	let pbytes = path.as_os_str().as_bytes();
-	let md = match fs::symlink_metadata(path) {
+	let rel = job.root.rel(path);
+	let md = match job
+		.root
+		.open_at(rel, libc::O_PATH)
+		.and_then(|f| f.metadata())
+	{
 		Ok(m) if m.file_type().is_file() => m,
 		Ok(_) => return,
-		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+		Err(e) if beneath::moved(&e) => return,
 		Err(e) => {
 			st.other_err.fetch_add(1, Relaxed);
 			event(sh, Kind::StatError, path, e.to_string());
@@ -1179,13 +1301,14 @@ fn one_file(
 				send(sh, Msg::Seen(pbytes.to_vec()));
 			}
 			st.skip_db.fetch_add(1, Relaxed);
+			links.passed(&md);
 			return;
 		}
 	}
 
-	let file = match open_noatime(path) {
+	let file = match job.root.open_read(rel) {
 		Ok(f) => f,
-		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+		Err(e) if beneath::moved(&e) => return,
 		Err(e) => {
 			st.other_err.fetch_add(1, Relaxed);
 			event(sh, Kind::OpenError, path, e.to_string());
@@ -1220,6 +1343,7 @@ fn one_file(
 		.filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d))
 	{
 		st.skip_xattr.fetch_add(1, Relaxed);
+		links.passed(&before);
 		send(
 			sh,
 			hashed_msg(pbytes, &Sums { b3: d, b2: None }, &before, date),
@@ -1508,5 +1632,159 @@ mod tests {
 			roots_diff(&a, &roots_key(&g(&["/a", "/d"]))),
 			"not given now: /b, /c; not in that run: /d"
 		);
+	}
+
+	fn test_group(root: &Path) -> Group {
+		Group {
+			name: "g".into(),
+			roots: vec![root.to_path_buf()],
+			threads: 1,
+			stats: Stats::default(),
+			done: AtomicBool::new(false),
+		}
+	}
+
+	fn scratch(tag: &str) -> PathBuf {
+		let d =
+			std::env::temp_dir().join(format!("test_tukfs-hash_scan_{tag}_{}", std::process::id()));
+		_ = fs::remove_dir_all(&d);
+		fs::create_dir_all(&d).unwrap();
+		d
+	}
+
+	fn job(root: &Arc<Root>, rel: &str) -> Job {
+		Job {
+			path: root.path.join(rel),
+			in_git: false,
+			root: root.clone(),
+		}
+	}
+
+	// The mount table is empty here, as it would be for a filesystem mounted
+	// after the scan started. /dev/shm is its own mount on most boxes.
+	#[test]
+	fn the_walk_stays_on_the_root_device() {
+		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
+			return;
+		};
+		if dev.dev() == shm.dev() {
+			eprintln!("/dev/shm isn't a mount here; skipped");
+			return;
+		}
+		let mine = PathBuf::from(format!(
+			"/dev/shm/test_tukfs-hash_walk_{}",
+			std::process::id()
+		));
+		fs::write(&mine, "x").unwrap();
+		let (sh, rx) = test_shared(PathBuf::from("/nowhere/t.sqlite"));
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let (jtx, jrx) = sync_channel(1 << 16);
+		walk(Path::new("/dev"), &sh, &Stats::default(), &jtx);
+		drop((jtx, sh));
+		drain.join().unwrap();
+		let jobs: Vec<PathBuf> = jrx.iter().map(|j| j.path).collect();
+		fs::remove_file(&mine).unwrap();
+		assert!(!jobs.iter().any(|p| p.starts_with("/dev/shm")), "{jobs:?}");
+	}
+
+	// A folder swapped for a symlink after the walk listed it.
+	#[test]
+	fn a_swapped_folder_is_not_followed() {
+		let d = scratch("swap");
+		let (root, outside) = (d.join("root"), d.join("outside"));
+		fs::create_dir_all(&root).unwrap();
+		fs::create_dir_all(&outside).unwrap();
+		fs::write(outside.join("f"), "not for the scan").unwrap();
+		std::os::unix::fs::symlink(&outside, root.join("dir")).unwrap();
+		let (sh, rx) = test_shared(d.join("t.sqlite"));
+		let g = test_group(&root);
+		let r = Arc::new(Root::open(&root).unwrap());
+		let mut buf = vec![0u8; 4096];
+		let mut logged = 0;
+		one_file(
+			&g,
+			&sh,
+			&job(&r, "dir/f"),
+			None,
+			&mut buf,
+			&Links::default(),
+			&mut logged,
+		);
+		assert_eq!(g.stats.files.load(Relaxed), 0);
+		assert!(rx.try_recv().is_err());
+		fs::remove_dir_all(&d).unwrap();
+	}
+
+	// Names skipped by the database or the attributes count down too, so the
+	// entry goes once all are seen.
+	#[test]
+	fn skipped_links_count_down() {
+		let d = scratch("links");
+		fs::write(d.join("a"), "linked").unwrap();
+		fs::hard_link(d.join("a"), d.join("b")).unwrap();
+		fs::hard_link(d.join("a"), d.join("c")).unwrap();
+		let md = fs::metadata(d.join("a")).unwrap();
+		let fresh = Prior {
+			bytes: md.len() as i64,
+			mtime_us: mtime_us(&md),
+			ino: md.ino() as i64,
+			hashed_us: now_us(),
+			seen_run: 0,
+			b3: blake3::hash(b"linked").as_bytes().to_vec(),
+		};
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let links = Links::default();
+		let mut buf = vec![0u8; 4096];
+		let mut logged = 0;
+		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
+		let left = |l: &Links| l.map.lock().unwrap().entries.len();
+		assert_eq!(left(&links), 1);
+		one_file(
+			&g,
+			&sh,
+			&job(&r, "b"),
+			Some(fresh),
+			&mut buf,
+			&links,
+			&mut logged,
+		);
+		assert_eq!(g.stats.skip_db.load(Relaxed), 1);
+		one_file(&g, &sh, &job(&r, "c"), None, &mut buf, &links, &mut logged);
+		if g.stats.xattr_set.load(Relaxed) == 1 {
+			assert_eq!(g.stats.skip_xattr.load(Relaxed), 1);
+		} else {
+			eprintln!("no user xattrs here; c went through the claim");
+		}
+		assert_eq!(left(&links), 0);
+		drop(sh);
+		drain.join().unwrap();
+		fs::remove_dir_all(&d).unwrap();
+	}
+
+	#[test]
+	fn the_link_map_is_capped() {
+		let mut m = LinkMap::default();
+		let v = (1, 1, sums(1));
+		for i in 0..LINKS_KEPT as u64 + 10 {
+			m.fill((1, i), v, 5);
+		}
+		assert_eq!(m.entries.len(), LINKS_KEPT);
+		assert!(!m.entries.contains_key(&(1, 9)) && m.entries.contains_key(&(1, 10)));
+		// Counted down and filled again: the stale key doesn't grow the queue.
+		for _ in 0..5 {
+			m.count_down((1, 10));
+		}
+		m.fill((1, 10), v, 1);
+		assert!(m.filled.len() <= LINKS_KEPT && m.entries.len() <= LINKS_KEPT);
+		// One being read is never dropped.
+		m.entries.insert((2, 0), None);
+		for i in 0..LINKS_KEPT as u64 {
+			m.fill((3, i), v, 5);
+		}
+		assert!(matches!(m.entries.get(&(2, 0)), Some(None)));
 	}
 }
