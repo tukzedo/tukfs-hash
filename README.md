@@ -25,7 +25,11 @@ It's a utility under tukfs, part of tukzedo.
 
 - Runs one worker per set of disks, so no disk is read by two at once, and more on flash. It never crosses into another mount or btrfs subvolume.
 
-- Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again. `--resume` only takes the newest scan, and only with the same roots, so 2 scripts sharing one database can't finish each other's runs.
+- Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again. `--resume` only takes the newest scan, and only with the same roots and the same `--verify` or not, so 2 scripts sharing one database can't finish each other's runs.
+
+- `scan --verify` is a quicker check between full runs. It reads again only the files with a checksum stored at their current size and time, even ones read earlier that day, and leaves no attributes. New and edited files wait for the next full scan.
+
+- `gone` lists the names a finished scan didn't see, which mostly means deleted files. `prune` drops the contents no name points at any more, since every edit leaves one behind.
 
 - `snapdiff` takes the change list from `zfs diff` or `btrfs subvolume find-new` and flags files that changed between 2 snapshots with the same size and time.
 
@@ -52,13 +56,17 @@ tukfs-hash scan --db FILE --root DIR [--root DIR ...] [options]
 tukfs-hash plan --root DIR [--root DIR ...]
 tukfs-hash runs --db FILE
 tukfs-hash report --db FILE [--run N] [--kind KIND]
+tukfs-hash gone --db FILE [--run N]
 tukfs-hash accept --db FILE PATH...
+tukfs-hash prune --db FILE
 tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE)
 ~~~
 
 `tukfs-hash --help` has the options. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
 `accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. Each name of a hard-linked file has its own record, so name each one.
+
+`gone` takes the newest finished scan, or run N, and lists the names under its roots that it didn't see. A name with an error in that run, or under a folder it couldn't list, isn't counted, and neither is one last seen from a deeper root by another run, since that may be a mount the walk stops at. A folder left out with `--exclude` does count as not seen.
 
 Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files or folders couldn't be checked, or input wasn't understood (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both kinds found. A resumed scan counts what its earlier parts found too. `accept` exits 1 if any file wasn't taken.
 

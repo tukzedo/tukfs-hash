@@ -19,6 +19,7 @@ macro_rules! err {
 mod accept;
 mod beneath;
 mod db;
+mod gone;
 mod mounts;
 mod scan;
 mod snapdiff;
@@ -39,7 +40,9 @@ Usage:
 	tukfs-hash plan --root DIR [--root DIR ...] [--threads DIR=N ...]
 	tukfs-hash runs --db FILE
 	tukfs-hash report --db FILE [--run N] [--kind KIND] [--limit N]
+	tukfs-hash gone --db FILE [--run N] [--limit N]
 	tukfs-hash accept --db FILE PATH...
+	tukfs-hash prune --db FILE
 	tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 
 scan options:
@@ -49,7 +52,11 @@ scan options:
 	--threads DIR=N     Workers for the disks under DIR. Default 1 with a hard drive, else 2, or 4 on NVMe.
 	--since YYYY-MM-DD  Skip files checksummed since then with the same size and time. Default today.
 	--resume            Continue the last scan, if it didn't finish, with its date.
-	                    Refused when its roots differ.
+	                    Refused when its roots differ, or it was a --verify
+	                    and this isn't, or the other way round.
+	--verify            Only read files with a checksum stored at their size and
+	                    time, however recently, and compare. New and edited files
+	                    are left for the next full scan. Writes no attributes.
 	--progress SECS     Seconds between progress lines. Default 30.
 
 A scan never crosses into another mount. Each root's mount is walked on its
@@ -66,6 +73,13 @@ file changed on purpose with its time put back, or one restored and checked
 by hand. It replaces the database record and any blake3 set on the file,
 removes rmlint's blake2b if it no longer matches, and logs an accepted event.
 Each name of a hard-linked file has its own record.
+
+gone lists names the newest finished scan, or run N, didn't see: under its
+roots, with no event of their own in that run, and not last seen by another
+run from a deeper root, which may be a mount the walk stops at. A folder
+left out with --exclude counts as not seen.
+
+prune removes contents no name points at any more. Each edit leaves one.
 
 Attributes, as nemo-anywhere reads them:
 	user.blake3.b64u    checksum, base64url with no padding
@@ -141,6 +155,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut threads = Vec::new();
 	let mut since = None;
 	let mut resume = false;
+	let mut verify = false;
 	let mut write_xattrs = true;
 	let mut progress = 30;
 	let mut run_id = None;
@@ -192,6 +207,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				);
 			}
 			"--resume" => resume = true,
+			"--verify" => verify = true,
 			"--progress" => {
 				progress = take_text(&mut it, a)?
 					.parse()
@@ -230,6 +246,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			if resume && since.is_some() {
 				return Err("--resume uses the old run's date; drop --since".into());
 			}
+			if verify && since.is_some() {
+				return Err("--verify reads every known file again; drop --since".into());
+			}
 			let stop = Arc::new(AtomicBool::new(false));
 			for sig in [
 				signal_hook::consts::SIGINT,
@@ -250,6 +269,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					threads,
 					since,
 					resume,
+					verify,
 					write_xattrs,
 					progress_secs: progress,
 					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
@@ -272,6 +292,8 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		}
 		"runs" => runs(&need_db()?),
 		"report" => report(&need_db()?, run_id, kind.as_deref(), limit),
+		"gone" => gone::run(&need_db()?, run_id, limit),
+		"prune" => prune(&need_db()?),
 		"accept" => accept::run(
 			&need_db()?,
 			&files,
@@ -301,8 +323,14 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 fn runs(db: &std::path::Path) -> Result<i32, String> {
 	let conn = db::open_ro(db)?;
 	let e = |e: rusqlite::Error| e.to_string();
+	// Until a newer version has opened it for writing.
+	let verify = if db::has_column(&conn, "runs", "verify").map_err(e)? {
+		"verify"
+	} else {
+		"0"
+	};
 	let mut st = conn
-		.prepare("SELECT id, started_us, finished_us, cutoff_us, status, host, summary FROM runs ORDER BY id")
+		.prepare(&format!("SELECT id, started_us, finished_us, cutoff_us, status, host, summary, {verify} FROM runs ORDER BY id"))
 		.map_err(e)?;
 	let rows = st
 		.query_map([], |r| {
@@ -314,13 +342,16 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 				r.get::<_, String>(4)?,
 				r.get::<_, Option<String>>(5)?,
 				r.get::<_, Option<String>>(6)?,
+				r.get::<_, bool>(7)?,
 			))
 		})
 		.map_err(e)?;
 	for row in rows {
-		let (id, start, fin, cutoff, status, host, summary) = row.map_err(e)?;
+		let (id, start, fin, cutoff, status, host, summary, verify) = row.map_err(e)?;
 		let skipping = if status == "accept" {
 			String::new()
+		} else if verify {
+			", verify".into()
 		} else {
 			format!(", skipping since {}", util::fmt_local(cutoff))
 		};
@@ -344,6 +375,25 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 		)
 		.map_err(e)?;
 	out!("{paths} paths, {files} distinct contents");
+	Ok(0)
+}
+
+fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
+	let db_path = scan::canonical_db(db_arg)?;
+	if !db_path.is_file() {
+		return Err(format!("{}: no such database", util::show_path(&db_path)));
+	}
+	let _lock = scan::lock(&db_path)?;
+	let conn = db::open_rw(&db_path)?;
+	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
+	if let Err(x) = db::close_rw(conn) {
+		err!(
+			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
+			util::show_path(&db_path)
+		);
+	}
+	scan::give_back(&db_path);
+	out!("removed {n} content(s) no name points at");
 	Ok(0)
 }
 

@@ -35,6 +35,7 @@ pub struct Opts {
 	pub threads: Vec<(PathBuf, usize)>,
 	pub since: Option<i64>,
 	pub resume: bool,
+	pub verify: bool,
 	pub write_xattrs: bool,
 	pub progress_secs: u64,
 	pub args: String,
@@ -185,12 +186,13 @@ struct Resumed {
 }
 
 // Only the newest scan, only if it didn't finish, and only over the same
-// roots. An older stopped run would bring back an old skip date, and the
-// other wrapper's run would be finished over the wrong roots.
-fn pick_resume(conn: &rusqlite::Connection, roots: &[u8]) -> Result<Resumed, String> {
+// roots and in the same mode. An older stopped run would bring back an old
+// skip date, and the other wrapper's run would be finished over the wrong
+// roots.
+fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Result<Resumed, String> {
 	let row = conn
 		.query_row(
-			"SELECT id, status, cutoff_us, started_us, roots, summary FROM runs
+			"SELECT id, status, cutoff_us, started_us, roots, summary, verify FROM runs
 			WHERE status != 'accept' ORDER BY id DESC LIMIT 1",
 			[],
 			|r| {
@@ -203,12 +205,13 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8]) -> Result<Resumed, Str
 					},
 					r.get::<_, String>(1)?,
 					r.get::<_, Option<Vec<u8>>>(4)?,
+					r.get::<_, bool>(6)?,
 				))
 			},
 		)
 		.optional()
 		.map_err(|e| format!("database: {e}"))?;
-	let Some((run, status, was)) = row else {
+	let Some((run, status, was, was_verify)) = row else {
 		return Err("--resume: no scan to resume".into());
 	};
 	let id = run.id;
@@ -232,6 +235,19 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8]) -> Result<Resumed, Str
 			roots_diff(&was, roots)
 		));
 	}
+	match (was_verify, verify) {
+		(true, false) => {
+			return Err(format!(
+				"--resume: run {id} was a --verify run. Resume it with --verify, or start a new scan without --resume."
+			))
+		}
+		(false, true) => {
+			return Err(format!(
+				"--resume: run {id} was a full scan. Resume it without --verify, or start a new --verify without --resume."
+			))
+		}
+		_ => {}
+	}
 	if status == "running" || status == "killed" {
 		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
 	}
@@ -244,6 +260,7 @@ struct Stats {
 	hashed: AtomicU64,
 	skip_db: AtomicU64,
 	skip_xattr: AtomicU64,
+	skip_unknown: AtomicU64,
 	links: AtomicU64,
 	bytes: AtomicU64,
 	b3_ok: AtomicU64,
@@ -265,7 +282,7 @@ impl Stats {
 			g(&self.files),
 			g(&self.hashed),
 			human_bytes(g(&self.bytes)),
-			g(&self.skip_db) + g(&self.skip_xattr),
+			g(&self.skip_db) + g(&self.skip_xattr) + g(&self.skip_unknown),
 			g(&self.links),
 			g(&self.b3_ok),
 			g(&self.b2_ok),
@@ -313,6 +330,7 @@ struct Shared {
 	no_xattr: Vec<PathBuf>,
 	mount_points: BTreeMap<PathBuf, String>,
 	write_xattrs: bool,
+	verify: bool,
 	tx: SyncSender<Msg>,
 }
 
@@ -452,7 +470,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	let started = now_us();
 	let roots = roots_key(&plan.groups);
 	let (run_id, cutoff_us, run_started, earlier) = if o.resume {
-		let r = pick_resume(&conn, &roots)?;
+		let r = pick_resume(&conn, &roots, o.verify)?;
 		(r.id, r.cutoff_us, r.started_us, r.summary)
 	} else {
 		// The lock is held, so a run still marked running died without a
@@ -462,20 +480,29 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			[],
 		)
 		.map_err(e)?;
-		let cutoff = o.since.unwrap_or_else(|| local_midnight_us(started));
+		// A verify reads every known file again, however fresh.
+		let cutoff = if o.verify {
+			started
+		} else {
+			o.since.unwrap_or_else(|| local_midnight_us(started))
+		};
 		conn.execute(
-			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots) VALUES (?1, ?2, 'running', ?3, ?4, ?5)",
-			rusqlite::params![started, cutoff, host(), o.args, roots],
+			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6)",
+			rusqlite::params![started, cutoff, host(), o.args, roots, o.verify],
 		)
 		.map_err(e)?;
 		(conn.last_insert_rowid(), cutoff, started, None)
 	};
 	conn.execute("UPDATE runs SET status = 'running' WHERE id = ?1", [run_id])
 		.map_err(e)?;
-	out!(
-		"run {run_id}: files checksummed since {} are skipped",
-		fmt_local(cutoff_us)
-	);
+	if o.verify {
+		out!("run {run_id}: rereading files with a known checksum");
+	} else {
+		out!(
+			"run {run_id}: files checksummed since {} are skipped",
+			fmt_local(cutoff_us)
+		);
+	}
 
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
@@ -504,7 +531,9 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
 			.collect(),
 		mount_points: mounts::mount_points(&mounts),
-		write_xattrs: o.write_xattrs,
+		// A quick check leaves ctimes alone.
+		write_xattrs: o.write_xattrs && !o.verify,
+		verify: o.verify,
 		tx,
 	});
 
@@ -1329,6 +1358,17 @@ fn one_file(
 	let onfile = OnFile::read(fd);
 	let refs = Refs::new(&onfile, prior.as_ref(), &before);
 
+	// Nothing stored at this size and time to check against: new or edited.
+	// The next full scan reads it.
+	if sh.verify && refs.xattr.is_none() && refs.db.is_none() {
+		st.skip_unknown.fetch_add(1, Relaxed);
+		links.passed(&before);
+		if prior.as_ref().is_some_and(|p| p.seen_run != sh.run_id) {
+			send(sh, Msg::Seen(pbytes.to_vec()));
+		}
+		return;
+	}
+
 	// Another name for this inode may have left a fresh set without ever
 	// seeing this name's row, so the row gets a say.
 	if let Some((d, date)) = onfile
@@ -1562,6 +1602,7 @@ mod tests {
 			no_xattr: Vec::new(),
 			mount_points: BTreeMap::new(),
 			write_xattrs: false,
+			verify: false,
 			tx,
 		};
 		(sh, rx)

@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-pub const SCHEMA: i64 = 2;
+pub const SCHEMA: i64 = 3;
 
 // Matches the dataset's recordsize, so a page write is one record write.
 const PAGE_SIZE: i64 = 16384;
@@ -30,7 +30,8 @@ CREATE TABLE runs (
 	host        TEXT,
 	args        TEXT,
 	summary     TEXT,
-	roots       BLOB
+	roots       BLOB,
+	verify      INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE files (
 	id    INTEGER PRIMARY KEY,
@@ -108,14 +109,19 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		.optional()
 		.map_err(e)?;
 	// 2 added runs.roots, for --resume. Older runs have none, and can't be
-	// resumed.
-	if schema == Some(1) {
-		conn.execute_batch(
-			"BEGIN;
-			ALTER TABLE runs ADD COLUMN roots BLOB;
-			UPDATE meta SET value = 2 WHERE key = 'schema';
-			COMMIT;",
-		)
+	// resumed. 3 added runs.verify, so a resume keeps the run's mode.
+	let step = match schema {
+		Some(1) => Some(("ALTER TABLE runs ADD COLUMN roots BLOB;", 2)),
+		Some(2) => Some((
+			"ALTER TABLE runs ADD COLUMN verify INTEGER NOT NULL DEFAULT 0;",
+			3,
+		)),
+		_ => None,
+	};
+	if let Some((alter, to)) = step {
+		conn.execute_batch(&format!(
+			"BEGIN; {alter} UPDATE meta SET value = {to} WHERE key = 'schema'; COMMIT;"
+		))
 		.map_err(e)?;
 		drop(conn);
 		return open_rw(path);
@@ -134,6 +140,25 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		.map_err(e)?;
 	conn.pragma_update(None, "cache_size", -65536).map_err(e)?;
 	Ok(conn)
+}
+
+// A database a newer program hasn't opened for writing yet can lack columns
+// that readers ask for.
+pub fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+	conn.query_row(
+		"SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2",
+		[table, column],
+		|r| r.get::<_, i64>(0),
+	)
+	.map(|n| n > 0)
+}
+
+// Contents no name points at any more. Every edit leaves one behind.
+pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
+	conn.execute(
+		"DELETE FROM files WHERE NOT EXISTS (SELECT 1 FROM paths WHERE paths.file_id = files.id)",
+		[],
+	)
 }
 
 pub fn open_ro(path: &Path) -> Result<Connection, String> {
@@ -482,21 +507,78 @@ mod tests {
 		let p = temp_db("schema1");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
+		// Was only roots dropped. Schema 1 had neither column.
 		c.execute_batch(
 			"ALTER TABLE runs DROP COLUMN roots;
+			ALTER TABLE runs DROP COLUMN verify;
 			INSERT INTO runs (started_us, cutoff_us, status) VALUES (1, 1, 'stopped');
 			UPDATE meta SET value = 1 WHERE key = 'schema';",
 		)
 		.unwrap();
 		drop(c);
 		let c = open_rw(&p).unwrap();
-		let (n, roots): (i64, Option<Vec<u8>>) = c
-			.query_row("SELECT count(*), roots FROM runs", [], |r| {
+		let (n, roots, verify): (i64, Option<Vec<u8>>, i64) = c
+			.query_row("SELECT count(*), roots, verify FROM runs", [], |r| {
+				Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+			})
+			.unwrap();
+		assert_eq!((n, roots, verify), (1, None, 0));
+		let schema: i64 = c
+			.query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| {
+				r.get(0)
+			})
+			.unwrap();
+		assert_eq!(schema, SCHEMA);
+		close_rw(c).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn takes_schema_2_forward() {
+		let p = temp_db("schema2");
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		let c = Connection::open(&p).unwrap();
+		c.execute_batch(
+			"ALTER TABLE runs DROP COLUMN verify;
+			INSERT INTO runs (started_us, cutoff_us, status, roots) VALUES (1, 1, 'stopped', x'2f61');
+			UPDATE meta SET value = 2 WHERE key = 'schema';",
+		)
+		.unwrap();
+		assert!(!has_column(&c, "runs", "verify").unwrap());
+		drop(c);
+		let c = open_rw(&p).unwrap();
+		assert!(has_column(&c, "runs", "verify").unwrap());
+		let (roots, verify): (Vec<u8>, i64) = c
+			.query_row("SELECT roots, verify FROM runs", [], |r| {
 				Ok((r.get(0)?, r.get(1)?))
 			})
 			.unwrap();
-		assert_eq!((n, roots), (1, None));
+		assert_eq!((roots, verify), (b"/a".to_vec(), 0));
 		close_rw(c).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn prune_drops_only_unnamed_contents() {
+		let p = temp_db("prune");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 1), (2, x'02', 2), (3, x'03', 3);
+			INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run)
+			VALUES ('/x/a', 1, 1, 9, 1, 100, 1), ('/x/b', 1, 1, 9, 2, 100, 1), ('/x/c', 3, 3, 9, 3, 100, 1);",
+		)
+		.unwrap();
+		assert_eq!(prune(&conn).unwrap(), 1);
+		let ids: Vec<i64> = conn
+			.prepare("SELECT id FROM files ORDER BY id")
+			.unwrap()
+			.query_map([], |r| r.get(0))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		assert_eq!(ids, [1, 3]);
+		assert_eq!(prune(&conn).unwrap(), 0);
+		close_rw(conn).unwrap();
 		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
