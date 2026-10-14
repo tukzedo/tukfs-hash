@@ -639,23 +639,28 @@ fn one_file(
 	let (bytes, mt, ino) = (before.len() as i64, mtime_us(&before), before.ino() as i64);
 	let onfile = OnFile::read(fd);
 
-	if let (Some(d), Some(date)) = (onfile.b3_current(bytes, mt), onfile.b3_date_us) {
-		if date >= sh.cutoff_us {
-			st.skip_xattr.fetch_add(1, Relaxed);
-			send(
-				sh,
-				Msg::Hashed(Box::new(Hashed {
-					path: pbytes.to_vec(),
-					b3: d,
-					b2: None,
-					bytes,
-					mtime_us: mt,
-					ino,
-					hashed_us: date,
-				})),
-			);
-			return;
-		}
+	if let Some((d, date)) = onfile.b3_fresh(
+		bytes,
+		mt,
+		before.dev(),
+		before.ino(),
+		sh.cutoff_us,
+		now_us(),
+	) {
+		st.skip_xattr.fetch_add(1, Relaxed);
+		send(
+			sh,
+			Msg::Hashed(Box::new(Hashed {
+				path: pbytes.to_vec(),
+				b3: d,
+				b2: None,
+				bytes,
+				mtime_us: mt,
+				ino,
+				hashed_us: date,
+			})),
+		);
+		return;
 	}
 
 	let mut claim = None;
@@ -810,7 +815,8 @@ fn one_file(
 	// look at each file again.
 	if sh.write_xattrs && !job.in_git && !sh.no_xattr.iter().any(|x| path.starts_with(x)) {
 		let only_date = onfile.b3_current(bytes, mt) == Some(digest);
-		match xattr::write_b3(fd, &digest, bytes, mt, hashed_us, only_date) {
+		let id = (before.dev(), before.ino());
+		match xattr::write_b3(fd, &digest, bytes, mt, hashed_us, id, only_date) {
 			Ok(()) => {
 				st.xattr_set.fetch_add(1, Relaxed);
 			}

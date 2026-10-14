@@ -15,7 +15,7 @@ It's a utility under tukfs, part of tukzedo.
 	- The blake3 left on the file in extended attributes, by this program or by nemo-anywhere.
 	- rmlint's blake2b, in `user.rmlint.blake2b.*`.
 	- Its own database from earlier runs.
-- Writes the blake3 back onto the file, in the attributes nemo-anywhere reads, plus the date it was taken. Files in git work trees get none, since git already checksums what it keeps.
+- Writes the blake3 back onto the file, in the attributes nemo-anywhere reads, plus the date it was taken and the inode it came from. Files in git work trees get none, since git already checksums what it keeps.
 - Keeps everything in one SQLite file, which can be copied or archived as is.
 - Runs one worker per set of disks, so no disk is read by two at once, and more on flash. It never crosses into another mount.
 - Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again.
@@ -29,8 +29,11 @@ It's a utility under tukfs, part of tukzedo.
 | `user.blake3.bytes`   | size when it was taken
 | `user.blake3.date`    | when it was taken, microseconds since 1970
 | `user.blake3.mtime`   | modified time when it was taken, microseconds since 1970
+| `user.blake3.inode`   | `device:inode:checksum` of the file it was taken from
 
-The time is written last. A reader trusts the checksum only when both the size and time match the file, so a write that stops part way is thrown away.
+A reader trusts the checksum only when both the size and time match the file. The time is written after the checksum and the inode last, so a write that stops part way is thrown away.
+
+A file is skipped without reading only when `user.blake3.inode` matches the file's own device and inode and the checksum next to it. A copy made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. Attributes from before `user.blake3.inode` existed never skip.
 
 Writing an attribute changes the file's ctime, and Linux has no way to set it back.
 

@@ -36,6 +36,40 @@
 	- Opened by: code review
 	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
 
+- The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
+	- ID: 2026101406340902
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Steps to reproduce [Bug]:
+		- Scan a file. `cp -a` it, flip a byte in the copy, `touch -r` it back. Scan again the same day.
+		- Result: "hashed 0, skipped", no events, exit 0. The DB stores the source's digest for the bad copy.
+	- Incorrect behavior [Bug]:
+		- `one_file` in `src/scan.rs` (about line 642) skips when the xattr's size and mtime match and `user.blake3.date` is past the cutoff. It checks neither the inode nor the DB row, although the DB skip at about line 612 does check the inode.
+		- `cp -a` and `rsync -aX` carry xattrs and mtime, so a copy damaged in transit passes.
+		- nemo-anywhere writes the digest, size and mtime but never `date`. After a same-day edit and a nemo pass, our old `date` vouches for nemo's digest.
+		- A future or bit-flipped `date` makes the file skip forever, and that date is also stored as `hashed_us`, so the DB skip skips it too.
+	- Expected behavior [Bug]: A file is skipped only when this tool read that exact inode since the cutoff.
+	- Probable fix [Bug]: Store the inode and device in the xattr set, or drop the xattr skip and rely on the DB skip, which already checks the inode. Also reject a `date` later than now.
+	- Note: Blocks the b23 check.
+	- Decisions:
+		- Add the inode and device to the xattr set under a new `user.blake3.*` name. Skip only when they match the file's current inode and device. Refuse a `user.blake3.date` later than now. Old sets without the new name don't skip.
+	- Reproduced [Bug]: Yes. Step 8 of `tests/integration.bash` showed "hashed 0" and exit 0 for a `cp -a` copy with a flipped byte.
+	- Actual fix [Bug]:
+		- New `user.blake3.inode`, written last, holding `device:inode:checksum`. The skip needs it to match the file and the checksum beside it, and the date to fall between the cutoff and now.
+		- The checksum in it goes a little past the decision. It covers the nemo-anywhere case above, where an in-place edit keeps the inode and nemo writes a new checksum but no date.
+		- Device numbers can change at a reboot or remount. That costs a second read, not a wrong skip.
+		- README, help text and design.md list the new name.
+	- Branch: xattrskip
+	- Commit: `ab22859`
+	- Test case: Step 8 of `tests/integration.bash`: a `cp -a` copy, a set with no inode name, and a future date are each read again and reported. Unit test `b3_fresh_needs_our_inode_and_a_sane_date`.
+	- Verified: Step 8 failed 4 checks before the fix and passes after, on ext4 and ZFS. Dropping the date bound or the inode match each turns it red again. Unit tests, clippy and rustfmt pass.
+	- Swept: The skip at `one_file` is the only place the xattr date is trusted. The mismatch check and the `only_date` write use the size and time alone, which is right for a compare. The DB skip already checks the inode.
+	- Acceptance signoff: Needs signoff. It changes what's written to disk, and the checksum in the new name goes past the decision.
+
 - `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
 	- ID: 2026101406340913
 	- Type: Bug
@@ -102,27 +136,6 @@
 		- Some way to accept a file as changed on purpose is needed, or it gets reported forever. An `accept PATH` command, or a flag on the event, would both do.
 	- Note: Blocks the b23 check.
 	- Test case: None yet. Extend step 3 of `tests/integration.bash` with a second rescan that still reports the file.
-
-- The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
-	- ID: 2026101406340902
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced.
-	- Steps to reproduce [Bug]:
-		- Scan a file. `cp -a` it, flip a byte in the copy, `touch -r` it back. Scan again the same day.
-		- Result: "hashed 0, skipped", no events, exit 0. The DB stores the source's digest for the bad copy.
-	- Incorrect behavior [Bug]:
-		- `one_file` in `src/scan.rs` (about line 642) skips when the xattr's size and mtime match and `user.blake3.date` is past the cutoff. It checks neither the inode nor the DB row, although the DB skip at about line 612 does check the inode.
-		- `cp -a` and `rsync -aX` carry xattrs and mtime, so a copy damaged in transit passes.
-		- nemo-anywhere writes the digest, size and mtime but never `date`. After a same-day edit and a nemo pass, our old `date` vouches for nemo's digest.
-		- A future or bit-flipped `date` makes the file skip forever, and that date is also stored as `hashed_us`, so the DB skip skips it too.
-	- Expected behavior [Bug]: A file is skipped only when this tool read that exact inode since the cutoff.
-	- Probable fix [Bug]: Store the inode and device in the xattr set, or drop the xattr skip and rely on the DB skip, which already checks the inode. Also reject a `date` later than now.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Add the `cp -a` case to `tests/integration.bash`.
 
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
@@ -335,17 +348,6 @@
 	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
 	- Test case: None yet.
 
-- `--since` takes impossible dates such as 2026-02-31.
-	- ID: 2026101406340923
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `parse_date` in `src/util.rs`. Confirmed: `mktime` turns it into March 3.
-	- Expected behavior [Bug]: Refuse a date that doesn't round-trip.
-	- Test case: None yet. Add to the `dates` unit test.
-
 - A path argument that isn't valid UTF-8 panics.
 	- ID: 2026101406340924
 	- Type: Bug
@@ -509,6 +511,38 @@
 	- Swept: No other step resets anything.
 	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- `--since` takes impossible dates such as 2026-02-31.
+	- ID: 2026101406340923
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `parse_date` in `src/util.rs`. Confirmed: `mktime` turns it into March 3.
+	- Expected behavior [Bug]: Refuse a date that doesn't round-trip.
+	- Actual fix [Bug]: `parse_date` compares the year, month and day `mktime` hands back with what was asked for.
+	- Branch: xattrskip
+	- Commit: `ab22859`
+	- Test case: `dates` unit test, with Feb 31, Apr 31 and Feb 29 in a non-leap year.
+	- Verified: The test failed before the fix and passes after.
+	- Swept: `parse_date` is the only parser for user dates. `local_midnight_us` rolls over on purpose.
+	- Acceptance signoff: Self-closed: intent clear, test failed before and passes after.
+	- Closed: 20261014-070500
+
+- Integration step 6 fails now and then, with 15 bytes differing in place of 16.
+	- ID: 2026101414300001
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-143000
+	- Opened by: backlog round
+	- Actual cause [Bug]: The test writes 16 zero bytes over random data. When a byte there is already zero, only 15 differ, about 1 run in 16.
+	- Actual fix [Bug]: Invert the 16 bytes in place, so every one changes.
+	- Branch: xattrskip
+	- Test case: Step 6 of `tests/integration.bash` itself. Verified: 6 runs in a row passed.
+	- Acceptance signoff: Self-closed: mechanical.
+	- Closed: 20261014-143000
 
 - The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
 	- ID: 2026101406340928

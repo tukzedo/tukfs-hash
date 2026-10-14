@@ -138,7 +138,7 @@ cp -p "$work/old/a" "$work/new/a"
 printf 'same\n' > "$work/old/b"; cp -p "$work/old/b" "$work/new/b"
 printf 'v1\n' > "$work/old/c"; printf 'v2 longer\n' > "$work/new/c"
 touch -d '2001-01-01' "$work/old/c"
-python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(4096); f.write(b"\0"*16); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "$work/new/a"
+python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(4096); b=f.read(16); f.seek(4096); f.write(bytes(x^255 for x in b)); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "$work/new/a"
 printf 'a\nb\nc\nmissing\n' > "$work/list"
 rc=0; "$bin" snapdiff --old "$work/old" --new "$work/new" --list "$work/list" > "$work/sd.txt" 2> /dev/null || rc=$?
 check "snapdiff exit" "$rc" 4
@@ -154,6 +154,26 @@ kill -INT "$pid" 2> /dev/null || true
 wait "$pid" || true
 check "second scan refused" "$rc" 1
 expect "says why" "lock message: $(cat "$work/lock.txt")" grep -q 'locked' "$work/lock.txt"
+
+# 8. Attributes vouch only for the inode that was read. A fresh database each
+# time, so only the attributes can skip a file.
+xt="$work/xa"
+mkdir -p "$xt"
+for f in a b c d; do head -c $((20000 + ${#f} * 777)) /dev/urandom > "$xt/$f"; done
+touch -d '2015-05-05 05:05:05.5' "$xt/a"; touch -d '2019-09-09' "$xt/c"
+xscan() { local rc=0; "$bin" scan --db "$work/db/$1.sqlite" --root "$xt" --progress 3600 > "$work/x.txt" 2>&1 || rc=$?; echo "$rc"; }
+flip() { python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(100); b=f.read(1); f.seek(100); f.write(bytes([b[0]^1])); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "$1"; }
+check "attribute scan exit" "$(xscan x1)" 0
+check "inode attribute" "$(xget "$xt/a" user.blake3.inode)" "$(stat -c '%d:%i' "$xt/a"):$(xget "$xt/a" user.blake3.b64u)"
+check "fresh attributes skip" "$(xscan x2) $(grep -o 'hashed [0-9]*' "$work/x.txt" | head -1)" "0 hashed 0"
+# A copy with a flipped byte, a set from before the inode attribute, and a
+# date in the future.
+cp -a "$xt/a" "$xt/a-copy"; flip "$xt/a-copy"
+setfattr -x user.blake3.inode "$xt/b" 2> /dev/null || true; flip "$xt/b"
+setfattr -n user.blake3.date -v "$(( ($(date +%s) + 86400 * 365) * 1000000 ))" "$xt/c"; flip "$xt/c"
+check "untrusted attributes read again" "$(xscan x3)" 4
+check "each one is a mismatch" "$(sqlite3 "$work/db/x3.sqlite" "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "$xt/a-copy $xt/b $xt/c"
+check "the rest still skip" "$(grep -o 'hashed [0-9]*' "$work/x.txt" | head -1)" "hashed 3"
 
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"
