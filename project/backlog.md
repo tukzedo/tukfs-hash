@@ -791,6 +791,21 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-143000
 
+- The integration suite stops partway with "bad input encoding" about 1 run in 1000.
+	- ID: 2026101409000001
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-090000
+	- Opened by: backlog round
+	- Actual cause [Bug]: Step 12 copies a digest with `setfattr -v`. A digest starting `0s` or `0x` is read by setfattr as base64 or hex, it fails, and `set -e` ends the suite.
+	- Actual fix [Bug]: Quote the value, which setfattr takes as plain text.
+	- Swept: The other `setfattr -v` calls in the suite and the 3 scripts set numbers or hex, which can't start that way.
+	- Branch: testfix
+	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
+	- Acceptance signoff: Self-closed: mechanical.
+	- Closed: 20261014-090000
+
 - The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
 	- ID: 2026101406340928
 	- Type: Task

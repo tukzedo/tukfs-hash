@@ -292,7 +292,8 @@ hq hl2 "UPDATE paths SET hashed_us = hashed_us - 172800000000"
 flip "$hl/b_old"
 mkdir -p "$work/hlc"; cp -p "$hl/b_old" "$work/hlc/x"
 "$bin" scan --db "$work/db/hlc.sqlite" --root "$work/hlc" --progress 3600 > /dev/null 2>&1 || true
-setfattr -n user.blake3.b64u -v "$(xget "$work/hlc/x" user.blake3.b64u)" "$hl/b_old"
+# Quoted, or a digest starting 0s or 0x is decoded by setfattr.
+setfattr -n user.blake3.b64u -v "\"$(xget "$work/hlc/x" user.blake3.b64u)\"" "$hl/b_old"
 setfattr -n user.blake3.bytes -v 50000 "$hl/b_old"
 setfattr -n user.blake3.mtime -v "$(stat -c %.6Y "$hl/b_old" | tr -d .)" "$hl/b_old"
 ln "$hl/b_old" "$hl/a_new"
