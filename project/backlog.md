@@ -298,6 +298,36 @@
 	- Swept: `run`'s query was the only reader of `--resume`. `accept` opens through `open_rw`, so it takes the new version too. `runs` prints `killed` as it is. Neither wrapper had its own idea of which run to resume.
 	- Acceptance signoff: Needs signoff. It changes the database layout and adds a run status.
 
+- `diffs` can lose its snapshots partway through and report nothing for them.
+	- ID: 2026101406340912
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
+	- Incorrect behavior [Bug]:
+		- The last snapshot of a day is often a 15-minute one, kept about 12 hours, or an hourly, kept 24.
+		- `snapdiff` runs only after every `zfs diff` finishes. A snapshot pruned by then makes snapdiff skip every file in it and report 0 flagged.
+		- `snapdiff-summary.txt` lines don't say which pair they are for.
+	- Expected behavior [Bug]: The snapshots in use can't be pruned during the run, and each summary line names its pair.
+	- Probable fix [Bug]: Prefer `_daily` snapshots, or `zfs hold` each chosen one and release it at the end. Run snapdiff right after each pair's diff.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: With pruning made to happen during the first diff, all 3 pairs of a dataset went unchecked, snapdiff ran only after every diff, and no summary line named its pair.
+	- Actual fix [Bug]:
+		- Each day's pick is its last daily, or its last snapshot when it has none. That goes for btrfs too.
+		- Each picked zfs snapshot gets a `tukfs-diffs` hold before its dataset's diffs. The holds are released once that dataset's pairs are compared, and on any exit, including Ctrl+C, a hangup and TERM. zfs-auto-snapshot prunes with `destroy -d`, which waits for the hold, so the snapshot is pruned after.
+		- A run killed outright leaves its holds, so each run releases that tag everywhere first. A lock keeps a second run from taking a live run's holds.
+		- snapdiff runs right after each pair's diff, and each summary line starts with the pair's file name.
+		- A failed diff, a snapshot gone by the end of its compare, and a btrfs pair whose generation can't be read count as not fully checked. The last was skipped with no count before.
+	- Note: btrfs has no holds. Comparing right after each find-new keeps the window to one pair, and a snapshot deleted mid-compare is reported.
+	- Note: Unverified on real pools: that releasing the hold on an automounted snapshot lets its deferred destroy go ahead. If it doesn't, zfs-auto-snapshot's next `destroy -d` takes it.
+	- Branch: diffs (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: The fixed function, run against stand-in zfs, btrfs and tukfs-hash: every pair checked with pruning during the run, each compare right after its diff, every summary line named, no holds left after a normal end, TERM, INT or HUP, and a kill -9's holds cleared by the next run. A second run at once is refused. The pre-change copy fails 5 of those checks. Lint passes.
+	- Swept: Every way `step_diffs` could skip or half-check a pair: a failed `zfs diff` or find-new, no generation, a snapshot gone mid-compare. The usage text cut off the last 2 help lines with `sed -n '2,25p'`, and now prints up to `set -euo`.
+	- Acceptance signoff: Needs signoff after the root run. Holding the auto-snapshots, preferring dailies, and the lock are choices the item didn't spell out.
+
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
 	- ID: 2026101406340915
 	- Type: Bug
@@ -438,36 +468,6 @@
 	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
 	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
 
-- `diffs` can lose its snapshots partway through and report nothing for them.
-	- ID: 2026101406340912
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
-	- Incorrect behavior [Bug]:
-		- The last snapshot of a day is often a 15-minute one, kept about 12 hours, or an hourly, kept 24.
-		- `snapdiff` runs only after every `zfs diff` finishes. A snapshot pruned by then makes snapdiff skip every file in it and report 0 flagged.
-		- `snapdiff-summary.txt` lines don't say which pair they are for.
-	- Expected behavior [Bug]: The snapshots in use can't be pruned during the run, and each summary line names its pair.
-	- Probable fix [Bug]: Prefer `_daily` snapshots, or `zfs hold` each chosen one and release it at the end. Run snapdiff right after each pair's diff.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: With pruning made to happen during the first diff, all 3 pairs of a dataset went unchecked, snapdiff ran only after every diff, and no summary line named its pair.
-	- Actual fix [Bug]:
-		- Each day's pick is its last daily, or its last snapshot when it has none. That goes for btrfs too.
-		- Each picked zfs snapshot gets a `tukfs-diffs` hold before its dataset's diffs. The holds are released once that dataset's pairs are compared, and on any exit, including Ctrl+C, a hangup and TERM. zfs-auto-snapshot prunes with `destroy -d`, which waits for the hold, so the snapshot is pruned after.
-		- A run killed outright leaves its holds, so each run releases that tag everywhere first. A lock keeps a second run from taking a live run's holds.
-		- snapdiff runs right after each pair's diff, and each summary line starts with the pair's file name.
-		- A failed diff, a snapshot gone by the end of its compare, and a btrfs pair whose generation can't be read count as not fully checked. The last was skipped with no count before.
-	- Note: btrfs has no holds. Comparing right after each find-new keeps the window to one pair, and a snapshot deleted mid-compare is reported.
-	- Note: Unverified on real pools: that releasing the hold on an automounted snapshot lets its deferred destroy go ahead. If it doesn't, zfs-auto-snapshot's next `destroy -d` takes it.
-	- Branch: diffs (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: The fixed function, run against stand-in zfs, btrfs and tukfs-hash: every pair checked with pruning during the run, each compare right after its diff, every summary line named, no holds left after a normal end, TERM, INT or HUP, and a kill -9's holds cleared by the next run. A second run at once is refused. The pre-change copy fails 5 of those checks. Lint passes.
-	- Swept: Every way `step_diffs` could skip or half-check a pair: a failed `zfs diff` or find-new, no generation, a snapshot gone mid-compare. The usage text cut off the last 2 help lines with `sed -n '2,25p'`, and now prints up to `set -euo`.
-	- Acceptance signoff: Needs signoff after the root run. Holding the auto-snapshots, preferring dailies, and the lock are choices the item didn't spell out.
-
 - The scan's last step fails with exit 1 when anything else has the database open.
 	- ID: 2026101406340914
 	- Type: Bug
@@ -546,28 +546,6 @@
 		- `O_NOFOLLOW` covers only the last path part. A directory renamed to a symlink between `readdir` and `open` sends the root process elsewhere, where it reads files and sets `user.*` xattrs.
 	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
 	- Test case: None yet.
-
-- `diffs` uses a btrfs snapshot's current generation, so changes could be missed if a balance touched the older snapshot.
-	- ID: 2026101406340927
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
-	- Expected behavior [Bug]: Check whether `Gen at creation` is the right base for `find-new`, and use it if so.
-	- Reproduced [Bug]: Not on today's snapshots. On all of them in `/opt/bsnaps/@` and `@home`, Generation is Gen at creation or 1 more, and find-new lists from its base generation on, so nothing is missed yet. Read without root through the subvolume info ioctl, since `subvolume show` needs root.
-	- Actual cause [Bug]:
-		- Generation is the last transaction that wrote the snapshot's root. Anything that rewrites it later, a balance for one, moves it past the snapshot's creation, and find-new on the newer snapshot then skips what changed in between.
-		- Gen at creation is the transaction the snapshot was taken in, and never moves. Nothing in the old snapshot is newer, so it's the right base.
-		- find-new prints extents whose generation is at or above the base, per btrfs-progs' `btrfs_list_find_updated_files`. So the base's own transaction is listed too, which can only add files to compare.
-	- Actual fix [Bug]: `diffs` passes the old snapshot's Gen at creation to find-new. A pair whose generation can't be read counts as not fully checked.
-	- Note: Unverified: that a balance moves Generation, and the real `subvolume show` text, which needs root. The label comes from btrfs-progs' `print_subvolume_show_text`. If it doesn't match, every btrfs pair is reported as not checked, not passed.
-	- Branch: diffs (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: The fixed function passes the old snapshot's Gen at creation to find-new, and counts a pair whose generation can't be read. The pre-change copy passes Generation, and skips that pair with no count. Lint passes.
-	- Acceptance signoff: Self-closed: the item's question is answered and the fix is what it asked for. Its test failed before and passes after.
-	- Closed: 20261014-081921
 
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
@@ -687,6 +665,28 @@
 	- Swept: No other step resets anything.
 	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- `diffs` uses a btrfs snapshot's current generation, so changes could be missed if a balance touched the older snapshot.
+	- ID: 2026101406340927
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
+	- Expected behavior [Bug]: Check whether `Gen at creation` is the right base for `find-new`, and use it if so.
+	- Reproduced [Bug]: Not on today's snapshots. On all of them in `/opt/bsnaps/@` and `@home`, Generation is Gen at creation or 1 more, and find-new lists from its base generation on, so nothing is missed yet. Read without root through the subvolume info ioctl, since `subvolume show` needs root.
+	- Actual cause [Bug]:
+		- Generation is the last transaction that wrote the snapshot's root. Anything that rewrites it later, a balance for one, moves it past the snapshot's creation, and find-new on the newer snapshot then skips what changed in between.
+		- Gen at creation is the transaction the snapshot was taken in, and never moves. Nothing in the old snapshot is newer, so it's the right base.
+		- find-new prints extents whose generation is at or above the base, per btrfs-progs' `btrfs_list_find_updated_files`. So the base's own transaction is listed too, which can only add files to compare.
+	- Actual fix [Bug]: `diffs` passes the old snapshot's Gen at creation to find-new. A pair whose generation can't be read counts as not fully checked.
+	- Note: Unverified: that a balance moves Generation, and the real `subvolume show` text, which needs root. The label comes from btrfs-progs' `print_subvolume_show_text`. If it doesn't match, every btrfs pair is reported as not checked, not passed.
+	- Branch: diffs (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: The fixed function passes the old snapshot's Gen at creation to find-new, and counts a pair whose generation can't be read. The pre-change copy passes Generation, and skips that pair with no count. Lint passes.
+	- Acceptance signoff: Self-closed: the item's question is answered and the fix is what it asked for. Its test failed before and passes after.
+	- Closed: 20261014-081921
 
 - `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
 	- ID: 2026101406340926
