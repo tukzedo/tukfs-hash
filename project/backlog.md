@@ -617,24 +617,55 @@
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
 	- Type: Feature
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
+	- Decisions:
+		- A `gone` command, with `--run N` and `--limit N` like `report`. It defaults to the newest run with status `done`, and refuses any other status.
+		- Only paths the run would have reached count: under its roots, no event of their own in that run, not under a folder with a `dir-error` in it, and not last seen from a deeper root by another run, since that may be a mount the walk stops at.
+		- It only lists. Nothing is deleted.
+	- Branch: extras
+	- Commit: bed0537
+	- Test case: `gone::tests::only_names_the_run_would_reach`, and integration section 18.
+	- Verified: Integration section 18 on ext4 and ZFS lists only the deleted file, leaving out an unreadable file, a file in an unreadable folder, a file under a deeper root, and a file under another run's root. With the deeper-root rule and the event and folder checks taken out, it listed 4 and failed.
+	- Note: `--exclude` isn't kept with the run, so a folder left out counts as not seen. Documented in README and design.md.
+	- Swept: Every place a scan reaches a path either sets `seen_run` or logs an event, except a file deleted or turned into something else mid-scan, which is gone.
+	- Acceptance signoff: Needs signoff. New command and output wording, and the rules for what counts are a choice.
 
 - A `verify` mode that rereads only files whose blake3 is already known, for a quick check between full runs.
 	- ID: 2026101406340931
 	- Type: Feature
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
+	- Decisions:
+		- A `scan --verify` flag, not a command. It needs the whole scan: the walk and its mount rules, workers per disk, hard link claims, stop and resume, events and exit codes. A command going through database rows would read in name order and couldn't open files from their root.
+		- Known means a blake3 at the file's current size and time, in the database or on the file. Others are left for the next full scan.
+		- The skip date is the run's own start, so it rereads files read earlier that day. `--since` is refused with it.
+		- A clean read updates the database row as a scan does. No attributes are written, so ctimes don't move.
+		- The tables go to version 3, adding `runs.verify`. `--resume` only continues a verify run with `--verify`, and a full scan only without it. Older databases are brought forward on the first write.
+	- Branch: extras
+	- Commit: bed0537
+	- Test case: Integration section 17, and `db::tests::takes_schema_2_forward`. `db::tests::takes_schema_1_forward` now drops both new columns, as a real version 1 database had neither.
+	- Verified: Section 17 on ext4 and ZFS: a same-day verify rereads, a new file isn't read or recorded, an edited file isn't read, a flipped byte exits 4, no ctime moves, and resume refuses the other mode. The checks on what's read, ctimes, and resuming a verify as a full scan failed with that code taken out.
+	- Swept: Run inserts in `scan` and `accept`, `pick_resume`, and `runs`. `accept` gets the column's default.
+	- Acceptance signoff: Needs signoff. New flag, a table change, and the choices above.
 
 - A way to prune `files` rows no path points at.
 	- ID: 2026101406340932
 	- Type: Feature
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
 	- Note: Every content change orphans a row, which only inflates the "distinct contents" count.
+	- Decisions:
+		- A `prune --db FILE` command. It holds the database lock, deletes only `files` rows no path points at, and prints how many.
+		- It isn't a run, so it adds no status and `--resume` never sees it.
+	- Branch: extras
+	- Commit: bed0537
+	- Test case: `db::tests::prune_drops_only_unnamed_contents`, and integration section 19.
+	- Verified: Section 19 on ext4 and ZFS removes the 3 rows left by earlier edits and keeps every path joined. With the delete turned off, it failed.
+	- Acceptance signoff: Needs signoff. It deletes data.
 
 - `vm-scan` stops at the first disk image, after the guests are already frozen or shut down and the snapshots taken.
 	- ID: 2026101406340903
