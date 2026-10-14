@@ -27,14 +27,20 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 ## Reading files
 
 - Each root is walked on its own and the walk stops at every mount point, so bind mounts, snapshots and other filesystems are only read when they are listed.
+	- It also stops at any folder on another device than the root. That covers a btrfs subvolume that isn't mounted, and anything mounted after the mount table was read.
+
+- Every file and folder is opened from the root's own folder, and no symlink is followed and no mount crossed anywhere on the way. A folder swapped for a symlink after it was listed counts as gone, rather than sending the scan, which runs as root, somewhere else. Kernels before 5.6 have no `openat2`, so there it goes one folder at a time.
 
 - Roots on the same disks share one group of workers. One worker for any group with a hard drive, 2 on SATA flash and 4 on NVMe. Two readers on one hard drive make it seek between them.
 
 - Folders go in name order and files in inode order, which on most filesystems is close to the order on disk.
+	- A folder with over a million files is queued a million at a time, each part in inode order, so its list stays bounded.
+	- The names of a folder's subfolders are all held until it's done, for the name order. Only names are kept, not whole paths.
 
 - A file is checked with fstat before and after reading. If the size, time or ctime moved, it's recorded as unstable and not stored. Running VM images and live databases land there.
 
 - The first worker to reach a hard-linked inode claims it. Other names wait for that result rather than reading the file again, and the entry is dropped once every name has been seen. Each name still gets compared with its own database row.
+	- A name skipped by its row or attributes counts as seen too. Names outside the roots never come, so a group keeps only its newest 262,144 results, and a later name of an older one is read again.
 
 - A file's cached pages are dropped before it's read, so a scribble in the page cache isn't hashed as if it were on disk. ZFS ignores that advice and answers from the ARC, so there a second read can't tell memory from disk.
 

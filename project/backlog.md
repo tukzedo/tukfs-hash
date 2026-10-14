@@ -554,7 +554,7 @@
 - The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
 	- ID: 2026101406340921
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -563,12 +563,29 @@
 		- A directory with 10M entries costs about 1.5 GB before its first file is queued. The inode sort needs the whole list, so this is partly by design.
 		- A `Links` entry counts down only for names that reach the claim. Names skipped earlier by the DB or xattr checks, or outside the roots, leave it above zero.
 	- Expected behavior [Bug]: Memory stays bounded on huge trees.
-	- Test case: None.
+	- Reproduced [Bug]: The `Links` part, by a test that left an entry behind before the fix. The folder part is from the code.
+	- Actual cause [Bug]:
+		- `Links` counted down only at the claim. Once the first name's attribute is written, the other names usually skip through it and never get there. Nothing capped the map.
+		- The walk kept a whole path per entry for a folder's files and for every subfolder still to walk, at every level.
+	- Actual fix [Bug]:
+		- Names skipped by the database or the attributes count down too. A group keeps at most 262,144 results and drops the oldest first, so a name outside the roots costs at most a second read of that file.
+		- The walk keeps names only. A folder's files are queued a million at a time, each part in inode order. Subfolders are taken off one at a time as they're walked.
+		- What stays by design: a folder's subfolder names are all held until it's done, for the name order. In a folder over a million files, inode order holds within each part only.
+	- Against: design.md, Reading files, "files in inode order". It now says so for big folders.
+	- Branch: walkfix
+	- Commit:
+	- Test case: `scan::tests::skipped_links_count_down` and `scan::tests::the_link_map_is_capped`. The batching has none, since it needs a folder of over a million files.
+	- Verified:
+		- `skipped_links_count_down` fails with the skip sites' countdown taken out, and passes with it.
+		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
+		- A same-day rerun of 50,000 files took the same time as before.
+	- Swept: `Links` is the only map in the scan that grows per file. The snapdiff inode walk is bounded by its list and was left alone.
+	- Acceptance signoff: Needs signoff. The cap and the batch size are choices the item didn't spell out.
 
 - The walk follows the mount table read at the start, and a directory swapped for a symlink mid-walk is followed.
 	- ID: 2026101406340922
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -578,7 +595,24 @@
 		- A btrfs subvolume that isn't a mount point is walked too. None are inside the b23 roots today, since `/opt/bsnaps` and `/mnt/bfs/bf7/bsnaps` are both mounted.
 		- `O_NOFOLLOW` covers only the last path part. A directory renamed to a symlink between `readdir` and `open` sends the root process elsewhere, where it reads files and sets `user.*` xattrs.
 	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
-	- Test case: None yet.
+	- Reproduced [Bug]: Confirmed. The build before the fix walked into a btrfs subvolume that isn't mounted, and into a tmpfs mounted part way through a scan. A test that opens a file through a folder swapped for a symlink read it before the fix.
+	- Actual cause [Bug]: Folders and files were opened by their full path, and only the mount table read at the start said where a filesystem ended. Nothing compared devices.
+	- Actual fix [Bug]:
+		- Each root is opened once. Folders and files under it are opened from it with `openat2`, with no symlink followed and no mount crossed on the way. Kernels before 5.6 go one folder at a time instead, with the same rules.
+		- A folder on another device than its root is skipped like a mount point. Folders are listed from their fd.
+		- A path that's no longer what the walk saw, gone or now a symlink, a file or a new mount, is skipped like a file deleted mid-scan.
+		- Loop mounts are unchanged. Each root is compared with its own device, and grouping still comes from the disks under the backing file.
+	- Branch: walkfix
+	- Commit:
+	- Test case: `beneath::tests::a_symlink_on_the_way_is_not_followed`, `beneath::tests::another_filesystem_is_not_entered`, `scan::tests::a_swapped_folder_is_not_followed` and `scan::tests::the_walk_stays_on_the_root_device`.
+	- Verified:
+		- `a_swapped_folder_is_not_followed` fails with the old open, and `the_walk_stays_on_the_root_device` fails with the device check and the mount rule taken out. Both pass with them.
+		- A btrfs subvolume and a tmpfs mounted mid-scan: the old build recorded files in both, this one in neither.
+		- The `beneath` tests run both the `openat2` and the one folder at a time paths.
+		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
+	- Note: Unverified: a root run of `scan` and `vm-scan` on b23, and the fallback on a real kernel before 5.6.
+	- Swept: `accept` opens the paths it's given by name, which a person typed, so it was left. `snapdiff` reads snapshots, which can't change under it, and already compares devices in its inode walk.
+	- Acceptance signoff: Needs signoff. It changes what the scan reads and touches security.
 
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930

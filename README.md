@@ -23,7 +23,7 @@ It's a utility under tukfs, part of tukzedo.
 
 - Keeps everything in one SQLite file, which can be copied or archived as is.
 
-- Runs one worker per set of disks, so no disk is read by two at once, and more on flash. It never crosses into another mount.
+- Runs one worker per set of disks, so no disk is read by two at once, and more on flash. It never crosses into another mount or btrfs subvolume.
 
 - Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again. `--resume` only takes the newest scan, and only with the same roots, so 2 scripts sharing one database can't finish each other's runs.
 
