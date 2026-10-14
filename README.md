@@ -11,14 +11,20 @@ It's a utility under tukfs, part of tukzedo.
 ## What it does
 
 - Reads each regular file once with blake3. Files that already have a current rmlint blake2b checksum get blake2b too, from the same read.
+
 - Compares the result with three earlier records, when they're there and the size and time still match:
 	- The blake3 left on the file in extended attributes, by this program or by nemo-anywhere.
 	- rmlint's blake2b, in `user.rmlint.blake2b.*`.
 	- Its own database from earlier runs.
+
 - Writes the blake3 back onto the file, in the attributes nemo-anywhere reads, plus the date it was taken and the inode it came from. Files in git work trees get none, since git already checksums what it keeps.
+
 - Keeps everything in one SQLite file, which can be copied or archived as is.
+
 - Runs one worker per set of disks, so no disk is read by two at once, and more on flash. It never crosses into another mount.
+
 - Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again.
+
 - `snapdiff` takes the change list from `zfs diff` or `btrfs subvolume find-new` and flags files that changed between 2 snapshots with the same size and time.
 
 ## Attributes
@@ -49,7 +55,9 @@ tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-ne
 
 `tukfs-hash --help` has the options. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
-Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found.
+Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8 add up to 12 when both happen.
+
+Names that aren't plain text are printed with `\xHH` escapes, and a backslash as `\\`, so 2 names never print the same.
 
 ## Building
 

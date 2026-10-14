@@ -175,6 +175,67 @@ check "untrusted attributes read again" "$(xscan x3)" 4
 check "each one is a mismatch" "$(sqlite3 "$work/db/x3.sqlite" "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "$xt/a-copy $xt/b $xt/c"
 check "the rest still skip" "$(grep -o 'hashed [0-9]*' "$work/x.txt" | head -1)" "hashed 3"
 
+# 9. snapdiff refuses or reports input it can't use, rather than checking
+# nothing and exiting 0. Each case has a damaged file it should reach.
+sd="$work/sd"
+mkdir -p "$sd/old" "$sd/new" "$sd/live"
+ln -s "$sd/live" "$sd/live-link"
+live="$(realpath "$sd/live")"
+head -c 5000 /dev/urandom > "$sd/old/d"; cp -p "$sd/old/d" "$sd/new/d"; flip "$sd/new/d"
+sdiff() { local rc=0; "$bin" snapdiff --old "$sd/old" --new "$sd/new" "$@" > "$sd/out.txt" 2> "$sd/err.txt" || rc=$?; echo "$rc"; }
+printf 'M\tF\t%s/d\n' "$live" > "$sd/typed"
+check "zfs diff -F read" "$(sdiff --zfs-diff "$sd/typed" --mount "$live") $(cut -f1,2 "$sd/out.txt")" $'4 content-changed-same-mtime\td'
+printf 'M\t%s/d\n' "$live" > "$sd/plain"
+check "--mount through a symlink" "$(sdiff --zfs-diff "$sd/plain" --mount "$sd/live-link") $(cut -f2 "$sd/out.txt")" "4 d"
+check "lines outside --mount refused" "$(sdiff --zfs-diff "$sd/plain" --mount "$sd/old")" 1
+expect "says which line" "outside message: $(cat "$sd/err.txt")" grep -q "1 line(s) aren't under --mount.* the first at line 1" "$sd/err.txt"
+printf -- '-\t%s/d\n+\t%s/d\n' "$live" "$live" > "$sd/replaced"
+check "a replaced file is compared" "$(sdiff --zfs-diff "$sd/replaced" --mount "$live") $(cut -f2 "$sd/out.txt")" "4 d"
+printf 'M\t%s/d\nM\t%s/not-there\n' "$live" "$live" > "$sd/gone"
+check "a file zfs diff names but the snapshot lacks" "$(sdiff --zfs-diff "$sd/gone" --mount "$live") $(grep -c '^missing' "$sd/out.txt")" "12 1"
+printf 'what\nM\t%s/d\n' "$live" > "$sd/junk"
+check "a line not understood" "$(sdiff --zfs-diff "$sd/junk" --mount "$live")" 12
+expect "says which line" "junk message: $(cat "$sd/err.txt")" grep -q '^line 1 not understood: what$' "$sd/err.txt"
+printf '%s/d\n' "$sd/new" > "$sd/abs"
+check "absolute list names refused" "$(sdiff --list "$sd/abs")" 1
+printf 'd\r\n' > "$sd/crlf"
+check "nothing compared" "$(sdiff --list "$sd/crlf")" 8
+mkdir -p "$sd/old/locked" "$sd/new/locked"
+printf 'x\n' > "$sd/old/locked/f"; cp -p "$sd/old/locked/f" "$sd/new/locked/f"
+chmod 000 "$sd/old/locked"
+printf 'locked/f\nd\n' > "$sd/locked"
+check "a stat error is counted" "$(sdiff --list "$sd/locked") $(cut -f1,2 "$sd/out.txt" | sort | tr '\n' ' ')" $'12 content-changed-same-mtime\td stat-error\tlocked/f '
+chmod 755 "$sd/old/locked"
+# btrfs find-new names a renamed file by its new name only. The same inode
+# under 2 names stands in for 2 snapshots.
+ln "$sd/old/d" "$sd/old/before"
+ln "$sd/old/d" "$sd/new/after"
+printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "$sd/new/after")" > "$sd/renamed"
+check "a renamed file found by inode" "$(sdiff --find-new "$sd/renamed" --all) $(cut -f1,2 "$sd/out.txt")" $'0 same\tafter'
+
+# 10. Names that aren't plain text: arguments are taken, and output escapes
+# them so 2 names never print the same.
+rc=0; "$bin" snapdiff --old "$sd/$(printf 'x\xff')" --new "$sd/new" --list "$sd/abs" > /dev/null 2> "$sd/err.txt" || rc=$?
+# ZFS with utf8only says EILSEQ rather than ENOENT.
+check "non-UTF-8 argument" "$rc $(sed 's/: [^:]*$//' "$sd/err.txt")" "1 tukfs-hash: $sd/x\\xff"
+tab="$(printf 't\tab')"
+head -c 3000 /dev/urandom > "$sd/old/$tab"; cp -p "$sd/old/$tab" "$sd/new/$tab"; flip "$sd/new/$tab"
+names="$tab"
+if [[ "$odd" == 1 ]]; then
+	head -c 3000 /dev/urandom > "$sd/old/$(printf 'caf\xe9')"; cp -p "$sd/old/$(printf 'caf\xe9')" "$sd/new/"; flip "$sd/new/$(printf 'caf\xe9')"
+	names+=$'\n'"$(printf 'caf\xe9')"
+fi
+printf '%s\n' "$names" > "$sd/names"
+want='t\x09ab'; [[ "$odd" == 1 ]] && want+=$'\ncaf\\xe9'
+check "snapdiff escapes names" "$(sdiff --list "$sd/names") $(cut -f2 "$sd/out.txt")" "4 $want"
+rt="$work/rt"; mkdir -p "$rt"
+head -c 3000 /dev/urandom > "$rt/$tab"
+"$bin" scan --db "$work/db/rt.sqlite" --root "$rt" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
+flip "$rt/$tab"
+"$bin" scan --db "$work/db/rt.sqlite" --root "$rt" --no-xattrs --since "$tomorrow" --progress 3600 > /dev/null 2>&1 || true
+"$bin" report --db "$work/db/rt.sqlite" > "$work/report2.txt"
+check "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"$rt/t\\\\x09ab"$'\t' "$work/report2.txt")" 1
+
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"
 else

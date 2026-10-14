@@ -23,6 +23,8 @@ mod snapdiff;
 mod util;
 mod xattr;
 
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -58,17 +60,38 @@ Attributes, as nemo-anywhere reads them:
 	user.blake3.inode   device:inode:checksum of the file it was taken from
 rmlint's user.rmlint.blake2b.* are checked when present and current.
 
-Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found.
+snapdiff takes `zfs diff` output with or without -H, -t and -F, and compares
+M and R lines, and a path with both - and +. Lines outside --mount, and names
+that aren't relative, are refused. A file renamed between btrfs snapshots is
+found in --old by its inode.
+
+Names that aren't plain text are printed with \\xHH escapes, and a backslash
+as \\\\.
+
+Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
+8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8
+add up to 12 when both happen.
 ";
 
-fn take_value(args: &mut std::slice::Iter<'_, String>, flag: &str) -> Result<String, String> {
+fn take_value<'a>(
+	args: &mut std::slice::Iter<'a, OsString>,
+	flag: &str,
+) -> Result<&'a OsStr, String> {
 	args.next()
-		.cloned()
+		.map(OsString::as_os_str)
 		.ok_or_else(|| format!("{flag} needs a value"))
 }
 
+fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<String, String> {
+	let v = take_value(args, flag)?;
+	v.to_str()
+		.map(str::to_string)
+		.ok_or_else(|| format!("{flag}: {} isn't text", util::escape_name(v.as_bytes())))
+}
+
 fn main() {
-	let argv: Vec<String> = std::env::args().skip(1).collect();
+	// Paths can be any bytes, so not env::args, which panics on them.
+	let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
 	let code = match real_main(&argv) {
 		Ok(c) => c,
 		Err(e) => {
@@ -79,8 +102,9 @@ fn main() {
 	std::process::exit(code);
 }
 
-fn real_main(argv: &[String]) -> Result<i32, String> {
-	let Some(cmd) = argv.first() else {
+fn real_main(argv: &[OsString]) -> Result<i32, String> {
+	let shown = |a: &OsStr| util::escape_name(a.as_bytes());
+	let Some(cmd) = argv.first().map(|c| c.to_str().unwrap_or_default()) else {
 		let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
 		return Ok(1);
 	};
@@ -110,24 +134,29 @@ fn real_main(argv: &[String]) -> Result<i32, String> {
 	let mut show_all = false;
 
 	let mut it = argv[1..].iter();
-	while let Some(a) = it.next() {
-		let p = |v: String| PathBuf::from(v);
-		match a.as_str() {
+	while let Some(arg) = it.next() {
+		let p = |v: &OsStr| PathBuf::from(v);
+		let a = arg.to_str().unwrap_or_default();
+		match a {
 			"--db" => db = Some(p(take_value(&mut it, a)?)),
 			"--root" => roots.push(p(take_value(&mut it, a)?)),
 			"--exclude" => excludes.push(p(take_value(&mut it, a)?)),
 			"--no-xattr" => no_xattr.push(p(take_value(&mut it, a)?)),
 			"--no-xattrs" => write_xattrs = false,
 			"--threads" => {
-				let v = take_value(&mut it, a)?;
-				let (d, n) = v.rsplit_once('=').ok_or("--threads takes DIR=N")?;
-				let n: usize = n
-					.parse()
-					.map_err(|_| format!("--threads: bad count in {v}"))?;
-				threads.push((p(d.to_string()), n));
+				let v = take_value(&mut it, a)?.as_bytes();
+				let eq = v
+					.iter()
+					.rposition(|&c| c == b'=')
+					.ok_or("--threads takes DIR=N")?;
+				let n: usize = std::str::from_utf8(&v[eq + 1..])
+					.ok()
+					.and_then(|n| n.parse().ok())
+					.ok_or_else(|| format!("--threads: bad count in {}", util::escape_name(v)))?;
+				threads.push((p(OsStr::from_bytes(&v[..eq])), n));
 			}
 			"--since" => {
-				let v = take_value(&mut it, a)?;
+				let v = take_text(&mut it, a)?;
 				since = Some(
 					util::parse_date(&v)
 						.ok_or_else(|| format!("--since: {v} is not YYYY-MM-DD"))?,
@@ -135,20 +164,20 @@ fn real_main(argv: &[String]) -> Result<i32, String> {
 			}
 			"--resume" => resume = true,
 			"--progress" => {
-				progress = take_value(&mut it, a)?
+				progress = take_text(&mut it, a)?
 					.parse()
 					.map_err(|_| "--progress takes seconds")?
 			}
 			"--run" => {
 				run_id = Some(
-					take_value(&mut it, a)?
+					take_text(&mut it, a)?
 						.parse::<i64>()
 						.map_err(|_| "--run takes a number")?,
 				)
 			}
-			"--kind" => kind = Some(take_value(&mut it, a)?),
+			"--kind" => kind = Some(take_text(&mut it, a)?),
 			"--limit" => {
-				limit = take_value(&mut it, a)?
+				limit = take_text(&mut it, a)?
 					.parse()
 					.map_err(|_| "--limit takes a number")?
 			}
@@ -159,12 +188,12 @@ fn real_main(argv: &[String]) -> Result<i32, String> {
 			"--find-new" => find_new = Some(p(take_value(&mut it, a)?)),
 			"--list" => list = Some(p(take_value(&mut it, a)?)),
 			"--all" => show_all = true,
-			_ => return Err(format!("unknown option {a}; see --help")),
+			_ => return Err(format!("unknown option {}; see --help", shown(arg))),
 		}
 	}
 	let need_db = || db.clone().ok_or_else(|| "--db is required".to_string());
 
-	match cmd.as_str() {
+	match cmd {
 		"scan" => {
 			if roots.is_empty() {
 				return Err("scan needs at least one --root".into());
@@ -194,7 +223,7 @@ fn real_main(argv: &[String]) -> Result<i32, String> {
 					resume,
 					write_xattrs,
 					progress_secs: progress,
-					args: argv.join(" "),
+					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
 				},
 				stop,
 			)
@@ -207,7 +236,7 @@ fn real_main(argv: &[String]) -> Result<i32, String> {
 			for (name, rs, n) in &plan.groups {
 				out!("group {name}, {n} worker(s)");
 				for r in rs {
-					out!("\t{}", r.display());
+					out!("\t{}", util::show_path(r));
 				}
 			}
 			Ok(0)
@@ -231,7 +260,7 @@ fn real_main(argv: &[String]) -> Result<i32, String> {
 			};
 			snapdiff::run(&old, &new, src, show_all)
 		}
-		_ => Err(format!("unknown command {cmd}; see --help")),
+		_ => Err(format!("unknown command {}; see --help", shown(&argv[0]))),
 	}
 }
 

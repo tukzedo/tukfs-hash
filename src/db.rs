@@ -74,7 +74,7 @@ impl ToSql for PathKey<'_> {
 
 pub fn path_text(v: ValueRef<'_>) -> String {
 	match v {
-		ValueRef::Text(t) | ValueRef::Blob(t) => String::from_utf8_lossy(t).into_owned(),
+		ValueRef::Text(t) | ValueRef::Blob(t) => crate::util::escape_name(t),
 		_ => String::new(),
 	}
 }
