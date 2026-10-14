@@ -329,6 +329,8 @@ struct Shared {
 	excludes: Vec<PathBuf>,
 	no_xattr: Vec<PathBuf>,
 	mount_points: BTreeMap<PathBuf, String>,
+	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
+	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
 	verify: bool,
 	tx: SyncSender<Msg>,
@@ -412,6 +414,12 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 }
 
 pub fn lock(db: &Path) -> Result<File, String> {
+	if let Some(t) = mounts::hands_off_at(&mounts::read_mounts()?, db) {
+		return Err(format!(
+			"{} is on {t}, which isn't written to from Linux; put the database elsewhere",
+			db.display()
+		));
+	}
 	let p = lock_path(db);
 	let f = OpenOptions::new()
 		.create(true)
@@ -512,6 +520,15 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	};
 
 	let mounts = mounts::read_mounts()?;
+	let mut hands_off = BTreeMap::new();
+	for r in plan.groups.iter().flat_map(|g| &g.1) {
+		if let Some(t) = mounts::hands_off_at(&mounts, r) {
+			let dev = fs::metadata(r)
+				.map_err(|e| format!("{}: {e}", r.display()))?
+				.dev();
+			hands_off.insert(r.clone(), (dev, t));
+		}
+	}
 	let shared = Arc::new(Shared {
 		stop: stop.clone(),
 		faults: faults.clone(),
@@ -531,6 +548,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
 			.collect(),
 		mount_points: mounts::mount_points(&mounts),
+		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && !o.verify,
 		verify: o.verify,
@@ -553,7 +571,10 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	for g in &groups {
 		out!("group {} with {} worker(s):", g.name, g.threads);
 		for r in &g.roots {
-			out!("\t{}", r.display());
+			match hands_off.get(r) {
+				Some((_, t)) => out!("\t{} ({t}, no attributes written)", r.display()),
+				None => out!("\t{}", r.display()),
+			}
 		}
 	}
 
@@ -1459,7 +1480,11 @@ fn one_file(
 	// Not inside a git checkout: the files come and go with every checkout,
 	// git already checksums what it keeps, and a ctime change makes git
 	// look at each file again.
-	if sh.write_xattrs && !job.in_git && !sh.no_xattr.iter().any(|x| path.starts_with(x)) {
+	if sh.write_xattrs
+		&& !job.in_git
+		&& !sh.no_write_devs.contains(&before.dev())
+		&& !sh.no_xattr.iter().any(|x| path.starts_with(x))
+	{
 		let only_date = refs.xattr == Some(sums.b3);
 		let id = (before.dev(), before.ino());
 		match xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date) {
@@ -1601,6 +1626,7 @@ mod tests {
 			excludes: Vec::new(),
 			no_xattr: Vec::new(),
 			mount_points: BTreeMap::new(),
+			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
 			verify: false,
 			tx,
@@ -1801,6 +1827,35 @@ mod tests {
 			eprintln!("no user xattrs here; c went through the claim");
 		}
 		assert_eq!(left(&links), 0);
+		drop(sh);
+		drain.join().unwrap();
+		fs::remove_dir_all(&d).unwrap();
+	}
+
+	#[test]
+	fn nothing_written_on_a_hands_off_device() {
+		let d = scratch("handsoff");
+		fs::write(d.join("a"), "win").unwrap();
+		fs::write(d.join("b"), "mac").unwrap();
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let links = Links::default();
+		let mut buf = vec![0u8; 4096];
+		let mut logged = 0;
+		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
+		let control = g.stats.xattr_set.load(Relaxed);
+		sh.no_write_devs.insert(fs::metadata(&d).unwrap().dev());
+		one_file(&g, &sh, &job(&r, "b"), None, &mut buf, &links, &mut logged);
+		assert_eq!(g.stats.xattr_set.load(Relaxed), control);
+		assert_eq!(g.stats.xattr_fail.load(Relaxed), 0);
+		let fd = File::open(d.join("b")).unwrap();
+		assert!(OnFile::read(fd.as_raw_fd()).b3.is_none());
+		if control == 0 {
+			eprintln!("no user xattrs here; the control proves nothing");
+		}
 		drop(sh);
 		drain.join().unwrap();
 		fs::remove_dir_all(&d).unwrap();

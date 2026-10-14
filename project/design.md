@@ -117,6 +117,10 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - None are written in git work trees. Files come and go with each checkout, git checksums what it keeps, and a ctime change makes git look at each file again.
 
+- Nothing is written to NTFS, APFS or HFS+, not attributes and not the database. Linux's drivers for them aren't reliable enough to trust with writes, and this tool only runs on Linux. They're still read and recorded.
+	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway.
+	- The walk stays on its root's device, so a root's filesystem decides for every file under it.
+
 - Writing changes ctime, and Linux has no call to set it back. Only changing the system clock or editing the inode on an unmounted ext4 could, and neither is safe to do per file.
 
 - On ZFS with `xattr=on`, each file's attributes are a hidden folder plus a file per name. `xattr=sa` keeps them in the inode and is much faster.
