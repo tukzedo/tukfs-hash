@@ -2,8 +2,521 @@
 <!-- markdownlint-disable MD010 -- No hard tabs -->
 <!-- markdownlint-disable MD041 -- First line in a file should be a top-level heading -->
 
+<!-- TOC ignore:true -->
 # Backlog
 
+<!-- TOC ignore:true -->
+## Table of contents
+
+<!-- TOC -->
+
+- [Introduction](#introduction)
+- [Issues](#issues)
+- [Template](#template)
+
+<!-- /TOC -->
+
+## Introduction
+
+- Items from the 2026-10-13 review cover the Rust code and the 3 b23 scripts that drive it:
+	- `~/synced/0-0/common/exec/util/linux/bash/tukfs-hash_scan-b23.bash`, the main scan wrapper.
+	- `~/synced/0-0/common/exec/util/linux/bash/tukfs-hash_vm-scan-b23.bash`, the VM image scan.
+	- `~/tmp/b23-ram-check-20261013/root-steps.bash`, the one-off root steps for the bad-RAM check.
+- Items marked "Blocks the b23 check" need to close before the root steps `diffs`, `scan` and `vm-scan` are run. `scrub` and `status` can run now, though `status` has its own item.
+- Line numbers are as of commit `6e4aafd` and will drift. Function names are given too.
+
+## Issues
+
+- A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
+	- ID: 2026101406340901
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced with the release build.
+	- Steps to reproduce [Bug]:
+		- Scan a tree. Flip a byte in a file and put its mtime back. Scan with `--since` tomorrow: exit 4 with `b3-xattr-mismatch` and `b3-db-mismatch`.
+		- Scan again the same way: "verified", no events, exit 0.
+	- Incorrect behavior [Bug]:
+		- `one_file` in `src/scan.rs` (about line 795) sends `Hashed` with the new digest after a mismatch, so `paths.file_id` points at the bad content.
+		- It then calls `xattr::write_b3` with `only_date` false (about line 812), so the xattr digest is replaced too.
+		- The good digest survives only as text in the one event. `report` shows the latest run by default, so it shows nothing.
+		- `src/db.rs` lines 7-9 say a damaged file is refused and left alone, which the code doesn't do.
+	- Expected behavior [Bug]: A mismatch leaves the xattr and the DB digest as they were, and every later run keeps reporting the file until someone resolves it.
+	- Actual cause [Bug]: The mismatch paths fall through to the normal "hashed" path.
+	- Progress log:
+		- The xattr is written as soon as the event is queued, but the event commits up to about 1 s later, or longer with the 65536-message channel backed up. A second Ctrl+C (exit 130 in `main.rs`), the OOM killer, power loss, or a writer error in that gap leaves the bad digest on the file and no event anywhere.
+		- No `POSIX_FADV_DONTNEED` before the read, only after. A page-cache scribble (seen on b23 on 2026-10-03) is hashed as if it were the disk copy.
+	- Probable fix [Bug]:
+		- Keep the stored values on any mismatch. Drop the file's cached pages before reading, and read again after a mismatch with the cache dropped, to tell a cache-only fault from one on disk.
+		- Some way to accept a file as changed on purpose is needed, or it gets reported forever. An `accept PATH` command, or a flag on the event, would both do.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Extend step 3 of `tests/integration.bash` with a second rescan that still reports the file.
+
+- The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
+	- ID: 2026101406340902
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Steps to reproduce [Bug]:
+		- Scan a file. `cp -a` it, flip a byte in the copy, `touch -r` it back. Scan again the same day.
+		- Result: "hashed 0, skipped", no events, exit 0. The DB stores the source's digest for the bad copy.
+	- Incorrect behavior [Bug]:
+		- `one_file` in `src/scan.rs` (about line 642) skips when the xattr's size and mtime match and `user.blake3.date` is past the cutoff. It checks neither the inode nor the DB row, although the DB skip at about line 612 does check the inode.
+		- `cp -a` and `rsync -aX` carry xattrs and mtime, so a copy damaged in transit passes.
+		- nemo-anywhere writes the digest, size and mtime but never `date`. After a same-day edit and a nemo pass, our old `date` vouches for nemo's digest.
+		- A future or bit-flipped `date` makes the file skip forever, and that date is also stored as `hashed_us`, so the DB skip skips it too.
+	- Expected behavior [Bug]: A file is skipped only when this tool read that exact inode since the cutoff.
+	- Probable fix [Bug]: Store the inode and device in the xattr set, or drop the xattr skip and rely on the DB skip, which already checks the inode. Also reject a `date` later than now.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Add the `cp -a` case to `tests/integration.bash`.
+
+- `vm-scan` stops at the first disk image, after the guests are already frozen or shut down and the snapshots taken.
+	- ID: 2026101406340903
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, written 2026-10-13, never run. Confirmed.
+	- Incorrect behavior [Bug]: In `attach_all`, `tr -c 'A-Za-z0-9._-\n' _` reads `_-\n` as a backwards range. `tr` exits 1, and `set -e` with `pipefail` ends the script inside `name="$(...)"`.
+	- Expected behavior [Bug]: Image names are cleaned and the scan goes on.
+	- Probable fix [Bug]: Put the `-` last: `'A-Za-z0-9._\n-'`.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Run `attach_all`'s name line on a name with a space.
+
+- `diffs` writes the root filesystem's btrfs results and bf7's to the same file names, so bf7's overwrite the root's.
+	- ID: 2026101406340904
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`, about line 162. Confirmed.
+	- Incorrect behavior [Bug]:
+		- The name is built from `basename "$(dirname "$sv")"`, which is `bsnaps` for both `/opt/bsnaps/@` and `/mnt/bfs/bf7/bsnaps/@`.
+		- 32 of 41 day pairs share names. bf7 runs second, so the root's pairs get compared against bf7's file lists. Those paths mostly don't exist on the root and are skipped, and nothing is reported.
+	- Expected behavior [Bug]: Each subvolume's pair gets its own file.
+	- Probable fix [Bug]: Build the name from the full path, such as `${sv//\//_}`.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Check that the manifest has no duplicate output names.
+
+- `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
+	- ID: 2026101406340905
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `src/snapdiff.rs`. Parser cases confirmed with the release build. The `-`/`+` and btrfs rename cases are reasoned from OpenZFS and btrfs-progs output, not run.
+	- Incorrect behavior [Bug]:
+		- `zfs diff -F` adds a type column, so `parse_zfs_diff` reads "F" as the path and drops every line.
+		- A `--mount` spelled any other way than zfs prints it, such as through a symlink, drops every line.
+		- An absolute `--list` path makes `old.join()` and `new.join()` both point at the same file, which then matches itself.
+		- A file replaced through a new object, as rsync without `--inplace`, tar or an atomic save do, shows as `-` and `+` on one path. Both lines are ignored, so an mtime-preserving copy through bad RAM is never compared.
+		- A file renamed between btrfs snapshots appears in find-new under its new name only. The old side is not found and the file is skipped.
+		- `run` skips any `symlink_metadata` error with no count, so EACCES, swapped `--old`/`--new` or CRLF lines all end in exit 0.
+	- Expected behavior [Bug]: Unusable lines are counted and reported. Lines outside `--mount` are an error. `-`/`+` pairs on one path are compared. Absolute list paths are refused. A stat error other than NotFound is counted, and a run that compared nothing exits non-zero.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Unit tests in `snapdiff.rs` for each input case.
+
+- A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
+	- ID: 2026101406340906
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Steps to reproduce [Bug]: Hash `b_old` with `--no-xattrs`. Add a hard link `a_new`, which sorts first. Damage the file, keeping size and mtime. Rescan: "links 1", no events, exit 0, and the DB row for `b_old` now has the bad digest.
+	- Incorrect behavior [Bug]: The `Claim::Done` path in `one_file` (about line 662) sends `Hashed` for the other name without the `prior` comparison.
+	- Expected behavior [Bug]: Each name is compared with its own DB row.
+	- Note: It matters where no xattr baseline exists: `--no-xattrs`, `--no-xattr` dirs, git trees, read-only or immutable files, and filesystems without xattrs. That covers every `vm-scan` file. Blocks the b23 check.
+	- Test case: None yet. Add the repro to `tests/integration.bash`.
+
+- `status` reads only the current boot's kernel log, so it misses checksum errors from before the bad RAM was fenced off.
+	- ID: 2026101406340907
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_status`. Confirmed: `journalctl -k` implies `-b` per its man page.
+	- Incorrect behavior [Bug]: `kernel-checksum-lines.txt` starts at the 2026-10-12 boot. The journal has 11 boots.
+	- Expected behavior [Bug]: All boots in the journal are searched.
+	- Probable fix [Bug]: Use `journalctl _TRANSPORT=kernel`, which reaches back to 2026-10-06 here. Older kernel logs are in the journal copies under `/opt/bsnaps/@var~log`.
+	- Test case: None. One-off script; check the first line's date.
+
+- A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
+	- ID: 2026101406340908
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Exit code confirmed with a mode-000 directory. The mid-directory case is from reading std's `ReadDir`, not run.
+	- Incorrect behavior [Bug]:
+		- `walk` in `src/scan.rs` uses `rd.flatten()` (about line 435), which throws away an error partway through a directory. std then ends the stream, so the rest of the directory is skipped silently. An EIO on a damaged ZFS directory block is the case that matters here.
+		- `ent.file_type()` errors are skipped the same way (about line 440).
+		- `run` counts only mismatches and read errors toward exit 4 (about line 326). `dir-error`, `open-error` and `stat-error` still exit 0.
+	- Expected behavior [Bug]: Every directory error is an event, and any error event makes the exit code non-zero.
+	- Note: A separate exit code bit for "some files weren't checked" would keep it from reading as clean.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Mode-000 directory in `tests/integration.bash`.
+
+- A stopped run exits 2 even with mismatches found, and `--resume` then reports 0 for them.
+	- ID: 2026101406340909
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Incorrect behavior [Bug]:
+		- `run` returns 2 for a stopped run whatever it found (about line 341).
+		- The resumed process starts its stats at zero and replaces `runs.summary`. It exited 0 with "MISMATCH 0" while the earlier part's events sat in the table.
+	- Expected behavior [Bug]: The exit code and summary count every event the run has, from all its parts. And also a stop with mismatches still says so.
+	- Probable fix [Bug]: Count from the `events` table for the run id at the end.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Extend step 5 of `tests/integration.bash` with a damaged file before the stop.
+
+- `--resume` can pick the wrong run.
+	- ID: 2026101406340910
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `run` in `src/scan.rs` about line 220. Confirmed from the query.
+	- Incorrect behavior [Bug]:
+		- `WHERE status != 'done' ORDER BY id DESC` takes an older stopped run even when a newer run finished. The old cutoff is used, and events go under the old id, which `report` doesn't show by default.
+		- The main scan and `vm-scan` share the DB, so either one's `--resume` can carry on the other's run with the wrong roots and mark it done.
+		- A run killed hard stays `running` forever.
+	- Expected behavior [Bug]: `--resume` continues only the newest run, only if it isn't done, and only with the same roots. Otherwise it refuses and says why.
+	- Probable fix [Bug]: Compare `runs.args` roots, or store a run label that each wrapper passes.
+	- Note: Blocks the b23 check.
+	- Test case: None yet.
+
+- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
+	- ID: 2026101406340911
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
+	- Incorrect behavior [Bug]:
+		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
+		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
+		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
+		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
+	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
+	- Note: Blocks the b23 check.
+	- Test case: None. Needs root and live VMs; check by hand.
+
+- `diffs` can lose its snapshots partway through and report nothing for them.
+	- ID: 2026101406340912
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
+	- Incorrect behavior [Bug]:
+		- The last snapshot of a day is often a 15-minute one, kept about 12 hours, or an hourly, kept 24.
+		- `snapdiff` runs only after every `zfs diff` finishes. A snapshot pruned by then makes snapdiff skip every file in it and report 0 flagged.
+		- `snapdiff-summary.txt` lines don't say which pair they are for.
+	- Expected behavior [Bug]: The snapshots in use can't be pruned during the run, and each summary line names its pair.
+	- Probable fix [Bug]: Prefer `_daily` snapshots, or `zfs hold` each chosen one and release it at the end. Run snapdiff right after each pair's diff.
+	- Note: Blocks the b23 check.
+	- Test case: None. One-off script.
+
+- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
+	- ID: 2026101406340913
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
+	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
+	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
+	- Test case: None. Needs root.
+
+- The scan's last step fails with exit 1 when anything else has the database open.
+	- ID: 2026101406340914
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `close_rw` in `src/db.rs`. Confirmed, reproduced with an idle `sqlite3` shell.
+	- Incorrect behavior [Bug]:
+		- Leaving WAL mode needs sole access. With another reader open, such as `report` stalled in a pager, it fails after the 30 s busy timeout.
+		- The result is exit 1 in place of 4, no summary printed, `give_back` never run, and the DB left in WAL mode and owned by root, which a normal user then can't open.
+		- `pragma_update_and_check` never checks that the mode came back as `delete`.
+	- Expected behavior [Bug]: The run's result is printed and returned whatever happens to the mode switch. A failed switch is a warning, and ownership is still handed back.
+	- Test case: None yet.
+
+- A failed DB lookup counts as "no prior record", which skips the DB comparison.
+	- ID: 2026101406340915
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
+	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
+	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
+	- Test case: None yet.
+
+- A writer error throws away its batch of events, and the run never records a summary.
+	- ID: 2026101406340916
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `writer` in `src/db.rs` and its caller in `run`. Confirmed from the code.
+	- Incorrect behavior [Bug]: One failed statement rolls back the whole batch, mismatch events included. `run` returns an error before the summary, and the run stays `running`. Workers keep writing xattrs after `send` starts failing.
+	- Expected behavior [Bug]: Events are written in their own transaction ahead of the rest, a writer failure stops the workers, and the run is marked failed.
+	- Test case: None yet.
+
+- `vm-scan` freezes guests and takes snapshots before finding out the main scan has the database locked.
+	- ID: 2026101406340917
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`. Confirmed from the code.
+	- Incorrect behavior [Bug]: The lock is only met when `tukfs-hash scan` starts, after the freeze, snapshots, mounts adn fsck runs. The script then says the snapshots are kept for `--resume`, though no run was made.
+	- Expected behavior [Bug]: Check the lock first, such as `flock -n "$db.lock" true`, and stop before touching any guest.
+	- Test case: None. Needs root.
+
+- `vm-scan` skips a partition it can't mount when another partition in the same image mounts, so that partition is never checked at all.
+	- ID: 2026101406340918
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Plausible.
+	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
+	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
+	- Test case: None. Needs root.
+
+- `clear-btrfs` zeroes the btrfs error counters without saving them first.
+	- ID: 2026101406340919
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_clear_btrfs`. Confirmed from the code.
+	- Incorrect behavior [Bug]: The counts survive only if `status` ran first.
+	- Expected behavior [Bug]: Save the counters to `out/` with a timestamp before zeroing.
+	- Test case: None. One-off script.
+
+- The scan can hang forever if every worker in a group fails to start, or if a worker panics.
+	- ID: 2026101406340920
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `run_group` and the main loop in `src/scan.rs`. Confirmed from the code.
+	- Incorrect behavior [Bug]:
+		- If every hasher's `open_ro` fails, the walker blocks on the full job channel. `run_group` still has a receiver, so the send never fails.
+		- A panic in the scope skips `g.done.store(true)`, and the main loop waits forever. Only a second signal ends it.
+	- Expected behavior [Bug]: Both cases end the group with an error.
+	- Test case: None yet.
+
+- The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
+	- ID: 2026101406340921
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `walk` and `Links` in `src/scan.rs`. Confirmed from the code.
+	- Incorrect behavior [Bug]:
+		- A directory with 10M entries costs about 1.5 GB before its first file is queued. The inode sort needs the whole list, so this is partly by design.
+		- A `Links` entry counts down only for names that reach the claim. Names skipped earlier by the DB or xattr checks, or outside the roots, leave it above zero.
+	- Expected behavior [Bug]: Memory stays bounded on huge trees.
+	- Test case: None.
+
+- The walk follows the mount table read at the start, and a directory swapped for a symlink mid-walk is followed.
+	- ID: 2026101406340922
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `walk` and `open_noatime` in `src/scan.rs`. Plausible; needs a mount or a rename racing the scan.
+	- Incorrect behavior [Bug]:
+		- There's no `st_dev` check against the root, so a filesystem mounted mid-scan is walked as part of the parent.
+		- A btrfs subvolume that isn't a mount point is walked too. None are inside the b23 roots today, since `/opt/bsnaps` and `/mnt/bfs/bf7/bsnaps` are both mounted.
+		- `O_NOFOLLOW` covers only the last path part. A directory renamed to a symlink between `readdir` and `open` sends the root process elsewhere, where it reads files and sets `user.*` xattrs.
+	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
+	- Test case: None yet.
+
+- `--since` takes impossible dates such as 2026-02-31.
+	- ID: 2026101406340923
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `parse_date` in `src/util.rs`. Confirmed: `mktime` turns it into March 3.
+	- Expected behavior [Bug]: Refuse a date that doesn't round-trip.
+	- Test case: None yet. Add to the `dates` unit test.
+
+- A path argument that isn't valid UTF-8 panics.
+	- ID: 2026101406340924
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
+	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
+	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
+	- Test case: None yet.
+
+- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
+	- ID: 2026101406340925
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
+	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
+	- Test case: None.
+
+- `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
+	- ID: 2026101406340926
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Confirmed from the code.
+	- Expected behavior [Bug]: A trap tears down on INT or TERM. `--cleanup` clears it by hand now.
+	- Test case: None.
+
+- `diffs` uses a btrfs snapshot's current generation, so changes could be missed if a balance touched the older snapshot.
+	- ID: 2026101406340927
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
+	- Expected behavior [Bug]: Check whether `Gen at creation` is the right base for `find-new`, and use it if so.
+	- Test case: None.
+
+- The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
+	- ID: 2026101406340928
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Note: On OpenZFS 2.3.9, `xattr=on` already means `sa` per the local man page, and `dnodesize=auto` is set on all 3 pools. Remove the step, or fix the comment about a hidden folder per file.
+	- Test case: None.
+
+- Should the main scan write xattrs on Dropbox files?
+	- ID: 2026101406340929
+	- Type: Task
+	- Status: Waiting for answers
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
+
 - Report paths that a finished run didn't see, as gone.
+	- ID: 2026101406340930
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261013-110127
+
 - A `verify` mode that rereads only files whose blake3 is already known, for a quick check between full runs.
+	- ID: 2026101406340931
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261013-110127
+
 - A way to prune `files` rows no path points at.
+	- ID: 2026101406340932
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261013-110127
+	- Note: Every content change orphans a row, which only inflates the "distinct contents" count.
+
+## Template
+
+- Notes:
+
+	- Only use rows that you actually need or expect will be filled in. Always fill in the title, ID, Type, Status, Opened and Created by.
+
+	- The ID is the local time to the hundredth of a second. Opened is when it was written down, which may differ. (Use a keyboard macro and possibly something like project 'zuid' to generate.)
+
+	- Status values meaning: Testing means the fix is in and checks are running or still to run. Waiting on signoff means automated testing passed. Moot means something else changed that made it irrelevant. Canceled means it still applies but was decided against. Waiting for testing means the fix is in and waits on a long CI run or an outside test host. Can't reproduce means a real attempt to reproduce it failed.
+
+	- As issues are worked, and statuses change, place them in correct sorting order within the list:
+		- First by status: Waiting for answers, Waiting on signoff, Testing, Waiting for testing, Can't reproduce, Stalled, Started, Queued, Done, Deferred, Canceled, Moot
+		- Then by severity|priority: Critical, High, Avg, Low
+		- Then by type: Bugs, [not bugs together]
+
+	- Rows marked [Bug] are for bugs only, and rows marked [Feature] for features and enhancements. Priority and Severity share one row and one scale. Priority is for a Feature or Enhancement, and Severity for a Bug. Children are not nested. They sit at the top level and point back with Parent ID.
+
+Template:
+
+- Title
+	- ID: YYYYmmDDHHMMSSNN
+	- Type: [Bug|Feature|Enhancement|Task]
+	- Status: [Queued|Waiting for answers|Waiting on signoff|Waiting for testing|Started|Testing|Stalled|Can't reproduce|Moot|Canceled|Deferred|Done]
+	- Needs local test suite run?:
+	- Needs external testing:
+	- Priority [Feature|Enhancement] | Severity [Bug]: [Critical|High|Avg|Low]
+	- Opened:
+	- Opened by:
+	- Assigned to:
+	- Parent ID:
+	- Prereq IDs:
+	- Related IDs:
+	- Target OS:
+	- Test environment:
+	- Version and build:
+	- Requirements  [Feature]:
+		- Hierarchical bulleted list.
+	- Steps to reproduce [Bug]:
+		- …
+	- Incorrect behavior [Bug]:
+	- Expected behavior [Bug]:
+	- Reproduced [Bug]: [No, or when, where and how]
+	- Possible cause [Bug]:
+	- Actual cause [Bug]:
+		- …
+	- Estimated effort: [High|Avg|Low]
+	- Actual effort: [High|Avg|Low]
+	- Progress log:
+		- …
+	- Decisions:
+		- …
+	- Actual fix [Bug]:
+	- Branch:
+	- Commit:
+	- Test case: [Reason not applicable, or CI test case #]
+	- Acceptance signoff:
+	- Superseded by ID:
+	- Closed:
