@@ -14,6 +14,20 @@ pub fn now_us() -> i64 {
 		.unwrap_or(0)
 }
 
+// The folder resolved and the name left alone, so a symlink stays a symlink.
+// A scan stores names that way, walking down from a resolved root.
+pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
+	let parent = p
+		.parent()
+		.filter(|d| !d.as_os_str().is_empty())
+		.unwrap_or(Path::new("."));
+	let dir = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+	let name = p
+		.file_name()
+		.ok_or_else(|| format!("{}: not a file name", p.display()))?;
+	Ok(dir.join(name))
+}
+
 pub fn cpath(p: &Path) -> io::Result<CString> {
 	CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }

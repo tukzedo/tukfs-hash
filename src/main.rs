@@ -16,6 +16,7 @@ macro_rules! err {
 	}};
 }
 
+mod accept;
 mod db;
 mod mounts;
 mod scan;
@@ -37,6 +38,7 @@ Usage:
 	tukfs-hash plan --root DIR [--root DIR ...] [--threads DIR=N ...]
 	tukfs-hash runs --db FILE
 	tukfs-hash report --db FILE [--run N] [--kind KIND] [--limit N]
+	tukfs-hash accept --db FILE PATH...
 	tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 
 scan options:
@@ -51,6 +53,17 @@ scan options:
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at
 once. Ctrl+C stops after the files in hand; --resume picks up from there.
+
+A file that reads differently from what was stored, at the same size and
+time, is read again with its cache dropped. If the second read matches, it's
+a cache-mismatch and only memory was wrong. If not, the stored checksums are
+left as they were, so every later scan reports it again.
+
+accept reads each PATH twice and takes what it reads as now as good: for a
+file changed on purpose with its time put back, or one restored and checked
+by hand. It replaces the database record and any blake3 set on the file,
+removes rmlint's blake2b if it no longer matches, and logs an accepted event.
+Each name of a hard-linked file has its own record.
 
 Attributes, as nemo-anywhere reads them:
 	user.blake3.b64u    checksum, base64url with no padding
@@ -70,7 +83,7 @@ as \\\\.
 
 Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
 8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8
-add up to 12 when both happen.
+add up to 12 when both happen. accept exits 1 if any file wasn't taken.
 ";
 
 fn take_value<'a>(
@@ -132,10 +145,22 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let (mut old, mut new, mut zfs_diff, mut mount, mut find_new, mut list) =
 		(None, None, None, None, None, None);
 	let mut show_all = false;
+	let mut files = Vec::new();
+	let mut only_files = false;
 
 	let mut it = argv[1..].iter();
 	while let Some(arg) = it.next() {
 		let p = |v: &OsStr| PathBuf::from(v);
+		if cmd == "accept" {
+			if only_files || !arg.as_bytes().starts_with(b"-") {
+				files.push(p(arg));
+				continue;
+			}
+			if arg == "--" {
+				only_files = true;
+				continue;
+			}
+		}
 		let a = arg.to_str().unwrap_or_default();
 		match a {
 			"--db" => db = Some(p(take_value(&mut it, a)?)),
@@ -243,6 +268,11 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		}
 		"runs" => runs(&need_db()?),
 		"report" => report(&need_db()?, run_id, kind.as_deref(), limit),
+		"accept" => accept::run(
+			&need_db()?,
+			&files,
+			&argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
+		),
 		"snapdiff" => {
 			let (Some(old), Some(new)) = (old, new) else {
 				return Err("snapdiff needs --old and --new".into());
@@ -285,12 +315,16 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 		.map_err(e)?;
 	for row in rows {
 		let (id, start, fin, cutoff, status, host, summary) = row.map_err(e)?;
+		let skipping = if status == "accept" {
+			String::new()
+		} else {
+			format!(", skipping since {}", util::fmt_local(cutoff))
+		};
 		out!(
-			"run {id} on {} {status}: started {}, finished {}, skipping since {}",
+			"run {id} on {} {status}: started {}, finished {}{skipping}",
 			host.unwrap_or_default(),
 			util::fmt_local(start),
 			fin.map(util::fmt_local).unwrap_or_else(|| "-".into()),
-			util::fmt_local(cutoff)
 		);
 		if let Some(s) = summary {
 			for l in s.lines() {

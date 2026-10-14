@@ -114,6 +114,51 @@
 	- Swept: The 3 parsers and `run` are the only input paths. `--list` read with `map_while(Result::ok)`, which stopped quietly at a read error, and now reads the file whole. The stat of `--old` was the twin of `--new`'s and is fixed with it. `--old` and `--new` that aren't folders are refused up front.
 	- Acceptance signoff: Needs signoff. It adds an exit code and changes output lines and the summary.
 
+- A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
+	- ID: 2026101406340901
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced with the release build.
+	- Steps to reproduce [Bug]:
+		- Scan a tree. Flip a byte in a file and put its mtime back. Scan with `--since` tomorrow: exit 4 with `b3-xattr-mismatch` and `b3-db-mismatch`.
+		- Scan again the same way: "verified", no events, exit 0.
+	- Incorrect behavior [Bug]:
+		- `one_file` in `src/scan.rs` (about line 795) sends `Hashed` with the new digest after a mismatch, so `paths.file_id` points at the bad content.
+		- It then calls `xattr::write_b3` with `only_date` false (about line 812), so the xattr digest is replaced too.
+		- The good digest survives only as text in the one event. `report` shows the latest run by default, so it shows nothing.
+		- `src/db.rs` lines 7-9 say a damaged file is refused and left alone, which the code doesn't do.
+	- Expected behavior [Bug]: A mismatch leaves the xattr and the DB digest as they were, and every later run keeps reporting the file until someone resolves it.
+	- Actual cause [Bug]: The mismatch paths fall through to the normal "hashed" path.
+	- Progress log:
+		- The xattr is written as soon as the event is queued, but the event commits up to about 1 s later, or longer with the 65536-message channel backed up. A second Ctrl+C (exit 130 in `main.rs`), the OOM killer, power loss, or a writer error in that gap leaves the bad digest on the file and no event anywhere.
+		- No `POSIX_FADV_DONTNEED` before the read, only after. A page-cache scribble (seen on b23 on 2026-10-03) is hashed as if it were the disk copy.
+	- Probable fix [Bug]:
+		- Keep the stored values on any mismatch. Drop the file's cached pages before reading, and read again after a mismatch with the cache dropped, to tell a cache-only fault from one on disk.
+		- Some way to accept a file as changed on purpose is needed, or it gets reported forever. An `accept PATH` command, or a flag on the event, would both do.
+	- Note: Blocks the b23 check.
+	- Decisions:
+		- Keep the stored xattr and DB digest on any mismatch, so later runs keep reporting it.
+		- Drop cached pages before reading. Read again after a mismatch with the cache dropped, and record whether it was cache-only.
+		- Add an `accept PATH...` subcommand that reads the named files again, takes the new digest as good, and logs an event.
+	- Reproduced [Bug]: Yes. The new step 3 checks failed on the old build: the xattr and DB digest were replaced, and the next run reported 1 event in place of 7.
+	- Actual fix [Bug]:
+		- On any mismatch nothing is written: no new DB row and no xattr. Only `seen_run` moves. That also closes the gap in the progress log, since a lost event now leaves the old digests in place and the next run finds it again.
+		- Cached pages are dropped before each read, not only after. A mismatch reads the file a second time. If that read matches everything stored, the event is `cache-mismatch` and the file is recorded as usual. If not, the mismatch events say whether the 2 reads agreed.
+		- `cache-mismatch` counts as a mismatch, so it exits 4 too.
+		- On ZFS the drop request does nothing, so the second read comes from the ARC. design.md and README say so.
+		- New `accept --db FILE PATH...`. It reads each file twice and refuses it if the reads differ. It updates the DB row, replaces a blake3 set already on the file but doesn't add one, and removes a current rmlint blake2b that no longer matches. It logs `accepted` under a run with status `accept`, and `scan --resume` now only picks up `running` or `stopped` runs. It warns when other hard-link names have their own records.
+		- The `src/db.rs` header comment was about a damaged database file, not a damaged file. Reworded.
+		- README, help text and design.md describe both.
+	- Branch: keepgood
+	- Commit: `eb111ff`
+	- Test case: Step 3 of `tests/integration.bash`: the digests stay, a second run reports all 7 events again, `accept` takes 3 files and drops rmlint's stale sum, and the run after is clean. Unit tests `a_match_is_not_read_again`, `a_second_read_tells_cache_from_disk` and `each_record_is_checked` cover the cache-only verdict, which can't be made without root.
+	- Verified: Step 3 failed 8 checks against the old build and passes after, on ext4 and ZFS. Unit tests, clippy, rustfmt and shellcheck pass.
+	- Swept: Every place that sends `Hashed` or writes xattrs in `one_file`: the xattr skip, the hard-link `Done` path and the normal path. `snapdiff` reads without dropping the cache. There a scribble can only add a false flag, not hide a change, so it was left alone.
+	- Acceptance signoff: Needs signoff. It changes what's written to disk, adds a subcommand and an event kind, and `cache-mismatch` exiting 4 is a choice.
+
 - `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
 	- ID: 2026101406340913
 	- Type: Bug
@@ -131,6 +176,49 @@
 	- Verified: On exit 4 it unmounted and destroyed the snapshots before the fix, and does neither after. Exit 0 still drops both, and exit 2 still unmounts and keeps the snapshots. Lint passes.
 	- Swept: The main scan wrapper keeps nothing temporary, so it has no twin.
 	- Acceptance signoff: Waiting: leaving the mounts in place goes past what the item asked.
+
+- A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
+	- ID: 2026101406340906
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Steps to reproduce [Bug]: Hash `b_old` with `--no-xattrs`. Add a hard link `a_new`, which sorts first. Damage the file, keeping size and mtime. Rescan: "links 1", no events, exit 0, and the DB row for `b_old` now has the bad digest.
+	- Incorrect behavior [Bug]: The `Claim::Done` path in `one_file` (about line 662) sends `Hashed` for the other name without the `prior` comparison.
+	- Expected behavior [Bug]: Each name is compared with its own DB row.
+	- Note: It matters where no xattr baseline exists: `--no-xattrs`, `--no-xattr` dirs, git trees, read-only or immutable files, and filesystems without xattrs. That covers every `vm-scan` file. Blocks the b23 check.
+	- Reproduced [Bug]: Yes, as step 11 of `tests/integration.bash`, on the old build.
+	- Actual fix [Bug]:
+		- The `Done` path compares the shared result with this name's own xattr, rmlint sum and DB row, the same as the name that read it. A mismatch is reported under each name and nothing is recorded.
+		- A sibling: the xattr skip took a fresh set left through another name, without this name's row. It now skips only when the row, at the same size and time, has the same digest.
+		- Step 3's old checks expected 2 xattr and 2 DB mismatches. `big.bin`'s hard link now counts too, so they're 3 each. The old lines are commented out with the reason.
+	- Branch: keepgood
+	- Commit: `eb111ff`
+	- Test case: Step 11 of `tests/integration.bash`: the review's repro, and a fresh set from the other name over a digest written after the damage.
+	- Verified: Both step 11 checks failed on the old build and pass after, on ext4 and ZFS. Taking out only the xattr skip change turns just the second one red.
+	- Swept: `Hashed` is sent from the xattr skip, the `Done` path and the normal path. All 3 now hold a name to its own row. The DB skip already checks the name's own row.
+	- Acceptance signoff: Needs signoff. The xattr skip change goes past the item, and the step 3 counts changed.
+
+- A failed DB lookup counts as "no prior record", which skips the DB comparison.
+	- ID: 2026101406340915
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
+	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
+	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
+	- Reproduced [Bug]: Yes. A row with text in its size column was overwritten with no event by the old build.
+	- Actual fix [Bug]: `lookup` returns an error for anything but a missing row. The scan logs it as `db-error`, counts it under other-err, and skips the file. `accept` stops on it for that file. The exit code is left to 2026101406340908.
+	- Branch: keepgood
+	- Commit: `eb111ff`
+	- Test case: Step 12 of `tests/integration.bash`, and unit test `lookup_error_is_not_no_row`.
+	- Verified: Step 12 failed on the old build and passes after, on ext4 and ZFS. The unit test fails with the old `.ok()` put back.
+	- Swept: `lookup` has 2 callers, `hasher` in `src/scan.rs` and `accept`. No other `.ok()` reads the database. `report` and `scan --resume` turn any query error into "no runs yet" or "no unfinished run to resume", but both still exit 1 and nothing is written, so they were left alone.
+	- Acceptance signoff: Needs signoff. It adds an event kind users see.
 
 - The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
 	- ID: 2026101406340925
@@ -175,47 +263,6 @@
 	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
 	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
 	- Acceptance signoff: Needs signoff. It changes how names print.
-
-- A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
-	- ID: 2026101406340901
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced with the release build.
-	- Steps to reproduce [Bug]:
-		- Scan a tree. Flip a byte in a file and put its mtime back. Scan with `--since` tomorrow: exit 4 with `b3-xattr-mismatch` and `b3-db-mismatch`.
-		- Scan again the same way: "verified", no events, exit 0.
-	- Incorrect behavior [Bug]:
-		- `one_file` in `src/scan.rs` (about line 795) sends `Hashed` with the new digest after a mismatch, so `paths.file_id` points at the bad content.
-		- It then calls `xattr::write_b3` with `only_date` false (about line 812), so the xattr digest is replaced too.
-		- The good digest survives only as text in the one event. `report` shows the latest run by default, so it shows nothing.
-		- `src/db.rs` lines 7-9 say a damaged file is refused and left alone, which the code doesn't do.
-	- Expected behavior [Bug]: A mismatch leaves the xattr and the DB digest as they were, and every later run keeps reporting the file until someone resolves it.
-	- Actual cause [Bug]: The mismatch paths fall through to the normal "hashed" path.
-	- Progress log:
-		- The xattr is written as soon as the event is queued, but the event commits up to about 1 s later, or longer with the 65536-message channel backed up. A second Ctrl+C (exit 130 in `main.rs`), the OOM killer, power loss, or a writer error in that gap leaves the bad digest on the file and no event anywhere.
-		- No `POSIX_FADV_DONTNEED` before the read, only after. A page-cache scribble (seen on b23 on 2026-10-03) is hashed as if it were the disk copy.
-	- Probable fix [Bug]:
-		- Keep the stored values on any mismatch. Drop the file's cached pages before reading, and read again after a mismatch with the cache dropped, to tell a cache-only fault from one on disk.
-		- Some way to accept a file as changed on purpose is needed, or it gets reported forever. An `accept PATH` command, or a flag on the event, would both do.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Extend step 3 of `tests/integration.bash` with a second rescan that still reports the file.
-
-- A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
-	- ID: 2026101406340906
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced.
-	- Steps to reproduce [Bug]: Hash `b_old` with `--no-xattrs`. Add a hard link `a_new`, which sorts first. Damage the file, keeping size and mtime. Rescan: "links 1", no events, exit 0, and the DB row for `b_old` now has the bad digest.
-	- Incorrect behavior [Bug]: The `Claim::Done` path in `one_file` (about line 662) sends `Hashed` for the other name without the `prior` comparison.
-	- Expected behavior [Bug]: Each name is compared with its own DB row.
-	- Note: It matters where no xattr baseline exists: `--no-xattrs`, `--no-xattr` dirs, git trees, read-only or immutable files, and filesystems without xattrs. That covers every `vm-scan` file. Blocks the b23 check.
-	- Test case: None yet. Add the repro to `tests/integration.bash`.
 
 - A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
 	- ID: 2026101406340908
@@ -314,18 +361,6 @@
 		- The result is exit 1 in place of 4, no summary printed, `give_back` never run, and the DB left in WAL mode and owned by root, which a normal user then can't open.
 		- `pragma_update_and_check` never checks that the mode came back as `delete`.
 	- Expected behavior [Bug]: The run's result is printed and returned whatever happens to the mode switch. A failed switch is a warning, and ownership is still handed back.
-	- Test case: None yet.
-
-- A failed DB lookup counts as "no prior record", which skips the DB comparison.
-	- ID: 2026101406340915
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
-	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
-	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
 	- Test case: None yet.
 
 - A writer error throws away its batch of events, and the run never records a summary.

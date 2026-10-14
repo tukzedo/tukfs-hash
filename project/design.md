@@ -32,15 +32,27 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A file is checked with fstat before and after reading. If the size, time or ctime moved, it's recorded as unstable and not stored. Running VM images and live databases land there.
 
-- The first worker to reach a hard-linked inode claims it. Other names wait for that result rather than reading the file again, and the entry is dropped once every name has been seen.
+- The first worker to reach a hard-linked inode claims it. Other names wait for that result rather than reading the file again, and the entry is dropped once every name has been seen. Each name still gets compared with its own database row.
+
+- A file's cached pages are dropped before it's read, so a scribble in the page cache isn't hashed as if it were on disk. ZFS ignores that advice and answers from the ARC, so there a second read can't tell memory from disk.
 
 - An EIO on ZFS means a block failed its checksum with no good copy left. It's reported the same as a mismatch.
+
+## Mismatches
+
+- A file that reads differently from a stored checksum, at the same size and time, is read once more before it's believed. When the second read matches everything stored, the event is `cache-mismatch` and the file is recorded as usual.
+
+- Otherwise the attribute and the database row are left as they were and nothing new is written. The next run reads the file again and reports it again. Writing the new checksum would make the next run call the damaged file clean, and a crash before the event was saved would leave no trace at all.
+
+- `accept` is the one way to replace a stored checksum with a different one. It reads the file twice and wants both reads to agree, so a fault during that read isn't what gets kept. It logs an `accepted` event under its own run, with status `accept`, which `scan --resume` never picks up.
+
+- A database lookup that fails for any reason but a missing row is a `db-error` event, and the file isn't recorded. Taking it for "no record" would overwrite the row unseen.
 
 ## Skipping
 
 - A file is skipped when the database or its attributes say it was read on or after the skip date with the same size, time and inode. The default skip date is the start of today, so a rerun the same day is cheap and a run on a later day reads everything again and compares.
 
-- The attributes only skip a file when `user.blake3.inode` names the file's own device and inode, and the checksum beside it. `cp -a` and `rsync -aX` copy the attributes, but the copy gets another inode. The checksum in it means a later one written by nemo-anywhere, which writes no date, doesn't get to use ours.
+- The attributes only skip a file when `user.blake3.inode` names the file's own device and inode, and the checksum beside it, and the file's database row doesn't disagree. Another name of a hard-linked file can leave a fresh set without ever seeing this name's row. `cp -a` and `rsync -aX` copy the attributes, but the copy gets another inode. The checksum in it means a later one written by nemo-anywhere, which writes no date, doesn't get to use ours.
 
 - A date later than now never skips. Otherwise a wrong clock or a flipped bit would skip the file forever.
 

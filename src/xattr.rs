@@ -55,6 +55,25 @@ pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
 	}
 }
 
+// A name that isn't there is already gone.
+pub fn fremove(fd: RawFd, name: &CStr) -> io::Result<()> {
+	if unsafe { libc::fremovexattr(fd, name.as_ptr()) } == 0 {
+		return Ok(());
+	}
+	let err = io::Error::last_os_error();
+	match err.raw_os_error() {
+		Some(libc::ENODATA) => Ok(()),
+		_ => Err(err),
+	}
+}
+
+// For a file taken as good with a different blake2b. rmlint reads it again
+// once these are gone. The checksum goes first, since it's useless alone.
+pub fn remove_rmlint(fd: RawFd) -> io::Result<()> {
+	fremove(fd, RM_B2_CKSUM)?;
+	fremove(fd, RM_B2_MTIME)
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct OnFile {
 	pub b3: Option<[u8; 32]>,

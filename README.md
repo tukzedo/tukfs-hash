@@ -17,6 +17,8 @@ It's a utility under tukfs, part of tukzedo.
 	- rmlint's blake2b, in `user.rmlint.blake2b.*`.
 	- Its own database from earlier runs.
 
+- Reads a file again, with its cache dropped, when it doesn't match. If the second read does, only memory was wrong, and that's logged as a `cache-mismatch`. If not, the stored checksums are kept as they were, so every later run reports the file until it's fixed or accepted. ZFS keeps its own cache and ignores the request to drop it, so there the second read can't tell memory from disk.
+
 - Writes the blake3 back onto the file, in the attributes nemo-anywhere reads, plus the date it was taken and the inode it came from. Files in git work trees get none, since git already checksums what it keeps.
 
 - Keeps everything in one SQLite file, which can be copied or archived as is.
@@ -50,12 +52,15 @@ tukfs-hash scan --db FILE --root DIR [--root DIR ...] [options]
 tukfs-hash plan --root DIR [--root DIR ...]
 tukfs-hash runs --db FILE
 tukfs-hash report --db FILE [--run N] [--kind KIND]
+tukfs-hash accept --db FILE PATH...
 tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE)
 ~~~
 
 `tukfs-hash --help` has the options. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
-Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8 add up to 12 when both happen.
+`accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. Each name of a hard-linked file has its own record, so name each one.
+
+Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files couldn't be checked or input wasn't understood (snapdiff). 4 and 8 add up to 12 when both happen. `accept` exits 1 if any file wasn't taken.
 
 Names that aren't plain text are printed with `\xHH` escapes, and a backslash as `\\`, so 2 names never print the same.
 
