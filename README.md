@@ -19,7 +19,7 @@ It's a utility under tukfs, part of tukzedo.
 
 - Reads a file again, with its cache dropped, when it doesn't match. If the second read does, only memory was wrong, and that's logged as a `cache-mismatch`. If not, the stored checksums are kept as they were, so every later run reports the file until it's fixed or accepted. ZFS keeps its own cache and ignores the request to drop it, so there the second read can't tell memory from disk.
 
-- Writes the blake3 back onto the file, in the attributes nemo-anywhere reads, plus the date it was taken and the inode it came from. Files in git work trees get none, since git already checksums what it keeps.
+- Writes the blake3 back onto the file, in the attributes nemo-anywhere reads, plus the date it was taken and the inode it came from. Files in git work trees get none, since git already checksums what it keeps. Files on NTFS, APFS or HFS+ get none either, since Linux's drivers for those aren't reliable enough to write with. They're still read and recorded, and the database can't go on one.
 
 - Keeps everything in one SQLite file, which can be copied or archived as is.
 
@@ -64,7 +64,7 @@ tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-ne
 
 `tukfs-hash --help` has the options. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
-`accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. Each name of a hard-linked file has its own record, so name each one.
+`accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. On NTFS, APFS or HFS+ only the database record changes. Each name of a hard-linked file has its own record, so name each one.
 
 `gone` takes the newest finished scan, or run N, and lists the names under its roots that it didn't see. A name with an error in that run, or under a folder it couldn't list, isn't counted, and neither is one last seen from a deeper root by another run, since that may be a mount the walk stops at. A folder left out with `--exclude` does count as not seen.
 

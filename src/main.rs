@@ -88,6 +88,8 @@ Attributes, as nemo-anywhere reads them:
 	user.blake3.date    when it was taken, microseconds since 1970
 	user.blake3.inode   device:inode:checksum of the file it was taken from
 rmlint's user.rmlint.blake2b.* are checked when present and current.
+Files on NTFS, APFS or HFS+ are read but never get attributes, and the
+database can't go on one. Linux's drivers for them aren't trusted to write.
 
 snapdiff takes `zfs diff` output with or without -H, -t and -F, and compares
 M and R lines, and a path with both - and +. Lines outside --mount, and names

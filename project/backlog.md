@@ -39,10 +39,43 @@
 	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
 	- Answer: Yes
 
+- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
+	- ID: 2026101406340911
+	- Type: Bug
+	- Status: Waiting for testing
+	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
+	- Incorrect behavior [Bug]:
+		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
+		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
+		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
+		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
+	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
+	- Actual fix [Bug]:
+		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
+		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
+		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
+		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
+		- `--shutdown` shuts all guests down together as well.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified:
+		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
+		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
+		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
+	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
+	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
+	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
-	- Status: Waiting on signoff
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -71,12 +104,13 @@
 	- Test case: Step 8 of `tests/integration.bash`: a `cp -a` copy, a set with no inode name, and a future date are each read again and reported. Unit test `b3_fresh_needs_our_inode_and_a_sane_date`.
 	- Verified: Step 8 failed 4 checks before the fix and passes after, on ext4 and ZFS. Dropping the date bound or the inode match each turns it red again. Unit tests, clippy and rustfmt pass.
 	- Swept: The skip at `one_file` is the only place the xattr date is trusted. The mismatch check and the `only_date` write use the size and time alone, which is right for a compare. The DB skip already checks the inode.
-	- Acceptance signoff: Needs signoff. It changes what's written to disk, and the checksum in the new name goes past the decision.
+	- Acceptance signoff: Self-closed: fits the decision. The checksum in the new name covers the nemo-anywhere case the decision missed, at no cost. Tests fail before and pass after.
+	- Closed: 20261014-095605
 
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
 	- Type: Bug
-	- Status: Waiting on signoff
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -113,12 +147,13 @@
 	- Note: The `zfs diff` and `find-new` formats come from the OpenZFS and btrfs-progs sources. `zfs diff` needs root here, so no real output was parsed.
 	- Note: The inode walk reads every folder of the old snapshot when a find-new pair has new files, which is most days on `/opt/bsnaps/@`. Only folder reads and a stat per folder, but it adds time per pair.
 	- Swept: The 3 parsers and `run` are the only input paths. `--list` read with `map_while(Result::ok)`, which stopped quietly at a read error, and now reads the file whole. The stat of `--old` was the twin of `--new`'s and is fixed with it. `--old` and `--new` that aren't folders are refused up front.
-	- Acceptance signoff: Needs signoff. It adds an exit code and changes output lines and the summary.
+	- Acceptance signoff: Self-closed: every dropped input is counted now. If the real `zfs diff` text differs from the sources, it shows as exit 8 and lines not understood, not as a clean pass. Tests fail before and pass after.
+	- Closed: 20261014-095605
 
 - A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
 	- ID: 2026101406340901
 	- Type: Bug
-	- Status: Waiting on signoff
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -158,515 +193,8 @@
 	- Test case: Step 3 of `tests/integration.bash`: the digests stay, a second run reports all 7 events again, `accept` takes 3 files and drops rmlint's stale sum, and the run after is clean. Unit tests `a_match_is_not_read_again`, `a_second_read_tells_cache_from_disk` and `each_record_is_checked` cover the cache-only verdict, which can't be made without root.
 	- Verified: Step 3 failed 8 checks against the old build and passes after, on ext4 and ZFS. Unit tests, clippy, rustfmt and shellcheck pass.
 	- Swept: Every place that sends `Hashed` or writes xattrs in `one_file`: the xattr skip, the hard-link `Done` path and the normal path. `snapdiff` reads without dropping the cache. There a scribble can only add a false flag, not hide a change, so it was left alone.
-	- Acceptance signoff: Needs signoff. It changes what's written to disk, adds a subcommand and an event kind, and `cache-mismatch` exiting 4 is a choice.
-
-- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
-	- ID: 2026101406340913
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A real `vm-scan` run as root.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
-	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
-	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
-	- Actual fix [Bug]: Exit 4 keeps the snapshots and also leaves the images mounted, since the flagged paths are under the mounts. It says so and points at `--cleanup`. The DB snapshot is still taken. Exit 0 and a stopped run are as before. The script's header and the root steps' `vm-scan` line say the same.
-	- Branch: scriptfix (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: On exit 4 it unmounted and destroyed the snapshots before the fix, and does neither after. Exit 0 still drops both, and exit 2 still unmounts and keeps the snapshots. Lint passes.
-	- Swept: The main scan wrapper keeps nothing temporary, so it has no twin.
-	- Acceptance signoff: Waiting: leaving the mounts in place goes past what the item asked.
-
-- A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
-	- ID: 2026101406340906
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced.
-	- Steps to reproduce [Bug]: Hash `b_old` with `--no-xattrs`. Add a hard link `a_new`, which sorts first. Damage the file, keeping size and mtime. Rescan: "links 1", no events, exit 0, and the DB row for `b_old` now has the bad digest.
-	- Incorrect behavior [Bug]: The `Claim::Done` path in `one_file` (about line 662) sends `Hashed` for the other name without the `prior` comparison.
-	- Expected behavior [Bug]: Each name is compared with its own DB row.
-	- Note: It matters where no xattr baseline exists: `--no-xattrs`, `--no-xattr` dirs, git trees, read-only or immutable files, and filesystems without xattrs. That covers every `vm-scan` file. Blocks the b23 check.
-	- Reproduced [Bug]: Yes, as step 11 of `tests/integration.bash`, on the old build.
-	- Actual fix [Bug]:
-		- The `Done` path compares the shared result with this name's own xattr, rmlint sum and DB row, the same as the name that read it. A mismatch is reported under each name and nothing is recorded.
-		- A sibling: the xattr skip took a fresh set left through another name, without this name's row. It now skips only when the row, at the same size and time, has the same digest.
-		- Step 3's old checks expected 2 xattr and 2 DB mismatches. `big.bin`'s hard link now counts too, so they're 3 each. The old lines are commented out with the reason.
-	- Branch: keepgood
-	- Commit: `eb111ff`
-	- Test case: Step 11 of `tests/integration.bash`: the review's repro, and a fresh set from the other name over a digest written after the damage.
-	- Verified: Both step 11 checks failed on the old build and pass after, on ext4 and ZFS. Taking out only the xattr skip change turns just the second one red.
-	- Swept: `Hashed` is sent from the xattr skip, the `Done` path and the normal path. All 3 now hold a name to its own row. The DB skip already checks the name's own row.
-	- Acceptance signoff: Needs signoff. The xattr skip change goes past the item, and the step 3 counts changed.
-
-- A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
-	- ID: 2026101406340908
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Exit code confirmed with a mode-000 directory. The mid-directory case is from reading std's `ReadDir`, not run.
-	- Incorrect behavior [Bug]:
-		- `walk` in `src/scan.rs` uses `rd.flatten()` (about line 435), which throws away an error partway through a directory. std then ends the stream, so the rest of the directory is skipped silently. An EIO on a damaged ZFS directory block is the case that matters here.
-		- `ent.file_type()` errors are skipped the same way (about line 440).
-		- `run` counts only mismatches and read errors toward exit 4 (about line 326). `dir-error`, `open-error` and `stat-error` still exit 0.
-	- Expected behavior [Bug]: Every directory error is an event, and any error event makes the exit code non-zero.
-	- Note: A separate exit code bit for "some files weren't checked" would keep it from reading as clean.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: Yes. Step 13 of `tests/integration.bash` against the old build: a mode-000 folder and a mode-000 file gave a `dir-error` and an `open-error` and exit 0. Step 12's `db-error` exited 0 too.
-	- Actual cause [Bug]: The exit code counted only mismatches and read errors. The walk dropped listing and type errors with no event.
-	- Decisions:
-		- Exit 8 means some files weren't checked, the same bit snapdiff uses. A `db-error` counts toward it.
-	- Actual fix [Bug]:
-		- An error partway through a folder listing is a `dir-error` that says how many entries were read. A type error on an entry is a `stat-error`. So is an fstat that fails after open, which used to return without a word.
-		- `dir-error`, `stat-error`, `open-error` and `db-error` set 8. The mismatches, `cache-mismatch` and `read-error` set 4.
-		- `unstable` and `xattr-error` set nothing. Live files like a running VM's disk would set 8 on every main scan, and an attribute write comes after the check. A kind this version doesn't know sets 8.
-		- A folder or entry that's gone by the time it's read is skipped without an event, like a file that's gone before it's opened.
-		- Event kinds are one enum, each with its bit, and design.md has the table.
-	- Branch: runexit
-	- Commit: `11847b0`
-	- Test case: Step 13 of `tests/integration.bash`: an unreadable folder and file exit 8, and 12 with a mismatch. The exit check added to step 12. Unit test `exit_bits_add_up`. An error partway through a listing, or on an entry's type, needs a damaged filesystem, so neither has a test.
-	- Verified: Step 13's 2 checks and step 12's exit check failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
-	- Swept: Every `event` call in `src/scan.rs` takes a kind, so each one has a bit. `walk`'s `read_dir`, entry and type errors, and `one_file`'s stat, open and fstat errors. A worker that can't open the database still stops the run with exit 2, which is 2026101406340920's area. snapdiff already had 8.
-	- Acceptance signoff: Needs signoff. It changes exit codes, and leaving `unstable` and `xattr-error` out of 8 is a choice.
-
-- A stopped run exits 2 even with mismatches found, and `--resume` then reports 0 for them.
-	- ID: 2026101406340909
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A real scan and vm-scan as root, stopped and resumed.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced.
-	- Incorrect behavior [Bug]:
-		- `run` returns 2 for a stopped run whatever it found (about line 341).
-		- The resumed process starts its stats at zero and replaces `runs.summary`. It exited 0 with "MISMATCH 0" while the earlier part's events sat in the table.
-	- Expected behavior [Bug]: The exit code and summary count every event the run has, from all its parts. And also a stop with mismatches still says so.
-	- Probable fix [Bug]: Count from the `events` table for the run id at the end.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: Yes. Step 5 of `tests/integration.bash` against the old build: a stop after a mismatch exited 2, the resumed part read the damaged file again and logged its 2 events a second time, and the summary had only that part's counts.
-	- Actual cause [Bug]: `run` made the exit code from the counters of the process that ended it, and returned 2 for a stop before looking at them.
-	- Decisions:
-		- Count from the `events` table for the run id at the end.
-		- 2 adds to 4 and 8, the same way 4 and 8 add to 12. 6 is a stop after a mismatch, 10 a stop after files that couldn't be checked, and 14 both. --help, README and design.md say so.
-	- Actual fix [Bug]:
-		- The exit code, and a new "events in the whole run" line in the summary, come from the `events` table for the run id. Each file counts once per kind.
-		- A resumed run doesn't read again a file an earlier part already judged at the same size, time and inode. Before, it read every mismatched file again and reported it twice.
-		- The stored summary keeps the earlier parts' lines, with a "resumed" line between. The output shows this part's lines and the whole run's events line.
-		- Both wrappers take the database snapshot on 0, 4, 8 and 12. vm-scan keeps its mounts and snapshots on 4, 8 and 12, and takes any other code, 6 included, as a stop to resume.
-	- Branch: runexit
-	- Commit: `11847b0`
-	- Test case: Step 5 of `tests/integration.bash`: a damaged file before the stop, exit 6 on the stop and 4 on the resume, 2 events and not 4, and the whole run's line in the summary. The old checks for exit 2 and 0 are commented out with the reason.
-	- Verified: Step 5's 3 new checks failed against the old build and pass after, on ext4 and ZFS. The vm-scan wrapper's exit handling does the right thing for every code from 0 to 14 and for 130. Both wrappers pass shellcheck. Neither was run, since both need root.
-	- Swept: `run` is the only place scan's exit code is made. `report` and `runs` already read the table. The 2 exit code tests in the vm-scan wrapper and the 1 in the main wrapper. `root-steps.bash` checks only snapdiff's codes and hands scan's through with `exec`.
-	- Acceptance signoff: Needs signoff. It changes exit codes and the summary, and the skip for files this run already judged goes past the item.
-
-- `--resume` can pick the wrong run.
-	- ID: 2026101406340910
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `run` in `src/scan.rs` about line 220. Confirmed from the query.
-	- Incorrect behavior [Bug]:
-		- `WHERE status != 'done' ORDER BY id DESC` takes an older stopped run even when a newer run finished. The old cutoff is used, and events go under the old id, which `report` doesn't show by default.
-		- The main scan and `vm-scan` share the DB, so either one's `--resume` can carry on the other's run with the wrong roots and mark it done.
-		- A run killed hard stays `running` forever.
-	- Expected behavior [Bug]: `--resume` continues only the newest run, only if it isn't done, and only with the same roots. Otherwise it refuses and says why.
-	- Probable fix [Bug]: Compare `runs.args` roots, or store a run label that each wrapper passes.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: Yes. Step 14 of `tests/integration.bash` against the old build: an older stopped run was resumed past a newer finished one, a run over other roots was resumed, and a run left `running` stayed that way after a new run.
-	- Actual cause [Bug]: The query took the newest unfinished run, whatever came after it, and nothing recorded which roots a run covered.
-	- Decisions:
-		- Continue only the newest run, only if it isn't done, and only with the same roots. Otherwise refuse and say why.
-		- Runs with status `accept` are never resumed.
-	- Actual fix [Bug]:
-		- `--resume` takes the newest run that isn't an `accept` run. It refuses if that run finished, if its roots differ, or if it's from before roots were kept. A roots refusal names up to 3 on each side.
-		- Roots are kept per run as `plan` keeps them, sorted, in a new `runs.roots` column. Comparing the roots was picked over a label from each wrapper, since it needs nothing from the caller. The table version goes to 2. A version 1 database gets the column the first time it's opened, and its runs can't be resumed.
-		- A new scan marks any run still `running` as `killed`. The lock means nothing else is using it. A newest run left `running` can still be resumed, with a note that it was likely killed.
-		- Both wrappers' usage comments say `--resume` only takes the last run, and only when it was that script's.
-	- Branch: runexit
-	- Commit: `11847b0`
-	- Test case: Step 14 of `tests/integration.bash`. Unit tests `roots_key_ignores_order` and `takes_schema_1_forward`.
-	- Verified: 6 of step 14's 8 checks failed against the old build. All pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass, and shellcheck on both wrappers.
-	- Note: No live database existed yet, so the version 1 to 2 step has only run on test files.
-	- Swept: `run`'s query was the only reader of `--resume`. `accept` opens through `open_rw`, so it takes the new version too. `runs` prints `killed` as it is. Neither wrapper had its own idea of which run to resume.
-	- Acceptance signoff: Needs signoff. It changes the database layout and adds a run status.
-
-- `diffs` can lose its snapshots partway through and report nothing for them.
-	- ID: 2026101406340912
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
-	- Incorrect behavior [Bug]:
-		- The last snapshot of a day is often a 15-minute one, kept about 12 hours, or an hourly, kept 24.
-		- `snapdiff` runs only after every `zfs diff` finishes. A snapshot pruned by then makes snapdiff skip every file in it and report 0 flagged.
-		- `snapdiff-summary.txt` lines don't say which pair they are for.
-	- Expected behavior [Bug]: The snapshots in use can't be pruned during the run, and each summary line names its pair.
-	- Probable fix [Bug]: Prefer `_daily` snapshots, or `zfs hold` each chosen one and release it at the end. Run snapdiff right after each pair's diff.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: With pruning made to happen during the first diff, all 3 pairs of a dataset went unchecked, snapdiff ran only after every diff, and no summary line named its pair.
-	- Actual fix [Bug]:
-		- Each day's pick is its last daily, or its last snapshot when it has none. That goes for btrfs too.
-		- Each picked zfs snapshot gets a `tukfs-diffs` hold before its dataset's diffs. The holds are released once that dataset's pairs are compared, and on any exit, including Ctrl+C, a hangup and TERM. zfs-auto-snapshot prunes with `destroy -d`, which waits for the hold, so the snapshot is pruned after.
-		- A run killed outright leaves its holds, so each run releases that tag everywhere first. A lock keeps a second run from taking a live run's holds.
-		- snapdiff runs right after each pair's diff, and each summary line starts with the pair's file name.
-		- A failed diff, a snapshot gone by the end of its compare, and a btrfs pair whose generation can't be read count as not fully checked. The last was skipped with no count before.
-	- Note: btrfs has no holds. Comparing right after each find-new keeps the window to one pair, and a snapshot deleted mid-compare is reported.
-	- Note: Unverified on real pools: that releasing the hold on an automounted snapshot lets its deferred destroy go ahead. If it doesn't, zfs-auto-snapshot's next `destroy -d` takes it.
-	- Branch: diffs (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: The fixed function, run against stand-in zfs, btrfs and tukfs-hash: every pair checked with pruning during the run, each compare right after its diff, every summary line named, no holds left after a normal end, TERM, INT or HUP, and a kill -9's holds cleared by the next run. A second run at once is refused. The pre-change copy fails 5 of those checks. Lint passes.
-	- Swept: Every way `step_diffs` could skip or half-check a pair: a failed `zfs diff` or find-new, no generation, a snapshot gone mid-compare. The usage text cut off the last 2 help lines with `sed -n '2,25p'`, and now prints up to `set -euo`.
-	- Acceptance signoff: Needs signoff after the root run. Holding the auto-snapshots, preferring dailies, and the lock are choices the item didn't spell out.
-
-- A failed DB lookup counts as "no prior record", which skips the DB comparison.
-	- ID: 2026101406340915
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
-	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
-	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
-	- Reproduced [Bug]: Yes. A row with text in its size column was overwritten with no event by the old build.
-	- Actual fix [Bug]: `lookup` returns an error for anything but a missing row. The scan logs it as `db-error`, counts it under other-err, and skips the file. `accept` stops on it for that file. The exit code is left to 2026101406340908.
-	- Branch: keepgood
-	- Commit: `eb111ff`
-	- Test case: Step 12 of `tests/integration.bash`, and unit test `lookup_error_is_not_no_row`.
-	- Verified: Step 12 failed on the old build and passes after, on ext4 and ZFS. The unit test fails with the old `.ok()` put back.
-	- Swept: `lookup` has 2 callers, `hasher` in `src/scan.rs` and `accept`. No other `.ok()` reads the database. `report` and `scan --resume` turn any query error into "no runs yet" or "no unfinished run to resume", but both still exit 1 and nothing is written, so they were left alone.
-	- Acceptance signoff: Needs signoff. It adds an event kind users see.
-
-- `vm-scan` skips a partition it can't mount when another partition in the same image mounts, so that partition is never checked at all.
-	- ID: 2026101406340918
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Plausible.
-	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
-	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
-	- Reproduced [Bug]: Yes. An image with a mountable EFI partition beside a BitLocker one, and one with an ext4 partition that wouldn't mount, were both left out of hashing.
-	- Actual fix [Bug]:
-		- An image with a partition that has a filesystem but can't be read, such as BitLocker, LUKS or LVM, or whose mount fails, is checksummed whole as well as through its mounted partitions.
-		- Swap is skipped as before. A partition with no filesystem found, like Windows' reserved one, is listed as not checked, and doesn't make the image read whole.
-		- Raw partitions aren't hashed, since `tukfs-hash` takes only folders as roots.
-	- Branch: vmscan (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: Over 5 images. Before the fix, the BitLocker and failed-mount images were left out and the empty partition wasn't listed. After, both are hashed whole, an image whose only unmounted parts are an empty partition and swap is still left out, and the empty partition is listed. Lint passes.
-	- Note: A running guest's image changes between runs, so a whole-image sum finds damage only on stopped guests. That's the same as for images with nothing mountable.
-	- Swept: `attach_all` is the only place images are left out. A whole disk with a partition table shows no type and isn't listed.
-	- Acceptance signoff: Needs signoff. It picked hashing the image whole over raw partitions, so such an image is read twice.
-
-- The scan's last step fails with exit 1 when anything else has the database open.
-	- ID: 2026101406340914
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A scan as root through sudo with a reader open, to see the WAL files handed back too.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `close_rw` in `src/db.rs`. Confirmed, reproduced with an idle `sqlite3` shell.
-	- Incorrect behavior [Bug]:
-		- Leaving WAL mode needs sole access. With another reader open, such as `report` stalled in a pager, it fails after the 30 s busy timeout.
-		- The result is exit 1 in place of 4, no summary printed, `give_back` never run, and the DB left in WAL mode and owned by root, which a normal user then can't open.
-		- `pragma_update_and_check` never checks that the mode came back as `delete`.
-	- Expected behavior [Bug]: The run's result is printed and returned whatever happens to the mode switch. A failed switch is a warning, and ownership is still handed back.
-	- Reproduced [Bug]: Yes. Step 15 of `tests/integration.bash` against the old build: exit 1, "database is locked", no summary. A Python reader made it fail at once. An idle second connection made it wait out the whole 30 s.
-	- Actual cause [Bug]: `close_rw`'s error went up through `?` before the summary, `give_back` and the exit code.
-	- Actual fix [Bug]:
-		- `close_rw` checks that the mode came back as `delete`. Any failure there is a warning that names the file, and the run goes on to print and return its result.
-		- `give_back` also hands back the `-wal` and `-shm` files, which are only there when the switch failed.
-		- The switch waits 5 s for a reader, not 30. Everything is committed by then, so a longer wait only holds up the result.
-		- `accept` gets the same treatment.
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Step 15 of `tests/integration.bash`, and unit test `close_rw_says_when_wal_stays`.
-	- Verified: Step 15's exit and output checks failed against the old build and pass after, on ext4 and ZFS. The next run puts the file back in rollback mode.
-	- Note: Unverified: the ownership hand-back, which needs a run as root.
-	- Swept: `close_rw` and `give_back` have 2 callers each, `scan` and `accept`. `accept` still returns early on a failed `runs` update before closing, which is a database error and not this case.
-	- Acceptance signoff: Needs signoff. It leaves the file in WAL mode with a warning, and the 5 s wait is a choice.
-
-- A writer error throws away its batch of events, and the run never records a summary.
-	- ID: 2026101406340916
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `writer` in `src/db.rs` and its caller in `run`. Confirmed from the code.
-	- Incorrect behavior [Bug]: One failed statement rolls back the whole batch, mismatch events included. `run` returns an error before the summary, and the run stays `running`. Workers keep writing xattrs after `send` starts failing.
-	- Expected behavior [Bug]: Events are written in their own transaction ahead of the rest, a writer failure stops the workers, and the run is marked failed.
-	- Reproduced [Bug]: Yes. Step 16 of `tests/integration.bash` against the old build, with a trigger that refuses new `files` rows: exit 1, the mismatch event gone, the run left `running` with no summary, and the file left in WAL mode.
-	- Actual cause [Bug]: Each batch was one transaction, and the writer's error went up through `?` past the summary and status update.
-	- Decisions:
-		- A run status `failed`, beside `running`, `stopped`, `killed`, `accept` and `done`. `--resume` takes it like a stopped one: newest, same roots, not done.
-		- A failed run exits 1, as any error does. Its events are in the table and its summary is printed and stored, so the 4 and 8 bits aren't added to it.
-	- Actual fix [Bug]:
-		- Each batch's events go in first, in their own transaction. After a failure the other rows are dropped, but events are still kept until one of those fails too.
-		- A writer failure stops the workers at once, and no attribute is written for a file once nothing more can be recorded.
-		- The run is marked `failed` with its summary, prints it, says to fix the cause and resume, and exits 1 with the reason.
-		- design.md says so under Database and Runs.
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Step 16 of `tests/integration.bash`, which also resumes the failed run. Unit test `a_bad_row_keeps_the_events`.
-	- Verified: 4 of step 16's checks failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
-	- Note: Not covered by a test: the attribute skip after a failure, since which files were queued before it is timing.
-	- Swept: `writer` is scan's only writer. `accept` writes each file's row and event in one transaction on purpose, since a refused row means nothing was accepted. Of the 5 `send` callers, only the one before the attribute write needs its answer. Per 2026101406340909's notes, both wrappers already treat exit 1 as not finished.
-	- Acceptance signoff: Needs signoff. It adds a run status and picks exit 1 for it.
-
-- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
-	- ID: 2026101406340925
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
-	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
-	- Actual fix [Bug]:
-		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
-		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
-	- Branch: scriptfix (backlog only; the scripts are outside the repo)
-	- Test case: None in the repo, since the scripts live outside it.
-	- Verified:
-		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
-		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
-		- Lint passes on both.
-	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
-	- Acceptance signoff: Waiting: the fix picked one of the 2 ways the item gave.
-
-- A path argument that isn't valid UTF-8 panics.
-	- ID: 2026101406340924
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
-	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
-	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
-	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
-	- Actual fix [Bug]:
-		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
-		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
-		- README and help text say so.
-	- Branch: snapdiff2
-	- Commit: `cede460`
-	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
-	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
-	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
-	- Acceptance signoff: Needs signoff. It changes how names print.
-
-- `vm-scan` names mount folders and fsck logs after the image file name alone, so 2 images with one name in different subfolders of a dataset share them.
-	- ID: 2026101414100001
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-141000
-	- Opened by: backlog round
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Read only; no dataset has 2 such images today.
-	- Expected behavior [Bug]: Build the name from the image's path within its dataset.
-	- Related IDs: 2026101406340904
-	- Reproduced [Bug]: Yes. `a/disk.img` and `b/disk.img` in one dataset got one mount folder and one fsck log.
-	- Actual fix [Bug]:
-		- Mount folders are named from the image's path within its dataset, with `/` and other odd characters turned into `_`. A name already taken in the run gets `_2`, `_3` and so on.
-		- fsck logs go in a folder per dataset, named from the same name and the partition.
-		- An image at the top of its dataset keeps the name it had.
-	- Branch: vmscan (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: 4 images whose names clean up the same. Before the fix they got 2 mount folders and 2 logs, after it 4 of each. Lint passes.
-	- Note: Unverified: a clash's suffix follows `find` order, which should be the same on `--resume`, since it reads the same snapshot.
-	- Swept: Datasets sit one level under the 2 parents, so their cleaned names can't clash. The `tr` line is still the only character set in the 3 scripts.
-	- Acceptance signoff: Needs signoff. The fsck logs moved into a folder per dataset, past what the item asked.
-
-- The scan can hang forever if every worker in a group fails to start, or if a worker panics.
-	- ID: 2026101406340920
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `run_group` and the main loop in `src/scan.rs`. Confirmed from the code.
-	- Incorrect behavior [Bug]:
-		- If every hasher's `open_ro` fails, the walker blocks on the full job channel. `run_group` still has a receiver, so the send never fails.
-		- A panic in the scope skips `g.done.store(true)`, and the main loop waits forever. Only a second signal ends it.
-	- Expected behavior [Bug]: Both cases end the group with an error.
-	- Reproduced [Bug]: Yes, both. With a panic put into a worker for the test, the old build hung until killed, with the run left `running`. Unit test `a_group_with_no_workers_ends` hung on the old `run_group`.
-	- Actual cause [Bug]: `run_group` kept its own copy of the job receiver, so the walk's send waited forever once every worker was gone. A panic made the scope panic in turn, which skipped marking the group done.
-	- Actual fix [Bug]:
-		- Only the workers hold the receiver, so the walk's send fails once the last one ends.
-		- A worker or walk that panics, or a worker that can't open the database, is a fault. It stops the run, which is marked `failed` and exits 1, per 2026101406340916.
-		- The group is marked done on any way out, panics included.
-	- Related IDs: 2026101406340916
-	- Branch: dbsafe
-	- Commit: `422efff`
-	- Test case: Unit tests `a_group_with_no_workers_ends` and `a_panic_is_a_fault`.
-	- Verified: `a_group_with_no_workers_ends` timed out on the old `run_group` and passes after. With the panic put in, the new build exited 1 with the run `failed` and the file in rollback mode.
-	- Swept: `run_group` is the only place workers start. `hasher`'s `expect` on its statement is now a fault too. The writer is a plain thread, and its panic still ends the run with an error.
-	- Acceptance signoff: Needs signoff. A worker that can't open the database was a stop with exit 2 and is now a failed run with exit 1.
-
-- The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
-	- ID: 2026101406340921
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `walk` and `Links` in `src/scan.rs`. Confirmed from the code.
-	- Incorrect behavior [Bug]:
-		- A directory with 10M entries costs about 1.5 GB before its first file is queued. The inode sort needs the whole list, so this is partly by design.
-		- A `Links` entry counts down only for names that reach the claim. Names skipped earlier by the DB or xattr checks, or outside the roots, leave it above zero.
-	- Expected behavior [Bug]: Memory stays bounded on huge trees.
-	- Reproduced [Bug]: The `Links` part, by a test that left an entry behind before the fix. The folder part is from the code.
-	- Actual cause [Bug]:
-		- `Links` counted down only at the claim. Once the first name's attribute is written, the other names usually skip through it and never get there. Nothing capped the map.
-		- The walk kept a whole path per entry for a folder's files and for every subfolder still to walk, at every level.
-	- Actual fix [Bug]:
-		- Names skipped by the database or the attributes count down too. A group keeps at most 262,144 results and drops the oldest first, so a name outside the roots costs at most a second read of that file.
-		- The walk keeps names only. A folder's files are queued a million at a time, each part in inode order. Subfolders are taken off one at a time as they're walked.
-		- What stays by design: a folder's subfolder names are all held until it's done, for the name order. In a folder over a million files, inode order holds within each part only.
-	- Against: design.md, Reading files, "files in inode order". It now says so for big folders.
-	- Branch: walkfix
-	- Commit: 9120949
-	- Test case: `scan::tests::skipped_links_count_down` and `scan::tests::the_link_map_is_capped`. The batching has none, since it needs a folder of over a million files.
-	- Verified:
-		- `skipped_links_count_down` fails with the skip sites' countdown taken out, and passes with it.
-		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
-		- A same-day rerun of 50,000 files took the same time as before.
-	- Swept: `Links` is the only map in the scan that grows per file. The snapdiff inode walk is bounded by its list and was left alone.
-	- Acceptance signoff: Needs signoff. The cap and the batch size are choices the item didn't spell out.
-
-- The walk follows the mount table read at the start, and a directory swapped for a symlink mid-walk is followed.
-	- ID: 2026101406340922
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `walk` and `open_noatime` in `src/scan.rs`. Plausible; needs a mount or a rename racing the scan.
-	- Incorrect behavior [Bug]:
-		- There's no `st_dev` check against the root, so a filesystem mounted mid-scan is walked as part of the parent.
-		- A btrfs subvolume that isn't a mount point is walked too. None are inside the b23 roots today, since `/opt/bsnaps` and `/mnt/bfs/bf7/bsnaps` are both mounted.
-		- `O_NOFOLLOW` covers only the last path part. A directory renamed to a symlink between `readdir` and `open` sends the root process elsewhere, where it reads files and sets `user.*` xattrs.
-	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
-	- Reproduced [Bug]: Confirmed. The build before the fix walked into a btrfs subvolume that isn't mounted, and into a tmpfs mounted part way through a scan. A test that opens a file through a folder swapped for a symlink read it before the fix.
-	- Actual cause [Bug]: Folders and files were opened by their full path, and only the mount table read at the start said where a filesystem ended. Nothing compared devices.
-	- Actual fix [Bug]:
-		- Each root is opened once. Folders and files under it are opened from it with `openat2`, with no symlink followed and no mount crossed on the way. Kernels before 5.6 go one folder at a time instead, with the same rules.
-		- A folder on another device than its root is skipped like a mount point. Folders are listed from their fd.
-		- A path that's no longer what the walk saw, gone or now a symlink, a file or a new mount, is skipped like a file deleted mid-scan.
-		- Loop mounts are unchanged. Each root is compared with its own device, and grouping still comes from the disks under the backing file.
-	- Branch: walkfix
-	- Commit: 9120949
-	- Test case: `beneath::tests::a_symlink_on_the_way_is_not_followed`, `beneath::tests::another_filesystem_is_not_entered`, `scan::tests::a_swapped_folder_is_not_followed` and `scan::tests::the_walk_stays_on_the_root_device`.
-	- Verified:
-		- `a_swapped_folder_is_not_followed` fails with the old open, and `the_walk_stays_on_the_root_device` fails with the device check and the mount rule taken out. Both pass with them.
-		- A btrfs subvolume and a tmpfs mounted mid-scan: the old build recorded files in both, this one in neither.
-		- The `beneath` tests run both the `openat2` and the one folder at a time paths.
-		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
-	- Note: Unverified: a root run of `scan` and `vm-scan` on b23, and the fallback on a real kernel before 5.6.
-	- Swept: `accept` opens the paths it's given by name, which a person typed, so it was left. `snapdiff` reads snapshots, which can't change under it, and already compares devices in its inode walk.
-	- Acceptance signoff: Needs signoff. It changes what the scan reads and touches security.
-
-- Report paths that a finished run didn't see, as gone.
-	- ID: 2026101406340930
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261013-110127
-	- Decisions:
-		- A `gone` command, with `--run N` and `--limit N` like `report`. It defaults to the newest run with status `done`, and refuses any other status.
-		- Only paths the run would have reached count: under its roots, no event of their own in that run, not under a folder with a `dir-error` in it, and not last seen from a deeper root by another run, since that may be a mount the walk stops at.
-		- It only lists. Nothing is deleted.
-	- Branch: extras
-	- Commit: bed0537
-	- Test case: `gone::tests::only_names_the_run_would_reach`, and integration section 18.
-	- Verified: Integration section 18 on ext4 and ZFS lists only the deleted file, leaving out an unreadable file, a file in an unreadable folder, a file under a deeper root, and a file under another run's root. With the deeper-root rule and the event and folder checks taken out, it listed 4 and failed.
-	- Note: `--exclude` isn't kept with the run, so a folder left out counts as not seen. Documented in README and design.md.
-	- Swept: Every place a scan reaches a path either sets `seen_run` or logs an event, except a file deleted or turned into something else mid-scan, which is gone.
-	- Acceptance signoff: Needs signoff. New command and output wording, and the rules for what counts are a choice.
-
-- A `verify` mode that rereads only files whose blake3 is already known, for a quick check between full runs.
-	- ID: 2026101406340931
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261013-110127
-	- Decisions:
-		- A `scan --verify` flag, not a command. It needs the whole scan: the walk and its mount rules, workers per disk, hard link claims, stop and resume, events and exit codes. A command going through database rows would read in name order and couldn't open files from their root.
-		- Known means a blake3 at the file's current size and time, in the database or on the file. Others are left for the next full scan.
-		- The skip date is the run's own start, so it rereads files read earlier that day. `--since` is refused with it.
-		- A clean read updates the database row as a scan does. No attributes are written, so ctimes don't move.
-		- The tables go to version 3, adding `runs.verify`. `--resume` only continues a verify run with `--verify`, and a full scan only without it. Older databases are brought forward on the first write.
-	- Branch: extras
-	- Commit: bed0537
-	- Test case: Integration section 17, and `db::tests::takes_schema_2_forward`. `db::tests::takes_schema_1_forward` now drops both new columns, as a real version 1 database had neither.
-	- Verified: Section 17 on ext4 and ZFS: a same-day verify rereads, a new file isn't read or recorded, an edited file isn't read, a flipped byte exits 4, no ctime moves, and resume refuses the other mode. The checks on what's read, ctimes, and resuming a verify as a full scan failed with that code taken out.
-	- Swept: Run inserts in `scan` and `accept`, `pick_resume`, and `runs`. `accept` gets the column's default.
-	- Acceptance signoff: Needs signoff. New flag, a table change, and the choices above.
-
-- A way to prune `files` rows no path points at.
-	- ID: 2026101406340932
-	- Type: Feature
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261013-110127
-	- Note: Every content change orphans a row, which only inflates the "distinct contents" count.
-	- Decisions:
-		- A `prune --db FILE` command. It holds the database lock, deletes only `files` rows no path points at, and prints how many.
-		- It isn't a run, so it adds no status and `--resume` never sees it.
-	- Branch: extras
-	- Commit: bed0537
-	- Test case: `db::tests::prune_drops_only_unnamed_contents`, and integration section 19.
-	- Verified: Section 19 on ext4 and ZFS removes the 3 rows left by earlier edits and keeps every path joined. With the delete turned off, it failed.
-	- Acceptance signoff: Needs signoff. It deletes data.
-
-- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
-	- ID: 2026101406340911
-	- Type: Bug
-	- Status: Waiting for testing
-	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
-	- Incorrect behavior [Bug]:
-		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
-		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
-		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
-		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
-	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
-	- Actual fix [Bug]:
-		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
-		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
-		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
-		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
-		- `--shutdown` shuts all guests down together as well.
-	- Branch: vmscan (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified:
-		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
-		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
-		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
-	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
-	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
-	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
+	- Acceptance signoff: Self-closed: per the decisions. `cache-mismatch` exiting 4 errs on the safe side, since a memory fault is still a fault. Tests fail before and pass after.
+	- Closed: 20261014-095605
 
 - `vm-scan` stops at the first disk image, after the guests are already frozen or shut down and the snapshots taken.
 	- ID: 2026101406340903
@@ -710,6 +238,181 @@
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
 
+- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
+	- ID: 2026101406340913
+	- Type: Bug
+	- Status: Done
+	- Needs external testing: A real `vm-scan` run as root.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
+	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
+	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
+	- Actual fix [Bug]: Exit 4 keeps the snapshots and also leaves the images mounted, since the flagged paths are under the mounts. It says so and points at `--cleanup`. The DB snapshot is still taken. Exit 0 and a stopped run are as before. The script's header and the root steps' `vm-scan` line say the same.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: Stand-in test bed kept with the project's private files, case `names`. Not in the repo, since the script lives outside it.
+	- Verified: On exit 4 it unmounted and destroyed the snapshots before the fix, and does neither after. Exit 0 still drops both, and exit 2 still unmounts and keeps the snapshots. Lint passes.
+	- Swept: The main scan wrapper keeps nothing temporary, so it has no twin.
+	- Acceptance signoff: Self-closed: the flagged paths are under the mounts, so the snapshots are no use without them. The b23 root run is the last check.
+	- Closed: 20261014-095605
+
+- A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
+	- ID: 2026101406340906
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Steps to reproduce [Bug]: Hash `b_old` with `--no-xattrs`. Add a hard link `a_new`, which sorts first. Damage the file, keeping size and mtime. Rescan: "links 1", no events, exit 0, and the DB row for `b_old` now has the bad digest.
+	- Incorrect behavior [Bug]: The `Claim::Done` path in `one_file` (about line 662) sends `Hashed` for the other name without the `prior` comparison.
+	- Expected behavior [Bug]: Each name is compared with its own DB row.
+	- Note: It matters where no xattr baseline exists: `--no-xattrs`, `--no-xattr` dirs, git trees, read-only or immutable files, and filesystems without xattrs. That covers every `vm-scan` file. Blocks the b23 check.
+	- Reproduced [Bug]: Yes, as step 11 of `tests/integration.bash`, on the old build.
+	- Actual fix [Bug]:
+		- The `Done` path compares the shared result with this name's own xattr, rmlint sum and DB row, the same as the name that read it. A mismatch is reported under each name and nothing is recorded.
+		- A sibling: the xattr skip took a fresh set left through another name, without this name's row. It now skips only when the row, at the same size and time, has the same digest.
+		- Step 3's old checks expected 2 xattr and 2 DB mismatches. `big.bin`'s hard link now counts too, so they're 3 each. The old lines are commented out with the reason.
+	- Branch: keepgood
+	- Commit: `eb111ff`
+	- Test case: Step 11 of `tests/integration.bash`: the review's repro, and a fresh set from the other name over a digest written after the damage.
+	- Verified: Both step 11 checks failed on the old build and pass after, on ext4 and ZFS. Taking out only the xattr skip change turns just the second one red.
+	- Swept: `Hashed` is sent from the xattr skip, the `Done` path and the normal path. All 3 now hold a name to its own row. The DB skip already checks the name's own row.
+	- Acceptance signoff: Self-closed: each name is held to its own row, as asked. The xattr skip change is the same bug by another path. Step 3's counts went up because the hard link is compared now, which is right.
+	- Closed: 20261014-095605
+
+- A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
+	- ID: 2026101406340908
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Exit code confirmed with a mode-000 directory. The mid-directory case is from reading std's `ReadDir`, not run.
+	- Incorrect behavior [Bug]:
+		- `walk` in `src/scan.rs` uses `rd.flatten()` (about line 435), which throws away an error partway through a directory. std then ends the stream, so the rest of the directory is skipped silently. An EIO on a damaged ZFS directory block is the case that matters here.
+		- `ent.file_type()` errors are skipped the same way (about line 440).
+		- `run` counts only mismatches and read errors toward exit 4 (about line 326). `dir-error`, `open-error` and `stat-error` still exit 0.
+	- Expected behavior [Bug]: Every directory error is an event, and any error event makes the exit code non-zero.
+	- Note: A separate exit code bit for "some files weren't checked" would keep it from reading as clean.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. Step 13 of `tests/integration.bash` against the old build: a mode-000 folder and a mode-000 file gave a `dir-error` and an `open-error` and exit 0. Step 12's `db-error` exited 0 too.
+	- Actual cause [Bug]: The exit code counted only mismatches and read errors. The walk dropped listing and type errors with no event.
+	- Decisions:
+		- Exit 8 means some files weren't checked, the same bit snapdiff uses. A `db-error` counts toward it.
+	- Actual fix [Bug]:
+		- An error partway through a folder listing is a `dir-error` that says how many entries were read. A type error on an entry is a `stat-error`. So is an fstat that fails after open, which used to return without a word.
+		- `dir-error`, `stat-error`, `open-error` and `db-error` set 8. The mismatches, `cache-mismatch` and `read-error` set 4.
+		- `unstable` and `xattr-error` set nothing. Live files like a running VM's disk would set 8 on every main scan, and an attribute write comes after the check. A kind this version doesn't know sets 8.
+		- A folder or entry that's gone by the time it's read is skipped without an event, like a file that's gone before it's opened.
+		- Event kinds are one enum, each with its bit, and design.md has the table.
+	- Branch: runexit
+	- Commit: `11847b0`
+	- Test case: Step 13 of `tests/integration.bash`: an unreadable folder and file exit 8, and 12 with a mismatch. The exit check added to step 12. Unit test `exit_bits_add_up`. An error partway through a listing, or on an entry's type, needs a damaged filesystem, so neither has a test.
+	- Verified: Step 13's 2 checks and step 12's exit check failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
+	- Swept: Every `event` call in `src/scan.rs` takes a kind, so each one has a bit. `walk`'s `read_dir`, entry and type errors, and `one_file`'s stat, open and fstat errors. A worker that can't open the database still stops the run with exit 2, which is 2026101406340920's area. snapdiff already had 8.
+	- Acceptance signoff: Self-closed: per the decision. Leaving `unstable` and `xattr-error` out of 8 keeps the main scan's exit code useful. Tests fail before and pass after.
+	- Closed: 20261014-095605
+
+- A stopped run exits 2 even with mismatches found, and `--resume` then reports 0 for them.
+	- ID: 2026101406340909
+	- Type: Bug
+	- Status: Done
+	- Needs external testing: A real scan and vm-scan as root, stopped and resumed.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced.
+	- Incorrect behavior [Bug]:
+		- `run` returns 2 for a stopped run whatever it found (about line 341).
+		- The resumed process starts its stats at zero and replaces `runs.summary`. It exited 0 with "MISMATCH 0" while the earlier part's events sat in the table.
+	- Expected behavior [Bug]: The exit code and summary count every event the run has, from all its parts. And also a stop with mismatches still says so.
+	- Probable fix [Bug]: Count from the `events` table for the run id at the end.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. Step 5 of `tests/integration.bash` against the old build: a stop after a mismatch exited 2, the resumed part read the damaged file again and logged its 2 events a second time, and the summary had only that part's counts.
+	- Actual cause [Bug]: `run` made the exit code from the counters of the process that ended it, and returned 2 for a stop before looking at them.
+	- Decisions:
+		- Count from the `events` table for the run id at the end.
+		- 2 adds to 4 and 8, the same way 4 and 8 add to 12. 6 is a stop after a mismatch, 10 a stop after files that couldn't be checked, and 14 both. --help, README and design.md say so.
+	- Actual fix [Bug]:
+		- The exit code, and a new "events in the whole run" line in the summary, come from the `events` table for the run id. Each file counts once per kind.
+		- A resumed run doesn't read again a file an earlier part already judged at the same size, time and inode. Before, it read every mismatched file again and reported it twice.
+		- The stored summary keeps the earlier parts' lines, with a "resumed" line between. The output shows this part's lines and the whole run's events line.
+		- Both wrappers take the database snapshot on 0, 4, 8 and 12. vm-scan keeps its mounts and snapshots on 4, 8 and 12, and takes any other code, 6 included, as a stop to resume.
+	- Branch: runexit
+	- Commit: `11847b0`
+	- Test case: Step 5 of `tests/integration.bash`: a damaged file before the stop, exit 6 on the stop and 4 on the resume, 2 events and not 4, and the whole run's line in the summary. The old checks for exit 2 and 0 are commented out with the reason.
+	- Verified: Step 5's 3 new checks failed against the old build and pass after, on ext4 and ZFS. The vm-scan wrapper's exit handling does the right thing for every code from 0 to 14 and for 130. Both wrappers pass shellcheck. Neither was run, since both need root.
+	- Swept: `run` is the only place scan's exit code is made. `report` and `runs` already read the table. The 2 exit code tests in the vm-scan wrapper and the 1 in the main wrapper. `root-steps.bash` checks only snapdiff's codes and hands scan's through with `exec`.
+	- Acceptance signoff: Self-closed: per the decisions. Not rereading files already judged stops double reports and saves the reads. Tests fail before and pass after. The b23 root run is the last check.
+	- Closed: 20261014-095605
+
+- `--resume` can pick the wrong run.
+	- ID: 2026101406340910
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `run` in `src/scan.rs` about line 220. Confirmed from the query.
+	- Incorrect behavior [Bug]:
+		- `WHERE status != 'done' ORDER BY id DESC` takes an older stopped run even when a newer run finished. The old cutoff is used, and events go under the old id, which `report` doesn't show by default.
+		- The main scan and `vm-scan` share the DB, so either one's `--resume` can carry on the other's run with the wrong roots and mark it done.
+		- A run killed hard stays `running` forever.
+	- Expected behavior [Bug]: `--resume` continues only the newest run, only if it isn't done, and only with the same roots. Otherwise it refuses and says why.
+	- Probable fix [Bug]: Compare `runs.args` roots, or store a run label that each wrapper passes.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. Step 14 of `tests/integration.bash` against the old build: an older stopped run was resumed past a newer finished one, a run over other roots was resumed, and a run left `running` stayed that way after a new run.
+	- Actual cause [Bug]: The query took the newest unfinished run, whatever came after it, and nothing recorded which roots a run covered.
+	- Decisions:
+		- Continue only the newest run, only if it isn't done, and only with the same roots. Otherwise refuse and say why.
+		- Runs with status `accept` are never resumed.
+	- Actual fix [Bug]:
+		- `--resume` takes the newest run that isn't an `accept` run. It refuses if that run finished, if its roots differ, or if it's from before roots were kept. A roots refusal names up to 3 on each side.
+		- Roots are kept per run as `plan` keeps them, sorted, in a new `runs.roots` column. Comparing the roots was picked over a label from each wrapper, since it needs nothing from the caller. The table version goes to 2. A version 1 database gets the column the first time it's opened, and its runs can't be resumed.
+		- A new scan marks any run still `running` as `killed`. The lock means nothing else is using it. A newest run left `running` can still be resumed, with a note that it was likely killed.
+		- Both wrappers' usage comments say `--resume` only takes the last run, and only when it was that script's.
+	- Branch: runexit
+	- Commit: `11847b0`
+	- Test case: Step 14 of `tests/integration.bash`. Unit tests `roots_key_ignores_order` and `takes_schema_1_forward`.
+	- Verified: 6 of step 14's 8 checks failed against the old build. All pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass, and shellcheck on both wrappers.
+	- Note: No live database existed yet, so the version 1 to 2 step has only run on test files.
+	- Swept: `run`'s query was the only reader of `--resume`. `accept` opens through `open_rw`, so it takes the new version too. `runs` prints `killed` as it is. Neither wrapper had its own idea of which run to resume.
+	- Acceptance signoff: Self-closed: per the decisions. Comparing roots needs nothing from the callers, and the table upgrade is tested from version 1 and 2.
+	- Closed: 20261014-095605
+
+- `diffs` can lose its snapshots partway through and report nothing for them.
+	- ID: 2026101406340912
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `root-steps.bash`, `step_diffs`. Plausible.
+	- Incorrect behavior [Bug]:
+		- The last snapshot of a day is often a 15-minute one, kept about 12 hours, or an hourly, kept 24.
+		- `snapdiff` runs only after every `zfs diff` finishes. A snapshot pruned by then makes snapdiff skip every file in it and report 0 flagged.
+		- `snapdiff-summary.txt` lines don't say which pair they are for.
+	- Expected behavior [Bug]: The snapshots in use can't be pruned during the run, and each summary line names its pair.
+	- Probable fix [Bug]: Prefer `_daily` snapshots, or `zfs hold` each chosen one and release it at the end. Run snapdiff right after each pair's diff.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: With pruning made to happen during the first diff, all 3 pairs of a dataset went unchecked, snapdiff ran only after every diff, and no summary line named its pair.
+	- Actual fix [Bug]:
+		- Each day's pick is its last daily, or its last snapshot when it has none. That goes for btrfs too.
+		- Each picked zfs snapshot gets a `tukfs-diffs` hold before its dataset's diffs. The holds are released once that dataset's pairs are compared, and on any exit, including Ctrl+C, a hangup and TERM. zfs-auto-snapshot prunes with `destroy -d`, which waits for the hold, so the snapshot is pruned after.
+		- A run killed outright leaves its holds, so each run releases that tag everywhere first. A lock keeps a second run from taking a live run's holds.
+		- snapdiff runs right after each pair's diff, and each summary line starts with the pair's file name.
+		- A failed diff, a snapshot gone by the end of its compare, and a btrfs pair whose generation can't be read count as not fully checked. The last was skipped with no count before.
+	- Note: btrfs has no holds. Comparing right after each find-new keeps the window to one pair, and a snapshot deleted mid-compare is reported.
+	- Note: Unverified on real pools: that releasing the hold on an automounted snapshot lets its deferred destroy go ahead. If it doesn't, zfs-auto-snapshot's next `destroy -d` takes it.
+	- Branch: diffs (backlog only; the script is outside the repo)
+	- Test case: Stand-in test bed kept with the project's private files, case `zfs`, `kill`, `kill9`, `btrfs` and `btrfs-noshow`. Not in the repo, since the script lives outside it.
+	- Verified: The fixed function, run against stand-in zfs, btrfs and tukfs-hash: every pair checked with pruning during the run, each compare right after its diff, every summary line named, no holds left after a normal end, TERM, INT or HUP, and a kill -9's holds cleared by the next run. A second run at once is refused. The pre-change copy fails 5 of those checks. Lint passes.
+	- Swept: Every way `step_diffs` could skip or half-check a pair: a failed `zfs diff` or find-new, no generation, a snapshot gone mid-compare. The usage text cut off the last 2 help lines with `sed -n '2,25p'`, and now prints up to `set -euo`.
+	- Acceptance signoff: Self-closed: holds and daily picks were the item's own ideas, and the lock keeps 2 runs off each other's holds. A hold that doesn't let go on b23 only puts off a prune. The b23 root run is the last check.
+	- Closed: 20261014-095605
+
 - `status` reads only the current boot's kernel log, so it misses checksum errors from before the bad RAM was fenced off.
 	- ID: 2026101406340907
 	- Type: Bug
@@ -728,6 +431,133 @@
 	- Swept: No other `journalctl` call in the 3 scripts.
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- Nothing is written to NTFS, APFS or HFS+ from Linux.
+	- ID: 2026101409545200
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-095452
+	- Requirements [Feature]:
+		- Don't write anything to NTFS, unless running natively in Windows. Linux NTFS drivers aren't reliable enough.
+		- Ditto with APFS and macOS.
+	- Decisions:
+		- This tool only runs on Linux, so those are always read and never written. HFS+ counts as a macOS one too.
+		- No attributes, and no database on one. `accept` updates only the database there.
+		- A FUSE mount of a disk or image with no type of its own counts too. That's ntfs-3g or exfat-fuse in practice.
+	- Done:
+		- The scan marks such roots in its group list and writes no attributes under them. The walk stays on its root's device, so the root decides.
+		- `scan`, `accept` and `prune` refuse a database on one, through the lock.
+		- `accept` notes "attributes left alone" in its event, and leaves rmlint's sum too.
+		- README, help text and design.md say so.
+	- Branch: ntfs
+	- Test case: `mounts::tests::no_writes_on_ntfs_or_mac_disks` and `scan::tests::nothing_written_on_a_hands_off_device`.
+	- Verified: The scan test fails with the device check taken out. On an NTFS image mounted with ntfs-3g, a database there was refused and `accept` left the attributes alone, where the old build wrote both. A root on b23's read-only fuseblk mount shows the note. Unit tests, clippy, rustfmt and the integration test on ext4 and ZFS pass.
+	- Note: There's no APFS or HFS+ driver here, so those rely on the type list test.
+	- Acceptance signoff: Self-closed: the requirement as given, tested.
+	- Closed: 20261014-095605
+
+- A failed DB lookup counts as "no prior record", which skips the DB comparison.
+	- ID: 2026101406340915
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `lookup` in `src/db.rs` about line 168. Confirmed from the code; the trigger is rare.
+	- Incorrect behavior [Bug]: `.ok()` turns a busy timeout, I/O error or type error into `None`. The row is overwritten with no event.
+	- Expected behavior [Bug]: Only `QueryReturnedNoRows` means no prior. Any other error is an event and the file is not recorded.
+	- Reproduced [Bug]: Yes. A row with text in its size column was overwritten with no event by the old build.
+	- Actual fix [Bug]: `lookup` returns an error for anything but a missing row. The scan logs it as `db-error`, counts it under other-err, and skips the file. `accept` stops on it for that file. The exit code is left to 2026101406340908.
+	- Branch: keepgood
+	- Commit: `eb111ff`
+	- Test case: Step 12 of `tests/integration.bash`, and unit test `lookup_error_is_not_no_row`.
+	- Verified: Step 12 failed on the old build and passes after, on ext4 and ZFS. The unit test fails with the old `.ok()` put back.
+	- Swept: `lookup` has 2 callers, `hasher` in `src/scan.rs` and `accept`. No other `.ok()` reads the database. `report` and `scan --resume` turn any query error into "no runs yet" or "no unfinished run to resume", but both still exit 1 and nothing is written, so they were left alone.
+	- Acceptance signoff: Self-closed: as expected, and the test fails before.
+	- Closed: 20261014-095605
+
+- `vm-scan` skips a partition it can't mount when another partition in the same image mounts, so that partition is never checked at all.
+	- ID: 2026101406340918
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Plausible.
+	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
+	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
+	- Reproduced [Bug]: Yes. An image with a mountable EFI partition beside a BitLocker one, and one with an ext4 partition that wouldn't mount, were both left out of hashing.
+	- Actual fix [Bug]:
+		- An image with a partition that has a filesystem but can't be read, such as BitLocker, LUKS or LVM, or whose mount fails, is checksummed whole as well as through its mounted partitions.
+		- Swap is skipped as before. A partition with no filesystem found, like Windows' reserved one, is listed as not checked, and doesn't make the image read whole.
+		- Raw partitions aren't hashed, since `tukfs-hash` takes only folders as roots.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: Stand-in test bed kept with the project's private files, case `parts`. Not in the repo, since the script lives outside it.
+	- Verified: Over 5 images. Before the fix, the BitLocker and failed-mount images were left out and the empty partition wasn't listed. After, both are hashed whole, an image whose only unmounted parts are an empty partition and swap is still left out, and the empty partition is listed. Lint passes.
+	- Note: A running guest's image changes between runs, so a whole-image sum finds damage only on stopped guests. That's the same as for images with nothing mountable.
+	- Swept: `attach_all` is the only place images are left out. A whole disk with a partition table shows no type and isn't listed.
+	- Acceptance signoff: Self-closed: reading the image whole is the path images with nothing mountable already take, and raw partitions can't be roots.
+	- Closed: 20261014-095605
+
+- The scan's last step fails with exit 1 when anything else has the database open.
+	- ID: 2026101406340914
+	- Type: Bug
+	- Status: Done
+	- Needs external testing: A scan as root through sudo with a reader open, to see the WAL files handed back too.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `close_rw` in `src/db.rs`. Confirmed, reproduced with an idle `sqlite3` shell.
+	- Incorrect behavior [Bug]:
+		- Leaving WAL mode needs sole access. With another reader open, such as `report` stalled in a pager, it fails after the 30 s busy timeout.
+		- The result is exit 1 in place of 4, no summary printed, `give_back` never run, and the DB left in WAL mode and owned by root, which a normal user then can't open.
+		- `pragma_update_and_check` never checks that the mode came back as `delete`.
+	- Expected behavior [Bug]: The run's result is printed and returned whatever happens to the mode switch. A failed switch is a warning, and ownership is still handed back.
+	- Reproduced [Bug]: Yes. Step 15 of `tests/integration.bash` against the old build: exit 1, "database is locked", no summary. A Python reader made it fail at once. An idle second connection made it wait out the whole 30 s.
+	- Actual cause [Bug]: `close_rw`'s error went up through `?` before the summary, `give_back` and the exit code.
+	- Actual fix [Bug]:
+		- `close_rw` checks that the mode came back as `delete`. Any failure there is a warning that names the file, and the run goes on to print and return its result.
+		- `give_back` also hands back the `-wal` and `-shm` files, which are only there when the switch failed.
+		- The switch waits 5 s for a reader, not 30. Everything is committed by then, so a longer wait only holds up the result.
+		- `accept` gets the same treatment.
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Step 15 of `tests/integration.bash`, and unit test `close_rw_says_when_wal_stays`.
+	- Verified: Step 15's exit and output checks failed against the old build and pass after, on ext4 and ZFS. The next run puts the file back in rollback mode.
+	- Note: Unverified: the ownership hand-back, which needs a run as root.
+	- Swept: `close_rw` and `give_back` have 2 callers each, `scan` and `accept`. `accept` still returns early on a failed `runs` update before closing, which is a database error and not this case.
+	- Acceptance signoff: Self-closed: a reader left open shouldn't cost a run its result, and 5 s is plenty with everything committed. The hand-back as root gets checked in the b23 root run.
+	- Closed: 20261014-095605
+
+- A writer error throws away its batch of events, and the run never records a summary.
+	- ID: 2026101406340916
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `writer` in `src/db.rs` and its caller in `run`. Confirmed from the code.
+	- Incorrect behavior [Bug]: One failed statement rolls back the whole batch, mismatch events included. `run` returns an error before the summary, and the run stays `running`. Workers keep writing xattrs after `send` starts failing.
+	- Expected behavior [Bug]: Events are written in their own transaction ahead of the rest, a writer failure stops the workers, and the run is marked failed.
+	- Reproduced [Bug]: Yes. Step 16 of `tests/integration.bash` against the old build, with a trigger that refuses new `files` rows: exit 1, the mismatch event gone, the run left `running` with no summary, and the file left in WAL mode.
+	- Actual cause [Bug]: Each batch was one transaction, and the writer's error went up through `?` past the summary and status update.
+	- Decisions:
+		- A run status `failed`, beside `running`, `stopped`, `killed`, `accept` and `done`. `--resume` takes it like a stopped one: newest, same roots, not done.
+		- A failed run exits 1, as any error does. Its events are in the table and its summary is printed and stored, so the 4 and 8 bits aren't added to it.
+	- Actual fix [Bug]:
+		- Each batch's events go in first, in their own transaction. After a failure the other rows are dropped, but events are still kept until one of those fails too.
+		- A writer failure stops the workers at once, and no attribute is written for a file once nothing more can be recorded.
+		- The run is marked `failed` with its summary, prints it, says to fix the cause and resume, and exits 1 with the reason.
+		- design.md says so under Database and Runs.
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Step 16 of `tests/integration.bash`, which also resumes the failed run. Unit test `a_bad_row_keeps_the_events`.
+	- Verified: 4 of step 16's checks failed against the old build and pass after, on ext4 and ZFS. Unit tests, clippy and rustfmt pass.
+	- Note: Not covered by a test: the attribute skip after a failure, since which files were queued before it is timing.
+	- Swept: `writer` is scan's only writer. `accept` writes each file's row and event in one transaction on purpose, since a refused row means nothing was accepted. Of the 5 `send` callers, only the one before the attribute write needs its answer. Per 2026101406340909's notes, both wrappers already treat exit 1 as not finished.
+	- Acceptance signoff: Self-closed: per the decisions. Tests fail before and pass after.
+	- Closed: 20261014-095605
 
 - `vm-scan` freezes guests and takes snapshots before finding out the main scan has the database locked.
 	- ID: 2026101406340917
@@ -764,6 +594,167 @@
 	- Swept: No other step resets anything.
 	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
+	- ID: 2026101406340925
+	- Type: Bug
+	- Status: Done
+	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
+	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
+	- Actual fix [Bug]:
+		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
+		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
+	- Branch: scriptfix (backlog only; the scripts are outside the repo)
+	- Test case: None in the repo, since the scripts live outside it.
+	- Verified:
+		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
+		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
+		- Lint passes on both.
+	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
+	- Acceptance signoff: Self-closed: doing both covers TinyCore64 and keeps containerd out. The b23 root run is the last check.
+	- Closed: 20261014-095605
+
+- A path argument that isn't valid UTF-8 panics.
+	- ID: 2026101406340924
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
+	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
+	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
+	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
+	- Actual fix [Bug]:
+		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
+		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
+		- README and help text say so.
+	- Branch: snapdiff2
+	- Commit: `cede460`
+	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
+	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
+	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
+	- Acceptance signoff: Self-closed: as expected. Tests fail before and pass after.
+	- Closed: 20261014-095605
+
+- `vm-scan` names mount folders and fsck logs after the image file name alone, so 2 images with one name in different subfolders of a dataset share them.
+	- ID: 2026101414100001
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-141000
+	- Opened by: backlog round
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Read only; no dataset has 2 such images today.
+	- Expected behavior [Bug]: Build the name from the image's path within its dataset.
+	- Related IDs: 2026101406340904
+	- Reproduced [Bug]: Yes. `a/disk.img` and `b/disk.img` in one dataset got one mount folder and one fsck log.
+	- Actual fix [Bug]:
+		- Mount folders are named from the image's path within its dataset, with `/` and other odd characters turned into `_`. A name already taken in the run gets `_2`, `_3` and so on.
+		- fsck logs go in a folder per dataset, named from the same name and the partition.
+		- An image at the top of its dataset keeps the name it had.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: Stand-in test bed kept with the project's private files, case `names`. Not in the repo, since the script lives outside it.
+	- Verified: 4 images whose names clean up the same. Before the fix they got 2 mount folders and 2 logs, after it 4 of each. Lint passes.
+	- Note: Unverified: a clash's suffix follows `find` order, which should be the same on `--resume`, since it reads the same snapshot.
+	- Swept: Datasets sit one level under the 2 parents, so their cleaned names can't clash. The `tr` line is still the only character set in the 3 scripts.
+	- Acceptance signoff: Self-closed: the log folder per dataset follows from the same names.
+	- Closed: 20261014-095605
+
+- The scan can hang forever if every worker in a group fails to start, or if a worker panics.
+	- ID: 2026101406340920
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `run_group` and the main loop in `src/scan.rs`. Confirmed from the code.
+	- Incorrect behavior [Bug]:
+		- If every hasher's `open_ro` fails, the walker blocks on the full job channel. `run_group` still has a receiver, so the send never fails.
+		- A panic in the scope skips `g.done.store(true)`, and the main loop waits forever. Only a second signal ends it.
+	- Expected behavior [Bug]: Both cases end the group with an error.
+	- Reproduced [Bug]: Yes, both. With a panic put into a worker for the test, the old build hung until killed, with the run left `running`. Unit test `a_group_with_no_workers_ends` hung on the old `run_group`.
+	- Actual cause [Bug]: `run_group` kept its own copy of the job receiver, so the walk's send waited forever once every worker was gone. A panic made the scope panic in turn, which skipped marking the group done.
+	- Actual fix [Bug]:
+		- Only the workers hold the receiver, so the walk's send fails once the last one ends.
+		- A worker or walk that panics, or a worker that can't open the database, is a fault. It stops the run, which is marked `failed` and exits 1, per 2026101406340916.
+		- The group is marked done on any way out, panics included.
+	- Related IDs: 2026101406340916
+	- Branch: dbsafe
+	- Commit: `422efff`
+	- Test case: Unit tests `a_group_with_no_workers_ends` and `a_panic_is_a_fault`.
+	- Verified: `a_group_with_no_workers_ends` timed out on the old `run_group` and passes after. With the panic put in, the new build exited 1 with the run `failed` and the file in rollback mode.
+	- Swept: `run_group` is the only place workers start. `hasher`'s `expect` on its statement is now a fault too. The writer is a plain thread, and its panic still ends the run with an error.
+	- Acceptance signoff: Self-closed: a group that can't start is a fault, not a stop, so exit 1 fits. Tests fail before and pass after.
+	- Closed: 20261014-095605
+
+- The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
+	- ID: 2026101406340921
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `walk` and `Links` in `src/scan.rs`. Confirmed from the code.
+	- Incorrect behavior [Bug]:
+		- A directory with 10M entries costs about 1.5 GB before its first file is queued. The inode sort needs the whole list, so this is partly by design.
+		- A `Links` entry counts down only for names that reach the claim. Names skipped earlier by the DB or xattr checks, or outside the roots, leave it above zero.
+	- Expected behavior [Bug]: Memory stays bounded on huge trees.
+	- Reproduced [Bug]: The `Links` part, by a test that left an entry behind before the fix. The folder part is from the code.
+	- Actual cause [Bug]:
+		- `Links` counted down only at the claim. Once the first name's attribute is written, the other names usually skip through it and never get there. Nothing capped the map.
+		- The walk kept a whole path per entry for a folder's files and for every subfolder still to walk, at every level.
+	- Actual fix [Bug]:
+		- Names skipped by the database or the attributes count down too. A group keeps at most 262,144 results and drops the oldest first, so a name outside the roots costs at most a second read of that file.
+		- The walk keeps names only. A folder's files are queued a million at a time, each part in inode order. Subfolders are taken off one at a time as they're walked.
+		- What stays by design: a folder's subfolder names are all held until it's done, for the name order. In a folder over a million files, inode order holds within each part only.
+	- Against: design.md, Reading files, "files in inode order". It now says so for big folders.
+	- Branch: walkfix
+	- Commit: 9120949
+	- Test case: `scan::tests::skipped_links_count_down` and `scan::tests::the_link_map_is_capped`. The batching has none, since it needs a folder of over a million files.
+	- Verified:
+		- `skipped_links_count_down` fails with the skip sites' countdown taken out, and passes with it.
+		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
+		- A same-day rerun of 50,000 files took the same time as before.
+	- Swept: `Links` is the only map in the scan that grows per file. The snapdiff inode walk is bounded by its list and was left alone.
+	- Acceptance signoff: Self-closed: the cap and the batch size bound memory, and a rerun of 50,000 files took the same time.
+	- Closed: 20261014-095605
+
+- The walk follows the mount table read at the start, and a directory swapped for a symlink mid-walk is followed.
+	- ID: 2026101406340922
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `walk` and `open_noatime` in `src/scan.rs`. Plausible; needs a mount or a rename racing the scan.
+	- Incorrect behavior [Bug]:
+		- There's no `st_dev` check against the root, so a filesystem mounted mid-scan is walked as part of the parent.
+		- A btrfs subvolume that isn't a mount point is walked too. None are inside the b23 roots today, since `/opt/bsnaps` and `/mnt/bfs/bf7/bsnaps` are both mounted.
+		- `O_NOFOLLOW` covers only the last path part. A directory renamed to a symlink between `readdir` and `open` sends the root process elsewhere, where it reads files and sets `user.*` xattrs.
+	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
+	- Reproduced [Bug]: Confirmed. The build before the fix walked into a btrfs subvolume that isn't mounted, and into a tmpfs mounted part way through a scan. A test that opens a file through a folder swapped for a symlink read it before the fix.
+	- Actual cause [Bug]: Folders and files were opened by their full path, and only the mount table read at the start said where a filesystem ended. Nothing compared devices.
+	- Actual fix [Bug]:
+		- Each root is opened once. Folders and files under it are opened from it with `openat2`, with no symlink followed and no mount crossed on the way. Kernels before 5.6 go one folder at a time instead, with the same rules.
+		- A folder on another device than its root is skipped like a mount point. Folders are listed from their fd.
+		- A path that's no longer what the walk saw, gone or now a symlink, a file or a new mount, is skipped like a file deleted mid-scan.
+		- Loop mounts are unchanged. Each root is compared with its own device, and grouping still comes from the disks under the backing file.
+	- Branch: walkfix
+	- Commit: 9120949
+	- Test case: `beneath::tests::a_symlink_on_the_way_is_not_followed`, `beneath::tests::another_filesystem_is_not_entered`, `scan::tests::a_swapped_folder_is_not_followed` and `scan::tests::the_walk_stays_on_the_root_device`.
+	- Verified:
+		- `a_swapped_folder_is_not_followed` fails with the old open, and `the_walk_stays_on_the_root_device` fails with the device check and the mount rule taken out. Both pass with them.
+		- A btrfs subvolume and a tmpfs mounted mid-scan: the old build recorded files in both, this one in neither.
+		- The `beneath` tests run both the `openat2` and the one folder at a time paths.
+		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
+	- Note: Unverified: a root run of `scan` and `vm-scan` on b23, and the fallback on a real kernel before 5.6.
+	- Swept: `accept` opens the paths it's given by name, which a person typed, so it was left. `snapdiff` reads snapshots, which can't change under it, and already compares devices in its inode walk.
+	- Acceptance signoff: Self-closed: `openat2` with no symlinks and no mount crossings is the usual fix for this. Tests fail before and pass after.
+	- Closed: 20261014-095605
 
 - Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
 	- ID: 2026101407522499
@@ -871,6 +862,62 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- Report paths that a finished run didn't see, as gone.
+	- ID: 2026101406340930
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261013-110127
+	- Decisions:
+		- A `gone` command, with `--run N` and `--limit N` like `report`. It defaults to the newest run with status `done`, and refuses any other status.
+		- Only paths the run would have reached count: under its roots, no event of their own in that run, not under a folder with a `dir-error` in it, and not last seen from a deeper root by another run, since that may be a mount the walk stops at.
+		- It only lists. Nothing is deleted.
+	- Branch: extras
+	- Commit: bed0537
+	- Test case: `gone::tests::only_names_the_run_would_reach`, and integration section 18.
+	- Verified: Integration section 18 on ext4 and ZFS lists only the deleted file, leaving out an unreadable file, a file in an unreadable folder, a file under a deeper root, and a file under another run's root. With the deeper-root rule and the event and folder checks taken out, it listed 4 and failed.
+	- Note: `--exclude` isn't kept with the run, so a folder left out counts as not seen. Documented in README and design.md.
+	- Swept: Every place a scan reaches a path either sets `seen_run` or logs an event, except a file deleted or turned into something else mid-scan, which is gone.
+	- Acceptance signoff: Self-closed: per the decisions. It only lists, and it's tested.
+	- Closed: 20261014-095605
+
+- A `verify` mode that rereads only files whose blake3 is already known, for a quick check between full runs.
+	- ID: 2026101406340931
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261013-110127
+	- Decisions:
+		- A `scan --verify` flag, not a command. It needs the whole scan: the walk and its mount rules, workers per disk, hard link claims, stop and resume, events and exit codes. A command going through database rows would read in name order and couldn't open files from their root.
+		- Known means a blake3 at the file's current size and time, in the database or on the file. Others are left for the next full scan.
+		- The skip date is the run's own start, so it rereads files read earlier that day. `--since` is refused with it.
+		- A clean read updates the database row as a scan does. No attributes are written, so ctimes don't move.
+		- The tables go to version 3, adding `runs.verify`. `--resume` only continues a verify run with `--verify`, and a full scan only without it. Older databases are brought forward on the first write.
+	- Branch: extras
+	- Commit: bed0537
+	- Test case: Integration section 17, and `db::tests::takes_schema_2_forward`. `db::tests::takes_schema_1_forward` now drops both new columns, as a real version 1 database had neither.
+	- Verified: Section 17 on ext4 and ZFS: a same-day verify rereads, a new file isn't read or recorded, an edited file isn't read, a flipped byte exits 4, no ctime moves, and resume refuses the other mode. The checks on what's read, ctimes, and resuming a verify as a full scan failed with that code taken out.
+	- Swept: Run inserts in `scan` and `accept`, `pick_resume`, and `runs`. `accept` gets the column's default.
+	- Acceptance signoff: Self-closed: per the decisions, and tested.
+	- Closed: 20261014-095605
+
+- A way to prune `files` rows no path points at.
+	- ID: 2026101406340932
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261013-110127
+	- Note: Every content change orphans a row, which only inflates the "distinct contents" count.
+	- Decisions:
+		- A `prune --db FILE` command. It holds the database lock, deletes only `files` rows no path points at, and prints how many.
+		- It isn't a run, so it adds no status and `--resume` never sees it.
+	- Branch: extras
+	- Commit: bed0537
+	- Test case: `db::tests::prune_drops_only_unnamed_contents`, and integration section 19.
+	- Verified: Section 19 on ext4 and ZFS removes the 3 rows left by earlier edits and keeps every path joined. With the delete turned off, it failed.
+	- Acceptance signoff: Self-closed: it deletes only rows nothing points at, which are never read. Tested.
+	- Closed: 20261014-095605
 
 - The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
 	- ID: 2026101406340928

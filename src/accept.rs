@@ -6,6 +6,7 @@
 // back, is reported on every run.
 
 use crate::db::{self, Hashed, Msg};
+use crate::mounts::Mount;
 use crate::scan::{self, read_sums, ReadFail, Sums};
 use crate::util::{b64u_encode, canonical_name, now_us, show_path};
 use crate::xattr::{self, OnFile};
@@ -34,10 +35,11 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	)
 	.map_err(e)?;
 	let run_id = conn.last_insert_rowid();
+	let mounts = crate::mounts::read_mounts()?;
 	let mut buf = vec![0u8; 1 << 20];
 	let mut taken = 0;
 	for p in paths {
-		match one(&mut conn, run_id, p, &mut buf) {
+		match one(&mut conn, run_id, p, &mounts, &mut buf) {
 			Ok(()) => taken += 1,
 			Err(msg) => err!("{}: {msg}", show_path(p)),
 		}
@@ -74,8 +76,15 @@ fn digest_text(d: Option<&[u8]>) -> String {
 	d.map_or_else(|| "none".into(), b64u_encode)
 }
 
-fn one(conn: &mut Connection, run_id: i64, given: &Path, buf: &mut [u8]) -> Result<(), String> {
+fn one(
+	conn: &mut Connection,
+	run_id: i64,
+	given: &Path,
+	mounts: &[Mount],
+	buf: &mut [u8],
+) -> Result<(), String> {
 	let path = canonical_name(given)?;
+	let hands_off = crate::mounts::hands_off_at(mounts, &path);
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// A scan never follows one, so it has no record under this name.
 	if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
@@ -118,9 +127,13 @@ fn one(conn: &mut Connection, run_id: i64, given: &Path, buf: &mut [u8]) -> Resu
 		digest_text(prior.as_ref().map(|p| &p.b3[..])),
 		digest_text(onfile.b3.as_ref().map(|d| &d[..])),
 	);
-	let drop_rmlint = matches!((rmlint, sums.b2), (Some(old), Some(new)) if old != new);
+	let drop_rmlint =
+		hands_off.is_none() && matches!((rmlint, sums.b2), (Some(old), Some(new)) if old != new);
 	if drop_rmlint {
 		detail.push_str("; rmlint's blake2b removed");
+	}
+	if let Some(t) = &hands_off {
+		detail.push_str(&format!("; attributes left alone on {t}"));
 	}
 	let hashed_us = now_us();
 	let (bytes, mt) = (before.len() as i64, scan::mtime_us(&before));
@@ -157,7 +170,7 @@ fn one(conn: &mut Connection, run_id: i64, given: &Path, buf: &mut [u8]) -> Resu
 	// Only a set that's already there is replaced. Where a scan left none,
 	// such as in a git work tree, accept doesn't add one.
 	let mut written = Ok(());
-	if onfile.b3.is_some() {
+	if onfile.b3.is_some() && hands_off.is_none() {
 		let id = (before.dev(), before.ino());
 		written = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, false);
 	}

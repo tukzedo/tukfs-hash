@@ -256,6 +256,29 @@ pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
 		.collect()
 }
 
+// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
+// and nothing more, no attributes and no database. A FUSE mount of a disk or
+// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
+// fuseblk for a block device, plain fuse for a file mounted by a user.
+pub fn hands_off(m: &Mount) -> bool {
+	let t = m.fstype.strip_prefix("fuse.").unwrap_or(&m.fstype);
+	match t {
+		"fuseblk" | "ntfs" | "ntfs3" | "ntfs-3g" | "lowntfs-3g" | "apfs" | "apfs-fuse" | "hfs"
+		| "hfsplus" => true,
+		"fuse" => m.source.starts_with('/'),
+		_ => false,
+	}
+}
+
+pub fn hands_off_at(mounts: &[Mount], path: &Path) -> Option<String> {
+	mount_for(mounts, path)
+		.filter(|m| hands_off(m))
+		.map(|m| match m.fstype.as_str() {
+			"fuse" | "fuseblk" => format!("{} from {}", m.fstype, m.source),
+			t => t.to_string(),
+		})
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -292,6 +315,55 @@ mod tests {
 			mount_for(&m, Path::new("/home/user2")).unwrap().fstype,
 			"btrfs"
 		);
+	}
+
+	#[test]
+	fn no_writes_on_ntfs_or_mac_disks() {
+		let m = |t: &str, src: &str| Mount {
+			point: PathBuf::from("/m"),
+			fstype: t.into(),
+			source: src.into(),
+		};
+		for t in [
+			"ntfs",
+			"ntfs3",
+			"fuseblk",
+			"fuse.ntfs-3g",
+			"fuse.lowntfs-3g",
+			"apfs",
+			"fuse.apfs-fuse",
+			"hfs",
+			"hfsplus",
+		] {
+			assert!(hands_off(&m(t, "/dev/sdd1")), "{t}");
+		}
+		// What ntfs-3g shows when a user mounts an image file.
+		assert!(hands_off(&m("fuse", "/x/ntfs.img")));
+		for t in [
+			"zfs",
+			"btrfs",
+			"ext4",
+			"xfs",
+			"vfat",
+			"exfat",
+			"tmpfs",
+			"fuse.sshfs",
+		] {
+			assert!(!hands_off(&m(t, "/dev/sdd1")), "{t}");
+		}
+		assert!(!hands_off(&m("fuse", "portal")));
+		let all = parse_mountinfo(&format!(
+			"{SAMPLE}70 22 8:49 / /mnt/win rw - ntfs3 /dev/sdd1 rw\n71 22 8:50 / /mnt/mac ro - apfs /dev/sdd2 ro\n"
+		));
+		assert_eq!(
+			hands_off_at(&all, Path::new("/mnt/win/a/b")).as_deref(),
+			Some("ntfs3")
+		);
+		assert_eq!(
+			hands_off_at(&all, Path::new("/mnt/mac")).as_deref(),
+			Some("apfs")
+		);
+		assert_eq!(hands_off_at(&all, Path::new("/mnt/ext/x")), None);
 	}
 
 	#[test]
