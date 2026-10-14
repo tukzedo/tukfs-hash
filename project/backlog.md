@@ -22,7 +22,9 @@
 	- `~/synced/0-0/common/exec/util/linux/bash/tukfs-hash_scan-b23.bash`, the main scan wrapper.
 	- `~/synced/0-0/common/exec/util/linux/bash/tukfs-hash_vm-scan-b23.bash`, the VM image scan.
 	- `~/tmp/b23-ram-check-20261013/root-steps.bash`, the one-off root steps for the bad-RAM check.
+
 - Items marked "Blocks the b23 check" need to close before the root steps `diffs`, `scan` and `vm-scan` are run. `scrub` and `status` can run now, though `status` has its own item.
+
 - Line numbers are as of commit `6e4aafd` and will drift. Function names are given too.
 
 ## Issues
@@ -140,7 +142,7 @@
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -154,7 +156,29 @@
 		- `run` skips any `symlink_metadata` error with no count, so EACCES, swapped `--old`/`--new` or CRLF lines all end in exit 0.
 	- Expected behavior [Bug]: Unusable lines are counted and reported. Lines outside `--mount` are an error. `-`/`+` pairs on one path are compared. Absolute list paths are refused. A stat error other than NotFound is counted, and a run that compared nothing exits non-zero.
 	- Note: Blocks the b23 check.
-	- Test case: None yet. Unit tests in `snapdiff.rs` for each input case.
+	- Reproduced [Bug]: Yes, all 6. Step 9 of `tests/integration.bash` against the old build: exit 0 and nothing flagged for `-F`, a symlinked `--mount`, a `-`/`+` pair, an absolute list name, a CRLF list and a mode-000 folder, and the renamed file was never compared.
+	- Actual cause [Bug]: Each parser kept only the lines it knew and dropped the rest, and `run` skipped any stat error. Nothing counted what was dropped, so the exit code couldn't say.
+	- Actual fix [Bug]:
+		- `zfs diff` output is read with or without `-H`, `-t` and `-F`. Link count lines ending in `(+1)` still parse.
+		- `--mount` matches the given spelling or its real path. Any line outside it stops the run with exit 1 and names the line.
+		- A path with both `-` and `+` is compared.
+		- Absolute names, or names with `..`, stop the run with exit 1, from any source.
+		- The btrfs rename case is fixed, not just reported. A name missing from `--old` is looked up there by inode, with a birth time match, in one walk per pair.
+		- Lines not understood go to stderr with their line numbers. Stat and open errors, files a diff names that aren't there, and walk errors are printed as `stat-error`, `open-error`, `missing` and `walk-error` lines.
+		- New exit code 8 for any of these, or for a run that compared nothing because the listed files weren't in `--new`. It adds to 4, so 12 means both.
+		- An open error is now `open-error` and exit 8. It used to be `read-error` and exit 4, which called a permissions problem damage.
+		- The summary counts missing, not checked, and not understood.
+		- `step_diffs` in `root-steps.bash` logs each pair that exits other than 0 or 4 to `errors.txt`, and prints how many.
+	- Decisions:
+		- Exit 8 means some input or files weren't checked. 4 and 8 add up, the start of a bit scheme 2026101406340908 and ...09 can use.
+		- Missing files are an error for `zfs diff` on either side and for `find-new` on the new side. A `--list` may name anything, so missing there only counts toward "nothing compared".
+	- Branch: snapdiff2
+	- Test case: Step 9 of `tests/integration.bash`, one check per case. Unit tests `zfs_diff_type_column`, `zfs_diff_link_count`, `zfs_diff_without_h`, `zfs_diff_replaced_files`, `zfs_diff_junk_and_outside`, `find_new_lines` and `names_stay_inside`.
+	- Verified: Step 9 failed all 12 of its checks against the old build and passes after, on ext4 and ZFS. Dropping the link count pop turns `zfs_diff_link_count` red. Unit tests, clippy and rustfmt pass. `root-steps.bash` passes shellcheck and was not run.
+	- Note: The `zfs diff` and `find-new` formats come from the OpenZFS and btrfs-progs sources. `zfs diff` needs root here, so no real output was parsed.
+	- Note: The inode walk reads every folder of the old snapshot when a find-new pair has new files, which is most days on `/opt/bsnaps/@`. Only folder reads and a stat per folder, but it adds time per pair.
+	- Swept: The 3 parsers and `run` are the only input paths. `--list` read with `map_while(Result::ok)`, which stopped quietly at a read error, and now reads the file whole. The stat of `--old` was the twin of `--new`'s and is fixed with it. `--old` and `--new` that aren't folders are refused up front.
+	- Acceptance signoff: Needs signoff. It adds an exit code and changes output lines and the summary.
 
 - A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
 	- ID: 2026101406340906
@@ -351,14 +375,23 @@
 - A path argument that isn't valid UTF-8 panics.
 	- ID: 2026101406340924
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
 	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
 	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
 	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
-	- Test case: None yet.
+	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
+	- Actual fix [Bug]:
+		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
+		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
+		- README and help text say so.
+	- Branch: snapdiff2
+	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
+	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
+	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
+	- Acceptance signoff: Needs signoff. It changes how names print.
 
 - `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
 	- ID: 2026101406340926

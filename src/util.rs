@@ -151,6 +151,36 @@ pub fn human_bytes(n: u64) -> String {
 	}
 }
 
+// A name as text that maps back to its bytes, so 2 names never print the same:
+// a backslash doubled, and control characters and bytes that aren't UTF-8 as
+// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
+// in its columns.
+pub fn escape_name(b: &[u8]) -> String {
+	let mut out = String::with_capacity(b.len());
+	let hex_byte = |out: &mut String, byte: u8| out.push_str(&format!("\\x{byte:02x}"));
+	for chunk in b.utf8_chunks() {
+		for c in chunk.valid().chars() {
+			if c == '\\' {
+				out.push_str("\\\\");
+			} else if c.is_control() {
+				for byte in c.encode_utf8(&mut [0; 4]).bytes() {
+					hex_byte(&mut out, byte);
+				}
+			} else {
+				out.push(c);
+			}
+		}
+		for &byte in chunk.invalid() {
+			hex_byte(&mut out, byte);
+		}
+	}
+	out
+}
+
+pub fn show_path(p: &Path) -> String {
+	escape_name(p.as_os_str().as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -212,5 +242,15 @@ mod tests {
 		assert!(parse_date("2028-02-29").is_some());
 		assert!(parse_date("2026-12-31").is_some());
 		assert!(parse_date("yesterday").is_none());
+	}
+
+	#[test]
+	fn escapes_names() {
+		assert_eq!(escape_name(b"plain name.txt"), "plain name.txt");
+		assert_eq!(escape_name("caf\u{e9}".as_bytes()), "caf\u{e9}");
+		assert_eq!(escape_name(b"caf\xe9"), "caf\\xe9");
+		assert_eq!(escape_name(b"a\tb\nc\\d"), "a\\x09b\\x0ac\\\\d");
+		// The escaped form of one name is never another name's plain form.
+		assert_ne!(escape_name(b"\\xe9"), escape_name(b"\xe9"));
 	}
 }
