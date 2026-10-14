@@ -364,7 +364,8 @@
 - `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
 	- ID: 2026101406340911
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting for testing
+	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -376,7 +377,22 @@
 		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
 	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
 	- Note: Blocks the b23 check.
-	- Test case: None. Needs root and live VMs; check by hand.
+	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
+	- Actual fix [Bug]:
+		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
+		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
+		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
+		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
+		- `--shutdown` shuts all guests down together as well.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified:
+		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
+		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
+		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
+	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
+	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
+	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
 
 - `diffs` can lose its snapshots partway through and report nothing for them.
 	- ID: 2026101406340912
@@ -425,14 +441,24 @@
 - `vm-scan` skips a partition it can't mount when another partition in the same image mounts, so that partition is never checked at all.
 	- ID: 2026101406340918
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
 	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Plausible.
 	- Incorrect behavior [Bug]: Once any partition mounts, the whole image is excluded from hashing. A BitLocker C: next to a mountable EFI partition is never read.
 	- Expected behavior [Bug]: A partition that can't be mounted is hashed as a raw device, or at least listed as unchecked.
-	- Test case: None. Needs root.
+	- Reproduced [Bug]: Yes. An image with a mountable EFI partition beside a BitLocker one, and one with an ext4 partition that wouldn't mount, were both left out of hashing.
+	- Actual fix [Bug]:
+		- An image with a partition that has a filesystem but can't be read, such as BitLocker, LUKS or LVM, or whose mount fails, is checksummed whole as well as through its mounted partitions.
+		- Swap is skipped as before. A partition with no filesystem found, like Windows' reserved one, is listed as not checked, and doesn't make the image read whole.
+		- Raw partitions aren't hashed, since `tukfs-hash` takes only folders as roots.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: Over 5 images. Before the fix, the BitLocker and failed-mount images were left out and the empty partition wasn't listed. After, both are hashed whole, an image whose only unmounted parts are an empty partition and swap is still left out, and the empty partition is listed. Lint passes.
+	- Note: A running guest's image changes between runs, so a whole-image sum finds damage only on stopped guests. That's the same as for images with nothing mountable.
+	- Swept: `attach_all` is the only place images are left out. A whole disk with a partition table shows no type and isn't listed.
+	- Acceptance signoff: Needs signoff. It picked hashing the image whole over raw partitions, so such an image is read twice.
 
 - Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
 	- ID: 2026101407522499
@@ -489,13 +515,22 @@
 - `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
 	- ID: 2026101406340926
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
 	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Confirmed from the code.
 	- Expected behavior [Bug]: A trap tears down on INT or TERM. `--cleanup` clears it by hand now.
-	- Test case: None.
+	- Reproduced [Bug]: Yes. Ctrl+C during `e2fsck` let the script go on mounting and run the scan. A hangup during it left a mount and the loop device behind.
+	- Actual cause [Bug]: No trap was set while mounting. `e2fsck` catches Ctrl+C and exits, so the script took it as done and went on.
+	- Actual fix [Bug]: While mounting, INT, TERM and HUP unmount, detach, and stop with the snapshots kept for `--resume`. The trap is cleared before the scan, so Ctrl+C still goes to `tukfs-hash` there. The log's `tee` ignores hangups, so the cleanup's output doesn't kill the script.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: Ctrl+C and a hangup during `e2fsck`. Before the fix the scan ran, or a mount and a loop device stayed. After, both stop with exit 130 or 129, with no mounts or loop devices left and the snapshots kept. `--resume` afterward mounts and scans. Lint passes.
+	- Note: That a real `e2fsck` exits 32 on Ctrl+C, and isn't killed by it, is from its docs and wasn't checked here.
+	- Swept: Snapshot taking has its own traps, fixed under 2026101406340911. The scan and the end-of-run teardown are unchanged.
+	- Acceptance signoff: Self-closed: the expected fix as written, test failed before and passes after.
+	- Closed: 20261014-080916
 
 - `diffs` uses a btrfs snapshot's current generation, so changes could be missed if a balance touched the older snapshot.
 	- ID: 2026101406340927
@@ -511,13 +546,24 @@
 - `vm-scan` names mount folders and fsck logs after the image file name alone, so 2 images with one name in different subfolders of a dataset share them.
 	- ID: 2026101414100001
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on signoff
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-141000
 	- Opened by: backlog round
 	- Origin: `tukfs-hash_vm-scan-b23.bash`, `attach_all`. Read only; no dataset has 2 such images today.
 	- Expected behavior [Bug]: Build the name from the image's path within its dataset.
 	- Related IDs: 2026101406340904
+	- Reproduced [Bug]: Yes. `a/disk.img` and `b/disk.img` in one dataset got one mount folder and one fsck log.
+	- Actual fix [Bug]:
+		- Mount folders are named from the image's path within its dataset, with `/` and other odd characters turned into `_`. A name already taken in the run gets `_2`, `_3` and so on.
+		- fsck logs go in a folder per dataset, named from the same name and the partition.
+		- An image at the top of its dataset keeps the name it had.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: 4 images whose names clean up the same. Before the fix they got 2 mount folders and 2 logs, after it 4 of each. Lint passes.
+	- Note: Unverified: a clash's suffix follows `find` order, which should be the same on `--resume`, since it reads the same snapshot.
+	- Swept: Datasets sit one level under the 2 parents, so their cleaned names can't clash. The `tr` line is still the only character set in the 3 scripts.
+	- Acceptance signoff: Needs signoff. The fsck logs moved into a folder per dataset, past what the item asked.
 
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
