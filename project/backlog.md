@@ -60,7 +60,31 @@
 		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
 	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
 	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
+	- Progress log:
+		- 2026-10-14 12:16, first root run. Nothing was scanned. vm925w was mid restart for a Windows update, set at 12:14, so it never read as off. After 5 minutes the script gave up with no snapshots.
+		- The way out worked. vmFreeBSD was started again, vmDebARM64 was never frozen, and vm925w was left running. Uptimes and freeze status checked after.
+		- Still needs a run that gets to the snapshot.
 	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
+
+- vmFreeBSD is shut down for the snapshot, though its agent can freeze.
+	- ID: 2026101416080000
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-160800
+	- Opened by: vm-scan root run
+	- Related IDs: 2026101406340911
+	- Note: `tukfs-hash_vm-scan-b23.bash` picks freeze or shutdown by `domfsinfo`. FreeBSD's agent has no `guest-get-fsinfo`, but lists `guest-fsfreeze-freeze` as enabled in `guest-info`. Asking `guest-info` would let it freeze.
+
+- vm-scan writes nothing to its log until the snapshots are taken.
+	- ID: 2026101416080001
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-160800
+	- Opened by: vm-scan root run
+	- Related IDs: 2026101406340911
+	- Note: A run that gives up while shutting guests down leaves only terminal output, so what it said about each guest is lost. Logging should start before the guests are touched.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
