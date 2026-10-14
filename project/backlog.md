@@ -72,73 +72,6 @@
 	- Swept: The skip at `one_file` is the only place the xattr date is trusted. The mismatch check and the `only_date` write use the size and time alone, which is right for a compare. The DB skip already checks the inode.
 	- Acceptance signoff: Needs signoff. It changes what's written to disk, and the checksum in the new name goes past the decision.
 
-- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
-	- ID: 2026101406340913
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A real `vm-scan` run as root.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
-	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
-	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
-	- Actual fix [Bug]: Exit 4 keeps the snapshots and also leaves the images mounted, since the flagged paths are under the mounts. It says so and points at `--cleanup`. The DB snapshot is still taken. Exit 0 and a stopped run are as before. The script's header and the root steps' `vm-scan` line say the same.
-	- Branch: scriptfix (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified: On exit 4 it unmounted and destroyed the snapshots before the fix, and does neither after. Exit 0 still drops both, and exit 2 still unmounts and keeps the snapshots. Lint passes.
-	- Swept: The main scan wrapper keeps nothing temporary, so it has no twin.
-	- Acceptance signoff: Waiting: leaving the mounts in place goes past what the item asked.
-
-- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
-	- ID: 2026101406340925
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
-	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
-	- Actual fix [Bug]:
-		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
-		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
-	- Branch: scriptfix (backlog only; the scripts are outside the repo)
-	- Test case: None in the repo, since the scripts live outside it.
-	- Verified:
-		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
-		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
-		- Lint passes on both.
-	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
-	- Acceptance signoff: Waiting: the fix picked one of the 2 ways the item gave.
-
-- A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
-	- ID: 2026101406340901
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`. Confirmed, reproduced with the release build.
-	- Steps to reproduce [Bug]:
-		- Scan a tree. Flip a byte in a file and put its mtime back. Scan with `--since` tomorrow: exit 4 with `b3-xattr-mismatch` and `b3-db-mismatch`.
-		- Scan again the same way: "verified", no events, exit 0.
-	- Incorrect behavior [Bug]:
-		- `one_file` in `src/scan.rs` (about line 795) sends `Hashed` with the new digest after a mismatch, so `paths.file_id` points at the bad content.
-		- It then calls `xattr::write_b3` with `only_date` false (about line 812), so the xattr digest is replaced too.
-		- The good digest survives only as text in the one event. `report` shows the latest run by default, so it shows nothing.
-		- `src/db.rs` lines 7-9 say a damaged file is refused and left alone, which the code doesn't do.
-	- Expected behavior [Bug]: A mismatch leaves the xattr and the DB digest as they were, and every later run keeps reporting the file until someone resolves it.
-	- Actual cause [Bug]: The mismatch paths fall through to the normal "hashed" path.
-	- Progress log:
-		- The xattr is written as soon as the event is queued, but the event commits up to about 1 s later, or longer with the 65536-message channel backed up. A second Ctrl+C (exit 130 in `main.rs`), the OOM killer, power loss, or a writer error in that gap leaves the bad digest on the file and no event anywhere.
-		- No `POSIX_FADV_DONTNEED` before the read, only after. A page-cache scribble (seen on b23 on 2026-10-03) is hashed as if it were the disk copy.
-	- Probable fix [Bug]:
-		- Keep the stored values on any mismatch. Drop the file's cached pages before reading, and read again after a mismatch with the cache dropped, to tell a cache-only fault from one on disk.
-		- Some way to accept a file as changed on purpose is needed, or it gets reported forever. An `accept PATH` command, or a flag on the event, would both do.
-	- Note: Blocks the b23 check.
-	- Test case: None yet. Extend step 3 of `tests/integration.bash` with a second rescan that still reports the file.
-
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
 	- Type: Bug
@@ -180,6 +113,95 @@
 	- Note: The inode walk reads every folder of the old snapshot when a find-new pair has new files, which is most days on `/opt/bsnaps/@`. Only folder reads and a stat per folder, but it adds time per pair.
 	- Swept: The 3 parsers and `run` are the only input paths. `--list` read with `map_while(Result::ok)`, which stopped quietly at a read error, and now reads the file whole. The stat of `--old` was the twin of `--new`'s and is fixed with it. `--old` and `--new` that aren't folders are refused up front.
 	- Acceptance signoff: Needs signoff. It adds an exit code and changes output lines and the summary.
+
+- `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
+	- ID: 2026101406340913
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A real `vm-scan` run as root.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, end of script. Confirmed from the code.
+	- Incorrect behavior [Bug]: Exit 4 runs `drop_snapshots`. The flagged paths under `/mnt/ro/tukfs-vm` are gone, and a second read is how a misread is told from damage on disk.
+	- Expected behavior [Bug]: Keep the snapshots on exit 4 and say how to drop them.
+	- Actual fix [Bug]: Exit 4 keeps the snapshots and also leaves the images mounted, since the flagged paths are under the mounts. It says so and points at `--cleanup`. The DB snapshot is still taken. Exit 0 and a stopped run are as before. The script's header and the root steps' `vm-scan` line say the same.
+	- Branch: scriptfix (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified: On exit 4 it unmounted and destroyed the snapshots before the fix, and does neither after. Exit 0 still drops both, and exit 2 still unmounts and keeps the snapshots. Lint passes.
+	- Swept: The main scan wrapper keeps nothing temporary, so it has no twin.
+	- Acceptance signoff: Waiting: leaving the mounts in place goes past what the item asked.
+
+- The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
+	- ID: 2026101406340925
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_scan-b23.bash`. Confirmed with `findmnt`: `/var/lib/containerd` is part of `/`, and `TinyCore64/disk1.img` sits in the `zf10/vm` parent dataset.
+	- Expected behavior [Bug]: `--exclude` both, or have `vm-scan` cover the parent dataset's images too.
+	- Actual fix [Bug]:
+		- The main scan excludes `/var/lib/containerd`, and leaves out `zf10/vm` itself as it already did `zf13/secure_common/vm`.
+		- `vm-scan` now takes both parent datasets along with their children, so TinyCore64's image is snapshotted and read there.
+	- Branch: scriptfix (backlog only; the scripts are outside the repo)
+	- Test case: None in the repo, since the scripts live outside it.
+	- Verified:
+		- In the main scan's root list, `zf10/vm` was a root and containerd wasn't excluded before the fix; neither after. `--plan` still runs.
+		- `vm-scan`'s dataset list against the live pools now has both parents. The parent is snapshotted in the same command as its child and becomes a root.
+		- Lint passes on both.
+	- Swept: `zf13/secure_common/vm` itself was in neither scan. It is now in `vm-scan`. `/var/lib/libvirt/images` is empty.
+	- Acceptance signoff: Waiting: the fix picked one of the 2 ways the item gave.
+
+- A path argument that isn't valid UTF-8 panics.
+	- ID: 2026101406340924
+	- Type: Bug
+	- Status: Waiting on signoff
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
+	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
+	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
+	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
+	- Actual fix [Bug]:
+		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
+		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
+		- README and help text say so.
+	- Branch: snapdiff2
+	- Commit: `cede460`
+	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
+	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
+	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
+	- Acceptance signoff: Needs signoff. It changes how names print.
+
+- A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
+	- ID: 2026101406340901
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `f05c368`. Confirmed, reproduced with the release build.
+	- Steps to reproduce [Bug]:
+		- Scan a tree. Flip a byte in a file and put its mtime back. Scan with `--since` tomorrow: exit 4 with `b3-xattr-mismatch` and `b3-db-mismatch`.
+		- Scan again the same way: "verified", no events, exit 0.
+	- Incorrect behavior [Bug]:
+		- `one_file` in `src/scan.rs` (about line 795) sends `Hashed` with the new digest after a mismatch, so `paths.file_id` points at the bad content.
+		- It then calls `xattr::write_b3` with `only_date` false (about line 812), so the xattr digest is replaced too.
+		- The good digest survives only as text in the one event. `report` shows the latest run by default, so it shows nothing.
+		- `src/db.rs` lines 7-9 say a damaged file is refused and left alone, which the code doesn't do.
+	- Expected behavior [Bug]: A mismatch leaves the xattr and the DB digest as they were, and every later run keeps reporting the file until someone resolves it.
+	- Actual cause [Bug]: The mismatch paths fall through to the normal "hashed" path.
+	- Progress log:
+		- The xattr is written as soon as the event is queued, but the event commits up to about 1 s later, or longer with the 65536-message channel backed up. A second Ctrl+C (exit 130 in `main.rs`), the OOM killer, power loss, or a writer error in that gap leaves the bad digest on the file and no event anywhere.
+		- No `POSIX_FADV_DONTNEED` before the read, only after. A page-cache scribble (seen on b23 on 2026-10-03) is hashed as if it were the disk copy.
+	- Probable fix [Bug]:
+		- Keep the stored values on any mismatch. Drop the file's cached pages before reading, and read again after a mismatch with the cache dropped, to tell a cache-only fault from one on disk.
+		- Some way to accept a file as changed on purpose is needed, or it gets reported forever. An `accept PATH` command, or a flag on the event, would both do.
+	- Note: Blocks the b23 check.
+	- Test case: None yet. Extend step 3 of `tests/integration.bash` with a second rescan that still reports the file.
 
 - A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
 	- ID: 2026101406340906
@@ -372,28 +394,6 @@
 		- `O_NOFOLLOW` covers only the last path part. A directory renamed to a symlink between `readdir` and `open` sends the root process elsewhere, where it reads files and sets `user.*` xattrs.
 	- Expected behavior [Bug]: Stay on the root's device, and open files relative to a directory fd with `openat`.
 	- Test case: None yet.
-
-- A path argument that isn't valid UTF-8 panics.
-	- ID: 2026101406340924
-	- Type: Bug
-	- Status: Waiting on signoff
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `f05c368`, `main.rs` about line 70. Confirmed from the code.
-	- Incorrect behavior [Bug]: `std::env::args()` panics with exit 101. `snapdiff` and `report` print lossy names, so 2 different names can look the same.
-	- Expected behavior [Bug]: Use `args_os`, and print names with escapes.
-	- Reproduced [Bug]: Yes. Step 10 of `tests/integration.bash` against the old build: exit 101 with a panic on a `\xff` argument, a name with a tab printed raw and split the column, and `caf\xe9` printed as a replacement character.
-	- Actual fix [Bug]:
-		- Arguments are read with `args_os`. Paths go through as bytes, `--threads DIR=N` splits on bytes, and a number or date that isn't text is an error.
-		- New `escape_name` prints a backslash as `\\`, and control characters and bytes that aren't UTF-8 as `\xHH`. `snapdiff`, `report`, `plan`, error messages for unknown options and commands, and the stored run arguments use it.
-		- README and help text say so.
-	- Branch: snapdiff2
-	- Commit: `cede460`
-	- Test case: Step 10 of `tests/integration.bash`: a `\xff` argument, and a tab name and a non-UTF-8 name in `snapdiff` and `report` output. The non-UTF-8 name is skipped on ZFS. Unit test `escapes_names`.
-	- Verified: Step 10 failed its 3 checks against the old build and passes after, on ext4 and ZFS.
-	- Swept: `from_utf8_lossy` and `display()` across `src/`. `path_text`, used only by `report`, and `plan` now escape. The roots `scan` prints at its start still use `display()`; `src/scan.rs` was left alone this round. Other `display()` calls are in error text, and `mounts.rs` reads tool output, not names.
-	- Acceptance signoff: Needs signoff. It changes how names print.
 
 - `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
 	- ID: 2026101406340926
