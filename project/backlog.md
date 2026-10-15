@@ -29,66 +29,6 @@
 
 ## Issues
 
-- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
-	- ID: 2026101406340911
-	- Type: Bug
-	- Status: Waiting for testing
-	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-063409
-	- Opened by: code review
-	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
-	- Incorrect behavior [Bug]:
-		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
-		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
-		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
-		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
-	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
-	- Note: Blocks the b23 check.
-	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
-	- Actual fix [Bug]:
-		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
-		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
-		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
-		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
-		- `--shutdown` shuts all guests down together as well.
-	- Branch: vmscan (backlog only; the script is outside the repo)
-	- Test case: None in the repo, since the script lives outside it.
-	- Verified:
-		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
-		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
-		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
-	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
-	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
-	- Progress log:
-		- 2026-10-14 12:16, first root run. Nothing was scanned. vm925w was mid restart for a Windows update, set at 12:14, so it never read as off. After 5 minutes the script gave up with no snapshots.
-		- The way out worked. vmFreeBSD was started again, vmDebARM64 was never frozen, and vm925w was left running. Uptimes and freeze status checked after.
-		- Still needs a run that gets to the snapshot.
-		- 2026-10-14 17:56, guests are no longer frozen at all, per 2026101417560000. The freeze half of this fix is gone with it. The shutdown, put-back and hangup handling stay.
-	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
-
-- vm-scan shuts every guest down for the snapshot, under the test host lock.
-	- ID: 2026101417560000
-	- Type: Enhancement
-	- Status: Waiting for testing
-	- Needs external testing: The b23 root run of `vm-scan`, with vm925w, vmDebARM64 and vmFreeBSD running.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261014-175600
-	- Opened by: me
-	- Related IDs: 2026101406340911
-	- Requirements [Feature]:
-		- "1) Ask for a lock, 2) Shut the VM down, 3) Take a snapshot, 4) Bring the VM back up, 5) Work with that snapshot"
-		- Windows updates get paused for 5 weeks before a run, so one can't turn a shutdown into a restart.
-	- Decisions:
-		- No freezing. A shutdown leaves nothing caught mid-write, inside programs too, and costs a few minutes of downtime per run.
-		- The lock is taken only for guests it knows, by name or name plus a suffix, like vm925w-iommu. It waits as long as a test session holds one.
-		- It's taken as the user who ran sudo, since a root-owned lock file would shut every agent session out.
-		- Without sudo, or without the lock script, it warns and goes on.
-		- `--shutdown` is still accepted and does nothing.
-	- Actual fix: Freeze and thaw code removed. The lock is held from before the first shutdown until every guest is started again.
-	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
-	- Acceptance signoff: Waits on the root run, with ...11.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -449,6 +389,45 @@
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
 
+- `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
+	- ID: 2026101406340911
+	- Type: Bug
+	- Status: Done
+	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-063409
+	- Opened by: code review
+	- Origin: `tukfs-hash_vm-scan-b23.bash`, `take_snapshots` and `put_back`. vm925w having no agent channel confirmed with `dumpxml`. The `/dev/full` case reproduced. The rest are plausible.
+	- Incorrect behavior [Bug]:
+		- Guests are handled one at a time. One that froze stays frozen while a later one gets up to 5 minutes to shut down. vm925w has no guest agent, so it always takes the shutdown path.
+		- If `domfsfreeze` times out at 30 s but the freeze completes in the guest, the thaw that follows hides its errors and the guest is dropped from `frozen[]`. A frozen Linux guest can't finish a shutdown, so after 5 minutes the script exits and nothing thaws it.
+		- A guest still shutting down at the timeout or a Ctrl+C is not in `stopped[]` yet, so nothing starts it again.
+		- If the terminal hangs up, the `echo` after `virsh start` fails, and `set -e` in the EXIT trap stops `put_back` before the other guests.
+	- Expected behavior [Bug]: Shut down the guests that need it first, then freeze the rest, snapshot, thaw, and start. Every guest touched is put back, whatever fails.
+	- Note: Blocks the b23 check.
+	- Reproduced [Bug]: Yes. A guest stayed frozen while another shut down. A freeze that timed out, followed by a thaw that failed once, left the guest frozen and half shut down. A guest still shutting down at the 5 minute mark or at Ctrl+C was left off. A hangup during the snapshot left a stopped guest off.
+	- Actual fix [Bug]:
+		- Guests are sorted first. One whose agent answers is frozen, and the rest are shut down. The shutdowns all go at once, and freezing starts once they're all off.
+		- A guest that fails to freeze gets everything thawed, then is shut down, and the rest are frozen again. A guest leaves the frozen list only on a good thaw. Thaws are tried 3 times.
+		- A guest is listed for a restart before it's asked to shut down. On the way out, one still shutting down gets up to 2 minutes to finish and is then started. One that doesn't is named, with the command to start it.
+		- Putting guests back ignores Ctrl+C and hangups, and goes on past failed writes. A hangup before the snapshot puts them back too.
+		- `--shutdown` shuts all guests down together as well.
+	- Branch: vmscan (backlog only; the script is outside the repo)
+	- Test case: None in the repo, since the script lives outside it.
+	- Verified:
+		- 7 cases: mixed guests, a freeze that hangs and then thaws on the second try, a failed freeze, a shutdown past 5 minutes, Ctrl+C during a shutdown, a hangup during the snapshot, and a failed snapshot.
+		- Before the fix, 6 of them left a guest frozen while another shut down, or left one frozen or off. After, every guest ended running and thawed, and none was frozen while another shut down.
+		- `--shutdown`, and a thaw that never works, which warns with the command to run. Lint passes.
+	- Note: Unverified on live guests: how long libvirt holds a guest after a freeze or agent check times out, and whether vm925w's agent check fails fast.
+	- Swept: The mount phase had no trap, filed as 2026101406340926 and fixed with this. The end-of-run teardown already goes on past errors. Nothing else loops over guests.
+	- Progress log:
+		- 2026-10-14 12:16, first root run. Nothing was scanned. vm925w was mid restart for a Windows update, set at 12:14, so it never read as off. After 5 minutes the script gave up with no snapshots.
+		- The way out worked. vmFreeBSD was started again, vmDebARM64 was never frozen, and vm925w was left running. Uptimes and freeze status checked after.
+		- Still needs a run that gets to the snapshot.
+		- 2026-10-14 17:56, guests are no longer frozen at all, per 2026101417560000. The freeze half of this fix is gone with it. The shutdown, put-back and hangup handling stay.
+		- 2026-10-15 06:49, second root run. All 3 guests shut down together, the snapshots were taken, and all 3 were started again within a minute. The scan ran 4 h 52 m and ended with exit 4, keeping the mounts and snapshots.
+	- Acceptance signoff: Self-closed after the 2026-10-15 root run.
+
 - Nothing is written to NTFS, APFS or HFS+ from Linux.
 	- ID: 2026101409545200
 	- Type: Enhancement
@@ -473,6 +452,29 @@
 	- Note: There's no APFS or HFS+ driver here, so those rely on the type list test.
 	- Acceptance signoff: Self-closed: the requirement as given, tested.
 	- Closed: 20261014-095605
+
+- vm-scan shuts every guest down for the snapshot, under the test host lock.
+	- ID: 2026101417560000
+	- Type: Enhancement
+	- Status: Done
+	- Needs external testing: The b23 root run of `vm-scan`, with vm925w, vmDebARM64 and vmFreeBSD running.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-175600
+	- Opened by: me
+	- Related IDs: 2026101406340911
+	- Requirements [Feature]:
+		- "1) Ask for a lock, 2) Shut the VM down, 3) Take a snapshot, 4) Bring the VM back up, 5) Work with that snapshot"
+		- Windows updates get paused for 5 weeks before a run, so one can't turn a shutdown into a restart.
+	- Decisions:
+		- No freezing. A shutdown leaves nothing caught mid-write, inside programs too, and costs a few minutes of downtime per run.
+		- The lock is taken only for guests it knows, by name or name plus a suffix, like vm925w-iommu. It waits as long as a test session holds one.
+		- It's taken as the user who ran sudo, since a root-owned lock file would shut every agent session out.
+		- Without sudo, or without the lock script, it warns and goes on.
+		- `--shutdown` is still accepted and does nothing.
+	- Actual fix: Freeze and thaw code removed. The lock is held from before the first shutdown until every guest is started again.
+	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
+	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
+	- Acceptance signoff: Self-closed after the root run.
 
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
 	- ID: 2026101406340915
@@ -611,6 +613,27 @@
 	- Swept: No other step resets anything.
 	- Acceptance signoff: Self-closed: the expected fix, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- Files ntfs3 can't decode are reported as read errors, exit 4, the same as damage.
+	- ID: 2026101513014365
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261015-130143
+	- Opened by: me
+	- Related IDs: 2026101417560000
+	- Origin: 2026-10-15 vm-scan root run. 92018 `read-error` events, no mismatches.
+	- Incorrect behavior [Bug]:
+		- Every one was "Operation not supported" at byte 0, on vm925w's 2 NTFS drives.
+		- On disk1 they're Windows-compressed system files, mostly under `Windows` and `Program Files`. On disk2 they're EFS-encrypted Store app files, mostly Minecraft's.
+		- Debian's kernel builds ntfs3 without its compression support, and no Linux driver reads EFS without the key.
+	- Expected behavior [Bug]: A read the driver can't do is unchecked, exit 8. Damage stays exit 4.
+	- Reproduced [Bug]: Yes. `head` on a flagged file gets the same error. A sample of 400 all had the compressed or encrypted flag.
+	- Actual fix [Bug]: New event `read-unsupported` for that error, exit 8, counted under other-err. design.md's exit table has it.
+	- Branch: unsupported
+	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
+	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
+	- Acceptance signoff: Self-closed.
 
 - Should the main scan write xattrs on Dropbox files?
 	- ID: 2026101406340929

@@ -91,13 +91,15 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	| Event                                                                                       | Bit
 	| :---                                                                                        | :---
 	| `b3-xattr-mismatch`, `b2-rmlint-mismatch`, `b3-db-mismatch`, `cache-mismatch`, `read-error` | 4
-	| `dir-error`, `stat-error`, `open-error`, `db-error`                                         | 8
+	| `read-unsupported`, `dir-error`, `stat-error`, `open-error`, `db-error`                     | 8
 	| `unstable`, `xattr-error`                                                                   | none
 	| a kind this version doesn't know                                                            | 8
 
 - `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make it mean nothing. An attribute that can't be written comes after the file was checked.
 
 - A folder that can't be listed, or stops listing part way, is a `dir-error`. The files in it aren't seen at all, so there's nothing else to count them by.
+
+- A file the filesystem driver says it can't read is a `read-unsupported`. Debian's ntfs3 says that for every file Windows compresses or encrypts, which is most of a Windows system drive. Nothing was read, so it counts as unchecked.
 
 ## Gone
 
