@@ -49,6 +49,7 @@ pub enum Kind {
 	DbMismatch,
 	CacheMismatch,
 	ReadError,
+	Unsupported,
 	Unstable,
 	DirError,
 	StatError,
@@ -58,12 +59,13 @@ pub enum Kind {
 }
 
 impl Kind {
-	const ALL: [Kind; 11] = [
+	const ALL: [Kind; 12] = [
 		Kind::XattrMismatch,
 		Kind::RmlintMismatch,
 		Kind::DbMismatch,
 		Kind::CacheMismatch,
 		Kind::ReadError,
+		Kind::Unsupported,
 		Kind::Unstable,
 		Kind::DirError,
 		Kind::StatError,
@@ -79,6 +81,7 @@ impl Kind {
 			Kind::DbMismatch => "b3-db-mismatch",
 			Kind::CacheMismatch => "cache-mismatch",
 			Kind::ReadError => "read-error",
+			Kind::Unsupported => "read-unsupported",
 			Kind::Unstable => "unstable",
 			Kind::DirError => "dir-error",
 			Kind::StatError => "stat-error",
@@ -98,7 +101,11 @@ impl Kind {
 			| Kind::DbMismatch
 			| Kind::CacheMismatch
 			| Kind::ReadError => 4,
-			Kind::DirError | Kind::StatError | Kind::OpenError | Kind::DbError => 8,
+			Kind::Unsupported
+			| Kind::DirError
+			| Kind::StatError
+			| Kind::OpenError
+			| Kind::DbError => 8,
 			Kind::Unstable | Kind::XattrError => 0,
 		}
 	}
@@ -1151,6 +1158,12 @@ pub fn read_sums(
 fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 	match fail {
 		ReadFail::Stopped => {}
+		// The driver can't decode it, like ntfs3 with a Windows-compressed
+		// or EFS file. Nothing was read, so nothing's known.
+		ReadFail::Io(e, at) if e.raw_os_error() == Some(libc::EOPNOTSUPP) => {
+			st.other_err.fetch_add(1, Relaxed);
+			event(sh, Kind::Unsupported, path, format!("{e} at byte {at}"));
+		}
 		// On ZFS an EIO here is a block that failed its checksum with no
 		// good copy left. That is the same news as a mismatch.
 		ReadFail::Io(e, at) => {
@@ -1607,6 +1620,7 @@ mod tests {
 		assert_eq!(exit_bits(&c(&["cache-mismatch"])), 4);
 		assert_eq!(exit_bits(&c(&["read-error", "b3-db-mismatch"])), 4);
 		assert_eq!(exit_bits(&c(&["dir-error"])), 8);
+		assert_eq!(exit_bits(&c(&["read-unsupported"])), 8);
 		assert_eq!(exit_bits(&c(&["db-error", "b2-rmlint-mismatch"])), 12);
 		assert_eq!(exit_bits(&c(&["from-a-newer-version"])), 8);
 		assert_eq!(exit_bits(&[("dir-error".into(), 0)]), 0);
@@ -1666,6 +1680,29 @@ mod tests {
 		assert!(done && stopped);
 		assert_eq!(why.len(), 2, "{why:?}");
 		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	// ntfs3 answers EOPNOTSUPP for compressed and EFS files. That's not damage.
+	#[test]
+	fn unsupported_read_is_not_damage() {
+		let (sh, rx) = test_shared(PathBuf::from("/nowhere"));
+		let st = Stats::default();
+		let p = Path::new("/x/vss_ps.dll");
+		let kind = |fail| {
+			report_fail(&sh, &st, p, fail);
+			match rx.try_recv() {
+				Ok(Msg::Event { kind, .. }) => kind,
+				_ => panic!("no event"),
+			}
+		};
+		let eio = io::Error::from_raw_os_error(libc::EIO);
+		let nope = io::Error::from_raw_os_error(libc::EOPNOTSUPP);
+		assert_eq!(kind(ReadFail::Io(eio, 4096)), "read-error");
+		assert_eq!(kind(ReadFail::Io(nope, 0)), "read-unsupported");
+		assert_eq!(
+			(st.read_err.load(Relaxed), st.other_err.load(Relaxed)),
+			(1, 1)
+		);
 	}
 
 	#[test]
