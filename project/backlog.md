@@ -64,27 +64,30 @@
 		- 2026-10-14 12:16, first root run. Nothing was scanned. vm925w was mid restart for a Windows update, set at 12:14, so it never read as off. After 5 minutes the script gave up with no snapshots.
 		- The way out worked. vmFreeBSD was started again, vmDebARM64 was never frozen, and vm925w was left running. Uptimes and freeze status checked after.
 		- Still needs a run that gets to the snapshot.
+		- 2026-10-14 17:56, guests are no longer frozen at all, per 2026101417560000. The freeze half of this fix is gone with it. The shutdown, put-back and hangup handling stay.
 	- Acceptance signoff: Needs signoff after the root run. The 2 minute wait and the agent check are choices the item didn't spell out.
 
-- vmFreeBSD is shut down for the snapshot, though its agent can freeze.
-	- ID: 2026101416080000
+- vm-scan shuts every guest down for the snapshot, under the test host lock.
+	- ID: 2026101417560000
 	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-160800
-	- Opened by: vm-scan root run
+	- Status: Waiting for testing
+	- Needs external testing: The b23 root run of `vm-scan`, with vm925w, vmDebARM64 and vmFreeBSD running.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261014-175600
+	- Opened by: me
 	- Related IDs: 2026101406340911
-	- Note: `tukfs-hash_vm-scan-b23.bash` picks freeze or shutdown by `domfsinfo`. FreeBSD's agent has no `guest-get-fsinfo`, but lists `guest-fsfreeze-freeze` as enabled in `guest-info`. Asking `guest-info` would let it freeze.
-
-- vm-scan writes nothing to its log until the snapshots are taken.
-	- ID: 2026101416080001
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-160800
-	- Opened by: vm-scan root run
-	- Related IDs: 2026101406340911
-	- Note: A run that gives up while shutting guests down leaves only terminal output, so what it said about each guest is lost. Logging should start before the guests are touched.
+	- Requirements [Feature]:
+		- "1) Ask for a lock, 2) Shut the VM down, 3) Take a snapshot, 4) Bring the VM back up, 5) Work with that snapshot"
+		- Windows updates get paused for 5 weeks before a run, so one can't turn a shutdown into a restart.
+	- Decisions:
+		- No freezing. A shutdown leaves nothing caught mid-write, inside programs too, and costs a few minutes of downtime per run.
+		- The lock is taken only for guests it knows, by name or name plus a suffix, like vm925w-iommu. It waits as long as a test session holds one.
+		- It's taken as the user who ran sudo, since a root-owned lock file would shut every agent session out.
+		- Without sudo, or without the lock script, it warns and goes on.
+		- `--shutdown` is still accepted and does nothing.
+	- Actual fix: Freeze and thaw code removed. The lock is held from before the first shutdown until every guest is started again.
+	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
+	- Acceptance signoff: Waits on the root run, with ...11.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -890,6 +893,20 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
 
+- vm-scan writes nothing to its log until the snapshots are taken.
+	- ID: 2026101416080001
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-160800
+	- Opened by: vm-scan root run
+	- Related IDs: 2026101406340911
+	- Note: A run that gives up while shutting guests down leaves only terminal output, so what it said about each guest is lost. Logging should start before the guests are touched.
+	- Actual fix: Logging starts right after the database lock check, before any guest is touched. The log is handed to the user who ran sudo up front.
+	- Test case: Test bed cases `slowstop` and `lockbusy` check the log has what was said about the guests. Both fail on the script before.
+	- Acceptance signoff: Self-closed: the log is the record of a root run, and a run that gives up early is the one that most needs it.
+	- Closed: 20261014-175600
+
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
 	- Type: Feature
@@ -962,6 +979,18 @@
 	- Verified: No child dataset sets `xattr` itself, apart from the tukfs one, which is `on`. Lint passes.
 	- Acceptance signoff: Self-closed: comment fix per the decision.
 	- Closed: 20261014-065308
+
+- vmFreeBSD is shut down for the snapshot, though its agent can freeze.
+	- ID: 2026101416080000
+	- Type: Enhancement
+	- Status: Moot
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-160800
+	- Opened by: vm-scan root run
+	- Related IDs: 2026101406340911
+	- Note: `tukfs-hash_vm-scan-b23.bash` picks freeze or shutdown by `domfsinfo`. FreeBSD's agent has no `guest-get-fsinfo`, but lists `guest-fsfreeze-freeze` as enabled in `guest-info`. Asking `guest-info` would let it freeze.
+	- Superseded by ID: 2026101417560000
+	- Closed: 20261014-175600
 
 ## Template
 
