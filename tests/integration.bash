@@ -71,8 +71,8 @@ check "no attributes in a git work tree" "$(xget "$tree/repo/src/main.c" user.bl
 check "no attributes inside .git" "$(xget "$tree/repo/.git/objects/ab" user.blake3.b64u)" ""
 check "git files still recorded" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/repo/%'")" 2
 check "non-UTF-8 name stored as blob" "$(q "SELECT count(*) FROM paths WHERE typeof(path) = 'blob'")" "$odd"
-check "current rmlint blake2b verified" "$(grep -o 'b2 [0-9]*' "$work/out.txt" | head -1)" "b2 1"
-check "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2 IS NOT NULL")" 1
+check "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "$work/out.txt" | head -1)" "b2b 1"
+check "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
 check "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '$tree/%'")" 0
 check "no events" "$(q 'SELECT count(*) FROM events')" 0
 check "file handed back readable" "$(stat -c %U "$db")" "$(id -un)"
@@ -106,7 +106,7 @@ check "corruption exit code" "$rc" 4
 # check "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 2
 check "xattr mismatch found" "$(q "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "$tree/big.bin $tree/rm.txt $tree/sub dir/big-link.bin"
 check "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 3
-check "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2-rmlint-mismatch'")" "$tree/rm.txt"
+check "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2b-rmlint-mismatch'")" "$tree/rm.txt"
 "$bin" report --db "$db" > "$work/report.txt"
 expect "report lists it" "report misses big.bin" grep -q $'^b3-xattr-mismatch\t'"$tree/big.bin" "$work/report.txt"
 check "unchanged attributes keep their digest" "$(xget "$tree/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
@@ -471,18 +471,18 @@ setfattr -n user.rmlint.blake2b.mtime -v 1000.5 "$rd/two"
 rdb="$work/db/rd.sqlite"
 rscan() { local rc=0; "$bin" scan --db "$rdb" --root "$rd" --progress 3600 --since "$tomorrow" "$@" > "$work/rd.txt" 2>&1 || rc=$?; echo "$rc"; }
 xhex() { getfattr --only-values -n "$2" "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
-b2hex() { printf '%s' "$(b2sum "$1" | cut -d' ' -f1)" | od -An -tx1 | tr -d ' \n'; echo 00; }
+b2bhex() { printf '%s' "$(b2sum "$1" | cut -d' ' -f1)" | od -An -tx1 | tr -d ' \n'; echo 00; }
 check "rmlint: plain scan" "$(rscan)" 0
 check "rmlint: none written without the flag" "$(xget "$rd/one" user.rmlint.blake2b.mtime)" ""
-check "rmlint: none in the database either" "$(sqlite3 "$rdb" 'SELECT count(*) FROM files WHERE b2 IS NOT NULL')" 0
+check "rmlint: none in the database either" "$(sqlite3 "$rdb" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 0
 check "rmlint: flagged scan" "$(rscan --rmlint)" 0
-check "rmlint: checksum with its NUL" "$(xhex "$rd/one" user.rmlint.blake2b.cksum)" "$(b2hex "$rd/one")"
+check "rmlint: checksum with its NUL" "$(xhex "$rd/one" user.rmlint.blake2b.cksum)" "$(b2bhex "$rd/one")"
 check "rmlint: time as rmlint writes it" "$(xget "$rd/one" user.rmlint.blake2b.mtime)" "1620310089.1234567"
-check "rmlint: stale set replaced" "$(xhex "$rd/two" user.rmlint.blake2b.cksum) $(xget "$rd/two" user.rmlint.blake2b.mtime)" "$(b2hex "$rd/two") 915177600"
+check "rmlint: stale set replaced" "$(xhex "$rd/two" user.rmlint.blake2b.cksum) $(xget "$rd/two" user.rmlint.blake2b.mtime)" "$(b2bhex "$rd/two") 915177600"
 check "rmlint: none in a git work tree" "$(xget "$rd/repo/g" user.rmlint.blake2b.mtime)" ""
-check "rmlint: every file's blake2b stored" "$(sqlite3 "$rdb" 'SELECT count(*) FROM files WHERE b2 IS NOT NULL')" 3
+check "rmlint: every file's blake2b stored" "$(sqlite3 "$rdb" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 3
 check "rmlint: counted" "$(grep -o 'rmlint [0-9]*' "$work/rd.txt" | head -1)" "rmlint 2"
-check "rmlint: next scan verifies them" "$(rscan --rmlint) $(grep -o 'b2 [0-9]*' "$work/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "$work/rd.txt" | head -1)" "0 b2 2 rmlint 0"
+check "rmlint: next scan verifies them" "$(rscan --rmlint) $(grep -o 'b2b [0-9]*' "$work/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "$work/rd.txt" | head -1)" "0 b2b 2 rmlint 0"
 if command -v rmlint > /dev/null; then
 	# rmlint hashes only files that share a size, so a pair.
 	rp="$work/rp"; mkdir -p "$rp"

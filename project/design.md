@@ -90,7 +90,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 	| Event                                                                                       | Bit
 	| :---                                                                                        | :---
-	| `b3-xattr-mismatch`, `b2-rmlint-mismatch`, `b3-db-mismatch`, `cache-mismatch`, `read-error` | 4
+	| `b3-xattr-mismatch`, `b2b-rmlint-mismatch`, `b3-db-mismatch`, `cache-mismatch`, `read-error` | 4
 	| `read-unsupported`, `dir-error`, `stat-error`, `open-error`, `db-error`                     | 8
 	| `unstable`, `xattr-error`                                                                   | none
 	| a kind this version doesn't know                                                            | 8

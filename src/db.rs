@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-pub const SCHEMA: i64 = 3;
+pub const SCHEMA: i64 = 4;
 
 // Matches the dataset's recordsize, so a page write is one record write.
 const PAGE_SIZE: i64 = 16384;
@@ -37,7 +37,7 @@ CREATE TABLE files (
 	id    INTEGER PRIMARY KEY,
 	b3    BLOB NOT NULL UNIQUE,
 	bytes INTEGER NOT NULL,
-	b2    BLOB
+	b2b   BLOB
 );
 CREATE TABLE paths (
 	id        INTEGER PRIMARY KEY,
@@ -109,12 +109,18 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		.optional()
 		.map_err(e)?;
 	// 2 added runs.roots, for --resume. Older runs have none, and can't be
-	// resumed. 3 added runs.verify, so a resume keeps the run's mode.
+	// resumed. 3 added runs.verify, so a resume keeps the run's mode. 4 renamed
+	// b2 to b2b, so it reads as blake2b.
 	let step = match schema {
 		Some(1) => Some(("ALTER TABLE runs ADD COLUMN roots BLOB;", 2)),
 		Some(2) => Some((
 			"ALTER TABLE runs ADD COLUMN verify INTEGER NOT NULL DEFAULT 0;",
 			3,
+		)),
+		Some(3) => Some((
+			"ALTER TABLE files RENAME COLUMN b2 TO b2b;
+			UPDATE events SET kind = 'b2b-rmlint-mismatch' WHERE kind = 'b2-rmlint-mismatch';",
+			4,
 		)),
 		_ => None,
 	};
@@ -223,7 +229,7 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Resu
 pub struct Hashed {
 	pub path: Vec<u8>,
 	pub b3: [u8; 32],
-	pub b2: Option<[u8; 64]>,
+	pub b2b: Option<[u8; 64]>,
 	pub bytes: i64,
 	pub mtime_us: i64,
 	pub ino: i64,
@@ -249,14 +255,14 @@ pub fn apply(
 ) -> rusqlite::Result<()> {
 	match m {
 		Msg::Hashed(h) => {
-			let b2: Option<&[u8]> = h.b2.as_ref().map(|b| &b[..]);
+			let b2b: Option<&[u8]> = h.b2b.as_ref().map(|b| &b[..]);
 			let id: i64 = tx
 				.prepare_cached(
-					"INSERT INTO files (b3, bytes, b2) VALUES (?1, ?2, ?3)
-					ON CONFLICT(b3) DO UPDATE SET bytes = excluded.bytes, b2 = coalesce(excluded.b2, files.b2)
+					"INSERT INTO files (b3, bytes, b2b) VALUES (?1, ?2, ?3)
+					ON CONFLICT(b3) DO UPDATE SET bytes = excluded.bytes, b2b = coalesce(excluded.b2b, files.b2b)
 					RETURNING id",
 				)?
-				.query_row(params![&h.b3[..], h.bytes, b2], |r| r.get(0))?;
+				.query_row(params![&h.b3[..], h.bytes, b2b], |r| r.get(0))?;
 			tx.prepare_cached(
 				"INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run)
 				VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -381,7 +387,7 @@ mod tests {
 			tx.send(Msg::Hashed(Box::new(Hashed {
 				path,
 				b3: [d; 32],
-				b2: None,
+				b2b: None,
 				bytes: 3,
 				mtime_us: 9,
 				ino: 1,
@@ -416,7 +422,7 @@ mod tests {
 		Msg::Hashed(Box::new(Hashed {
 			path: path.to_vec(),
 			b3: [d; 32],
-			b2: None,
+			b2b: None,
 			bytes: 3,
 			mtime_us: 9,
 			ino: 1,
@@ -511,6 +517,7 @@ mod tests {
 		c.execute_batch(
 			"ALTER TABLE runs DROP COLUMN roots;
 			ALTER TABLE runs DROP COLUMN verify;
+			ALTER TABLE files RENAME COLUMN b2b TO b2;
 			INSERT INTO runs (started_us, cutoff_us, status) VALUES (1, 1, 'stopped');
 			UPDATE meta SET value = 1 WHERE key = 'schema';",
 		)
@@ -540,6 +547,7 @@ mod tests {
 		let c = Connection::open(&p).unwrap();
 		c.execute_batch(
 			"ALTER TABLE runs DROP COLUMN verify;
+			ALTER TABLE files RENAME COLUMN b2b TO b2;
 			INSERT INTO runs (started_us, cutoff_us, status, roots) VALUES (1, 1, 'stopped', x'2f61');
 			UPDATE meta SET value = 2 WHERE key = 'schema';",
 		)
@@ -554,6 +562,37 @@ mod tests {
 			})
 			.unwrap();
 		assert_eq!((roots, verify), (b"/a".to_vec(), 0));
+		close_rw(c).unwrap();
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn takes_schema_3_forward() {
+		let p = temp_db("schema3");
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		let c = Connection::open(&p).unwrap();
+		c.execute_batch(
+			"ALTER TABLE files RENAME COLUMN b2b TO b2;
+			INSERT INTO files (b3, bytes, b2) VALUES (x'01', 1, x'02');
+			INSERT INTO events (run_id, at_us, kind, path) VALUES (1, 1, 'b2-rmlint-mismatch', '/a'), (1, 1, 'read-error', '/b');
+			UPDATE meta SET value = 3 WHERE key = 'schema';",
+		)
+		.unwrap();
+		drop(c);
+		let c = open_rw(&p).unwrap();
+		assert!(!has_column(&c, "files", "b2").unwrap());
+		let kept: Vec<u8> = c
+			.query_row("SELECT b2b FROM files", [], |r| r.get(0))
+			.unwrap();
+		assert_eq!(kept, [2]);
+		let kinds: String = c
+			.query_row(
+				"SELECT group_concat(kind, ' ') FROM (SELECT kind FROM events ORDER BY path)",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(kinds, "b2b-rmlint-mismatch read-error");
 		close_rw(c).unwrap();
 		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}

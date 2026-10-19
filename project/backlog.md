@@ -647,7 +647,7 @@
 		- The b23 scan wrapper passes it.
 	- Decisions:
 		- The flag is `scan --rmlint`. Without it nothing changes.
-		- rmlint's set is written only where it's missing or its time is stale. A current one that disagrees is a `b2-rmlint-mismatch` and is left alone, like ours.
+		- rmlint's set is written only where it's missing or its time is stale. A current one that disagrees is a `b2b-rmlint-mismatch` and is left alone, like ours.
 		- Same rules as ours for where nothing is written: git work trees, `--no-xattr`, `--verify`, NTFS, APFS and HFS+. The database still gets the blake2b.
 		- Files skipped as read since `--since` aren't read, so they get it on the next run that reads them.
 		- `accept` still removes a current rmlint set that no longer matches. The next `--rmlint` scan writes a new one.
