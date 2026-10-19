@@ -29,6 +29,276 @@
 
 ## Issues
 
+- The release build uses thin LTO and 4 codegen units, and keeps its symbols.
+	- ID: 2026101916404100
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404105
+	- Requirements  [Feature]:
+		- Set `lto = true`, `codegen-units = 1` and `strip = true` in `[profile.release]`.
+		- Keep `panic = "unwind"`, with a comment. `guarded()` in `scan.rs` catches a worker's panic so the run is marked failed and keeps its events. With abort, the run is left as running.
+	- Note: The binary is 3.43 MB now and 3.02 MB with these, at the same speed. Numbers are in details.md.
+
+- With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
+	- ID: 2026101916404101
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Time a `--rmlint` scan on b23's NVMe group against one without it, to see if it's CPU-bound.
+		- If it is, try `blake2b_simd`, which has an AVX2 path. The digest has to stay the same byte for byte, which integration step 20 checks against rmlint.
+	- Note: One worker hashed cached data at about 1.5 GB/s for blake3 alone, and about 0.5 GB/s with blake2b added. The `blake2` crate has no SIMD path on stable Rust. Hard drive groups won't notice.
+
+- Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
+	- ID: 2026101916404102
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404110
+	- Requirements  [Feature]:
+		- Turn on `pedantic` in a `[lints.clippy]` table in `Cargo.toml`, so the existing `-D warnings` gate holds it.
+		- Fix the mechanical ones, about 30.
+		- Allow the cast lints, with a reason. Stat values are stored as SQLite's `i64`, and rmlint keeps its time as a float.
+		- Long functions have their own item.
+	- Note: The list by lint and line is in details.md.
+
+- Event kinds are passed around as plain strings, next to the `Kind` enum.
+	- ID: 2026101916404103
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404104
+	- Requirements  [Feature]:
+		- `Msg::Event` takes a `Kind` rather than a `&str`. `Kind` moves to `db.rs`.
+		- Add `Kind::Accepted`. `accept.rs` writes "accepted" and "xattr-error" by hand now.
+		- `gone.rs` matches "dir-error", and `report` in `main.rs` matches "%mismatch" and "read-error" in its SQL. Those come from `Kind` too.
+	- Sweep: Every event name written as a string literal.
+	- Note: The stored names don't change, so the tables stay at version 4.
+
+- Run statuses are plain strings, compared in 4 files.
+	- ID: 2026101916404104
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404103
+	- Requirements  [Feature]:
+		- A `RunStatus` enum for running, stopped, failed, done, killed and accept, with its stored text.
+		- `pick_resume` in `scan.rs` matches it with no catch-all arm. A status the program doesn't know is still refused.
+	- Note: The stored text stays as it is.
+
+- `opt-level = "z"` hasn't been measured on a quiet box.
+	- ID: 2026101916404105
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Prereq IDs: 2026101916404100
+	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
+
+- Every skipped file updates its database row by path.
+	- ID: 2026101916404106
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- `LOOKUP` returns the row id. `Msg::Seen` carries the id, and the writer updates by it, so no path is copied per file.
+	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
+
+- The walk builds each file's full path twice.
+	- ID: 2026101916404107
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `list_dir` in `scan.rs` joins every entry's path, and `queue` joins it again for files. Keep the first one.
+
+- `hex` and `escape_name` allocate a new string for every byte.
+	- ID: 2026101916404108
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Write each byte into the output string with `write!`, or from a table.
+	- Note: `--rmlint` calls `hex` for every rmlint checksum it writes, 64 bytes each. This also clears 2 pedantic warnings.
+
+- Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
+	- ID: 2026101916404109
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- `Links` and the job queue in `scan.rs` use `lock().unwrap()`, and `Faults` uses `if let Ok`. Pick one: `unwrap_or_else(PoisonError::into_inner)` everywhere, or a one-line reason.
+	- Note: `ClaimGuard::drop` runs while a panic unwinds, where a second panic aborts.
+
+- 6 functions run past 100 lines.
+	- ID: 2026101916404110
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404102
+	- Requirements  [Feature]:
+		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
+		- Split `scan::run` into setup, the progress loop, and the finish.
+		- `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
+
+- `scan::Opts` keeps full scan versus `--verify` as a bool.
+	- ID: 2026101916404111
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- A mode enum in place of `verify`.
+	- Note: `Opts` has 4 bools, which pedantic flags.
+
+- Some public types don't derive `Debug`.
+	- ID: 2026101916404112
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `Opts`, `Plan`, `PathKey`, `Hashed`, `Msg`, `Entry`, `List`, `Source` and `Diff`.
+
+- Public items have `//` comments instead of `///`.
+	- ID: 2026101916404113
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Only `Kind` and `Sums` use `///`.
+
+- Some clones have no comment saying why.
+	- ID: 2026101916404114
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Restructure where it's cheap, and comment the rest.
+	- Note: `need_db` in `main.rs`, `unlisted` in `gone.rs`, `group_roots` in `mounts.rs`, and `Pair::same` and the mount list in `snapdiff.rs`. All run once at setup. `Arc` clones don't count.
+
+- Errors are plain strings, converted by a local closure in about 8 functions.
+	- ID: 2026101916404115
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Optional. It's consistent across files today. `anyhow` would replace the closures with `.context()`. Weigh its size cost.
+
+- The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
+	- ID: 2026101916404116
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Move to edition 2024 and collapse the nested `if let` in `mounts.rs`, `scan.rs` and `snapdiff.rs`.
+	- Note: 2024 changes when temporaries in a block's last expression are dropped. The lock guards in `Links` need a look.
+
+- `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
+	- ID: 2026101916404117
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Against: Committed names stay as they are. New code uses names that don't clash.
+
+- The integration test keeps old checks as commented-out code.
+	- ID: 2026101916404118
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Remove the old checks in steps 1, 3 and 5. Keep a one-line why where it explains the current check.
+
+- The integration test has no `##` header block and no History section.
+	- ID: 2026101916404119
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+
+- The integration test's helpers and variables don't follow the house names, and most expansions aren't braced.
+	- ID: 2026101916404120
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Helpers such as `ok`, `check`, `xget` and `wait_started` become `fCamelCase`, and variables camelCase.
+		- Every expansion is braced.
+	- Against: Committed names stay as they are. Worth it only with a bigger rewrite of the script. Bracing has no such limit.
+
+- The integration test uses `[ ]` for 7 checks passed through `expect`.
+	- ID: 2026101916404121
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `[[` can't be passed as a command, so `expect` needs to take an exit status instead.
+
+- The integration test has 3 copies of the byte-flip Python.
+	- ID: 2026101916404122
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- One `fFlipByte FILE OFFSET MASK` in place of `flip`, `flip1` and the inline copy in step 6.
+
+- The integration test's setup forks 400 times in one loop.
+	- ID: 2026101916404123
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Step 5 runs `head` once per file. One `python3` call can make all 400.
+
+- The integration test removes its work folder with no check right before that it's the one it made.
+	- ID: 2026101916404124
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -1028,6 +1298,15 @@
 	- Verified: No child dataset sets `xattr` itself, apart from the tukfs one, which is `on`. Lint passes.
 	- Acceptance signoff: Self-closed: comment fix per the decision.
 	- Closed: 20261014-065308
+
+- Each path is stored twice, once in `paths` and once in its unique index.
+	- ID: 2026101916404125
+	- Type: Enhancement
+	- Status: Deferred
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Path text was about 2/3 of a 48 MB test database of 200k paths. A table of folders would roughly halve it, but it needs a schema change. Worth it only if database size or cache pressure shows up.
 
 - vmFreeBSD is shut down for the snapshot, though its agent can freeze.
 	- ID: 2026101416080000
