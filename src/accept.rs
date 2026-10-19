@@ -97,7 +97,7 @@ fn one(
 	}
 	let fd = file.as_raw_fd();
 	let onfile = OnFile::read(fd);
-	let rmlint = onfile.b2_current(scan::mtime_s(&before));
+	let rmlint = onfile.b2b_current(scan::mtime_s(&before));
 
 	// Read twice, so a fault in memory during this read isn't what gets
 	// taken as good.
@@ -127,7 +127,7 @@ fn one(
 		digest_text(onfile.b3.as_ref().map(|d| &d[..])),
 	);
 	let drop_rmlint =
-		hands_off.is_none() && matches!((rmlint, sums.b2), (Some(old), Some(new)) if old != new);
+		hands_off.is_none() && matches!((rmlint, sums.b2b), (Some(old), Some(new)) if old != new);
 	if drop_rmlint {
 		detail.push_str("; rmlint's blake2b removed");
 	}
@@ -145,7 +145,7 @@ fn one(
 		Msg::Hashed(Box::new(Hashed {
 			path: pbytes.to_vec(),
 			b3: sums.b3,
-			b2: sums.b2,
+			b2b: sums.b2b,
 			bytes,
 			mtime_us: mt,
 			ino: before.ino() as i64,

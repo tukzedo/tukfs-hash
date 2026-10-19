@@ -78,7 +78,7 @@ impl Kind {
 	pub fn name(self) -> &'static str {
 		match self {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
-			Kind::RmlintMismatch => "b2-rmlint-mismatch",
+			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
 			Kind::DbMismatch => "b3-db-mismatch",
 			Kind::CacheMismatch => "cache-mismatch",
 			Kind::ReadError => "read-error",
@@ -272,7 +272,7 @@ struct Stats {
 	links: AtomicU64,
 	bytes: AtomicU64,
 	b3_ok: AtomicU64,
-	b2_ok: AtomicU64,
+	b2b_ok: AtomicU64,
 	db_ok: AtomicU64,
 	mismatch: AtomicU64,
 	read_err: AtomicU64,
@@ -287,14 +287,14 @@ impl Stats {
 	fn line(&self) -> String {
 		let g = |a: &AtomicU64| a.load(Relaxed);
 		format!(
-			"files {} hashed {} ({}) skipped {} links {} | verified b3 {} b2 {} db {} | MISMATCH {} read-err {} other-err {} unstable {} | xattr set {} fail {} rmlint {}",
+			"files {} hashed {} ({}) skipped {} links {} | verified b3 {} b2b {} db {} | MISMATCH {} read-err {} other-err {} unstable {} | xattr set {} fail {} rmlint {}",
 			g(&self.files),
 			g(&self.hashed),
 			human_bytes(g(&self.bytes)),
 			g(&self.skip_db) + g(&self.skip_xattr) + g(&self.skip_unknown),
 			g(&self.links),
 			g(&self.b3_ok),
-			g(&self.b2_ok),
+			g(&self.b2b_ok),
 			g(&self.db_ok),
 			g(&self.mismatch),
 			g(&self.read_err),
@@ -1100,7 +1100,7 @@ pub fn open_noatime(p: &Path) -> io::Result<File> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sums {
 	pub b3: [u8; 32],
-	pub b2: Option<[u8; 64]>,
+	pub b2b: Option<[u8; 64]>,
 }
 
 #[derive(Debug)]
@@ -1116,7 +1116,7 @@ pub enum ReadFail {
 pub fn read_sums(
 	file: &File,
 	before: &fs::Metadata,
-	want_b2: bool,
+	want_b2b: bool,
 	buf: &mut [u8],
 	stop: &AtomicBool,
 	read_bytes: &AtomicU64,
@@ -1127,7 +1127,7 @@ pub fn read_sums(
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
 	}
 	let mut b3 = blake3::Hasher::new();
-	let mut b2 = want_b2.then(<blake2::Blake2b512 as blake2::Digest>::new);
+	let mut b2b = want_b2b.then(<blake2::Blake2b512 as blake2::Digest>::new);
 	let mut total: u64 = 0;
 	loop {
 		if stop.load(Relaxed) {
@@ -1137,7 +1137,7 @@ pub fn read_sums(
 			Ok(0) => break,
 			Ok(n) => {
 				b3.update(&buf[..n]);
-				if let Some(h) = b2.as_mut() {
+				if let Some(h) = b2b.as_mut() {
 					blake2::Digest::update(h, &buf[..n]);
 				}
 				total += n as u64;
@@ -1162,7 +1162,7 @@ pub fn read_sums(
 	}
 	Ok(Sums {
 		b3: *b3.finalize().as_bytes(),
-		b2: b2.map(|h| blake2::Digest::finalize(h).into()),
+		b2b: b2b.map(|h| blake2::Digest::finalize(h).into()),
 	})
 }
 
@@ -1193,7 +1193,7 @@ fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 struct Refs<'a> {
 	xattr: Option<[u8; 32]>,
 	xattr_date: Option<i64>,
-	b2: Option<[u8; 64]>,
+	b2b: Option<[u8; 64]>,
 	db: Option<&'a Prior>,
 }
 
@@ -1205,7 +1205,7 @@ impl<'a> Refs<'a> {
 		Refs {
 			xattr: onfile.b3_current(bytes, mt),
 			xattr_date: onfile.b3_date_us,
-			b2: onfile.b2_current(mtime_s(md)),
+			b2b: onfile.b2b_current(mtime_s(md)),
 			db: prior.filter(|p| p.bytes == bytes && p.mtime_us == mt),
 		}
 	}
@@ -1223,7 +1223,7 @@ impl<'a> Refs<'a> {
 				),
 			));
 		}
-		if let (Some(stored), Some(now)) = (self.b2, s.b2) {
+		if let (Some(stored), Some(now)) = (self.b2b, s.b2b) {
 			if stored != now {
 				out.push((
 					Kind::RmlintMismatch,
@@ -1250,8 +1250,8 @@ impl<'a> Refs<'a> {
 		if self.xattr.is_some() {
 			st.b3_ok.fetch_add(1, Relaxed);
 		}
-		if self.b2.is_some() && s.b2.is_some() {
-			st.b2_ok.fetch_add(1, Relaxed);
+		if self.b2b.is_some() && s.b2b.is_some() {
+			st.b2b_ok.fetch_add(1, Relaxed);
 		}
 		if self.db.is_some() {
 			st.db_ok.fetch_add(1, Relaxed);
@@ -1324,7 +1324,7 @@ fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
 	Msg::Hashed(Box::new(Hashed {
 		path: path.to_vec(),
 		b3: s.b3,
-		b2: s.b2,
+		b2b: s.b2b,
 		bytes: md.len() as i64,
 		mtime_us: mtime_us(md),
 		ino: md.ino() as i64,
@@ -1430,7 +1430,7 @@ fn one_file(
 		links.passed(&before);
 		send(
 			sh,
-			hashed_msg(pbytes, &Sums { b3: d, b2: None }, &before, date),
+			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, &before, date),
 		);
 		return;
 	}
@@ -1454,14 +1454,14 @@ fn one_file(
 		}
 	}
 
-	let want_b2 = sh.rmlint || refs.b2.is_some();
-	let first = match read_sums(&file, &before, want_b2, buf, &sh.stop, &st.bytes) {
+	let want_b2b = sh.rmlint || refs.b2b.is_some();
+	let first = match read_sums(&file, &before, want_b2b, buf, &sh.stop, &st.bytes) {
 		Ok(s) => s,
 		Err(f) => return report_fail(sh, st, path, f),
 	};
 	st.hashed.fetch_add(1, Relaxed);
 	let verdict = judge(&refs, first, || {
-		read_sums(&file, &before, want_b2, buf, &sh.stop, &st.bytes)
+		read_sums(&file, &before, want_b2b, buf, &sh.stop, &st.bytes)
 	});
 	let sums = match verdict {
 		Err(f) => return report_fail(sh, st, path, f),
@@ -1513,8 +1513,8 @@ fn one_file(
 		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date);
 		// A current rmlint set got this far only by matching, so this is a
 		// missing or stale one.
-		if let (Ok(()), Some(b2), None) = (&wrote, sums.b2, refs.b2) {
-			wrote = xattr::write_rmlint(fd, &b2, mtime_s(&before));
+		if let (Ok(()), Some(b2b), None) = (&wrote, sums.b2b, refs.b2b) {
+			wrote = xattr::write_rmlint(fd, &b2b, mtime_s(&before));
 			if wrote.is_ok() {
 				st.rmlint_set.fetch_add(1, Relaxed);
 			}
@@ -1543,7 +1543,7 @@ mod tests {
 	fn sums(b: u8) -> Sums {
 		Sums {
 			b3: [b; 32],
-			b2: None,
+			b2b: None,
 		}
 	}
 
@@ -1551,7 +1551,7 @@ mod tests {
 		Refs {
 			xattr: xattr.map(|b| [b; 32]),
 			xattr_date: None,
-			b2: None,
+			b2b: None,
 			db,
 		}
 	}
@@ -1620,14 +1620,14 @@ mod tests {
 		let kinds: Vec<_> = r.misses(&sums(1)).iter().map(|m| m.0.name()).collect();
 		assert_eq!(kinds, ["b3-xattr-mismatch"]);
 		let r = Refs {
-			b2: Some([7; 64]),
+			b2b: Some([7; 64]),
 			..refs(None, None)
 		};
 		let s = Sums {
 			b3: [1; 32],
-			b2: Some([8; 64]),
+			b2b: Some([8; 64]),
 		};
-		assert_eq!(r.misses(&s)[0].0.name(), "b2-rmlint-mismatch");
+		assert_eq!(r.misses(&s)[0].0.name(), "b2b-rmlint-mismatch");
 	}
 
 	#[test]
@@ -1640,7 +1640,7 @@ mod tests {
 		assert_eq!(exit_bits(&c(&["read-error", "b3-db-mismatch"])), 4);
 		assert_eq!(exit_bits(&c(&["dir-error"])), 8);
 		assert_eq!(exit_bits(&c(&["read-unsupported"])), 8);
-		assert_eq!(exit_bits(&c(&["db-error", "b2-rmlint-mismatch"])), 12);
+		assert_eq!(exit_bits(&c(&["db-error", "b2b-rmlint-mismatch"])), 12);
 		assert_eq!(exit_bits(&c(&["from-a-newer-version"])), 8);
 		assert_eq!(exit_bits(&[("dir-error".into(), 0)]), 0);
 		// Every kind has a name of its own, which is what's stored.
@@ -1968,12 +1968,12 @@ mod tests {
 			fs::write(d.join(f), f).unwrap();
 		}
 		let fd = |f: &str| File::open(d.join(f)).unwrap();
-		if xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2_MTIME, b"1000.5").is_err() {
+		if xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2B_MTIME, b"1000.5").is_err() {
 			eprintln!("no user xattrs here; skipped");
 			fs::remove_dir_all(&d).unwrap();
 			return;
 		}
-		xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2_CKSUM, &[b'0'; 128]).unwrap();
+		xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2B_CKSUM, &[b'0'; 128]).unwrap();
 		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
 		sh.write_xattrs = true;
 		let g = test_group(&d);
@@ -1983,29 +1983,29 @@ mod tests {
 		let mut go = |sh: &Shared, j: Job| {
 			one_file(&g, sh, &j, None, &mut buf, &Links::default(), &mut logged);
 			match rx.try_recv() {
-				Ok(Msg::Hashed(h)) => h.b2,
+				Ok(Msg::Hashed(h)) => h.b2b,
 				_ => panic!("nothing recorded"),
 			}
 		};
-		let b2 = |f: &str| -> [u8; 64] {
+		let b2b = |f: &str| -> [u8; 64] {
 			<blake2::Blake2b512 as blake2::Digest>::digest(f.as_bytes()).into()
 		};
 		let now = |f: &str| {
 			let file = fd(f);
-			OnFile::read(file.as_raw_fd()).b2_current(mtime_s(&file.metadata().unwrap()))
+			OnFile::read(file.as_raw_fd()).b2b_current(mtime_s(&file.metadata().unwrap()))
 		};
 		assert_eq!(go(&sh, job(&r, "plain")), None);
 		assert_eq!(now("plain"), None);
 		sh.rmlint = true;
-		assert_eq!(go(&sh, job(&r, "flagged")), Some(b2("flagged")));
-		assert_eq!(now("flagged"), Some(b2("flagged")));
-		assert_eq!(go(&sh, job(&r, "stale")), Some(b2("stale")));
-		assert_eq!(now("stale"), Some(b2("stale")));
+		assert_eq!(go(&sh, job(&r, "flagged")), Some(b2b("flagged")));
+		assert_eq!(now("flagged"), Some(b2b("flagged")));
+		assert_eq!(go(&sh, job(&r, "stale")), Some(b2b("stale")));
+		assert_eq!(now("stale"), Some(b2b("stale")));
 		let in_git = Job {
 			in_git: true,
 			..job(&r, "git")
 		};
-		assert_eq!(go(&sh, in_git), Some(b2("git")));
+		assert_eq!(go(&sh, in_git), Some(b2b("git")));
 		assert_eq!(now("git"), None);
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
 		fs::remove_dir_all(&d).unwrap();

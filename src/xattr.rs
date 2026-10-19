@@ -20,8 +20,8 @@ pub const B3_INODE: &CStr = c"user.blake3.inode";
 
 // Left by `rmlint --xattr`. The checksum is hex, and the time is seconds as a
 // float, so it only matches to within float rounding.
-pub const RM_B2_CKSUM: &CStr = c"user.rmlint.blake2b.cksum";
-pub const RM_B2_MTIME: &CStr = c"user.rmlint.blake2b.mtime";
+pub const RM_B2B_CKSUM: &CStr = c"user.rmlint.blake2b.cksum";
+pub const RM_B2B_MTIME: &CStr = c"user.rmlint.blake2b.mtime";
 
 pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 	let mut buf = vec![0u8; 256];
@@ -90,18 +90,18 @@ fn g17(v: f64) -> String {
 
 // Byte for byte what `rmlint --xattr` writes: hex ending in a NUL, then the
 // time. The time goes second so a write that stops part way isn't trusted.
-pub fn write_rmlint(fd: RawFd, b2: &[u8; 64], mtime_s: f64) -> io::Result<()> {
-	let mut sum = hex(b2).into_bytes();
+pub fn write_rmlint(fd: RawFd, b2b: &[u8; 64], mtime_s: f64) -> io::Result<()> {
+	let mut sum = hex(b2b).into_bytes();
 	sum.push(0);
-	fset(fd, RM_B2_CKSUM, &sum)?;
-	fset(fd, RM_B2_MTIME, g17(mtime_s).as_bytes())
+	fset(fd, RM_B2B_CKSUM, &sum)?;
+	fset(fd, RM_B2B_MTIME, g17(mtime_s).as_bytes())
 }
 
 // For a file taken as good with a different blake2b. rmlint reads it again
 // once these are gone. The checksum goes first, since it's useless alone.
 pub fn remove_rmlint(fd: RawFd) -> io::Result<()> {
-	fremove(fd, RM_B2_CKSUM)?;
-	fremove(fd, RM_B2_MTIME)
+	fremove(fd, RM_B2B_CKSUM)?;
+	fremove(fd, RM_B2B_MTIME)
 }
 
 #[derive(Default, Debug, Clone)]
@@ -111,8 +111,8 @@ pub struct OnFile {
 	pub b3_mtime_us: Option<i64>,
 	pub b3_date_us: Option<i64>,
 	pub b3_inode: Option<(u64, u64, [u8; 32])>,
-	pub b2: Option<[u8; 64]>,
-	pub b2_mtime_s: Option<f64>,
+	pub b2b: Option<[u8; 64]>,
+	pub b2b_mtime_s: Option<f64>,
 }
 
 fn text_of(v: Option<Vec<u8>>) -> Option<Vec<u8>> {
@@ -154,11 +154,11 @@ impl OnFile {
 			of.b3_date_us = int_of(get(B3_DATE));
 			of.b3_inode = inode_of(get(B3_INODE));
 		}
-		of.b2 = text_of(get(RM_B2_CKSUM))
+		of.b2b = text_of(get(RM_B2B_CKSUM))
 			.and_then(|t| unhex(&t))
 			.and_then(|d| d.try_into().ok());
-		if of.b2.is_some() {
-			of.b2_mtime_s = text_of(get(RM_B2_MTIME))
+		if of.b2b.is_some() {
+			of.b2b_mtime_s = text_of(get(RM_B2B_MTIME))
 				.and_then(|t| String::from_utf8(t).ok())
 				.and_then(|s| s.parse().ok());
 		}
@@ -192,10 +192,10 @@ impl OnFile {
 	}
 
 	// rmlint keeps no size, so the time is all there is to go on.
-	pub fn b2_current(&self, mtime_s: f64) -> Option<[u8; 64]> {
-		let stored = self.b2_mtime_s?;
+	pub fn b2b_current(&self, mtime_s: f64) -> Option<[u8; 64]> {
+		let stored = self.b2b_mtime_s?;
 		((stored - mtime_s).abs() < 1e-5)
-			.then_some(self.b2)
+			.then_some(self.b2b)
 			.flatten()
 	}
 }
@@ -232,13 +232,13 @@ mod tests {
 	#[test]
 	fn rmlint_time_tolerance() {
 		let of = OnFile {
-			b2: Some([7; 64]),
-			b2_mtime_s: Some(1692238421.9263258),
+			b2b: Some([7; 64]),
+			b2b_mtime_s: Some(1692238421.9263258),
 			..Default::default()
 		};
 		// st_mtime 1692238421.926325000, as found on a real file.
-		assert!(of.b2_current(1692238421.926325).is_some());
-		assert!(of.b2_current(1692238422.926325).is_none());
+		assert!(of.b2b_current(1692238421.926325).is_some());
+		assert!(of.b2b_current(1692238422.926325).is_none());
 	}
 
 	// Expected values are from rmlint 2.10.3 and C's printf.
@@ -270,10 +270,10 @@ mod tests {
 			std::fs::remove_file(&p).unwrap();
 			return;
 		}
-		let raw = fget(fd, RM_B2_CKSUM).unwrap().unwrap();
+		let raw = fget(fd, RM_B2B_CKSUM).unwrap().unwrap();
 		assert_eq!(raw.len(), 129);
 		assert_eq!(raw.last(), Some(&0));
-		assert_eq!(OnFile::read(fd).b2_current(mt), Some([0xab; 64]));
+		assert_eq!(OnFile::read(fd).b2b_current(mt), Some([0xab; 64]));
 		std::fs::remove_file(&p).unwrap();
 	}
 
