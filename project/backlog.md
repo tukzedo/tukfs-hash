@@ -635,6 +635,32 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 
+- Write rmlint's blake2b too, to the database and its xattrs, from the same read.
+	- ID: 2026101912101896
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-115500
+	- Opened by: request
+	- Requirements [Feature]:
+		- A flag to take blake2b for every file it reads, and write `user.rmlint.*` and the database.
+		- The b23 scan wrapper passes it.
+	- Decisions:
+		- The flag is `scan --rmlint`. Without it nothing changes.
+		- rmlint's set is written only where it's missing or its time is stale. A current one that disagrees is a `b2-rmlint-mismatch` and is left alone, like ours.
+		- Same rules as ours for where nothing is written: git work trees, `--no-xattr`, `--verify`, NTFS, APFS and HFS+. The database still gets the blake2b.
+		- Files skipped as read since `--since` aren't read, so they get it on the next run that reads them.
+		- `accept` still removes a current rmlint set that no longer matches. The next `--rmlint` scan writes a new one.
+	- Actual fix:
+		- Written byte for byte as rmlint 2.10.3 does: hex ending in a NUL, and the time as C's `%.17g`.
+		- The stats line counts them as `rmlint N`.
+		- Costs about a CPU second per GB per worker. On a 2 GB file read from disk the wall time didn't change.
+	- Branch: rmlint
+	- Test case: `rmlint_set_only_with_the_flag`, `rmlint_time_text`, `rmlint_set_reads_back`, and integration section 20, which compares the bytes with what rmlint itself writes when it's installed.
+	- Verified: Section 20 on ext4 and ZFS. The flag test failed with the write taken out, and again with blake2b not asked for. The byte comparison failed without the NUL.
+	- Acceptance signoff: Self-closed: per the request, and tested.
+	- Closed: 20261019-121018
+
 - Should the main scan write xattrs on Dropbox files?
 	- ID: 2026101406340929
 	- Type: Task

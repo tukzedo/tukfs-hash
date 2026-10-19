@@ -10,7 +10,7 @@ It's a utility under tukfs, part of tukzedo.
 
 ## What it does
 
-- Reads each regular file once with blake3. Files that already have a current rmlint blake2b checksum get blake2b too, from the same read.
+- Reads each regular file once with blake3. Files that already have a current rmlint blake2b checksum get blake2b too, from the same read. With `--rmlint` every file it reads gets blake2b, kept in the database, and rmlint's own attributes are written where they're missing or out of date.
 
 - Compares the result with three earlier records, when they're there and the size and time still match:
 	- The blake3 left on the file in extended attributes, by this program or by nemo-anywhere.
@@ -46,6 +46,8 @@ It's a utility under tukfs, part of tukzedo.
 A reader trusts the checksum only when both the size and time match the file. The time is written after the checksum and the inode last, so a write that stops part way is thrown away.
 
 A file is skipped without reading only when `user.blake3.inode` matches the file's own device and inode and the checksum next to it. A copy made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. Attributes from before `user.blake3.inode` existed never skip.
+
+With `--rmlint`, `user.rmlint.blake2b.cksum` and `user.rmlint.blake2b.mtime` are written the same way `rmlint --xattr` writes them, so rmlint can use them without reading the file. One that's current and doesn't match is reported, and left as it was. blake2b is slower than blake3, about a CPU second per GB, which only shows when the disk is faster than that.
 
 Writing an attribute changes the file's ctime, and Linux has no way to set it back.
 
