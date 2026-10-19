@@ -37,6 +37,7 @@ pub struct Opts {
 	pub resume: bool,
 	pub verify: bool,
 	pub write_xattrs: bool,
+	pub rmlint: bool,
 	pub progress_secs: u64,
 	pub args: String,
 }
@@ -279,13 +280,14 @@ struct Stats {
 	unstable: AtomicU64,
 	xattr_set: AtomicU64,
 	xattr_fail: AtomicU64,
+	rmlint_set: AtomicU64,
 }
 
 impl Stats {
 	fn line(&self) -> String {
 		let g = |a: &AtomicU64| a.load(Relaxed);
 		format!(
-			"files {} hashed {} ({}) skipped {} links {} | verified b3 {} b2 {} db {} | MISMATCH {} read-err {} other-err {} unstable {} | xattr set {} fail {}",
+			"files {} hashed {} ({}) skipped {} links {} | verified b3 {} b2 {} db {} | MISMATCH {} read-err {} other-err {} unstable {} | xattr set {} fail {} rmlint {}",
 			g(&self.files),
 			g(&self.hashed),
 			human_bytes(g(&self.bytes)),
@@ -300,6 +302,7 @@ impl Stats {
 			g(&self.unstable),
 			g(&self.xattr_set),
 			g(&self.xattr_fail),
+			g(&self.rmlint_set),
 		)
 	}
 }
@@ -339,6 +342,8 @@ struct Shared {
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
+	// blake2b for every file read, not only ones with a current rmlint set.
+	rmlint: bool,
 	verify: bool,
 	tx: SyncSender<Msg>,
 }
@@ -558,6 +563,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && !o.verify,
+		rmlint: o.rmlint,
 		verify: o.verify,
 		tx,
 	});
@@ -1070,6 +1076,11 @@ pub fn mtime_us(md: &fs::Metadata) -> i64 {
 	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
 }
 
+// rmlint's time, as it works it out.
+pub fn mtime_s(md: &fs::Metadata) -> f64 {
+	md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9
+}
+
 pub fn open_noatime(p: &Path) -> io::Result<File> {
 	let base = libc::O_NOFOLLOW | libc::O_NONBLOCK;
 	match OpenOptions::new()
@@ -1191,11 +1202,10 @@ type Miss = (Kind, String);
 impl<'a> Refs<'a> {
 	fn new(onfile: &OnFile, prior: Option<&'a Prior>, md: &fs::Metadata) -> Refs<'a> {
 		let (bytes, mt) = (md.len() as i64, mtime_us(md));
-		let mtime_s = md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9;
 		Refs {
 			xattr: onfile.b3_current(bytes, mt),
 			xattr_date: onfile.b3_date_us,
-			b2: onfile.b2_current(mtime_s),
+			b2: onfile.b2_current(mtime_s(md)),
 			db: prior.filter(|p| p.bytes == bytes && p.mtime_us == mt),
 		}
 	}
@@ -1444,7 +1454,7 @@ fn one_file(
 		}
 	}
 
-	let want_b2 = refs.b2.is_some();
+	let want_b2 = sh.rmlint || refs.b2.is_some();
 	let first = match read_sums(&file, &before, want_b2, buf, &sh.stop, &st.bytes) {
 		Ok(s) => s,
 		Err(f) => return report_fail(sh, st, path, f),
@@ -1500,7 +1510,16 @@ fn one_file(
 	{
 		let only_date = refs.xattr == Some(sums.b3);
 		let id = (before.dev(), before.ino());
-		match xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date) {
+		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date);
+		// A current rmlint set got this far only by matching, so this is a
+		// missing or stale one.
+		if let (Ok(()), Some(b2), None) = (&wrote, sums.b2, refs.b2) {
+			wrote = xattr::write_rmlint(fd, &b2, mtime_s(&before));
+			if wrote.is_ok() {
+				st.rmlint_set.fetch_add(1, Relaxed);
+			}
+		}
+		match wrote {
 			Ok(()) => {
 				st.xattr_set.fetch_add(1, Relaxed);
 			}
@@ -1642,6 +1661,7 @@ mod tests {
 			mount_points: BTreeMap::new(),
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
+			rmlint: false,
 			verify: false,
 			tx,
 		};
@@ -1936,6 +1956,58 @@ mod tests {
 		);
 		drop(sh);
 		drain.join().unwrap();
+		fs::remove_dir_all(&d).unwrap();
+	}
+
+	// --rmlint leaves rmlint's set where none is current, and the blake2b goes
+	// to the database either way.
+	#[test]
+	fn rmlint_set_only_with_the_flag() {
+		let d = scratch("rmlint");
+		for f in ["plain", "flagged", "stale", "git"] {
+			fs::write(d.join(f), f).unwrap();
+		}
+		let fd = |f: &str| File::open(d.join(f)).unwrap();
+		if xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2_MTIME, b"1000.5").is_err() {
+			eprintln!("no user xattrs here; skipped");
+			fs::remove_dir_all(&d).unwrap();
+			return;
+		}
+		xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2_CKSUM, &[b'0'; 128]).unwrap();
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let mut buf = vec![0u8; 4096];
+		let mut logged = 0;
+		let mut go = |sh: &Shared, j: Job| {
+			one_file(&g, sh, &j, None, &mut buf, &Links::default(), &mut logged);
+			match rx.try_recv() {
+				Ok(Msg::Hashed(h)) => h.b2,
+				_ => panic!("nothing recorded"),
+			}
+		};
+		let b2 = |f: &str| -> [u8; 64] {
+			<blake2::Blake2b512 as blake2::Digest>::digest(f.as_bytes()).into()
+		};
+		let now = |f: &str| {
+			let file = fd(f);
+			OnFile::read(file.as_raw_fd()).b2_current(mtime_s(&file.metadata().unwrap()))
+		};
+		assert_eq!(go(&sh, job(&r, "plain")), None);
+		assert_eq!(now("plain"), None);
+		sh.rmlint = true;
+		assert_eq!(go(&sh, job(&r, "flagged")), Some(b2("flagged")));
+		assert_eq!(now("flagged"), Some(b2("flagged")));
+		assert_eq!(go(&sh, job(&r, "stale")), Some(b2("stale")));
+		assert_eq!(now("stale"), Some(b2("stale")));
+		let in_git = Job {
+			in_git: true,
+			..job(&r, "git")
+		};
+		assert_eq!(go(&sh, in_git), Some(b2("git")));
+		assert_eq!(now("git"), None);
+		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
 		fs::remove_dir_all(&d).unwrap();
 	}
 

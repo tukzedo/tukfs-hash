@@ -460,6 +460,44 @@ rc=0; "$bin" prune --db "$db" > "$work/prune.txt" 2>&1 || rc=$?
 check "prune: exit and count" "$rc $(cat "$work/prune.txt")" "0 removed $orphans content(s) no name points at"
 check "prune: none left, every name kept" "$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)') $(q 'SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id')" "0 $paths_before"
 
+# 20. --rmlint takes blake2b from the same read for every file, and writes
+# rmlint's set where it's missing or stale, the same bytes rmlint would.
+rd="$work/rd"; mkdir -p "$rd/repo/.git"
+printf 'one\n' > "$rd/one"; printf 'two\n' > "$rd/two"; printf 'git\n' > "$rd/repo/g"
+touch -d '2021-05-06 07:08:09.123456789' "$rd/one"
+touch -d '1999-01-01 00:00:00' "$rd/two"
+setfattr -n user.rmlint.blake2b.cksum -v "$(b2sum "$rd/one" | cut -d' ' -f1)" "$rd/two"
+setfattr -n user.rmlint.blake2b.mtime -v 1000.5 "$rd/two"
+rdb="$work/db/rd.sqlite"
+rscan() { local rc=0; "$bin" scan --db "$rdb" --root "$rd" --progress 3600 --since "$tomorrow" "$@" > "$work/rd.txt" 2>&1 || rc=$?; echo "$rc"; }
+xhex() { getfattr --only-values -n "$2" "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
+b2hex() { printf '%s' "$(b2sum "$1" | cut -d' ' -f1)" | od -An -tx1 | tr -d ' \n'; echo 00; }
+check "rmlint: plain scan" "$(rscan)" 0
+check "rmlint: none written without the flag" "$(xget "$rd/one" user.rmlint.blake2b.mtime)" ""
+check "rmlint: none in the database either" "$(sqlite3 "$rdb" 'SELECT count(*) FROM files WHERE b2 IS NOT NULL')" 0
+check "rmlint: flagged scan" "$(rscan --rmlint)" 0
+check "rmlint: checksum with its NUL" "$(xhex "$rd/one" user.rmlint.blake2b.cksum)" "$(b2hex "$rd/one")"
+check "rmlint: time as rmlint writes it" "$(xget "$rd/one" user.rmlint.blake2b.mtime)" "1620310089.1234567"
+check "rmlint: stale set replaced" "$(xhex "$rd/two" user.rmlint.blake2b.cksum) $(xget "$rd/two" user.rmlint.blake2b.mtime)" "$(b2hex "$rd/two") 915177600"
+check "rmlint: none in a git work tree" "$(xget "$rd/repo/g" user.rmlint.blake2b.mtime)" ""
+check "rmlint: every file's blake2b stored" "$(sqlite3 "$rdb" 'SELECT count(*) FROM files WHERE b2 IS NOT NULL')" 3
+check "rmlint: counted" "$(grep -o 'rmlint [0-9]*' "$work/rd.txt" | head -1)" "rmlint 2"
+check "rmlint: next scan verifies them" "$(rscan --rmlint) $(grep -o 'b2 [0-9]*' "$work/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "$work/rd.txt" | head -1)" "0 b2 2 rmlint 0"
+if command -v rmlint > /dev/null; then
+	# rmlint hashes only files that share a size, so a pair.
+	rp="$work/rp"; mkdir -p "$rp"
+	printf 'pair\n' > "$rp/a"; cp "$rp/a" "$rp/b"
+	touch -d '2024-01-01 00:00:00.351000100' "$rp/a" "$rp/b"
+	(cd "$rp" && env -u DISPLAY rmlint -a blake2b --xattr -o summary:/dev/null "$rp" > /dev/null 2>&1) || true
+	theirs="$(xhex "$rp/a" user.rmlint.blake2b.cksum) $(xhex "$rp/a" user.rmlint.blake2b.mtime)"
+	setfattr -x user.rmlint.blake2b.cksum "$rp/a"; setfattr -x user.rmlint.blake2b.mtime "$rp/a"
+	"$bin" scan --db "$rdb" --root "$rp" --rmlint --progress 3600 > /dev/null 2>&1 || true
+	expect "rmlint: rmlint wrote a set" "rmlint left nothing" [ "${#theirs}" -gt 100 ]
+	check "rmlint: same bytes as rmlint's" "$(xhex "$rp/a" user.rmlint.blake2b.cksum) $(xhex "$rp/a" user.rmlint.blake2b.mtime)" "$theirs"
+else
+	echo "skip rmlint isn't installed; no byte comparison"
+fi
+
 if [[ "$fails" -eq 0 ]]; then
 	echo "all passed"
 else

@@ -5,7 +5,7 @@
 // the ones nemo-anywhere reads and writes, so either program can trust what
 // the other left. The date and inode are ours; nemo-anywhere ignores them.
 
-use crate::util::{b64u_decode, b64u_encode, trim_value, unhex};
+use crate::util::{b64u_decode, b64u_encode, hex, trim_value, unhex};
 use std::ffi::CStr;
 use std::io;
 use std::os::fd::RawFd;
@@ -65,6 +65,36 @@ pub fn fremove(fd: RawFd, name: &CStr) -> io::Result<()> {
 		Some(libc::ENODATA) => Ok(()),
 		_ => Err(err),
 	}
+}
+
+// C's "%.17g", which is what rmlint's time goes through (glib's
+// g_ascii_dtostr).
+fn g17(v: f64) -> String {
+	let sci = format!("{v:.16e}");
+	let (mant, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+	let exp: i32 = exp.parse().unwrap_or(0);
+	let trim = |s: &str| {
+		if s.contains('.') {
+			s.trim_end_matches('0').trim_end_matches('.').to_string()
+		} else {
+			s.to_string()
+		}
+	};
+	if (-4..17).contains(&exp) {
+		trim(&format!("{v:.*}", (16 - exp) as usize))
+	} else {
+		let sign = if exp < 0 { '-' } else { '+' };
+		format!("{}e{sign}{:02}", trim(mant), exp.abs())
+	}
+}
+
+// Byte for byte what `rmlint --xattr` writes: hex ending in a NUL, then the
+// time. The time goes second so a write that stops part way isn't trusted.
+pub fn write_rmlint(fd: RawFd, b2: &[u8; 64], mtime_s: f64) -> io::Result<()> {
+	let mut sum = hex(b2).into_bytes();
+	sum.push(0);
+	fset(fd, RM_B2_CKSUM, &sum)?;
+	fset(fd, RM_B2_MTIME, g17(mtime_s).as_bytes())
 }
 
 // For a file taken as good with a different blake2b. rmlint reads it again
@@ -209,6 +239,42 @@ mod tests {
 		// st_mtime 1692238421.926325000, as found on a real file.
 		assert!(of.b2_current(1692238421.926325).is_some());
 		assert!(of.b2_current(1692238422.926325).is_none());
+	}
+
+	// Expected values are from rmlint 2.10.3 and C's printf.
+	#[test]
+	fn rmlint_time_text() {
+		let t = |s: i64, ns: i64| g17(s as f64 + ns as f64 / 1e9);
+		assert_eq!(t(1620310089, 123456789), "1620310089.1234567");
+		assert_eq!(t(1704096000, 351000100), "1704096000.3510001");
+		assert_eq!(t(1792436463, 762448303), "1792436463.7624483");
+		assert_eq!(t(915177600, 0), "915177600");
+		assert_eq!(t(5, 500000000), "5.5");
+		assert_eq!(t(0, 0), "0");
+		assert_eq!(t(-1, 0), "-1");
+		assert_eq!(g17(1e20), "1e+20");
+		assert_eq!(g17(1.5e-5), "1.5e-05");
+		assert_eq!(g17(0.0001), "0.0001");
+		assert_eq!(g17(123456789012345678.0), "1.2345678901234568e+17");
+	}
+
+	#[test]
+	fn rmlint_set_reads_back() {
+		let p = std::env::temp_dir().join(format!("test_tukfs-hash_rmset_{}", std::process::id()));
+		std::fs::write(&p, "x").unwrap();
+		let f = std::fs::File::open(&p).unwrap();
+		let fd = std::os::fd::AsRawFd::as_raw_fd(&f);
+		let mt = 1620310089.0 + 123456789.0 / 1e9;
+		if write_rmlint(fd, &[0xab; 64], mt).is_err() {
+			eprintln!("no user xattrs here; skipped");
+			std::fs::remove_file(&p).unwrap();
+			return;
+		}
+		let raw = fget(fd, RM_B2_CKSUM).unwrap().unwrap();
+		assert_eq!(raw.len(), 129);
+		assert_eq!(raw.last(), Some(&0));
+		assert_eq!(OnFile::read(fd).b2_current(mt), Some([0xab; 64]));
+		std::fs::remove_file(&p).unwrap();
 	}
 
 	#[test]

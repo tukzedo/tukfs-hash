@@ -49,6 +49,9 @@ scan options:
 	--exclude DIR       Don't go into DIR. Repeatable.
 	--no-xattr DIR      Checksum files under DIR, but leave no attributes on them. Repeatable.
 	--no-xattrs         Leave no attributes anywhere.
+	--rmlint            Take blake2b too for every file read, from the same read, and
+	                    keep it in the database. Where rmlint's own attributes are
+	                    missing or out of date, write them as `rmlint --xattr` would.
 	--threads DIR=N     Workers for the disks under DIR. Default 1 with a hard drive, else 2, or 4 on NVMe.
 	--since YYYY-MM-DD  Skip files checksummed since then with the same size and time. Default today.
 	--resume            Continue the last scan, if it didn't finish, with its date.
@@ -87,7 +90,8 @@ Attributes, as nemo-anywhere reads them:
 	user.blake3.mtime   modified time it was taken at, microseconds since 1970
 	user.blake3.date    when it was taken, microseconds since 1970
 	user.blake3.inode   device:inode:checksum of the file it was taken from
-rmlint's user.rmlint.blake2b.* are checked when present and current.
+rmlint's user.rmlint.blake2b.* are checked when present and current, and
+written with --rmlint.
 Files on NTFS, APFS or HFS+ are read but never get attributes, and the
 database can't go on one. Linux's drivers for them aren't trusted to write.
 
@@ -159,6 +163,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut resume = false;
 	let mut verify = false;
 	let mut write_xattrs = true;
+	let mut rmlint = false;
 	let mut progress = 30;
 	let mut run_id = None;
 	let mut kind = None;
@@ -189,6 +194,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			"--exclude" => excludes.push(p(take_value(&mut it, a)?)),
 			"--no-xattr" => no_xattr.push(p(take_value(&mut it, a)?)),
 			"--no-xattrs" => write_xattrs = false,
+			"--rmlint" => rmlint = true,
 			"--threads" => {
 				let v = take_value(&mut it, a)?.as_bytes();
 				let eq = v
@@ -273,6 +279,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					resume,
 					verify,
 					write_xattrs,
+					rmlint,
 					progress_secs: progress,
 					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
 				},

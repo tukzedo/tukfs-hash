@@ -97,8 +97,7 @@ fn one(
 	}
 	let fd = file.as_raw_fd();
 	let onfile = OnFile::read(fd);
-	let mtime_s = before.mtime() as f64 + before.mtime_nsec() as f64 / 1e9;
-	let rmlint = onfile.b2_current(mtime_s);
+	let rmlint = onfile.b2_current(scan::mtime_s(&before));
 
 	// Read twice, so a fault in memory during this read isn't what gets
 	// taken as good.

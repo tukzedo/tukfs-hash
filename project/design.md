@@ -10,7 +10,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 ## Database
 
-- `files` is one row per distinct content: blake3, size, and blake2b when rmlint had one. `paths` is one row per name, pointing at a `files` row, with the size, time, inode and when it was read. The split is the same one nemo-anywhere's cache uses, without thumbnails.
+- `files` is one row per distinct content: blake3, size, and blake2b when rmlint had one or the scan had `--rmlint`. `paths` is one row per name, pointing at a `files` row, with the size, time, inode and when it was read. The split is the same one nemo-anywhere's cache uses, without thumbnails.
 
 - `runs` has one row per scan, with its skip date and a summary. `events` has every mismatch, read error, unstable file and failed attribute write, by run.
 
@@ -124,6 +124,10 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - Nothing is written to NTFS, APFS or HFS+, not attributes and not the database. Linux's drivers for them aren't reliable enough to trust with writes, and this tool only runs on Linux. They're still read and recorded.
 	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway.
 	- The walk stays on its root's device, so a root's filesystem decides for every file under it.
+
+- With `--rmlint`, rmlint's `user.rmlint.blake2b.*` are written too, where they're missing or their time is stale. The format is what rmlint 2.10 writes: hex ending in a NUL, and the time as C's `%.17g` of seconds plus nanoseconds. A current one that disagrees is a mismatch and stays, the same as ours.
+	- The same places get none: git work trees, `--no-xattr`, `--verify` and the filesystems above.
+	- A file skipped as already read isn't read for it. The next run that reads it fills it in.
 
 - Writing changes ctime, and Linux has no call to set it back. Only changing the system clock or editing the inode on an unmounted ext4 could, and neither is safe to do per file.
 
