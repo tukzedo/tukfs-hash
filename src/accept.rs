@@ -77,7 +77,7 @@ fn digest_text(d: Option<&[u8]>) -> String {
 	d.map_or_else(|| "none".into(), b64u_encode)
 }
 
-#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
+#[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 fn one(
 	conn: &mut Connection,
 	run_id: i64,

@@ -47,7 +47,7 @@ fn bytes_of(v: ValueRef<'_>) -> Vec<u8> {
 	}
 }
 
-#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
+#[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> {
 	let conn = db::open_ro(db_path)?;
 	let e = |e: rusqlite::Error| e.to_string();

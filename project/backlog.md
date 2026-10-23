@@ -62,18 +62,17 @@
 	- Prereq IDs: 2026101916404100
 	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
 
-- 6 functions run past 100 lines.
-	- ID: 2026101916404110
+- 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
+	- ID: 2026102308220558
 	- Type: Enhancement
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404102
+	- Opened: 20261023-082205
+	- Opened by: split from 2026101916404110
+	- Parent ID: 2026101916404110
 	- Requirements  [Feature]:
-		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
-		- Split `scan::run` into setup, the progress loop, and the finish.
-		- `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
+		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
+	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
 - Public items have `//` comments instead of `///`.
 	- ID: 2026101916404113
@@ -181,6 +180,30 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- 6 functions run past 100 lines.
+	- ID: 2026101916404110
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404102, 2026102308220558
+	- Requirements  [Feature]:
+		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
+		- Split `scan::run` into setup, the progress loop, and the finish.
+		- `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
+	- Actual effort: Low
+	- Progress log:
+		- `one_file` is a method on a per-thread `Worker`, which owns the read buffer and the xattr error count, so it takes 2 arguments. It calls `stat`, `judged_already`, `open`, `skip_unread`, `read_judged` and `write_attrs`, in the same order as before. The link claim is filled at the same points, and dropped unfilled on a failed read as before.
+		- `scan::run` calls `begin`, `hands_off`, `groups`, `watch` and `finish`. The writer still starts before the mount table is read, and the database lock is held to the end.
+		- Both allows are gone. The other 4 functions moved to 2026102308220558, and their allows name it.
+		- Nothing new is allocated, cloned or locked per file. User CPU over 20k small files was the same within noise. The binary's text grew by about 5.8 KB of 2.97 MB, mostly in the cold setup and finish code.
+		- Verified: release build, clippy gate, fmt, `cargo test --release` (63 passed), and the integration test on ext4 and ZFS, after each split.
+		- Swept: every `too_many_lines` allow in `src`, and every `one_file` and `scan::run` caller, tests included.
+	- Branch: round-20261023
+	- Test case: the existing unit and integration suites. No failing-first test, since a split changes no behavior. The tests that called `one_file` go through a `read_one` helper with a small buffer.
+	- Closed: 20261023-082226
 
 - The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
 	- ID: 2026101916404116

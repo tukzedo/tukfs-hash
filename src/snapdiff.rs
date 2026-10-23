@@ -400,7 +400,7 @@ fn find_by_inode(
 	}
 }
 
-#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
+#[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, String> {
 	for dir in [old, new] {
 		let md = fs::metadata(dir).map_err(|e| format!("{}: {e}", show_path(dir)))?;

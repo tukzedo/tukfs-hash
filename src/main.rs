@@ -140,7 +140,7 @@ fn main() {
 	std::process::exit(code);
 }
 
-#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
+#[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let shown = |a: &OsStr| util::escape_name(a.as_bytes());
 	let Some(cmd) = argv.first().map(|c| c.to_str().unwrap_or_default()) else {
