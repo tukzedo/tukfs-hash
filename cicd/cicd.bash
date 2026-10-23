@@ -794,11 +794,14 @@ fStageRelease(){
 	done
 	if ((${#RELEASE_CHECKS[@]})); then fEcho "OK: ${#RELEASE_CHECKS[@]} release check(s)"; fi
 
-	## The old set goes first, by name and one file at a time, so a dir that
-	## isn't the release set can't lose more than its release files.
+	## The sums file goes first and comes back last, so a run stopped part way
+	## leaves no sums for a mixed set. Old files go by name, one at a time, so
+	## a dir that isn't the release set can't lose more than its release files.
 	artDir="${root}/${RELEASE_ARTIFACT_DIR}"
+	sums="${EXE_NAME}-${ver}-sha256sums.txt"
 	mkdir -p -- "${artDir}" || fDie "could not make ${RELEASE_ARTIFACT_DIR}"
-	for f in "${artDir}/${EXE_NAME}-"*; do
+	rm -f -- "${artDir}/.${sums}.tmp"
+	for f in "${artDir}/${EXE_NAME}-"*sha256sums.txt; do
 		if [[ -f "${f}" && ! -L "${f}" ]] && fReleaseName "${f##*/}"; then rm -f -- "${f}"; fi
 	done
 	for f in "${release_stage}"/*; do
@@ -807,8 +810,10 @@ fStageRelease(){
 		mv -f -- "${f}" "${artDir}/${n}" || fDie "could not move ${n} into ${RELEASE_ARTIFACT_DIR}"
 		names+=("${n}")
 	done
-	sums="${EXE_NAME}-${ver}-sha256sums.txt"
-	( cd "${artDir}" && sha256sum -- "${names[@]}" > "${sums}" ) || fDie "could not write ${sums}"
+	for f in "${artDir}/${EXE_NAME}-"*; do
+		if [[ -f "${f}" && ! -L "${f}" && " ${names[*]} " != *" ${f##*/} "* ]] && fReleaseName "${f##*/}"; then rm -f -- "${f}"; fi
+	done
+	( cd "${artDir}" && sha256sum -- "${names[@]}" > ".${sums}.tmp" && mv -f -- ".${sums}.tmp" "${sums}" ) || fDie "could not write ${sums}"
 	fEcho_Clean "$(cd "${artDir}" && stat -c '%10s  %n' -- "${names[@]}" "${sums}")"
 	fEcho "OK: ${#names[@]} release file(s) and ${sums} in ${RELEASE_ARTIFACT_DIR}/"
 	if ((${#CROSS_TARGETS[@]} == 0)); then fEcho_Clean "note: no cross targets in this run, so the set is the native build alone"; fi
