@@ -84,6 +84,8 @@ tests/integration.bash
 
 The integration test needs `sqlite3`, `getfattr`, `setfattr` and `b2sum`, and a `TMPDIR` on a filesystem with user xattrs.
 
+`rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline: format, build, lint, tests, release build and publish. `cicd/cicd.bash --gate` is the merge gate, which the pre-push hook runs after `git config core.hooksPath cicd/hooks`. `--help` lists the rest.
+
 ## Copyright and license
 
 > Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)<br>

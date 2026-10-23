@@ -7,3 +7,5 @@
 ## 0.1.0
 
 - First version: scan, plan, runs, report and snapdiff.
+
+- `--version` gives the build number and the copyright line, and a local pipeline builds, lints, tests and publishes it.

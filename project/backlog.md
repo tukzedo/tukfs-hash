@@ -86,6 +86,9 @@
 		- Each run's temp dir is removed only behind a guard like the integration test's.
 	- Progress log:
 		- 2026-10-23: The engine, config, hook and helpers are in, from shcl's. Every unsafe block has a SAFETY comment now, for the new lint. The gate passes.
+		- 2026-10-23: Verified: the gate fails on a clippy warning, a failing unit test and a format diff, each on its own, and passes again with the file put back.
+		- 2026-10-23: Verified: publish, and the pre-push hook's gate, its skip of a tree that passed, and its refusal of a broken commit.
+		- 2026-10-23: Verified: a run stopped part way, by TERM or Ctrl+C, leaves no temp dir, frozen copy or process behind. The stale build cache entries go, and the warm ones stay.
 	- Branch: cicd
 
 - cicd leak and security checks.
@@ -166,15 +169,6 @@
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
 	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't.
-
-- markdownlint flags README.md and design.md.
-	- ID: 2026102308554905
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261023-085549
-	- Opened by: round gate
-	- Note: Both use `<br>` in the copyright block with no MD033 disable comment, and design.md's event table trips MD060 at line 93. These were on `main` before the round, which changed neither file.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1640,6 +1634,19 @@
 	- Verified: No child dataset sets `xattr` itself, apart from the tukfs one, which is `on`. Lint passes.
 	- Acceptance signoff: Self-closed: comment fix per the decision.
 	- Closed: 20261014-065308
+
+- markdownlint flags README.md and design.md.
+	- ID: 2026102308554905
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-085549
+	- Opened by: round gate
+	- Note: Both use `<br>` in the copyright block with no MD033 disable comment, and design.md's event table trips MD060 at line 93. These were on `main` before the round, which changed neither file.
+	- Progress log:
+		- 2026-10-23: Both files have an MD033 disable comment now, and design.md's table lines up. license.md is left out of the lint, since it's the GPL's own text.
+	- Branch: cicd
+	- Closed: 20261023-103907
 
 - Each path is stored twice, once in `paths` and once in its unique index.
 	- ID: 2026101916404125

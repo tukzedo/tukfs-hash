@@ -142,6 +142,18 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, the old snapshot is walked once for the inode numbers it still needs, since snapshots of one subvolume keep them. A matching birth time rules out a number used again after a delete. A walk is only paid for when a listed file is missing from the old side, which new files also cause.
 
+## Build and release
+
+- `Cargo.toml` is the only place the version is kept. A release tag and the build stamp both read it from there, so they can't disagree.
+
+- The build number is the commit time in minutes since 2000-01-01 UTC, rounded, in lower-case Crockford base32. `cicd/cicd.bash` passes it in at compile time through `build.rs`, and `--version` prints it after the version. It comes from the commit rather than the clock, so 2 builds of one commit match. A plain `cargo build` has none.
+
+- Feature branches merge into `dev` with `--no-ff`. A `dev` to `main` merge is a release, and gets tagged. Pulls are `--ff-only`.
+
+- The pipeline runs here, not on a hosted service. Its `--gate` is the pre-push hook, for pushes to `dev` and `main`.
+
+- `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
+
 ## Rejected
 
 - PostgreSQL. Hashing runs at disk speed and one SQLite writer keeps up easily. A server adds a daemon and a data folder, and a single file is easier to snapshot and copy.

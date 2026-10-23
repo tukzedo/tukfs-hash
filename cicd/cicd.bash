@@ -390,7 +390,7 @@ trap 'fRunTmpGone || true' EXIT
 fVersion(){ sed -n '/^version *= *"/{ s/^version *= *"\(.*\)".*/\1/p; q; }' "${root}/${VERSION_MANIFEST}"; }
 
 ## The build number a binary prints after its version: minutes from 2000-01-01
-## UTC to a unix time, rounded, in lower-case Crockford base32.
+## UTC to a unix time, rounded, and also in lower-case Crockford base32.
 fBuildNumber(){   ## fBuildNumber EPOCH_SECONDS
 	local digits="0123456789abcdefghjkmnpqrstvwxyz" n out=""
 	## Anything but a count of seconds since 2000 would print a build that looks
