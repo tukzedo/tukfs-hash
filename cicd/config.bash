@@ -10,8 +10,7 @@
 ##		  stays generic.
 ##		- Command arrays run from the repo root. Plain strings are eval'd by the
 ##		  engine, with CPU_CAP and the run's other variables in scope.
-##		- A hook stage that's off here (demo gif) prints a skip line and
-##		  nothing else. The backlog item that fills it is named beside it.
+##		- A stage that's off here prints a skip line and nothing else.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -206,9 +205,16 @@ DOGFOOD_RUNNERS=(
 	"utility/dogfood_tukfs-hash|${_dfUtil}/linux/bash"
 )
 
-## Stage 8: demo gif, eval'd. Filled by 2026102309501605.
-GIF_ENABLE=0
-GIF_CMD=''
+## Stage 8: demo gif, eval'd. cicd/demo/scenario.toml runs against the
+## native release build from stage 6, in a home in the run's temp dir, and
+## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
+## the private dir beside the checkout, and copied to GIF_OUT when it differs.
+## No Pillow or font warns and passes. --quick and --gate leave it out.
+GIF_ENABLE=1
+GIF_SCENARIO="cicd/demo/scenario.toml"
+GIF_OUT="assets/demo.gif"
+GIF_ROTATE_DIR="${root}/../private/demo/gif"
+GIF_CMD='cicd/utility/demo-gif.bash "${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
 
 ## What --quick leaves out, each matched as plain text against one step of
 ## LEAKCHECK_STEPS, CROSS_TARGETS, RELEASE_CHECKS or IT_ROOTS. Nothing yet
@@ -243,3 +249,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  artifact names and dogfood. cargo's home is remapped in the builds.
 ##		- 2026-10-23: The leak checks, their image, and clippy over all features.
 ##		- 2026-10-23: The profiler, and ruff over the pipeline's Python.
+##		- 2026-10-23: The demo gif.

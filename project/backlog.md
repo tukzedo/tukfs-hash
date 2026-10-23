@@ -120,7 +120,7 @@
 - cicd demo gif.
 	- ID: 2026102309501605
 	- Type: Feature
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -128,7 +128,13 @@
 	- Prereq IDs: 2026102309501603
 	- Requirements  [Feature]:
 		- A fake-terminal gif of a scan and a flagged file, from an editable `cicd/demo/script.txt`, at the top of README.md.
+	- Progress log:
+		- 2026-10-23: The stage, `cicd/utility/gen-demo-gif.py`, the scenario and its script are in, and the gif is at the top of README.md. It shows a scan, a byte changed in one file with its time put back, a `--verify` scan that exits 4, and the report naming the file.
+		- 2026-10-23: Verified: a full run without publish or leak checks drew the gif in 6 s, rotated it into `../private/demo/gif/` and updated `assets/demo.gif`. A second run gave the same bytes and left it alone. 960x540, 496 frames, 29.6 s with the black, about 880 KB, every frame time a whole number of 20 ms frames.
+		- 2026-10-23: Verified: no Pillow and no font each warn and pass. A temp path in the output, a step with the wrong exit code, and a link inside the private dir each fail.
+	- Note: Dogfood and the ZFS integration test root were left out of these runs.
 	- Branch: cicd
+	- Closed: 20261023-153243
 
 - Test IDs for every test.
 	- ID: 2026102309501606

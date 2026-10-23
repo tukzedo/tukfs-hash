@@ -202,6 +202,20 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The report buckets self time by the nearest caller it knows: blake3, blake2b, SQLite, xattr reads, xattr writes, file reads and the walk. They're keyed on function names, so a rename moves time into "other".
 
+## Demo gif
+
+- The gif at the top of README.md is drawn on each full run by `cicd/utility/gen-demo-gif.py`, from `cicd/demo/scenario.toml`, which follows `cicd/demo/script.txt`. The commands really run, against that run's release build, in a home made in the run's temp dir, with the database there too. `--quick` and `--gate` leave it out.
+
+- The output shows the home as `/home/<user>`, with the prompt's made-up user, and this box's host and user names as the prompt's. After that, a line with the real user, home, host or a temp path fails the stage rather than going into the README.
+
+- The demo files are the same bytes every run, and dates and times in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
+
+- A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. No Pillow or font is a warning, and the run goes on.
+
+- Every frame time is a whole number of 20 ms frames, 50 fps, which is checked after the gif is written.
+
+- Each render is GFS-rotated into `../private/demo/gif/`, outside the repo. `private` is a link, so it's resolved first, and a link below it fails the stage.
+
 ## Rejected
 
 - PostgreSQL. Hashing runs at disk speed and one SQLite writer keeps up easily. A server adds a daemon and a data folder, and a single file is easier to snapshot and copy.

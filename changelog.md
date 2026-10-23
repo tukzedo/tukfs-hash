@@ -18,4 +18,6 @@
 
 - The local pipeline also draws a flamegraph of a scan and a rescan on each full run, with a summary of where the time went, and lints its own Python.
 
+- The README has a demo gif, drawn from the release build on each full run of the local pipeline.
+
 - SQLite is set up once before the first connection, rather than by whichever thread opens one first.

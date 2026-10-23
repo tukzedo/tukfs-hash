@@ -25,7 +25,8 @@
 ##	   6. release builds (native, cross targets, packages, release checks),
 ##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file
 ##	   7. dogfood (the native release build, and the dogfood runner)
-##	   8. demo gif
+##	   8. demo gif (a scenario run against the release build, drawn as a
+##	      fake terminal, GFS-rotated, and copied to GIF_OUT when it changed)
 ##	   9. backup + publish to git
 ##	   A stage config.bash has off prints one skip line. Cleanup comes last.
 ##	- Syntax:
@@ -124,7 +125,7 @@ LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS
 RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=()
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
-PACKAGE_CMD=''; GIF_CMD=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
+PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
@@ -502,7 +503,7 @@ if ((! quiet && ! inner_run)); then
 	else
 		fEcho_Clean "Dogfood ........: (off)"
 	fi
-	fEcho_Clean "Demo gif .......: $(fOnOff "${GIF_ENABLE}" 'on')"
+	fEcho_Clean "Demo gif .......: $(fOnOff "${GIF_ENABLE}" "${GIF_OUT:-on}")"
 	if ((${#GIT_PUBLISH[@]})); then
 		fEcho_Clean "Publish (last) .: ${GIT_PUBLISH[*]}$( [[ -n "${publish_msg}" ]] && echo " (\"${publish_msg}\")" || echo ' (asks for the message now)')"
 	else
@@ -1179,3 +1180,4 @@ exit 0
 ##		  generated workload in a run dir of its own, a timed line per step, a
 ##		  rotated flamegraph and flame-report.py's summary. ruff in the lint
 ##		  stage, and the profiling build in the cache prune.
+##		- 2026-10-23: The demo gif's settings in the plan.
