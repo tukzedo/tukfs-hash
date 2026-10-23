@@ -582,6 +582,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 
 	fn mounts(m: &str) -> Vec<&Path> {
 		vec![Path::new(m)]
@@ -593,6 +594,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_lines() {
+		let _id = test_id("0vCUqy");
 		let text = b"M\t/home/u/a\\0040b.txt\nR\t/home/u/old\t/home/u/new\n+\t/home/u/added\nM\t/other/x\n1700000000.5\tM\t/home/u/t\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(
@@ -613,6 +615,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_type_column() {
+		let _id = test_id("0vCnrf");
 		let text = b"M\t/\t/home/u/\nM\tF\t/home/u/a\n R\tF\t/home/u/b\t/home/u/c\n  170000.000000001\tM\tF\t/home/u/t\n+\t@\t/home/u/link\nM\t@\t/home/u/link2\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(
@@ -629,6 +632,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_link_count() {
+		let _id = test_id("0vCnrg");
 		let text = b"M\tF\t/home/u/h\t(+1)\nM\t/home/u/h2\t(-12)\nM\t/home/u/h3\t(1)\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs, vec![same("h"), same("h2")]);
@@ -637,6 +641,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_without_h() {
+		let _id = test_id("0vCnrh");
 		let text = b"R\t/home/u/old\\0040x -> /home/u/new\nR\tF\t/home/u/p -> /home/u/q\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs[0].old, PathBuf::from("old x"));
@@ -647,6 +652,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_replaced_files() {
+		let _id = test_id("0vCnri");
 		let text =
 			b"-\t/home/u/saved\n+\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\nM\t/home/u/\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
@@ -655,6 +661,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_junk_and_outside() {
+		let _id = test_id("0vCUqz");
 		let text = b"X\t/home/u/a\nM\n\nM\t/home/u/a\t/home/u/b\t/home/u/c\nM\t/home/user2/a\nR\t/home/u/a\t/elsewhere/b\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert!(p.pairs.is_empty());
@@ -676,6 +683,7 @@ mod tests {
 
 	#[test]
 	fn find_new_lines() {
+		let _id = test_id("0vCUr0");
 		let text = b"inode 257 file offset 0 len 4096 disk start 0 offset 0 gen 9 flags INLINE dir/a file\n\
 inode 257 file offset 4096 len 4096 disk start 12 offset 0 gen 9 flags NONE dir/a file\n\
 inode 300 file offset 0 len 4096 disk start 12 offset 0 gen 9 flags COMPRESS|PREALLOC b\n\
@@ -704,6 +712,7 @@ transid marker was 12\n";
 
 	#[test]
 	fn names_stay_inside() {
+		let _id = test_id("0vCnrj");
 		assert!(stays_inside(Path::new("a/b")));
 		assert!(stays_inside(Path::new("")));
 		assert!(!stays_inside(Path::new("/etc/passwd")));
@@ -711,9 +720,10 @@ transid marker was 12\n";
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "3 MB byte by byte; over 15 min under Miri, safe code")]
 	fn finds_a_scribble() {
-		let dir = std::env::temp_dir().join(format!("test_tukfs-hash_cmp_{}", std::process::id()));
-		fs::create_dir_all(&dir).unwrap();
+		let _id = test_id("0vCUr1");
+		let dir = scratch("snapdiff_cmp");
 		let cmp = |a: &str, b: &str| {
 			compare(
 				File::open(dir.join(a)).unwrap(),
@@ -736,6 +746,5 @@ transid marker was 12\n";
 		fs::write(dir.join("b"), &a[..100]).unwrap();
 		let d = cmp("a", "b");
 		assert_eq!(d.differing, a.len() as u64 - 100);
-		fs::remove_dir_all(dir).unwrap();
 	}
 }

@@ -111,7 +111,9 @@ pub fn trim_value(v: &[u8]) -> &[u8] {
 
 fn tm_of(us: i64) -> libc::tm {
 	let t: libc::time_t = us.div_euclid(1_000_000) as libc::time_t;
+	// SAFETY: libc::tm is integers and one pointer, and all zeros is valid for each.
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+	// SAFETY: t and tm are live locals for the call.
 	unsafe { libc::localtime_r(&raw const t, &raw mut tm) };
 	tm
 }
@@ -122,6 +124,7 @@ pub fn local_midnight_us(us: i64) -> i64 {
 	tm.tm_min = 0;
 	tm.tm_sec = 0;
 	tm.tm_isdst = -1;
+	// SAFETY: tm is a live local.
 	unsafe { libc::mktime(&raw mut tm) as i64 * 1_000_000 }
 }
 
@@ -132,11 +135,13 @@ pub fn parse_date(s: &str) -> Option<i64> {
 	if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
 		return None;
 	}
+	// SAFETY: libc::tm is integers and one pointer, and all zeros is valid for each.
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
 	tm.tm_year = year - 1900;
 	tm.tm_mon = month - 1;
 	tm.tm_mday = day;
 	tm.tm_isdst = -1;
+	// SAFETY: tm is a live local.
 	let t = unsafe { libc::mktime(&raw mut tm) };
 	// mktime rolls Feb 31 over into March, and says so only in tm.
 	let same_day = tm.tm_year == year - 1900 && tm.tm_mon == month - 1 && tm.tm_mday == day;
@@ -207,9 +212,11 @@ pub fn show_path(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::test_id;
 
 	#[test]
 	fn b64u_round_trip() {
+		let _id = test_id("0vCUr2");
 		for len in 0..70 {
 			let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
 			let text = b64u_encode(&data);
@@ -220,6 +227,7 @@ mod tests {
 
 	#[test]
 	fn b64u_matches_nemo_sample() {
+		let _id = test_id("0vCUr3");
 		// A 32-byte digest is 43 characters, as nemo-anywhere stores it.
 		let text = b"QCVLFYZQYGbOC-KOfkdZGj3e65bov-K1c1EWf3JLim0";
 		let raw = b64u_decode(text).unwrap();
@@ -229,6 +237,7 @@ mod tests {
 
 	#[test]
 	fn b64u_rejects_junk() {
+		let _id = test_id("0vCUr4");
 		assert!(b64u_decode(b"abc=").is_none());
 		assert!(b64u_decode(b"a").is_none());
 		assert!(b64u_decode(b"ab+/").is_none());
@@ -238,6 +247,7 @@ mod tests {
 
 	#[test]
 	fn hex_round_trip() {
+		let _id = test_id("0vCUr5");
 		let data = [0u8, 1, 0xab, 0xff];
 		assert_eq!(hex(&data), "0001abff");
 		assert_eq!(unhex(b"0001abff").unwrap(), data);
@@ -248,13 +258,16 @@ mod tests {
 
 	#[test]
 	fn trims_values() {
+		let _id = test_id("0vCUr6");
 		assert_eq!(trim_value(b"abc\0"), b"abc");
 		assert_eq!(trim_value(b"12\n"), b"12");
 		assert_eq!(trim_value(b"\0"), b"");
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
 	fn dates() {
+		let _id = test_id("0vCUr7");
 		let d = parse_date("2026-10-13").unwrap();
 		assert_eq!(local_midnight_us(d + 5 * 3600 * 1_000_000), d);
 		assert!(fmt_local(d).starts_with("2026-10-13 00:00:00"));
@@ -269,6 +282,7 @@ mod tests {
 
 	#[test]
 	fn escapes_names() {
+		let _id = test_id("0vCnrk");
 		assert_eq!(escape_name(b"plain name.txt"), "plain name.txt");
 		assert_eq!(escape_name("caf\u{e9}".as_bytes()), "caf\u{e9}");
 		assert_eq!(escape_name(b"caf\xe9"), "caf\\xe9");
@@ -280,6 +294,7 @@ mod tests {
 	// Pinned, since rmlint's xattr bytes and the listed names depend on them.
 	#[test]
 	fn hex_and_escape_pinned() {
+		let _id = test_id("0vG4Vc");
 		let all: Vec<u8> = (0..=255).collect();
 		let want = all
 			.iter()

@@ -283,6 +283,7 @@ pub fn hands_off_at(mounts: &[Mount], path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::test_id;
 
 	const SAMPLE: &str = "\
 22 1 0:21 /@ / rw,noatime shared:1 - btrfs /dev/mapper/luks-x rw
@@ -294,6 +295,7 @@ mod tests {
 
 	#[test]
 	fn parses_and_unescapes() {
+		let _id = test_id("0vCUqv");
 		let m = parse_mountinfo(SAMPLE);
 		assert_eq!(m.len(), 5);
 		assert_eq!(m[3].point, PathBuf::from("/mnt/my disk"));
@@ -303,6 +305,7 @@ mod tests {
 
 	#[test]
 	fn finds_deepest_mount() {
+		let _id = test_id("0vCUqw");
 		let m = parse_mountinfo(SAMPLE);
 		assert_eq!(
 			mount_for(&m, Path::new("/home/u/x")).unwrap().source,
@@ -320,6 +323,7 @@ mod tests {
 
 	#[test]
 	fn no_writes_on_ntfs_or_mac_disks() {
+		let _id = test_id("0vCqJT");
 		let m = |t: &str, src: &str| Mount {
 			point: PathBuf::from("/m"),
 			fstype: t.into(),
@@ -369,6 +373,7 @@ mod tests {
 
 	#[test]
 	fn groups_share_disks() {
+		let _id = test_id("0vCUqx");
 		let s = |v: &[&str]| v.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
 		let roots = vec![
 			(PathBuf::from("/a"), s(&["nvme0n1", "nvme1n1"])),

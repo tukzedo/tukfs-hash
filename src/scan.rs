@@ -392,6 +392,7 @@ pub fn lock(db: &Path) -> Result<File, String> {
 		.write(true)
 		.open(&p)
 		.map_err(|e| format!("{}: {e}", p.display()))?;
+	// SAFETY: f is open for the length of the call.
 	if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
 		return Err(format!(
 			"{} is locked; another scan is using this database",
@@ -422,6 +423,7 @@ pub fn give_back(db: &Path) {
 	};
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
 		if let Ok(c) = crate::util::cpath(&p) {
+			// SAFETY: c is NUL-terminated and outlives the call.
 			unsafe { libc::chown(c.as_ptr(), uid, gid) };
 		}
 	}
@@ -1148,6 +1150,7 @@ pub fn read_sums(
 	read_bytes: &AtomicU64,
 ) -> Result<Sums, ReadFail> {
 	let fd = file.as_raw_fd();
+	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe {
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
@@ -1175,6 +1178,7 @@ pub fn read_sums(
 			}
 		}
 	}
+	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
 	read_bytes.fetch_add(total, Relaxed);
 	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;
@@ -1639,6 +1643,7 @@ impl<'a> Worker<'a> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 
 	fn sums(b: u8) -> Sums {
 		Sums {
@@ -1670,6 +1675,7 @@ mod tests {
 
 	#[test]
 	fn a_match_is_not_read_again() {
+		let _id = test_id("0vCo6m");
 		let p = prior(1);
 		let v = judge(&refs(Some(1), Some(&p)), sums(1), || panic!("read again")).unwrap();
 		assert!(matches!(v, Verdict::Clean(s) if s == sums(1)));
@@ -1680,6 +1686,7 @@ mod tests {
 
 	#[test]
 	fn a_second_read_tells_cache_from_disk() {
+		let _id = test_id("0vCo6n");
 		let p = prior(1);
 		let r = refs(Some(1), Some(&p));
 		// Right the second time: only the first read was bad.
@@ -1715,6 +1722,7 @@ mod tests {
 
 	#[test]
 	fn each_record_is_checked() {
+		let _id = test_id("0vCo6o");
 		let p = prior(1);
 		// The database agrees, the attribute doesn't.
 		let r = refs(Some(2), Some(&p));
@@ -1733,6 +1741,7 @@ mod tests {
 
 	#[test]
 	fn exit_bits_add_up() {
+		let _id = test_id("0vCo6p");
 		let c =
 			|k: &[&str]| -> Vec<(String, i64)> { k.iter().map(|k| (k.to_string(), 1)).collect() };
 		assert_eq!(exit_bits(&c(&[])), 0);
@@ -1771,19 +1780,17 @@ mod tests {
 
 	// More files than the job queue holds, and no worker to take them.
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_group_with_no_workers_ends() {
-		let dir = std::env::temp_dir().join(format!(
-			"test_tukfs-hash_scan_noworkers_{}",
-			std::process::id()
-		));
-		fs::create_dir_all(&dir).unwrap();
+		let _id = test_id("0vCp8h");
+		let dir = scratch("scan_noworkers");
 		for i in 0..1500 {
 			File::create(dir.join(format!("f{i}"))).unwrap();
 		}
 		let (sh, _rx) = test_shared(dir.join("not here/t.sqlite"));
 		let g = Group {
 			name: "g".into(),
-			roots: vec![dir.clone()],
+			roots: vec![dir.to_path_buf()],
 			threads: 2,
 			stats: Stats::default(),
 			done: AtomicBool::new(false),
@@ -1800,12 +1807,12 @@ mod tests {
 			.expect("the group never ended");
 		assert!(done && stopped);
 		assert_eq!(why.len(), 2, "{why:?}");
-		fs::remove_dir_all(&dir).unwrap();
 	}
 
 	// ntfs3 answers EOPNOTSUPP for compressed and EFS files. That's not damage.
 	#[test]
 	fn unsupported_read_is_not_damage() {
+		let _id = test_id("0vDFgV");
 		let (sh, rx) = test_shared(PathBuf::from("/nowhere"));
 		let st = Stats::default();
 		let p = Path::new("/x/vss_ps.dll");
@@ -1828,6 +1835,7 @@ mod tests {
 
 	#[test]
 	fn a_panic_is_a_fault() {
+		let _id = test_id("0vCp8i");
 		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
 		let done = AtomicBool::new(false);
 		std::thread::scope(|s| {
@@ -1851,6 +1859,7 @@ mod tests {
 	// through, or the run aborts, hangs, or isn't marked failed.
 	#[test]
 	fn a_poisoned_lock_is_still_a_fault() {
+		let _id = test_id("0vG4ss");
 		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
 		let (dtx, drx) = std::sync::mpsc::channel();
 		std::thread::spawn(move || {
@@ -1886,6 +1895,7 @@ mod tests {
 
 	#[test]
 	fn roots_key_ignores_order() {
+		let _id = test_id("0vCo6q");
 		let g = |rs: &[&str]| vec![("g".to_string(), rs.iter().map(PathBuf::from).collect(), 1)];
 		let a = roots_key(&[g(&["/b", "/a"]), g(&["/c"])].concat());
 		let b = roots_key(&[g(&["/c"]), g(&["/a", "/b"])].concat());
@@ -1905,14 +1915,6 @@ mod tests {
 			stats: Stats::default(),
 			done: AtomicBool::new(false),
 		}
-	}
-
-	fn scratch(tag: &str) -> PathBuf {
-		let d =
-			std::env::temp_dir().join(format!("test_tukfs-hash_scan_{tag}_{}", std::process::id()));
-		_ = fs::remove_dir_all(&d);
-		fs::create_dir_all(&d).unwrap();
-		d
 	}
 
 	// A small buffer, so a read takes several passes.
@@ -1939,6 +1941,7 @@ mod tests {
 	// after the scan started. /dev/shm is its own mount on most boxes.
 	#[test]
 	fn the_walk_stays_on_the_root_device() {
+		let _id = test_id("0vCpSN");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
 		};
@@ -1964,8 +1967,10 @@ mod tests {
 
 	// A folder swapped for a symlink after the walk listed it.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_swapped_folder_is_not_followed() {
-		let d = scratch("swap");
+		let _id = test_id("0vCpSO");
+		let d = scratch("scan_swap");
 		let (root, outside) = (d.join("root"), d.join("outside"));
 		fs::create_dir_all(&root).unwrap();
 		fs::create_dir_all(&outside).unwrap();
@@ -1977,14 +1982,15 @@ mod tests {
 		read_one(&g, &sh, &job(&r, "dir/f"), None, &Links::default());
 		assert_eq!(g.stats.files.load(Relaxed), 0);
 		assert!(rx.try_recv().is_err());
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	// Names skipped by the database or the attributes count down too, so the
 	// entry goes once all are seen.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn skipped_links_count_down() {
-		let d = scratch("links");
+		let _id = test_id("0vCpSP");
+		let d = scratch("scan_links");
 		fs::write(d.join("a"), "linked").unwrap();
 		fs::hard_link(d.join("a"), d.join("b")).unwrap();
 		fs::hard_link(d.join("a"), d.join("c")).unwrap();
@@ -2018,12 +2024,13 @@ mod tests {
 		assert_eq!(left(&links), 0);
 		drop(sh);
 		drain.join().unwrap();
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn nothing_written_on_a_hands_off_device() {
-		let d = scratch("handsoff");
+		let _id = test_id("0vCqJU");
+		let d = scratch("scan_handsoff");
 		fs::write(d.join("a"), "win").unwrap();
 		fs::write(d.join("b"), "mac").unwrap();
 		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
@@ -2045,20 +2052,20 @@ mod tests {
 		}
 		drop(sh);
 		drain.join().unwrap();
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	// Dropbox files get ours too (backlog ...29), and Dropbox's own is left be.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn dropbox_files_get_attributes() {
-		let d = scratch("dropbox");
+		let _id = test_id("0vCs19");
+		let d = scratch("scan_dropbox");
 		fs::write(d.join("a"), "synced").unwrap();
 		let dbx = c"user.com.dropbox.attrs";
 		let theirs = b"\x0a\x12opaque";
 		let fd = File::open(d.join("a")).unwrap();
 		if xattr::fset(fd.as_raw_fd(), dbx, theirs).is_err() {
 			eprintln!("no user xattrs here; skipped");
-			fs::remove_dir_all(&d).unwrap();
 			return;
 		}
 		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
@@ -2076,21 +2083,21 @@ mod tests {
 		);
 		drop(sh);
 		drain.join().unwrap();
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	// --rmlint leaves rmlint's set where none is current, and the blake2b goes
 	// to the database either way.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_only_with_the_flag() {
-		let d = scratch("rmlint");
+		let _id = test_id("0vEgnh");
+		let d = scratch("scan_rmlint");
 		for f in ["plain", "flagged", "stale", "git"] {
 			fs::write(d.join(f), f).unwrap();
 		}
 		let fd = |f: &str| File::open(d.join(f)).unwrap();
 		if xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2B_MTIME, b"1000.5").is_err() {
 			eprintln!("no user xattrs here; skipped");
-			fs::remove_dir_all(&d).unwrap();
 			return;
 		}
 		xattr::fset(fd("stale").as_raw_fd(), xattr::RM_B2B_CKSUM, &[b'0'; 128]).unwrap();
@@ -2124,14 +2131,14 @@ mod tests {
 		assert_eq!(go(&sh, in_git), Some(b2b("git")));
 		assert_eq!(now("git"), None);
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	// rmlint takes plain unkeyed blake2b-512. The first two are RFC 7693's,
 	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
 	#[test]
 	fn b2b_matches_known_digests() {
-		let d = scratch("b2b_vectors");
+		let _id = test_id("0vG4LU");
+		let d = scratch("scan_b2b_vectors");
 		let long: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
 		let cases: [(&[u8], &str); 3] = [
 			(
@@ -2149,7 +2156,10 @@ mod tests {
 		];
 		let stop = AtomicBool::new(false);
 		let counted = AtomicU64::new(0);
-		for (i, (bytes, want)) in cases.iter().enumerate() {
+		// The long one takes Miri over 15 minutes. The short ones still go
+		// through the hashers' unsafe code there.
+		let n = if cfg!(miri) { 2 } else { cases.len() };
+		for (i, (bytes, want)) in cases.iter().take(n).enumerate() {
 			let p = d.join(format!("v{i}"));
 			fs::write(&p, bytes).unwrap();
 			let file = File::open(&p).unwrap();
@@ -2164,11 +2174,12 @@ mod tests {
 				);
 			}
 		}
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "2^18 entries; over 15 min under Miri, and safe code")]
 	fn the_link_map_is_capped() {
+		let _id = test_id("0vCpSQ");
 		let mut m = LinkMap::default();
 		let v = (1, 1, sums(1));
 		for i in 0..LINKS_KEPT as u64 + 10 {
@@ -2191,6 +2202,7 @@ mod tests {
 	}
 
 	fn runs_with(status: &str) -> rusqlite::Connection {
+		db::init();
 		let c = rusqlite::Connection::open_in_memory().unwrap();
 		c.execute_batch(
 			"CREATE TABLE runs (id INTEGER PRIMARY KEY, started_us, cutoff_us, status, roots, summary, verify);",
@@ -2205,7 +2217,9 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn resume_takes_only_the_statuses_it_knows() {
+		let _id = test_id("0vG4fd");
 		for s in ["stopped", "failed", "running", "killed"] {
 			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);
 			assert!(r.is_ok(), "{s}: {:?}", r.err());

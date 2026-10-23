@@ -1,0 +1,17 @@
+# cargo-deny's settings, for cicd/utility/advisories.bash, which runs only
+# the advisories check: vulnerable, unsound and unmaintained crates, by
+# RustSec's database. The soak's dhat counts, since it runs too.
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+version = 2
+# Both are quick-xml 0.26, under inferno under pprof, and both are in its XML
+# reader. inferno only writes the flamegraph, the chain is behind the profiling
+# feature and never ships, and inferno 0.11 holds quick-xml at 0.26. Drop these
+# once pprof takes a newer inferno.
+ignore = [
+	{ id = "RUSTSEC-2026-0194", reason = "profiling build only, and nothing there parses XML" },
+	{ id = "RUSTSEC-2026-0195", reason = "profiling build only, and nothing there parses XML" },
+]

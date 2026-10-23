@@ -56,8 +56,8 @@
 - A full cicd pipeline, per the directives' "CICD process" section.
 	- ID: 2026102309501600
 	- Type: Feature
-	- Status: Started
-		- Broken into the 6 children below, worked in order on one branch.
+	- Status: Done
+		- All 7 children are Done, and a full run passed with every stage on.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -67,45 +67,18 @@
 		- Feature branches merge into `dev`. A `dev` to `main` merge is a release.
 	- Decisions:
 		- `dev` made from `main` at `d5fd7cf` on 2026-10-23, since the project had grown enough for one.
+	- Progress log:
+		- 2026-10-23: The dogfood runner keeps a version with no GFS role while the pool is under 10 versions and 1 GB, and never goes under 5. It used to drop one at 7. A running version is found by its real path, so a linked home doesn't hide it either. Verified: 7 small versions all stayed, 12 went to 10, 8 of 300 MB to 5, 8 of 150 MB to 6, and 4 of 2 GB all stayed. A running one that the budget left out stayed, through a linked home too, where before it was removed.
+		- 2026-10-23: A stopped run kills the containers it started before anything else, by the IDs its steps leave in the run's temp dir. Verified: stopped during a leak step whose container ignored TERM, the run used to leave the container up after it was gone, and now takes it down in about a second. A stop during ASan left no container, process or temp dir.
+		- 2026-10-23: A demo gif with the same bytes as the newest one in `../private/demo/gif/` isn't rotated in. Verified: a second render of the same bytes was left out, and a changed one went in. The 2 extra copies already there were removed.
+		- 2026-10-23: A full run with no flags passed in 17 minutes: lint, unit tests, both integration roots (ext4 and ZFS), every leak check, the profiler, release builds and packages, dogfood and the gif. CodeQL is 11 of those minutes.
 	- Branch: cicd
-
-- cicd core: the engine, config, gate and pre-push hook.
-	- ID: 2026102309501601
-	- Type: Feature
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261023-095016
-	- Opened by: round settings answer
-	- Parent ID: 2026102309501600
-	- Requirements  [Feature]:
-		- Remote sync, format, debug build, lint, tests, publish and cleanup stages, with the flags the directives list.
-		- `--gate` as a pre-push hook through `core.hooksPath`.
-		- Lint output rotated into `cicd/artifacts/lint/`, with a `--check` that prints only what's new.
-		- `rust-toolchain.toml` and one place for tool pins.
-		- `--version` gives the build number from the commit time.
-		- Each run's temp dir is removed only behind a guard like the integration test's.
-	- Branch: cicd
-
-- cicd leak and security checks.
-	- ID: 2026102309501602
-	- Type: Feature
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261023-095016
-	- Opened by: round settings answer
-	- Parent ID: 2026102309501600
-	- Prereq IDs: 2026102309501601
-	- Requirements  [Feature]:
-		- AddressSanitizer and LeakSanitizer, ThreadSanitizer, and Miri on a pinned nightly.
-		- Known-advisory scan of the dependencies.
-		- CodeQL over the vendored tree, and a soak test of repeated scans.
-		- Each check watched to fail once before it's trusted.
-	- Branch: cicd
+	- Closed: 20261023-164000
 
 - cicd release builds, packages and dogfood.
 	- ID: 2026102309501603
 	- Type: Feature
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -115,12 +88,21 @@
 		- x86_64 and arm64 release builds, `.deb` and `.rpm`, and a sha256 sums file, all named by version.
 		- Two builds of one commit give the same bytes.
 		- Dogfood install, plus a `dogfood_tukfs-hash` script and its launchers.
+	- Progress log:
+		- 2026-10-23: The arm64 build goes through zig, bundled SQLite included, and costs about what x86_64 does. Two checkouts at different paths gave the same bytes for both.
+		- 2026-10-23: Release builds, packages, release checks, the sums file and dogfood are in, plus `dogfood_tukfs-hash` and its launcher. The packages hold the binary alone. `--quick` keeps arm64 and the packages, since together they take about as long as the native build.
+		- 2026-10-23: Verified: 2 checkouts of one commit at different paths gave the same sums for all 6 files, and so did a third, built warm.
+		- 2026-10-23: Verified: each release check failed once, on a `--version` with no build number, an x86_64 binary where the arm64 one goes, a package holding the wrong file, one with an extra file, and an rpm for the wrong arch. The PowerShell lint failed on an alias.
+		- 2026-10-23: Verified: dogfood skips a running copy and one that's already the build, and copies the runner only when it changed. The runner took 16 builds down to 10, kept one that was running until it stopped, passed the exit code back, and left a file it didn't make at the fixed name alone.
+		- 2026-10-23: Verified: a full run without publish passes in under 2 minutes, a run stopped during the arm64 build leaves no temp dir, copy or process, and `--gate` passes.
+	- Note: The ZFS integration test root was left out of these runs.
 	- Branch: cicd
+	- Closed: 20261023-113500
 
 - cicd profiler stage and flamegraph report.
 	- ID: 2026102309501604
 	- Type: Feature
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -129,12 +111,22 @@
 	- Requirements  [Feature]:
 		- A flamegraph of a scan, rotated into `cicd/artifacts/profiling/`, from an in-process sampler since `perf` can't record on b23.
 		- `cicd/utility/flame-report.py`, with `--check` for session start.
+	- Progress log:
+		- 2026-10-23: The `profiling` feature and profile, the attribution check, the workload, the stage and the report are in. A release build is the same bytes as before.
+		- 2026-10-23: A thread in the kernel gets about a third of the samples where half would be fair, so the graph shows each scan's user and system time beside it.
+		- 2026-10-23: Verified: the attribution check failed with libc on the sampler's blocklist and with the unwinder fix taken out, and passed with both back.
+		- 2026-10-23: Verified: a full run without publish or dogfood passes, draws the graph and prints the report, and leaves no workload behind.
+		- 2026-10-23: pprof's crates brought 2 advisories in quick-xml's reader, which inferno doesn't use, now ignored with the reason, and CodeQL findings from uuid's `Display` all over the tree. CodeQL's copy now leaves the profiling build out. Both pass again.
+		- 2026-10-23: Verified: the attribution check failed the run with libc on the blocklist, before any graph, and passed with it put back. A full run without publish or leak checks then passed in 2m 01s, the profiler stage in 33 s. `--gate` and `--quick` skip the stage.
+		- 2026-10-23: Verified: `flame-report.py --check` printed NEW, then SEEN, and exits 2 on a missing dir, a file that isn't a graph, and one cut off.
+	- Note: Not done here: the session-start check in per-project memory, which lives outside the repo.
 	- Branch: cicd
+	- Closed: 20261023-151600
 
 - cicd demo gif.
 	- ID: 2026102309501605
 	- Type: Feature
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -142,37 +134,47 @@
 	- Prereq IDs: 2026102309501603
 	- Requirements  [Feature]:
 		- A fake-terminal gif of a scan and a flagged file, from an editable `cicd/demo/script.txt`, at the top of README.md.
+	- Progress log:
+		- 2026-10-23: The stage, `cicd/utility/gen-demo-gif.py`, the scenario and its script are in, and the gif is at the top of README.md. It shows a scan, a byte changed in one file with its time put back, a `--verify` scan that exits 4, and the report naming the file.
+		- 2026-10-23: Verified: a full run without publish or leak checks drew the gif in 6 s, rotated it into `../private/demo/gif/` and updated `assets/demo.gif`. A second run gave the same bytes and left it alone. 960x540, 496 frames, 29.6 s with the black, about 880 KB, every frame time a whole number of 20 ms frames.
+		- 2026-10-23: Verified: no Pillow and no font each warn and pass. A temp path in the output, a step with the wrong exit code, and a link inside the private dir each fail.
+	- Note: Dogfood and the ZFS integration test root were left out of these runs.
 	- Branch: cicd
+	- Closed: 20261023-153243
 
 - Test IDs for every test.
 	- ID: 2026102309501606
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
 	- Requirements  [Feature]:
 		- Each Rust and integration test gets a base 62 ID from its first commit time.
+	- Progress log:
+		- 2026-10-23: 213 tests have IDs, 66 Rust tests and 147 integration checks. Each one's status line shows its ID, and libtest's own per-test lines are left out of the run's output. The 2 rmlint checks print a skip line with their IDs when rmlint isn't there.
+		- 2026-10-23: Each time is from the first commit of the test's lines, or of its fn name when that's older. Tests from the same commit got the next free second, in file order. `cicd/utility/test-ids.py new` gives the next one.
+		- 2026-10-23: `test-ids.py check` is in the lint stage. Verified: the gate failed on a test with no ID and on 2 checks sharing one, and passed with both put back.
 	- Branch: cicd
+	- Closed: 20261023-155700
 
 - Rust unit tests leave `test_tukfs-hash_*` folders in TMPDIR when they fail or are stopped.
 	- ID: 2026102309501607
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
-	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't.
-
-- markdownlint flags README.md and design.md.
-	- ID: 2026102308554905
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261023-085549
-	- Opened by: round gate
-	- Note: Both use `<br>` in the copyright block with no MD033 disable comment, and design.md's event table trips MD060 at line 93. These were on `main` before the round, which changed neither file.
+	- Actual fix [Bug]:
+		- The unit tests get their folders from one helper in `src/testutil.rs`, under `<TMPDIR>/tukfs-hash/`, and each goes when its test ends, by a panic too.
+		- The first folder a run makes also clears what killed runs left, once it's a day old and its pid is gone. Only a strict name right under that folder goes, and only when it isn't a link, its real path matches, it's ours, and it doesn't reach into another filesystem.
+	- Progress log:
+		- 2026-10-23: Verified: a run killed part way left 7 folders. The next run left them alone, and once they were a day old the one after removed them all. A failed test's folder went with a read-only folder inside it, and a young one, a live pid's, a link and a name that isn't ours were all left.
+	- Test case: `testutil::tests::a_scratch_folder_goes_on_a_panic` and `testutil::tests::only_a_dead_runs_old_folders_are_swept`.
+	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't. Folders made before this change, directly in TMPDIR, aren't swept.
+	- Branch: cicd
+	- Closed: 20261023-155700
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -942,6 +944,54 @@
 	- Acceptance signoff: Self-closed: per the answer. The test fails when the scan skips such files.
 	- Closed: 20261014-104500
 
+- cicd leak and security checks.
+	- ID: 2026102309501602
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Prereq IDs: 2026102309501601
+	- Requirements  [Feature]:
+		- AddressSanitizer and LeakSanitizer, ThreadSanitizer, and Miri on a pinned nightly.
+		- Known-advisory scan of the dependencies.
+		- CodeQL over the vendored tree, and a soak test of repeated scans.
+		- Each check watched to fail once before it's trusted.
+	- Progress log:
+		- 2026-10-23: The leak check image, the advisory scan, ASan, TSan, Miri and the soak are in. TSan found SQLite's first-time setup racing when two test threads opened a database at once, so it's now done once before any connection.
+		- 2026-10-23: CodeQL is in, over the tree with every crate vendored. Nothing in our code. Its 42 findings in the crates were in code the shipped binary doesn't build, or were looked at, found not to be bugs, and listed in `cicd/codeql/vendored-reviewed.tsv`.
+		- 2026-10-23: Verified: each check failed once. LSan on a `Box::leak`, ASan on a read past a `Vec` in an unsafe block, TSan on 2 threads bumping one static, Miri on a `bool` made from 2, the soak on a static `Vec` that kept every path, and the advisory scan on `time` 0.1.43. CodeQL has to report its planted null read on every run.
+		- 2026-10-23: Verified: a full run without publish passes all 6 in 18m 48s, about 4 minutes of it building the image. Without that it's about 15 minutes, 11 of them CodeQL. `--quick --leakcheck` runs all 6 and passes. `--quick`, `--gate`, `--gate --leakcheck` and `--no-leakcheck` leave them out.
+		- 2026-10-23: Verified: with no docker, the sanitizers and Miri run on the host with a note, and CodeQL skips with one.
+	- Note: The ZFS integration test root was left out of these runs.
+	- Branch: cicd
+	- Closed: 20261023-132127
+
+- cicd core: the engine, config, gate and pre-push hook.
+	- ID: 2026102309501601
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Requirements  [Feature]:
+		- Remote sync, format, debug build, lint, tests, publish and cleanup stages, with the flags the directives list.
+		- `--gate` as a pre-push hook through `core.hooksPath`.
+		- Lint output rotated into `cicd/artifacts/lint/`, with a `--check` that prints only what's new.
+		- `rust-toolchain.toml` and one place for tool pins.
+		- `--version` gives the build number from the commit time.
+		- Each run's temp dir is removed only behind a guard like the integration test's.
+	- Progress log:
+		- 2026-10-23: The engine, config, hook and helpers are in, from shcl's. Every unsafe block has a SAFETY comment now, for the new lint. The gate passes.
+		- 2026-10-23: Verified: the gate fails on a clippy warning, a failing unit test and a format diff, each on its own, and passes again with the file put back.
+		- 2026-10-23: Verified: publish, and the pre-push hook's gate, its skip of a tree that passed, and its refusal of a broken commit.
+		- 2026-10-23: Verified: a run stopped part way, by TERM or Ctrl+C, leaves no temp dir, frozen copy or process behind. The stale build cache entries go, and the warm ones stay.
+		- 2026-10-23: Verified: `--gate`, `--quick --no-publish` and a full run without publish all pass, in under 2 minutes each, and a drifted pin warns.
+	- Branch: cicd
+	- Closed: 20261023-104516
+
 - The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
 	- ID: 2026101406340925
 	- Type: Bug
@@ -1638,6 +1688,19 @@
 	- Verified: No child dataset sets `xattr` itself, apart from the tukfs one, which is `on`. Lint passes.
 	- Acceptance signoff: Self-closed: comment fix per the decision.
 	- Closed: 20261014-065308
+
+- markdownlint flags README.md and design.md.
+	- ID: 2026102308554905
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-085549
+	- Opened by: round gate
+	- Note: Both use `<br>` in the copyright block with no MD033 disable comment, and design.md's event table trips MD060 at line 93. These were on `main` before the round, which changed neither file.
+	- Progress log:
+		- 2026-10-23: Both files have an MD033 disable comment now, and design.md's table lines up. license.md is left out of the lint, since it's the GPL's own text.
+	- Branch: cicd
+	- Closed: 20261023-103907
 
 - Each path is stored twice, once in `paths` and once in its unique index.
 	- ID: 2026101916404125

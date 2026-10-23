@@ -1,5 +1,6 @@
 <!-- markdownlint-disable MD007 -- Unordered list indentation -->
 <!-- markdownlint-disable MD010 -- No hard tabs -->
+<!-- markdownlint-disable MD033 -- No inline html -->
 <!-- markdownlint-disable MD041 -- First line in a file should be a top-level heading -->
 
 # tukfs-hash design
@@ -88,12 +89,12 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Each event kind sets one exit code bit, and the bits add up with 2 for a stop. This table is the rule:
 
-	| Event                                                                                       | Bit
-	| :---                                                                                        | :---
+	| Event                                                                                        | Bit
+	| :---                                                                                         | :---
 	| `b3-xattr-mismatch`, `b2b-rmlint-mismatch`, `b3-db-mismatch`, `cache-mismatch`, `read-error` | 4
-	| `read-unsupported`, `dir-error`, `stat-error`, `open-error`, `db-error`                     | 8
-	| `unstable`, `xattr-error`                                                                   | none
-	| a kind this version doesn't know                                                            | 8
+	| `read-unsupported`, `dir-error`, `stat-error`, `open-error`, `db-error`                      | 8
+	| `unstable`, `xattr-error`                                                                    | none
+	| a kind this version doesn't know                                                             | 8
 
 - `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make it mean nothing. An attribute that can't be written comes after the file was checked.
 
@@ -140,6 +141,80 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - A path with both a `-` and a `+` line in `zfs diff` is a file replaced by a new one. rsync without `--inplace`, tar and atomic saves do that, and they keep the time, so these get compared too.
 
 - btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, the old snapshot is walked once for the inode numbers it still needs, since snapshots of one subvolume keep them. A matching birth time rules out a number used again after a delete. A walk is only paid for when a listed file is missing from the old side, which new files also cause.
+
+## Build and release
+
+- `Cargo.toml` is the only place the version is kept. A release tag and the build stamp both read it from there, so they can't disagree.
+
+- The build number is the commit time in minutes since 2000-01-01 UTC, rounded, in lower-case Crockford base32. `cicd/cicd.bash` passes it in at compile time through `build.rs`, and `--version` prints it after the version. It comes from the commit rather than the clock, so 2 builds of one commit match. A plain `cargo build` has none.
+
+- Feature branches merge into `dev` with `--no-ff`. A `dev` to `main` merge is a release, and gets tagged. Pulls are `--ff-only`.
+
+- The pipeline runs here, not on a hosted service. Its `--gate` is the pre-push hook, for pushes to `dev` and `main`.
+
+- `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
+
+- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. x86_64 is built natively, and arm64 through `cargo-zigbuild`, which also compiles the bundled SQLite. arm64 takes about as long as x86_64, so every run builds both.
+
+- The release set, in `cicd/artifacts/release/`, is named `tukfs-hash-<version>-linux-x86_64` and `tukfs-hash-<version>-linux-arm64`, the same names plus `.deb` and `.rpm`, and `tukfs-hash-<version>-sha256sums.txt`. Download links depend on these, so they stay. The x86_64 name is never amd64, though the `.deb` has to say amd64 inside.
+
+- The packages hold `/usr/bin/tukfs-hash` and nothing else. They depend on the glibc the binary was linked for, read off the binary: 2.39 for x86_64, since it's linked against this box's, and 2.30 for arm64. x86_64 also needs `libgcc_s`.
+
+- 2 builds of one commit give the same bytes, packages included. The build number and the packages' mtimes come from the commit time. cargo's home is mapped to `/cargo` in panic messages, so whose home it is doesn't matter, and the checkout's own paths are already relative. Release checks run over the set before it replaces the old one: the stamped `--version`, each build's architecture, and each package's files and bytes.
+
+- The dogfood copy goes to `~/synced/0-0/common/exec/util/linux/bin/tukfs-hash`, where the scan wrappers look, rather than the `app/linux/` dir. `utility/dogfood_tukfs-hash` keeps up to 10 dated versions in `~/.local/bin/tukfs-hash_versions/`, with a link to the newest at `~/.local/bin/tukfs-hash`.
+
+## Leak and memory checks
+
+- A full run, and `--quick --leakcheck`, ends the tests stage with the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, then Miri, and CodeQL. Any report fails the run. `--gate` never runs them, since it's the pre-push hook.
+
+- The sanitizers, Miri and CodeQL run in the image from `cicd/container/`, with the pinned nightly and CodeQL, no network, and only the run's own dirs and `target/leakcheck/` mounted. Its crates are fetched once per lock file into `target/leakcheck/cargo-home`. Without docker they run on the host with a note, and CodeQL skips.
+
+- The soak and the advisory scan run on the host. A scan finds its workers from the root's disks through `/dev`, which a container doesn't have, and cargo-deny fetches RustSec's database.
+
+- The soak, `src/soak.rs`, runs scan, change, scan, status and accept 20 times in one process, and holds the heap at round 20 to round 10 within 4 KB. The Rust heap is dhat's count. SQLite's is its own, since it allocates through libc, which dhat doesn't see. Both are back to 0 bytes live after every round, so the margin can be small. It's behind the `soak` feature, since dhat then counts every allocation in the test binary.
+
+- The bundled SQLite is built by clang with the same sanitizer as the Rust code, with its lookaside and page cache pools off so each block is a malloc of its own.
+
+- SQLite sets itself up on first use with plain reads and writes, and TSan caught 2 test threads doing that at once. `db::init()` does it once, behind a `Once`, before any connection opens. A scan already did it on the main thread before its workers started.
+
+- Miri skips what it can't run: SQLite, which is C, xattrs, `openat2` and `mktime`. 2 tests of safe code that take it over 15 minutes are skipped too. Each says why in its `#[cfg_attr(miri, ignore = ...)]`.
+
+- CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the shipped binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
+
+## Profiling
+
+- A full run draws a flamegraph of a scan into `cicd/artifacts/profiling/`, GFS-rotated, and prints `cicd/utility/flame-report.py`'s summary of it in the log. `--quick` and `--gate` leave it out.
+
+- `perf` can't record on b23, since `kernel.perf_event_paranoid` is 3, so the sampler is pprof, in the process, on SIGPROF. It's behind the `profiling` feature and the `profiling` cargo profile, which is release with names kept. pprof's flamegraph writer is inferno, which is CDDL-1.0, so a build with the feature never leaves the box. A release build doesn't change by a byte. The hook in `src/main.rs` sits at the bottom of the file so the lines above keep their numbers, which are in the release build's panic messages.
+
+- The workload is a generated tree of about 1.5 GB on ext4, synced first so the scan reads the disk: a first scan, then bytes changed with the mtime put back and some ordinary edits, then a rescan with `--rmlint` and a `--since` past the first scan, so every file is read again with blake2b. Each scan adds its samples to one graph, under its own name below the root.
+
+- libc isn't on the sampler's blocklist, unlike shcl's, since a scan's reads and attribute calls end there. libgcc, the vdso and the loader are, since unwinding from inside them isn't safe. `_Unwind_FindEnclosingFunction` is answered in the binary, as in shcl, or LTO leaves one name on most of a scan.
+
+- A thread in the kernel gets fewer SIGPROFs than its share: about 35% against a busy thread in user code, where 50% would be fair. So the graph understates system time. The subtitle has each scan's user and system CPU from `getrusage`, which doesn't, and wall time past the CPU is waiting on the disk. Read I/O against hashing off those.
+
+- blake3's assembly has no unwind info and no symbol sizes, so its samples come back with no name. The profiling build names them by where the functions start.
+
+- Before any graph is drawn, an attribution check runs 2 threads for the same time: 2 loops at 3 to 1 inlined into one function, and a reader of a cached file. The loops have to split about 3 to 1, and the reader has to get a share. Each of those fails with its fix taken out.
+
+- pprof's crates count for the advisory scan, which ignores 2 advisories in quick-xml's reader, since inferno only writes. CodeQL's copy of the tree leaves them out, and `src/profiling.rs`. uuid is one of them, and its `Display` read to CodeQL as a secret that every `format!` in the tree could log.
+
+- The report buckets self time by the nearest caller it knows: blake3, blake2b, SQLite, xattr reads, xattr writes, file reads and the walk. They're keyed on function names, so a rename moves time into "other".
+
+## Demo gif
+
+- The gif at the top of README.md is drawn on each full run by `cicd/utility/gen-demo-gif.py`, from `cicd/demo/scenario.toml`, which follows `cicd/demo/script.txt`. The commands really run, against that run's release build, in a home made in the run's temp dir, with the database there too. `--quick` and `--gate` leave it out.
+
+- The output shows the home as `/home/<user>`, with the prompt's made-up user, and this box's host and user names as the prompt's. After that, a line with the real user, home, host or a temp path fails the stage rather than going into the README.
+
+- The demo files are the same bytes every run, and dates and times in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
+
+- A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. No Pillow or font is a warning, and the run goes on.
+
+- Every frame time is a whole number of 20 ms frames, 50 fps, which is checked after the gif is written.
+
+- Each render is GFS-rotated into `../private/demo/gif/`, outside the repo. `private` is a link, so it's resolved first, and a link below it fails the stage.
 
 ## Rejected
 

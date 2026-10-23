@@ -23,6 +23,8 @@ mod gone;
 mod mounts;
 mod scan;
 mod snapdiff;
+#[cfg(all(test, feature = "soak"))]
+mod soak;
 mod util;
 mod xattr;
 
@@ -32,6 +34,14 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+// The build number is empty unless the pipeline passed one in; see build.rs.
+const VERSION: &str = concat!(
+	"tukfs-hash v",
+	env!("CARGO_PKG_VERSION"),
+	env!("TUKFS_HASH_BUILD_SUFFIX")
+);
+const COPYRIGHT: &str = "Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)";
 
 const USAGE: &str = "\
 tukfs-hash - checksum every file, remember it, and notice when one changes on its own
@@ -130,7 +140,7 @@ fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<St
 fn main() {
 	// Paths can be any bytes, so not env::args, which panics on them.
 	let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
-	let code = match real_main(&argv) {
+	let code = match sampled(|| real_main(&argv)) {
 		Ok(c) => c,
 		Err(e) => {
 			err!("tukfs-hash: {e}");
@@ -152,7 +162,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		return Ok(0);
 	}
 	if cmd == "--version" {
-		out!("tukfs-hash {}", env!("CARGO_PKG_VERSION"));
+		out!("{VERSION}\n{COPYRIGHT}");
 		return Ok(0);
 	}
 
@@ -482,13 +492,29 @@ fn report(
 	Ok(0)
 }
 
+// Down here so the lines above keep their numbers, which the release build's
+// panic messages have in them.
+#[cfg(feature = "profiling")]
+mod profiling;
+#[cfg(feature = "profiling")]
+use profiling::sampled;
+#[cfg(not(feature = "profiling"))]
+fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
+	f()
+}
+
+#[cfg(test)]
+mod testutil;
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::test_id;
 
 	// Same order as the old `LIKE '%mismatch'`, then `read-error`.
 	#[test]
 	fn damage_sorts_first() {
+		let _id = test_id("0vG4fc");
 		for k in db::Kind::ALL {
 			let n = k.name();
 			let was = if n.ends_with("mismatch") {
