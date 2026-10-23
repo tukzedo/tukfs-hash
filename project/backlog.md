@@ -51,21 +51,6 @@
 	- Test case: `b2b_matches_known_digests`, the RFC 7693 vectors and one 300000-byte input through `read_sums` with 3 buffer sizes. It fails when a read's bytes are dropped. Integration section 20 still matches rmlint 2.10.3 byte for byte, on ext4 and ZFS.
 	- Swept: every `blake2::` use in `src/` (the read loop and the `rmlint_set_only_with_the_flag` helper), `accept.rs`'s `read_sums` call, and the docs, which don't name the crate.
 
-- Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
-	- ID: 2026101916404102
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404110
-	- Requirements  [Feature]:
-		- Turn on `pedantic` in a `[lints.clippy]` table in `Cargo.toml`, so the existing `-D warnings` gate holds it.
-		- Fix the mechanical ones, about 30.
-		- Allow the cast lints, with a reason. Stat values are stored as SQLite's `i64`, and rmlint keeps its time as a float.
-		- Long functions have their own item.
-	- Note: The list by lint and line is in details.md.
-
 - Event kinds are passed around as plain strings, next to the `Kind` enum.
 	- ID: 2026101916404103
 	- Type: Enhancement
@@ -125,17 +110,6 @@
 	- Opened by: style and performance review
 	- Note: `list_dir` in `scan.rs` joins every entry's path, and `queue` joins it again for files. Keep the first one.
 
-- `hex` and `escape_name` allocate a new string for every byte.
-	- ID: 2026101916404108
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Write each byte into the output string with `write!`, or from a table.
-	- Note: `--rmlint` calls `hex` for every rmlint checksum it writes, 64 bytes each. This also clears 2 pedantic warnings.
-
 - Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
 	- ID: 2026101916404109
 	- Type: Task
@@ -170,15 +144,6 @@
 	- Requirements  [Feature]:
 		- A mode enum in place of `verify`.
 	- Note: `Opts` has 4 bools, which pedantic flags.
-
-- Some public types don't derive `Debug`.
-	- ID: 2026101916404112
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: `Opts`, `Plan`, `PathKey`, `Hashed`, `Msg`, `Entry`, `List`, `Source` and `Diff`.
 
 - Public items have `//` comments instead of `///`.
 	- ID: 2026101916404113
@@ -297,6 +262,68 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
+	- ID: 2026101916404102
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404110
+	- Requirements  [Feature]:
+		- Turn on `pedantic` in a `[lints.clippy]` table in `Cargo.toml`, so the existing `-D warnings` gate holds it.
+		- Fix the mechanical ones, about 30.
+		- Allow the cast lints, with a reason. Stat values are stored as SQLite's `i64`, and rmlint keeps its time as a float.
+		- Long functions have their own item.
+	- Note: The list by lint and line is in details.md.
+	- Actual effort: Avg
+	- Progress log:
+		- `pedantic` is on in `[lints.clippy]` in Cargo.toml, so the `-D warnings` gate holds it. The 4 cast lints are allowed there, with the reason.
+		- Fixed the mechanical ones by hand, and `hex` and `escape_name` with 2026101916404108.
+		- `too_many_lines` is allowed on each of the 6 long functions, with a reason naming 2026101916404110. `struct_excessive_bools` is allowed on `Opts`, naming 2026101916404111.
+		- Verified: release build, clippy gate, `cargo test --release` (56 passed), and the integration test on ext4 and ZFS.
+		- Verified: the gate goes red on a pedantic case put back on purpose (`unnested_or_patterns` in xattr.rs), and green again after restoring it.
+		- Swept: `cargo clippy --all-targets` covers the bin and its tests, so every site is checked.
+	- Decisions:
+		- `Hashed::hashed_us` keeps its name, since it matches its column. `struct_field_names` is allowed on that one field.
+		- `unreadable_literal` is allowed on the xattr tests, whose numbers are written as rmlint and stat print them.
+		- `scan::run`, `snapdiff::run`, `db::writer` and `one_file` now borrow what they took by value.
+	- Test case: The clippy gate itself.
+	- Closed: 20261023-074009
+
+- `hex` and `escape_name` allocate a new string for every byte.
+	- ID: 2026101916404108
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Write each byte into the output string with `write!`, or from a table.
+	- Note: `--rmlint` calls `hex` for every rmlint checksum it writes, 64 bytes each. This also clears 2 pedantic warnings.
+	- Actual effort: Low
+	- Progress log:
+		- Both write each byte from a 16-character table now.
+		- Verified: `hex_and_escape_pinned` passes on the old code and the new. Integration steps 10 and 20 pass on ext4 and ZFS.
+		- Swept: other `format!` per byte or char in src, by the `format_push_string` lint. None left.
+	- Test case: `util::tests::hex_and_escape_pinned`, beside `hex_round_trip` and `escapes_names`.
+	- Closed: 20261023-074009
+
+- Some public types don't derive `Debug`.
+	- ID: 2026101916404112
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `Opts`, `Plan`, `PathKey`, `Hashed`, `Msg`, `Entry`, `List`, `Source` and `Diff`.
+	- Actual effort: Low
+	- Progress log:
+		- All 9 derive `Debug`. Every field type already had it, so none needed a manual impl.
+		- Swept: every `pub struct` and `pub enum` in src has `Debug` now.
+	- Test case: None. It is a derive, and the build checks it.
+	- Closed: 20261023-074009
 
 - The release build uses thin LTO and 4 codegen units, and keeps its symbols.
 	- ID: 2026101916404100

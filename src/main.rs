@@ -139,6 +139,7 @@ fn main() {
 	std::process::exit(code);
 }
 
+#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
 fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let shown = |a: &OsStr| util::escape_name(a.as_bytes());
 	let Some(cmd) = argv.first().map(|c| c.to_str().unwrap_or_default()) else {
@@ -219,20 +220,20 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			"--progress" => {
 				progress = take_text(&mut it, a)?
 					.parse()
-					.map_err(|_| "--progress takes seconds")?
+					.map_err(|_| "--progress takes seconds")?;
 			}
 			"--run" => {
 				run_id = Some(
 					take_text(&mut it, a)?
 						.parse::<i64>()
 						.map_err(|_| "--run takes a number")?,
-				)
+				);
 			}
 			"--kind" => kind = Some(take_text(&mut it, a)?),
 			"--limit" => {
 				limit = take_text(&mut it, a)?
 					.parse()
-					.map_err(|_| "--limit takes a number")?
+					.map_err(|_| "--limit takes a number")?;
 			}
 			"--old" => old = Some(p(take_value(&mut it, a)?)),
 			"--new" => new = Some(p(take_value(&mut it, a)?)),
@@ -269,7 +270,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				signal_hook::flag::register(sig, stop.clone()).map_err(|e| e.to_string())?;
 			}
 			scan::run(
-				scan::Opts {
+				&scan::Opts {
 					db: need_db()?,
 					roots,
 					excludes,
@@ -283,7 +284,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					progress_secs: progress,
 					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
 				},
-				stop,
+				&stop,
 			)
 		}
 		"plan" => {
@@ -323,7 +324,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					)
 				}
 			};
-			snapdiff::run(&old, &new, src, show_all)
+			snapdiff::run(&old, &new, &src, show_all)
 		}
 		_ => Err(format!("unknown command {}; see --help", shown(&argv[0]))),
 	}
@@ -368,7 +369,7 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 			"run {id} on {} {status}: started {}, finished {}{skipping}",
 			host.unwrap_or_default(),
 			util::fmt_local(start),
-			fin.map(util::fmt_local).unwrap_or_else(|| "-".into()),
+			fin.map_or_else(|| "-".into(), util::fmt_local),
 		);
 		if let Some(s) = summary {
 			for l in s.lines() {

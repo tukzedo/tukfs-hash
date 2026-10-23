@@ -29,9 +29,9 @@ fn unescape(s: &str) -> PathBuf {
 			&& i + 3 < b.len()
 			&& b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
 		{
-			let v = (b[i + 1] - b'0') as u32 * 64
-				+ (b[i + 2] - b'0') as u32 * 8
-				+ (b[i + 3] - b'0') as u32;
+			let v = u32::from(b[i + 1] - b'0') * 64
+				+ u32::from(b[i + 2] - b'0') * 8
+				+ u32::from(b[i + 3] - b'0');
 			out.push(v as u8);
 			i += 4;
 		} else {
@@ -103,7 +103,7 @@ fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 	if sys.join("partition").exists() {
 		if let Some(parent) = fs::canonicalize(&sys)
 			.ok()
-			.and_then(|p| p.parent().map(|p| p.to_path_buf()))
+			.and_then(|p| p.parent().map(Path::to_path_buf))
 		{
 			if let Some(name) = parent.file_name() {
 				out.insert(name.to_string_lossy().into_owned());
@@ -368,7 +368,7 @@ mod tests {
 
 	#[test]
 	fn groups_share_disks() {
-		let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>();
+		let s = |v: &[&str]| v.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
 		let roots = vec![
 			(PathBuf::from("/a"), s(&["nvme0n1", "nvme1n1"])),
 			(PathBuf::from("/b"), s(&["sda"])),

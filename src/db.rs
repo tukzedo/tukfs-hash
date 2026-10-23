@@ -63,6 +63,7 @@ CREATE INDEX events_run_kind ON events(run_id, kind);
 
 // Names are bytes on Linux. Most are UTF-8 and go in as text, so the sqlite3
 // shell can match them with a plain string; the rest go in as blobs.
+#[derive(Debug)]
 pub struct PathKey<'a>(pub &'a [u8]);
 
 impl ToSql for PathKey<'_> {
@@ -226,6 +227,7 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Resu
 	.optional()
 }
 
+#[derive(Debug)]
 pub struct Hashed {
 	pub path: Vec<u8>,
 	pub b3: [u8; 32],
@@ -233,9 +235,11 @@ pub struct Hashed {
 	pub bytes: i64,
 	pub mtime_us: i64,
 	pub ino: i64,
+	#[allow(clippy::struct_field_names, reason = "named for its column")]
 	pub hashed_us: i64,
 }
 
+#[derive(Debug)]
 pub enum Msg {
 	Hashed(Box<Hashed>),
 	Seen(Vec<u8>),
@@ -313,7 +317,7 @@ fn commit(conn: &mut Connection, run_id: i64, msgs: &mut Vec<Msg>) -> rusqlite::
 pub fn writer(
 	mut conn: Connection,
 	run_id: i64,
-	rx: Receiver<Msg>,
+	rx: &Receiver<Msg>,
 	halt: impl Fn(),
 ) -> (Connection, Result<(), String>) {
 	let mut events: Vec<Msg> = Vec::new();
@@ -377,7 +381,7 @@ mod tests {
 		let p = temp_db("rt");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
-		let t = std::thread::spawn(move || writer(conn, 1, rx, || {}));
+		let t = std::thread::spawn(move || writer(conn, 1, &rx, || {}));
 		let odd = b"/x/caf\xe9".to_vec();
 		for (path, d) in [
 			(b"/x/a".to_vec(), 1u8),
@@ -447,11 +451,11 @@ mod tests {
 		)
 		.unwrap();
 		let halts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-		let h = halts.clone();
+		let halts_seen = halts.clone();
 		let (tx, rx) = sync_channel(16);
 		let t = std::thread::spawn(move || {
-			writer(conn, 1, rx, move || {
-				h.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			writer(conn, 1, &rx, move || {
+				halts_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 			})
 		});
 		// The row comes first in the batch, and still doesn't take the event

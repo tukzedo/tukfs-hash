@@ -33,7 +33,7 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 		}
 		let err = io::Error::last_os_error();
 		match err.raw_os_error() {
-			Some(libc::ENODATA) | Some(libc::ENOTSUP) => return Ok(None),
+			Some(libc::ENODATA | libc::ENOTSUP) => return Ok(None),
 			Some(libc::ERANGE) => {
 				let need = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
 				if need < 0 {
@@ -226,6 +226,7 @@ pub fn write_b3(
 }
 
 #[cfg(test)]
+#[allow(clippy::unreadable_literal, reason = "as rmlint and stat print them")]
 mod tests {
 	use super::*;
 

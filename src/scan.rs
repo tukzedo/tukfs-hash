@@ -16,6 +16,7 @@ use crate::xattr::{self, OnFile};
 use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
@@ -27,6 +28,8 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+#[derive(Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "see 2026101916404111")]
 pub struct Opts {
 	pub db: PathBuf,
 	pub roots: Vec<PathBuf>,
@@ -362,6 +365,7 @@ struct Job {
 	root: Arc<Root>,
 }
 
+#[derive(Debug)]
 pub struct Plan {
 	pub groups: Vec<(String, Vec<PathBuf>, usize)>,
 	pub dropped: Vec<String>,
@@ -474,7 +478,8 @@ pub fn give_back(db: &Path) {
 	}
 }
 
-pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
+#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
+pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let plan = plan(&o.roots, &o.threads)?;
 	for d in &plan.dropped {
 		err!("skipping root {d}");
@@ -528,7 +533,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	let (tx, rx) = sync_channel::<Msg>(65536);
 	let writer = {
 		let (faults, stop) = (faults.clone(), stop.clone());
-		std::thread::spawn(move || db::writer(conn, run_id, rx, move || faults.halt(&stop)))
+		std::thread::spawn(move || db::writer(conn, run_id, &rx, move || faults.halt(&stop)))
 	};
 
 	let mounts = mounts::read_mounts()?;
@@ -584,9 +589,10 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	for g in &groups {
 		out!("group {} with {} worker(s):", g.name, g.threads);
 		for r in &g.roots {
-			match hands_off.get(r) {
-				Some((_, t)) => out!("\t{} ({t}, no attributes written)", r.display()),
-				None => out!("\t{}", r.display()),
+			if let Some((_, t)) = hands_off.get(r) {
+				out!("\t{} ({t}, no attributes written)", r.display());
+			} else {
+				out!("\t{}", r.display());
 			}
 		}
 	}
@@ -621,7 +627,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	for h in handles {
 		// run_group catches its workers' panics; this is in case it can't.
 		if h.join().is_err() {
-			faults.add(&stop, "a group panicked".into());
+			faults.add(stop, "a group panicked".into());
 		}
 	}
 	let (conn, written) = writer
@@ -638,7 +644,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	// part's. The events line is the whole run's either way.
 	let mut part = String::new();
 	for g in &groups {
-		part.push_str(&format!("{}: {}\n", g.name, g.stats.line()));
+		let _ = writeln!(part, "{}: {}", g.name, g.stats.line());
 	}
 	let counts = run_events(&conn, run_id)
 		.map_err(|x| why.push(format!("database: {x}")))
@@ -650,7 +656,7 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			summary.push_str(l);
 			summary.push('\n');
 		}
-		summary.push_str(&format!("resumed {}\n", fmt_local(started)));
+		let _ = writeln!(summary, "resumed {}", fmt_local(started));
 	}
 	summary.push_str(&part);
 	let mut status = if !why.is_empty() {
@@ -1053,9 +1059,8 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 	let mut buf = vec![0u8; 1 << 20];
 	let mut xattr_fail_logged = 0;
 	loop {
-		let job = match jobs.lock().unwrap().recv() {
-			Ok(j) => j,
-			Err(_) => return,
+		let Ok(job) = jobs.lock().unwrap().recv() else {
+			return;
 		};
 		if sh.stop.load(Relaxed) {
 			continue;
@@ -1068,7 +1073,15 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 				continue;
 			}
 		};
-		one_file(g, sh, &job, prior, &mut buf, links, &mut xattr_fail_logged);
+		one_file(
+			g,
+			sh,
+			&job,
+			prior.as_ref(),
+			&mut buf,
+			links,
+			&mut xattr_fail_logged,
+		);
 	}
 }
 
@@ -1142,7 +1155,7 @@ pub fn read_sums(
 				}
 				total += n as u64;
 			}
-			Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+			Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
 			Err(e) => {
 				read_bytes.fetch_add(total, Relaxed);
 				return Err(ReadFail::Io(e, total));
@@ -1332,11 +1345,12 @@ fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
 	}))
 }
 
+#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
 fn one_file(
 	g: &Group,
 	sh: &Shared,
 	job: &Job,
-	prior: Option<Prior>,
+	prior: Option<&Prior>,
 	buf: &mut [u8],
 	links: &Links,
 	xattr_fail_logged: &mut u32,
@@ -1362,7 +1376,7 @@ fn one_file(
 	st.files.fetch_add(1, Relaxed);
 	let (bytes, mt) = (md.len() as i64, mtime_us(&md));
 
-	if let Some(p) = &prior {
+	if let Some(p) = prior {
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
 		if (p.hashed_us >= sh.cutoff_us || p.seen_run == sh.run_id)
@@ -1400,14 +1414,14 @@ fn one_file(
 	};
 	let (bytes, mt) = (before.len() as i64, mtime_us(&before));
 	let onfile = OnFile::read(fd);
-	let refs = Refs::new(&onfile, prior.as_ref(), &before);
+	let refs = Refs::new(&onfile, prior, &before);
 
 	// Nothing stored at this size and time to check against: new or edited.
 	// The next full scan reads it.
 	if sh.verify && refs.xattr.is_none() && refs.db.is_none() {
 		st.skip_unknown.fetch_add(1, Relaxed);
 		links.passed(&before);
-		if prior.as_ref().is_some_and(|p| p.seen_run != sh.run_id) {
+		if prior.is_some_and(|p| p.seen_run != sh.run_id) {
 			send(sh, Msg::Seen(pbytes.to_vec()));
 		}
 		return;
@@ -1443,7 +1457,7 @@ fn one_file(
 				st.links.fetch_add(1, Relaxed);
 				let misses = refs.misses(&sums);
 				if !misses.is_empty() {
-					keep(sh, st, path, prior.as_ref(), misses, "");
+					keep(sh, st, path, prior, misses, "");
 					return;
 				}
 				refs.tally(&sums, st);
@@ -1484,7 +1498,7 @@ fn one_file(
 			if let Some(c) = claim {
 				c.fill((bytes, mt, sums));
 			}
-			keep(sh, st, path, prior.as_ref(), misses, &note);
+			keep(sh, st, path, prior, misses, &note);
 			return;
 		}
 	};
@@ -1871,7 +1885,7 @@ mod tests {
 			&g,
 			&sh,
 			&job(&r, "b"),
-			Some(fresh),
+			Some(&fresh),
 			&mut buf,
 			&links,
 			&mut logged,

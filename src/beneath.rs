@@ -112,7 +112,7 @@ impl Root {
 				libc::SYS_openat2,
 				self.dir.as_raw_fd(),
 				c.as_ptr(),
-				&how as *const OpenHow,
+				&raw const how,
 				std::mem::size_of::<OpenHow>(),
 			)
 		})
@@ -161,6 +161,7 @@ pub enum Kind {
 	Other,
 }
 
+#[derive(Debug)]
 pub struct Entry {
 	pub name: Box<OsStr>,
 	pub ino: u64,
@@ -168,6 +169,7 @@ pub struct Entry {
 }
 
 // A folder's entries, read from an fd rather than by name.
+#[derive(Debug)]
 pub struct List {
 	dir: NonNull<libc::DIR>,
 }
@@ -175,14 +177,12 @@ pub struct List {
 impl List {
 	pub fn new(f: File) -> io::Result<List> {
 		let fd = f.into_raw_fd();
-		match NonNull::new(unsafe { libc::fdopendir(fd) }) {
-			Some(dir) => Ok(List { dir }),
-			None => {
-				let e = io::Error::last_os_error();
-				unsafe { libc::close(fd) };
-				Err(e)
-			}
-		}
+		let Some(dir) = NonNull::new(unsafe { libc::fdopendir(fd) }) else {
+			let e = io::Error::last_os_error();
+			unsafe { libc::close(fd) };
+			return Err(e);
+		};
+		Ok(List { dir })
 	}
 
 	fn fd(&self) -> RawFd {

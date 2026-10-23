@@ -17,6 +17,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::util::{escape_name, show_path};
 
+#[derive(Debug)]
 pub enum Source {
 	// `zfs diff` output, with the dataset's mount point to strip.
 	ZfsDiff(PathBuf, PathBuf),
@@ -65,7 +66,7 @@ fn zfs_unescape(s: &[u8]) -> Vec<u8> {
 		{
 			let v = s[i + 1..i + 5]
 				.iter()
-				.fold(0u32, |a, c| a * 8 + (c - b'0') as u32);
+				.fold(0u32, |a, c| a * 8 + u32::from(c - b'0'));
 			out.push(v as u8);
 			i += 5;
 		} else {
@@ -232,6 +233,7 @@ fn stays_inside(p: &Path) -> bool {
 		.all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
+#[derive(Debug)]
 pub struct Diff {
 	pub differing: u64,
 	pub runs: Vec<(u64, u64)>,
@@ -398,7 +400,8 @@ fn find_by_inode(
 	}
 }
 
-pub fn run(old: &Path, new: &Path, src: Source, show_all: bool) -> Result<i32, String> {
+#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
+pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, String> {
 	for dir in [old, new] {
 		let md = fs::metadata(dir).map_err(|e| format!("{}: {e}", show_path(dir)))?;
 		if !md.is_dir() {
@@ -408,7 +411,7 @@ pub fn run(old: &Path, new: &Path, src: Source, show_all: bool) -> Result<i32, S
 	let read = |p: &Path| fs::read(p).map_err(|e| format!("{}: {e}", show_path(p)));
 	// Which side each listed file has to be on. zfs diff names files in both
 	// snapshots, find-new files in the new one, and a list can name anything.
-	let (parsed, need_old, need_new) = match &src {
+	let (parsed, need_old, need_new) = match src {
 		Source::ZfsDiff(f, mount) => {
 			let mut mounts = vec![mount.clone()];
 			// zfs prints the real mount point, and --mount may go through a symlink.

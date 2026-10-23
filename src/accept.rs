@@ -11,6 +11,7 @@ use crate::scan::{self, read_sums, ReadFail, Sums};
 use crate::util::{b64u_encode, canonical_name, now_us, show_path};
 use crate::xattr::{self, OnFile};
 use rusqlite::{params, Connection};
+use std::fmt::Write as _;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -61,7 +62,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	}
 	scan::give_back(&db_path);
 	out!("run {run_id}: accepted {taken} of {}", paths.len());
-	Ok(if taken == paths.len() { 0 } else { 1 })
+	Ok(i32::from(taken != paths.len()))
 }
 
 fn fail_text(f: ReadFail) -> String {
@@ -76,6 +77,7 @@ fn digest_text(d: Option<&[u8]>) -> String {
 	d.map_or_else(|| "none".into(), b64u_encode)
 }
 
+#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
 fn one(
 	conn: &mut Connection,
 	run_id: i64,
@@ -132,7 +134,7 @@ fn one(
 		detail.push_str("; rmlint's blake2b removed");
 	}
 	if let Some(t) = &hands_off {
-		detail.push_str(&format!("; attributes left alone on {t}"));
+		let _ = write!(detail, "; attributes left alone on {t}");
 	}
 	let hashed_us = now_us();
 	let (bytes, mt) = (before.len() as i64, scan::mtime_us(&before));
