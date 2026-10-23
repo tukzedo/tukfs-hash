@@ -12,17 +12,39 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin="${1:-${here}/target/release/tukfs-hash}"
-work="${TMPDIR:-/tmp}/test_tukfs-hash_$(date +%Y%m%d-%H%M%S)$$"
+# Resolved, so fSafeRm can insist the path has no links in it.
+work="$(realpath -e -- "${TMPDIR:-/tmp}")/tukfs-hash/test_tukfs-hash_itzq_$(date +%Y%m%d-%H%M%S)_$$"
 # The exit trap removes it only while the marker holds this run's token, so
 # a folder this run didn't make is never touched.
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
+mkdir -p -- "${work%/*}"
 mkdir -- "${work}"
 printf '%s\n' "${token}" > "${work}/.test-run"
+
+# rm -rf, but only on what can only be one of this script's work folders:
+# .../tmp/<something>/test_tukfs-hash_itzq_<stamp>_<pid>, no links, no dots.
+fSafeRm() {
+	local p="${1:-}" real='' fhs=''
+	if [[ -z "${p}" || "${p}" != /* || "${p}" == *..* || "${p}" == *//* || "${p}" == *$'\n'* ]]; then
+		printf 'fSafeRm: refused, bad path: "%s"\n' "${p}" >&2; return 1
+	fi
+	if ! [[ "${p}" =~ ^(/.+)?/tmp/[^/]+(/[^/]+)*/test_tukfs-hash_itzq_[0-9]{8}-[0-9]{6}_[0-9]+$ ]]; then
+		printf 'fSafeRm: refused, not a test folder: %s\n' "${p}" >&2; return 1
+	fi
+	for fhs in / /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var "${HOME:-/}"; do
+		if [[ "${p%/}" == "${fhs%/}" ]]; then printf 'fSafeRm: refused, system folder: %s\n' "${p}" >&2; return 1; fi
+	done
+	real="$(realpath -e -- "${p}")" || { printf 'fSafeRm: refused, not there: %s\n' "${p}" >&2; return 1; }
+	if [[ "${real}" != "${p}" || ! -d "${p}" || -L "${p}" ]]; then
+		printf 'fSafeRm: refused, a link or not a folder: %s\n' "${p}" >&2; return 1
+	fi
+	rm -rf --one-file-system -- "${p}"
+}
 fCleanup() {
 	local got=''
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
-	rm -rf -- "${work}"
+	fSafeRm "${work}" || true
 }
 trap fCleanup EXIT
 tree="${work}/tree"
@@ -520,3 +542,5 @@ fi
 ##		  holds the run's token.
 ##		- 20261023: expect takes a status for [[ ]] checks, one fFlipByte, and
 ##		  step 5's 400 files from one python3.
+##		- 20261023: fSafeRm guards the work folder's rm -rf, and the folder moved
+##		  under <TMPDIR>/tukfs-hash/.
