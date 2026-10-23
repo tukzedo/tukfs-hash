@@ -1,17 +1,31 @@
 [package]
 name = "tukfs-hash"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.88"
 license = "GPL-2.0-only"
 publish = false
 
 [dependencies]
-blake2 = "0.10"
+blake2b_simd = "1.0"
 blake3 = "1.8"
 libc = "0.2"
 rusqlite = { version = "0.37", features = ["bundled"] }
 signal-hook = "0.3"
 
 [profile.release]
-lto = "thin"
-codegen-units = 4
+lto = true
+codegen-units = 1
+strip = true
+# guarded() in scan.rs catches a worker's panic so the run is marked failed.
+# With abort the run would be left as running.
+panic = "unwind"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Stat values are stored as SQLite's i64, and rmlint keeps its time as a float,
+# so these casts are on purpose.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"

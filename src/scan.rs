@@ -7,7 +7,7 @@
 // contents did is the thing this is looking for.
 
 use crate::beneath::{self, Root};
-use crate::db::{self, Hashed, Msg, Prior};
+use crate::db::{self, Hashed, Kind, Msg, Prior, RunStatus};
 use crate::mounts;
 use crate::util::{
 	b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us,
@@ -16,17 +16,34 @@ use crate::xattr::{self, OnFile};
 use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+/// A full scan, or `--verify`, which rereads only files with a known
+/// checksum. See design.md, Runs and exit codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+	Full,
+	Verify,
+}
+
+impl Mode {
+	// From runs.verify.
+	fn stored(verify: bool) -> Mode {
+		if verify { Mode::Verify } else { Mode::Full }
+	}
+}
+
+#[derive(Debug)]
 pub struct Opts {
 	pub db: PathBuf,
 	pub roots: Vec<PathBuf>,
@@ -35,81 +52,11 @@ pub struct Opts {
 	pub threads: Vec<(PathBuf, usize)>,
 	pub since: Option<i64>,
 	pub resume: bool,
-	pub verify: bool,
+	pub mode: Mode,
 	pub write_xattrs: bool,
 	pub rmlint: bool,
 	pub progress_secs: u64,
 	pub args: String,
-}
-
-/// What an event says about a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-	XattrMismatch,
-	RmlintMismatch,
-	DbMismatch,
-	CacheMismatch,
-	ReadError,
-	Unsupported,
-	Unstable,
-	DirError,
-	StatError,
-	OpenError,
-	DbError,
-	XattrError,
-}
-
-impl Kind {
-	const ALL: [Kind; 12] = [
-		Kind::XattrMismatch,
-		Kind::RmlintMismatch,
-		Kind::DbMismatch,
-		Kind::CacheMismatch,
-		Kind::ReadError,
-		Kind::Unsupported,
-		Kind::Unstable,
-		Kind::DirError,
-		Kind::StatError,
-		Kind::OpenError,
-		Kind::DbError,
-		Kind::XattrError,
-	];
-
-	pub fn name(self) -> &'static str {
-		match self {
-			Kind::XattrMismatch => "b3-xattr-mismatch",
-			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
-			Kind::DbMismatch => "b3-db-mismatch",
-			Kind::CacheMismatch => "cache-mismatch",
-			Kind::ReadError => "read-error",
-			Kind::Unsupported => "read-unsupported",
-			Kind::Unstable => "unstable",
-			Kind::DirError => "dir-error",
-			Kind::StatError => "stat-error",
-			Kind::OpenError => "open-error",
-			Kind::DbError => "db-error",
-			Kind::XattrError => "xattr-error",
-		}
-	}
-
-	// 4 is something flagged, 8 is something left unchecked. Unstable files
-	// are live ones, like a running VM's disk, and would set 8 on every run.
-	// A failed attribute write comes after the check.
-	fn exit_bits(self) -> i32 {
-		match self {
-			Kind::XattrMismatch
-			| Kind::RmlintMismatch
-			| Kind::DbMismatch
-			| Kind::CacheMismatch
-			| Kind::ReadError => 4,
-			Kind::Unsupported
-			| Kind::DirError
-			| Kind::StatError
-			| Kind::OpenError
-			| Kind::DbError => 8,
-			Kind::Unstable | Kind::XattrError => 0,
-		}
-	}
 }
 
 // Every part of a resumed run counts, and a file reported again by a later
@@ -127,12 +74,7 @@ fn exit_bits(counts: &[(String, i64)]) -> i32 {
 	counts
 		.iter()
 		.filter(|(_, n)| *n > 0)
-		.map(|(k, _)| {
-			Kind::ALL
-				.iter()
-				.find(|x| x.name() == k)
-				.map_or(8, |x| x.exit_bits())
-		})
+		.map(|(k, _)| Kind::parse(k).map_or(8, Kind::exit_bits))
 		.fold(0, |a, b| a | b)
 }
 
@@ -197,12 +139,12 @@ struct Resumed {
 // roots and in the same mode. An older stopped run would bring back an old
 // skip date, and the other wrapper's run would be finished over the wrong
 // roots.
-fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Result<Resumed, String> {
+fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<Resumed, String> {
 	let row = conn
 		.query_row(
 			"SELECT id, status, cutoff_us, started_us, roots, summary, verify FROM runs
-			WHERE status != 'accept' ORDER BY id DESC LIMIT 1",
-			[],
+			WHERE status != ?1 ORDER BY id DESC LIMIT 1",
+			[RunStatus::Accept],
 			|r| {
 				Ok((
 					Resumed {
@@ -223,14 +165,19 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Resul
 		return Err("--resume: no scan to resume".into());
 	};
 	let id = run.id;
-	match status.as_str() {
-		"stopped" | "failed" | "running" | "killed" => {}
-		"done" => {
+	let Some(known) = RunStatus::parse(&status) else {
+		return Err(format!("--resume: run {id} is {status}; can't resume it"));
+	};
+	match known {
+		RunStatus::Stopped | RunStatus::Failed | RunStatus::Running | RunStatus::Killed => {}
+		RunStatus::Done => {
 			return Err(format!(
 				"--resume: the last scan, run {id}, finished. Start a new one without --resume."
-			))
+			));
 		}
-		other => return Err(format!("--resume: run {id} is {other}; can't resume it")),
+		RunStatus::Accept => {
+			return Err(format!("--resume: run {id} is {status}; can't resume it"));
+		}
 	}
 	let Some(was) = was else {
 		return Err(format!(
@@ -243,20 +190,20 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Resul
 			roots_diff(&was, roots)
 		));
 	}
-	match (was_verify, verify) {
-		(true, false) => {
+	match (Mode::stored(was_verify), mode) {
+		(Mode::Verify, Mode::Full) => {
 			return Err(format!(
 				"--resume: run {id} was a --verify run. Resume it with --verify, or start a new scan without --resume."
-			))
+			));
 		}
-		(false, true) => {
+		(Mode::Full, Mode::Verify) => {
 			return Err(format!(
 				"--resume: run {id} was a full scan. Resume it without --verify, or start a new --verify without --resume."
-			))
+			));
 		}
-		_ => {}
+		(Mode::Full, Mode::Full) | (Mode::Verify, Mode::Verify) => {}
 	}
-	if status == "running" || status == "killed" {
+	if matches!(known, RunStatus::Running | RunStatus::Killed) {
 		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
 	}
 	Ok(run)
@@ -323,11 +270,16 @@ impl Faults {
 	}
 
 	fn add(&self, stop: &AtomicBool, why: String) {
-		if let Ok(mut v) = self.why.lock() {
-			v.push(why);
-		}
+		locked(&self.why).push(why);
 		self.halt(stop);
 	}
+}
+
+// A worker's panic is caught and fails the run, so a lock it poisoned has to
+// stay usable. Otherwise a ClaimGuard dropped in the unwind aborts, or the
+// reason is lost and the run isn't marked failed.
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+	m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct Shared {
@@ -344,7 +296,7 @@ struct Shared {
 	write_xattrs: bool,
 	// blake2b for every file read, not only ones with a current rmlint set.
 	rmlint: bool,
-	verify: bool,
+	mode: Mode,
 	tx: SyncSender<Msg>,
 }
 
@@ -362,14 +314,15 @@ struct Job {
 	root: Arc<Root>,
 }
 
+#[derive(Debug)]
 pub struct Plan {
 	pub groups: Vec<(String, Vec<PathBuf>, usize)>,
 	pub dropped: Vec<String>,
 }
 
-// Roots that resolve to the same place, or sit inside another root on the same
-// filesystem, are dropped, so nothing is read twice. Bind mounts are the usual
-// cause here.
+/// Roots that resolve to the same place, or sit inside another root on the same
+/// filesystem, are dropped, so nothing is read twice. Bind mounts are the usual
+/// cause here.
 pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, String> {
 	let mounts = mounts::read_mounts()?;
 	let mut dropped = Vec::new();
@@ -411,13 +364,13 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		kept.push((c, disks));
 	}
 	let mut groups = Vec::new();
-	for (disks, rs) in mounts::group_roots(&kept) {
+	for (disks, rs) in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);
 		for (p, t) in threads {
-			if let Ok(c) = fs::canonicalize(p) {
-				if rs.iter().any(|r| c.starts_with(r) || r.starts_with(&c)) {
-					n = *t;
-				}
+			if let Ok(c) = fs::canonicalize(p)
+				&& rs.iter().any(|r| c.starts_with(r) || r.starts_with(&c))
+			{
+				n = *t;
 			}
 		}
 		groups.push((mounts::group_name(&disks), rs, n.max(1)));
@@ -454,9 +407,9 @@ pub fn host() -> String {
 		.unwrap_or_default()
 }
 
-// Hand the files back to whoever ran this through sudo, so reports and
-// queries need no root. The WAL files are only there when leaving WAL mode
-// failed.
+/// Hand the files back to whoever ran this through sudo, so reports and
+/// queries need no root. The WAL files are only there when leaving WAL mode
+/// failed.
 pub fn give_back(db: &Path) {
 	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
 	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
@@ -474,7 +427,7 @@ pub fn give_back(db: &Path) {
 	}
 }
 
-pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
+pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let plan = plan(&o.roots, &o.threads)?;
 	for d in &plan.dropped {
 		err!("skipping root {d}");
@@ -485,62 +438,24 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	let db_path = canonical_db(&o.db)?;
 	let _lock = lock(&db_path)?;
 	let conn = db::open_rw(&db_path)?;
-	let e = |e: rusqlite::Error| format!("database: {e}");
 
 	let started = now_us();
-	let roots = roots_key(&plan.groups);
-	let (run_id, cutoff_us, run_started, earlier) = if o.resume {
-		let r = pick_resume(&conn, &roots, o.verify)?;
-		(r.id, r.cutoff_us, r.started_us, r.summary)
-	} else {
-		// The lock is held, so a run still marked running died without a
-		// word. A new run means it won't be resumed.
-		conn.execute(
-			"UPDATE runs SET status = 'killed' WHERE status = 'running'",
-			[],
-		)
-		.map_err(e)?;
-		// A verify reads every known file again, however fresh.
-		let cutoff = if o.verify {
-			started
-		} else {
-			o.since.unwrap_or_else(|| local_midnight_us(started))
-		};
-		conn.execute(
-			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6)",
-			rusqlite::params![started, cutoff, host(), o.args, roots, o.verify],
-		)
-		.map_err(e)?;
-		(conn.last_insert_rowid(), cutoff, started, None)
-	};
-	conn.execute("UPDATE runs SET status = 'running' WHERE id = ?1", [run_id])
-		.map_err(e)?;
-	if o.verify {
-		out!("run {run_id}: rereading files with a known checksum");
-	} else {
-		out!(
-			"run {run_id}: files checksummed since {} are skipped",
-			fmt_local(cutoff_us)
-		);
-	}
+	let Resumed {
+		id: run_id,
+		cutoff_us,
+		started_us: run_started,
+		summary: earlier,
+	} = begin(&conn, o, &roots_key(&plan.groups), started)?;
 
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
 	let writer = {
 		let (faults, stop) = (faults.clone(), stop.clone());
-		std::thread::spawn(move || db::writer(conn, run_id, rx, move || faults.halt(&stop)))
+		std::thread::spawn(move || db::writer(conn, run_id, &rx, move || faults.halt(&stop)))
 	};
 
 	let mounts = mounts::read_mounts()?;
-	let mut hands_off = BTreeMap::new();
-	for r in plan.groups.iter().flat_map(|g| &g.1) {
-		if let Some(t) = mounts::hands_off_at(&mounts, r) {
-			let dev = fs::metadata(r)
-				.map_err(|e| format!("{}: {e}", r.display()))?
-				.dev();
-			hands_off.insert(r.clone(), (dev, t));
-		}
-	}
+	let hands_off = hands_off(&mounts, &plan.groups)?;
 	let shared = Arc::new(Shared {
 		stop: stop.clone(),
 		faults: faults.clone(),
@@ -559,17 +474,130 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			.iter()
 			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
 			.collect(),
-		mount_points: mounts::mount_points(&mounts),
+		mount_points: mounts::mount_points(mounts),
 		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
 		// A quick check leaves ctimes alone.
-		write_xattrs: o.write_xattrs && !o.verify,
+		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
-		verify: o.verify,
+		mode: o.mode,
 		tx,
 	});
+	let groups = groups(plan.groups, &hands_off);
 
-	let groups: Vec<Arc<Group>> = plan
-		.groups
+	let mut handles = Vec::new();
+	for g in &groups {
+		let g = g.clone();
+		let sh = shared.clone();
+		handles.push(std::thread::spawn(move || run_group(&g, &sh)));
+	}
+	drop(shared);
+
+	let t0 = Instant::now();
+	watch(&groups, o.progress_secs, t0);
+	for h in handles {
+		// run_group catches its workers' panics; this is in case it can't.
+		if h.join().is_err() {
+			faults.add(stop, "a group panicked".into());
+		}
+	}
+	let (conn, written) = writer
+		.join()
+		.map_err(|_| "the database writer panicked".to_string())?;
+	let mut why = std::mem::take(&mut *locked(&faults.why));
+	why.extend(written.err());
+	let part = Part {
+		run_id,
+		started_us: started,
+		earlier,
+		groups: &groups,
+		t0,
+	};
+	finish(conn, &part, why, stop.load(Relaxed), &db_path)
+}
+
+// Picks up the run to resume, or starts a new one, and marks it running. A new
+// run is its own first part.
+fn begin(
+	conn: &rusqlite::Connection,
+	o: &Opts,
+	roots: &[u8],
+	started: i64,
+) -> Result<Resumed, String> {
+	let e = |e: rusqlite::Error| format!("database: {e}");
+	let r = if o.resume {
+		pick_resume(conn, roots, o.mode)?
+	} else {
+		// The lock is held, so a run still marked running died without a
+		// word. A new run means it won't be resumed.
+		conn.execute(
+			"UPDATE runs SET status = ?1 WHERE status = ?2",
+			[RunStatus::Killed, RunStatus::Running],
+		)
+		.map_err(e)?;
+		// A verify reads every known file again, however fresh.
+		let cutoff = match o.mode {
+			Mode::Verify => started,
+			Mode::Full => o.since.unwrap_or_else(|| local_midnight_us(started)),
+		};
+		conn.execute(
+			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+			rusqlite::params![
+				started,
+				cutoff,
+				RunStatus::Running,
+				host(),
+				o.args,
+				roots,
+				o.mode == Mode::Verify
+			],
+		)
+		.map_err(e)?;
+		Resumed {
+			id: conn.last_insert_rowid(),
+			cutoff_us: cutoff,
+			started_us: started,
+			summary: None,
+		}
+	};
+	conn.execute(
+		"UPDATE runs SET status = ?1 WHERE id = ?2",
+		rusqlite::params![RunStatus::Running, r.id],
+	)
+	.map_err(e)?;
+	if o.mode == Mode::Verify {
+		out!("run {}: rereading files with a known checksum", r.id);
+	} else {
+		out!(
+			"run {}: files checksummed since {} are skipped",
+			r.id,
+			fmt_local(r.cutoff_us)
+		);
+	}
+	Ok(r)
+}
+
+// Roots on NTFS, APFS or HFS+, with their device and filesystem type.
+fn hands_off(
+	mounts: &[mounts::Mount],
+	groups: &[(String, Vec<PathBuf>, usize)],
+) -> Result<BTreeMap<PathBuf, (u64, String)>, String> {
+	let mut out = BTreeMap::new();
+	for r in groups.iter().flat_map(|g| &g.1) {
+		if let Some(t) = mounts::hands_off_at(mounts, r) {
+			let dev = fs::metadata(r)
+				.map_err(|e| format!("{}: {e}", r.display()))?
+				.dev();
+			out.insert(r.clone(), (dev, t));
+		}
+	}
+	Ok(out)
+}
+
+fn groups(
+	planned: Vec<(String, Vec<PathBuf>, usize)>,
+	hands_off: &BTreeMap<PathBuf, (u64, String)>,
+) -> Vec<Arc<Group>> {
+	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|(name, roots, threads)| {
 			Arc::new(Group {
@@ -584,29 +612,24 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 	for g in &groups {
 		out!("group {} with {} worker(s):", g.name, g.threads);
 		for r in &g.roots {
-			match hands_off.get(r) {
-				Some((_, t)) => out!("\t{} ({t}, no attributes written)", r.display()),
-				None => out!("\t{}", r.display()),
+			if let Some((_, t)) = hands_off.get(r) {
+				out!("\t{} ({t}, no attributes written)", r.display());
+			} else {
+				out!("\t{}", r.display());
 			}
 		}
 	}
+	groups
+}
 
-	let mut handles = Vec::new();
-	for g in &groups {
-		let g = g.clone();
-		let sh = shared.clone();
-		handles.push(std::thread::spawn(move || run_group(&g, &sh)));
-	}
-	drop(shared);
-
-	let t0 = Instant::now();
+fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 	let mut last = Instant::now();
 	while !groups.iter().all(|g| g.done.load(Relaxed)) {
 		std::thread::sleep(Duration::from_millis(200));
-		if last.elapsed() >= Duration::from_secs(o.progress_secs.max(1)) {
+		if last.elapsed() >= Duration::from_secs(progress_secs.max(1)) {
 			last = Instant::now();
 			let secs = t0.elapsed().as_secs_f64().max(1.0);
-			for g in &groups {
+			for g in groups {
 				let rate = g.stats.bytes.load(Relaxed) as f64 / secs;
 				out!(
 					"[{}] {} {}/s | {}",
@@ -618,54 +641,57 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			}
 		}
 	}
-	for h in handles {
-		// run_group catches its workers' panics; this is in case it can't.
-		if h.join().is_err() {
-			faults.add(&stop, "a group panicked".into());
-		}
-	}
-	let (conn, written) = writer
-		.join()
-		.map_err(|_| "the database writer panicked".to_string())?;
-	let mut why: Vec<String> = faults
-		.why
-		.lock()
-		.map(|mut v| std::mem::take(&mut *v))
-		.unwrap_or_default();
-	why.extend(written.err());
-	let stopped = stop.load(Relaxed);
+}
+
+// This part of a run, from its start to its summary.
+struct Part<'a> {
+	run_id: i64,
+	started_us: i64,
+	earlier: Option<String>,
+	groups: &'a [Arc<Group>],
+	t0: Instant,
+}
+
+fn finish(
+	conn: rusqlite::Connection,
+	p: &Part,
+	mut why: Vec<String>,
+	stopped: bool,
+	db_path: &Path,
+) -> Result<i32, String> {
+	let run_id = p.run_id;
 	// The stored summary keeps every part's lines; the output shows this
 	// part's. The events line is the whole run's either way.
 	let mut part = String::new();
-	for g in &groups {
-		part.push_str(&format!("{}: {}\n", g.name, g.stats.line()));
+	for g in p.groups {
+		let _ = writeln!(part, "{}: {}", g.name, g.stats.line());
 	}
 	let counts = run_events(&conn, run_id)
 		.map_err(|x| why.push(format!("database: {x}")))
 		.ok();
 	part.push_str(&events_line(counts.as_deref()));
 	let mut summary = String::new();
-	if let Some(prev) = earlier {
+	if let Some(prev) = &p.earlier {
 		for l in prev.lines().filter(|l| !l.starts_with(EVENTS_LINE)) {
 			summary.push_str(l);
 			summary.push('\n');
 		}
-		summary.push_str(&format!("resumed {}\n", fmt_local(started)));
+		let _ = writeln!(summary, "resumed {}", fmt_local(p.started_us));
 	}
 	summary.push_str(&part);
 	let mut status = if !why.is_empty() {
-		"failed"
+		RunStatus::Failed
 	} else if stopped {
-		"stopped"
+		RunStatus::Stopped
 	} else {
-		"done"
+		RunStatus::Done
 	};
 	if let Err(x) = conn.execute(
 		"UPDATE runs SET status = ?1, finished_us = ?2, summary = ?3 WHERE id = ?4",
 		rusqlite::params![status, now_us(), summary, run_id],
 	) {
 		why.push(format!("database: {x}"));
-		status = "failed";
+		status = RunStatus::Failed;
 	}
 	// Everything is committed by now, so this can't change the result.
 	if let Err(x) = db::close_rw(conn) {
@@ -674,11 +700,12 @@ pub fn run(o: Opts, stop: Arc<AtomicBool>) -> Result<i32, String> {
 			db_path.display()
 		);
 	}
-	give_back(&db_path);
+	give_back(db_path);
 
 	out!(
-		"run {run_id} {status} after {}s\n{part}",
-		t0.elapsed().as_secs()
+		"run {run_id} {} after {}s\n{part}",
+		status.text(),
+		p.t0.elapsed().as_secs()
 	);
 	if !why.is_empty() {
 		why.dedup();
@@ -737,7 +764,7 @@ fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
 	_ = send(
 		sh,
 		Msg::Event {
-			kind: kind.name(),
+			kind,
 			path: path.as_os_str().as_bytes().to_vec(),
 			detail,
 		},
@@ -769,7 +796,7 @@ pub fn lock_path(db: &Path) -> PathBuf {
 	PathBuf::from(s)
 }
 
-// The database may not exist yet, so only its folder can be resolved.
+/// The database may not exist yet, so only its folder can be resolved.
 pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
 	crate::util::canonical_name(db)
 }
@@ -846,7 +873,7 @@ fn list_dir(
 	// Asked first, since a big folder's files are queued before the listing
 	// ends.
 	let mut in_git = git_above || list.has(".git");
-	let mut files: Vec<(u64, Box<OsStr>)> = Vec::new();
+	let mut files: Vec<(u64, PathBuf)> = Vec::new();
 	let mut subdirs = Vec::new();
 	for (seen, ent) in list.enumerate() {
 		// The rest of the folder goes unread after an error. An EIO in a
@@ -893,12 +920,12 @@ fn list_dir(
 			subdirs.push(ent.name);
 			continue;
 		}
-		files.push((ent.ino, ent.name));
+		files.push((ent.ino, p));
 		if files.len() >= FILES_BATCH {
-			queue(root, &dir, &mut files, in_git, jobs)?;
+			queue(root, &mut files, in_git, jobs)?;
 		}
 	}
-	queue(root, &dir, &mut files, in_git, jobs)?;
+	queue(root, &mut files, in_git, jobs)?;
 	subdirs.sort_unstable_by(|a, b| b.cmp(a));
 	Ok(Some(Frame {
 		dir,
@@ -909,15 +936,14 @@ fn list_dir(
 
 fn queue(
 	root: &Arc<Root>,
-	dir: &Path,
-	files: &mut Vec<(u64, Box<OsStr>)>,
+	files: &mut Vec<(u64, PathBuf)>,
 	in_git: bool,
 	jobs: &SyncSender<Job>,
 ) -> Result<(), Closed> {
 	files.sort_unstable();
-	for (_, name) in files.drain(..) {
+	for (_, path) in files.drain(..) {
 		let job = Job {
-			path: dir.join(&*name),
+			path,
 			in_git,
 			root: root.clone(),
 		};
@@ -991,18 +1017,14 @@ struct ClaimGuard<'a> {
 
 impl ClaimGuard<'_> {
 	fn fill(self, v: LinkVal) {
-		self.links
-			.map
-			.lock()
-			.unwrap()
-			.fill(self.key, v, self.others);
+		locked(&self.links.map).fill(self.key, v, self.others);
 	}
 }
 
 impl Drop for ClaimGuard<'_> {
 	// Unfilled means the read failed or was stopped; let the next name try.
 	fn drop(&mut self) {
-		let mut m = self.links.map.lock().unwrap();
+		let mut m = locked(&self.links.map);
 		if matches!(m.entries.get(&self.key), Some(None)) {
 			m.entries.remove(&self.key);
 		}
@@ -1012,7 +1034,7 @@ impl Drop for ClaimGuard<'_> {
 
 impl Links {
 	fn claim(&self, key: (u64, u64), nlink: u64, bytes: i64, mt: i64) -> Claim<'_> {
-		let mut m = self.map.lock().unwrap();
+		let mut m = locked(&self.map);
 		loop {
 			match m.entries.get(&key) {
 				Some(Some((v, _))) if v.0 == bytes && v.1 == mt => {
@@ -1020,7 +1042,7 @@ impl Links {
 					m.count_down(key);
 					return Claim::Done(v);
 				}
-				Some(None) => m = self.cv.wait(m).unwrap(),
+				Some(None) => m = self.cv.wait(m).unwrap_or_else(PoisonError::into_inner),
 				_ => {
 					m.entries.insert(key, None);
 					return Claim::Mine(ClaimGuard {
@@ -1036,7 +1058,7 @@ impl Links {
 	// A name skipped without a claim still counts as seen.
 	fn passed(&self, md: &fs::Metadata) {
 		if md.nlink() > 1 {
-			self.map.lock().unwrap().count_down((md.dev(), md.ino()));
+			locked(&self.map).count_down((md.dev(), md.ino()));
 		}
 	}
 }
@@ -1050,12 +1072,16 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 		Ok(st) => st,
 		Err(e) => return sh.faults.add(&sh.stop, format!("{}: {e}", sh.db.display())),
 	};
-	let mut buf = vec![0u8; 1 << 20];
-	let mut xattr_fail_logged = 0;
+	let mut w = Worker {
+		g,
+		sh,
+		links,
+		buf: vec![0u8; 1 << 20],
+		xattr_fail_logged: 0,
+	};
 	loop {
-		let job = match jobs.lock().unwrap().recv() {
-			Ok(j) => j,
-			Err(_) => return,
+		let Ok(job) = locked(jobs).recv() else {
+			return;
 		};
 		if sh.stop.load(Relaxed) {
 			continue;
@@ -1068,7 +1094,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 				continue;
 			}
 		};
-		one_file(g, sh, &job, prior, &mut buf, links, &mut xattr_fail_logged);
+		w.one_file(&job, prior.as_ref());
 	}
 }
 
@@ -1076,7 +1102,7 @@ pub fn mtime_us(md: &fs::Metadata) -> i64 {
 	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
 }
 
-// rmlint's time, as it works it out.
+/// rmlint's time, as it works it out.
 pub fn mtime_s(md: &fs::Metadata) -> f64 {
 	md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9
 }
@@ -1110,9 +1136,9 @@ pub enum ReadFail {
 	Unstable,
 }
 
-// Reads the whole file from the start. Its cached pages are dropped first, so
-// a scribble in the page cache isn't taken for what's on disk. ZFS ignores the
-// advice; see design.md, Reading files.
+/// Reads the whole file from the start. Its cached pages are dropped first, so
+/// a scribble in the page cache isn't taken for what's on disk. ZFS ignores the
+/// advice; see design.md, Reading files.
 pub fn read_sums(
 	file: &File,
 	before: &fs::Metadata,
@@ -1127,7 +1153,7 @@ pub fn read_sums(
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
 	}
 	let mut b3 = blake3::Hasher::new();
-	let mut b2b = want_b2b.then(<blake2::Blake2b512 as blake2::Digest>::new);
+	let mut b2b = want_b2b.then(blake2b_simd::State::new);
 	let mut total: u64 = 0;
 	loop {
 		if stop.load(Relaxed) {
@@ -1138,11 +1164,11 @@ pub fn read_sums(
 			Ok(n) => {
 				b3.update(&buf[..n]);
 				if let Some(h) = b2b.as_mut() {
-					blake2::Digest::update(h, &buf[..n]);
+					h.update(&buf[..n]);
 				}
 				total += n as u64;
 			}
-			Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+			Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
 			Err(e) => {
 				read_bytes.fetch_add(total, Relaxed);
 				return Err(ReadFail::Io(e, total));
@@ -1162,7 +1188,7 @@ pub fn read_sums(
 	}
 	Ok(Sums {
 		b3: *b3.finalize().as_bytes(),
-		b2b: b2b.map(|h| blake2::Digest::finalize(h).into()),
+		b2b: b2b.map(|h| *h.finalize().as_array()),
 	})
 }
 
@@ -1223,13 +1249,13 @@ impl<'a> Refs<'a> {
 				),
 			));
 		}
-		if let (Some(stored), Some(now)) = (self.b2b, s.b2b) {
-			if stored != now {
-				out.push((
-					Kind::RmlintMismatch,
-					format!("on file {}, read now {}", hex(&stored), hex(&now)),
-				));
-			}
+		if let (Some(stored), Some(now)) = (self.b2b, s.b2b)
+			&& stored != now
+		{
+			out.push((
+				Kind::RmlintMismatch,
+				format!("on file {}, read now {}", hex(&stored), hex(&now)),
+			));
 		}
 		if let Some(p) = self.db.filter(|p| p.b3 != s.b3) {
 			out.push((
@@ -1315,8 +1341,8 @@ fn keep(
 		st.mismatch.fetch_add(1, Relaxed);
 		event(sh, kind, path, format!("{detail}{note}"));
 	}
-	if prior.is_some_and(|p| p.seen_run != sh.run_id) {
-		send(sh, Msg::Seen(path.as_os_str().as_bytes().to_vec()));
+	if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+		send(sh, Msg::Seen(p.id));
 	}
 }
 
@@ -1332,189 +1358,263 @@ fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
 	}))
 }
 
-fn one_file(
-	g: &Group,
-	sh: &Shared,
-	job: &Job,
-	prior: Option<Prior>,
-	buf: &mut [u8],
-	links: &Links,
-	xattr_fail_logged: &mut u32,
-) {
-	let st = &g.stats;
-	let path = &job.path;
-	let pbytes = path.as_os_str().as_bytes();
-	let rel = job.root.rel(path);
-	let md = match job
-		.root
-		.open_at(rel, libc::O_PATH)
-		.and_then(|f| f.metadata())
-	{
-		Ok(m) if m.file_type().is_file() => m,
-		Ok(_) => return,
-		Err(e) if beneath::moved(&e) => return,
-		Err(e) => {
-			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::StatError, path, e.to_string());
+// One per hashing thread, so the buffer and the counter need no lock.
+struct Worker<'a> {
+	g: &'a Group,
+	sh: &'a Shared,
+	links: &'a Links,
+	buf: Vec<u8>,
+	xattr_fail_logged: u32,
+}
+
+impl<'a> Worker<'a> {
+	fn one_file(&mut self, job: &Job, prior: Option<&Prior>) {
+		let rel = job.root.rel(&job.path);
+		let Some(md) = self.stat(job, rel) else {
+			return;
+		};
+		if self.judged_already(prior, &md) {
 			return;
 		}
-	};
-	st.files.fetch_add(1, Relaxed);
-	let (bytes, mt) = (md.len() as i64, mtime_us(&md));
+		let Some((file, before)) = self.open(job, rel) else {
+			return;
+		};
+		let fd = file.as_raw_fd();
+		let onfile = OnFile::read(fd);
+		let refs = Refs::new(&onfile, prior, &before);
+		if self.skip_unread(job, prior, &refs, &onfile, &before) {
+			return;
+		}
+		let Some((sums, claim)) = self.read_judged(job, prior, &refs, &file, &before) else {
+			return;
+		};
+		refs.tally(&sums, &self.g.stats);
 
-	if let Some(p) = &prior {
+		let sh = self.sh;
+		let hashed_us = now_us();
+		if let Some(c) = claim {
+			c.fill((before.len() as i64, mtime_us(&before), sums));
+		}
+		// Once nothing more can be recorded, an attribute would vouch for a read
+		// the database never got.
+		let pbytes = job.path.as_os_str().as_bytes();
+		if !send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) || sh.faults.any.load(Relaxed) {
+			return;
+		}
+		self.write_attrs(job, &refs, &sums, fd, &before, hashed_us);
+	}
+
+	fn stat(&self, job: &Job, rel: &Path) -> Option<fs::Metadata> {
+		let md = match job
+			.root
+			.open_at(rel, libc::O_PATH)
+			.and_then(|f| f.metadata())
+		{
+			Ok(m) if m.file_type().is_file() => m,
+			Ok(_) => return None,
+			Err(e) if beneath::moved(&e) => return None,
+			Err(e) => {
+				self.g.stats.other_err.fetch_add(1, Relaxed);
+				event(self.sh, Kind::StatError, &job.path, e.to_string());
+				return None;
+			}
+		};
+		self.g.stats.files.fetch_add(1, Relaxed);
+		Some(md)
+	}
+
+	fn judged_already(&self, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
+		let (sh, st) = (self.sh, &self.g.stats);
+		let Some(p) = prior else {
+			return false;
+		};
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
 		if (p.hashed_us >= sh.cutoff_us || p.seen_run == sh.run_id)
-			&& p.bytes == bytes
-			&& p.mtime_us == mt
+			&& p.bytes == md.len() as i64
+			&& p.mtime_us == mtime_us(md)
 			&& p.ino == md.ino() as i64
 		{
 			if p.seen_run != sh.run_id {
-				send(sh, Msg::Seen(pbytes.to_vec()));
+				send(sh, Msg::Seen(p.id));
 			}
 			st.skip_db.fetch_add(1, Relaxed);
-			links.passed(&md);
-			return;
+			self.links.passed(md);
+			return true;
+		}
+		false
+	}
+
+	fn open(&self, job: &Job, rel: &Path) -> Option<(File, fs::Metadata)> {
+		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
+		let file = match job.root.open_read(rel) {
+			Ok(f) => f,
+			Err(e) if beneath::moved(&e) => return None,
+			Err(e) => {
+				st.other_err.fetch_add(1, Relaxed);
+				event(sh, Kind::OpenError, path, e.to_string());
+				return None;
+			}
+		};
+		match file.metadata() {
+			Ok(m) if m.file_type().is_file() => Some((file, m)),
+			Ok(_) => None,
+			Err(e) => {
+				st.other_err.fetch_add(1, Relaxed);
+				event(sh, Kind::StatError, path, e.to_string());
+				None
+			}
 		}
 	}
 
-	let file = match job.root.open_read(rel) {
-		Ok(f) => f,
-		Err(e) if beneath::moved(&e) => return,
-		Err(e) => {
-			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::OpenError, path, e.to_string());
-			return;
+	fn skip_unread(
+		&self,
+		job: &Job,
+		prior: Option<&Prior>,
+		refs: &Refs,
+		onfile: &OnFile,
+		before: &fs::Metadata,
+	) -> bool {
+		let (sh, st) = (self.sh, &self.g.stats);
+		// Nothing stored at this size and time to check against: new or edited.
+		// The next full scan reads it.
+		if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
+			st.skip_unknown.fetch_add(1, Relaxed);
+			self.links.passed(before);
+			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+				send(sh, Msg::Seen(p.id));
+			}
+			return true;
 		}
-	};
-	let fd = file.as_raw_fd();
-	let before = match file.metadata() {
-		Ok(m) if m.file_type().is_file() => m,
-		Ok(_) => return,
-		Err(e) => {
-			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::StatError, path, e.to_string());
-			return;
-		}
-	};
-	let (bytes, mt) = (before.len() as i64, mtime_us(&before));
-	let onfile = OnFile::read(fd);
-	let refs = Refs::new(&onfile, prior.as_ref(), &before);
 
-	// Nothing stored at this size and time to check against: new or edited.
-	// The next full scan reads it.
-	if sh.verify && refs.xattr.is_none() && refs.db.is_none() {
-		st.skip_unknown.fetch_add(1, Relaxed);
-		links.passed(&before);
-		if prior.as_ref().is_some_and(|p| p.seen_run != sh.run_id) {
-			send(sh, Msg::Seen(pbytes.to_vec()));
-		}
-		return;
-	}
-
-	// Another name for this inode may have left a fresh set without ever
-	// seeing this name's row, so the row gets a say.
-	if let Some((d, date)) = onfile
-		.b3_fresh(
-			bytes,
-			mt,
-			before.dev(),
-			before.ino(),
-			sh.cutoff_us,
-			now_us(),
-		)
-		.filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d))
-	{
+		// Another name for this inode may have left a fresh set without ever
+		// seeing this name's row, so the row gets a say.
+		let Some((d, date)) = onfile
+			.b3_fresh(
+				before.len() as i64,
+				mtime_us(before),
+				before.dev(),
+				before.ino(),
+				sh.cutoff_us,
+				now_us(),
+			)
+			.filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d))
+		else {
+			return false;
+		};
 		st.skip_xattr.fetch_add(1, Relaxed);
-		links.passed(&before);
+		self.links.passed(before);
+		let pbytes = job.path.as_os_str().as_bytes();
 		send(
 			sh,
-			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, &before, date),
+			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, before, date),
 		);
-		return;
+		true
 	}
 
-	let mut claim = None;
-	if before.nlink() > 1 {
-		match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
-			// Read once, but each name is held to its own records.
-			Claim::Done((_, _, sums)) => {
-				st.links.fetch_add(1, Relaxed);
-				let misses = refs.misses(&sums);
-				if !misses.is_empty() {
-					keep(sh, st, path, prior.as_ref(), misses, "");
-					return;
+	// Sums worth recording, with this name's claim on the inode still to fill.
+	// None once the file is dealt with: a failed read, a mismatch, or another
+	// name's read.
+	fn read_judged(
+		&mut self,
+		job: &Job,
+		prior: Option<&Prior>,
+		refs: &Refs,
+		file: &File,
+		before: &fs::Metadata,
+	) -> Option<(Sums, Option<ClaimGuard<'a>>)> {
+		let (sh, st, links, path) = (self.sh, &self.g.stats, self.links, &job.path);
+		let (bytes, mt) = (before.len() as i64, mtime_us(before));
+		let mut claim = None;
+		if before.nlink() > 1 {
+			match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
+				// Read once, but each name is held to its own records.
+				Claim::Done((_, _, sums)) => {
+					st.links.fetch_add(1, Relaxed);
+					let misses = refs.misses(&sums);
+					if !misses.is_empty() {
+						keep(sh, st, path, prior, misses, "");
+						return None;
+					}
+					refs.tally(&sums, st);
+					let pbytes = path.as_os_str().as_bytes();
+					send(sh, hashed_msg(pbytes, &sums, before, now_us()));
+					return None;
 				}
-				refs.tally(&sums, st);
-				send(sh, hashed_msg(pbytes, &sums, &before, now_us()));
-				return;
+				Claim::Mine(g) => claim = Some(g),
 			}
-			Claim::Mine(g) => claim = Some(g),
+		}
+
+		let want_b2b = sh.rmlint || refs.b2b.is_some();
+		let first = match read_sums(file, before, want_b2b, &mut self.buf, &sh.stop, &st.bytes) {
+			Ok(s) => s,
+			Err(f) => {
+				report_fail(sh, st, path, f);
+				return None;
+			}
+		};
+		st.hashed.fetch_add(1, Relaxed);
+		let verdict = judge(refs, first, || {
+			read_sums(file, before, want_b2b, &mut self.buf, &sh.stop, &st.bytes)
+		});
+		match verdict {
+			Err(f) => {
+				report_fail(sh, st, path, f);
+				None
+			}
+			Ok(Verdict::Clean(s)) => Some((s, claim)),
+			Ok(Verdict::CacheOnly { first, second }) => {
+				st.mismatch.fetch_add(1, Relaxed);
+				event(
+					sh,
+					Kind::CacheMismatch,
+					path,
+					format!(
+						"first read {}, then {} with the cache dropped, which matches what was stored",
+						b64u_encode(&first.b3),
+						b64u_encode(&second.b3)
+					),
+				);
+				Some((second, claim))
+			}
+			Ok(Verdict::Changed { sums, misses, note }) => {
+				if let Some(c) = claim {
+					c.fill((bytes, mt, sums));
+				}
+				keep(sh, st, path, prior, misses, &note);
+				None
+			}
 		}
 	}
 
-	let want_b2b = sh.rmlint || refs.b2b.is_some();
-	let first = match read_sums(&file, &before, want_b2b, buf, &sh.stop, &st.bytes) {
-		Ok(s) => s,
-		Err(f) => return report_fail(sh, st, path, f),
-	};
-	st.hashed.fetch_add(1, Relaxed);
-	let verdict = judge(&refs, first, || {
-		read_sums(&file, &before, want_b2b, buf, &sh.stop, &st.bytes)
-	});
-	let sums = match verdict {
-		Err(f) => return report_fail(sh, st, path, f),
-		Ok(Verdict::Clean(s)) => s,
-		Ok(Verdict::CacheOnly { first, second }) => {
-			st.mismatch.fetch_add(1, Relaxed);
-			event(
-				sh,
-				Kind::CacheMismatch,
-				path,
-				format!(
-					"first read {}, then {} with the cache dropped, which matches what was stored",
-					b64u_encode(&first.b3),
-					b64u_encode(&second.b3)
-				),
-			);
-			second
-		}
-		Ok(Verdict::Changed { sums, misses, note }) => {
-			if let Some(c) = claim {
-				c.fill((bytes, mt, sums));
-			}
-			keep(sh, st, path, prior.as_ref(), misses, &note);
+	fn write_attrs(
+		&mut self,
+		job: &Job,
+		refs: &Refs,
+		sums: &Sums,
+		fd: RawFd,
+		before: &fs::Metadata,
+		hashed_us: i64,
+	) {
+		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
+		// Not inside a git checkout: the files come and go with every checkout,
+		// git already checksums what it keeps, and a ctime change makes git
+		// look at each file again.
+		if !sh.write_xattrs
+			|| job.in_git
+			|| sh.no_write_devs.contains(&before.dev())
+			|| sh.no_xattr.iter().any(|x| path.starts_with(x))
+		{
 			return;
 		}
-	};
-	refs.tally(&sums, st);
-
-	let hashed_us = now_us();
-	if let Some(c) = claim {
-		c.fill((bytes, mt, sums));
-	}
-	// Once nothing more can be recorded, an attribute would vouch for a read
-	// the database never got.
-	if !send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) || sh.faults.any.load(Relaxed) {
-		return;
-	}
-
-	// Not inside a git checkout: the files come and go with every checkout,
-	// git already checksums what it keeps, and a ctime change makes git
-	// look at each file again.
-	if sh.write_xattrs
-		&& !job.in_git
-		&& !sh.no_write_devs.contains(&before.dev())
-		&& !sh.no_xattr.iter().any(|x| path.starts_with(x))
-	{
 		let only_date = refs.xattr == Some(sums.b3);
 		let id = (before.dev(), before.ino());
+		let (bytes, mt) = (before.len() as i64, mtime_us(before));
 		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date);
 		// A current rmlint set got this far only by matching, so this is a
 		// missing or stale one.
 		if let (Ok(()), Some(b2b), None) = (&wrote, sums.b2b, refs.b2b) {
-			wrote = xattr::write_rmlint(fd, &b2b, mtime_s(&before));
+			wrote = xattr::write_rmlint(fd, &b2b, mtime_s(before));
 			if wrote.is_ok() {
 				st.rmlint_set.fetch_add(1, Relaxed);
 			}
@@ -1527,8 +1627,8 @@ fn one_file(
 				st.xattr_fail.fetch_add(1, Relaxed);
 				// A read-only or xattr-less filesystem fails for every
 				// file. A few events are enough to say so.
-				if *xattr_fail_logged < 20 {
-					*xattr_fail_logged += 1;
+				if self.xattr_fail_logged < 20 {
+					self.xattr_fail_logged += 1;
 					event(sh, Kind::XattrError, path, e.to_string());
 				}
 			}
@@ -1558,6 +1658,7 @@ mod tests {
 
 	fn prior(b: u8) -> Prior {
 		Prior {
+			id: 1,
 			bytes: 1,
 			mtime_us: 1,
 			ino: 1,
@@ -1662,7 +1763,7 @@ mod tests {
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
 			rmlint: false,
-			verify: false,
+			mode: Mode::Full,
 			tx,
 		};
 		(sh, rx)
@@ -1690,7 +1791,7 @@ mod tests {
 		let (dtx, drx) = std::sync::mpsc::channel();
 		std::thread::spawn(move || {
 			run_group(&g, &sh);
-			let why = sh.faults.why.lock().unwrap().clone();
+			let why = locked(&sh.faults.why).clone();
 			dtx.send((g.done.load(Relaxed), sh.stop.load(Relaxed), why))
 				.unwrap();
 		});
@@ -1717,8 +1818,8 @@ mod tests {
 		};
 		let eio = io::Error::from_raw_os_error(libc::EIO);
 		let nope = io::Error::from_raw_os_error(libc::EOPNOTSUPP);
-		assert_eq!(kind(ReadFail::Io(eio, 4096)), "read-error");
-		assert_eq!(kind(ReadFail::Io(nope, 0)), "read-unsupported");
+		assert_eq!(kind(ReadFail::Io(eio, 4096)), Kind::ReadError);
+		assert_eq!(kind(ReadFail::Io(nope, 0)), Kind::Unsupported);
 		assert_eq!(
 			(st.read_err.load(Relaxed), st.other_err.load(Relaxed)),
 			(1, 1)
@@ -1735,7 +1836,7 @@ mod tests {
 		});
 		assert!(done.load(Relaxed));
 		assert!(sh.faults.any.load(Relaxed) && sh.stop.load(Relaxed));
-		assert_eq!(*sh.faults.why.lock().unwrap(), ["a worker panicked"]);
+		assert_eq!(*locked(&sh.faults.why), ["a worker panicked"]);
 		// And a panic past the guard still marks the group done.
 		let done = AtomicBool::new(false);
 		let r = std::panic::catch_unwind(|| {
@@ -1743,6 +1844,44 @@ mod tests {
 			panic!("on purpose");
 		});
 		assert!(r.is_err() && done.load(Relaxed));
+	}
+
+	// A worker that panics holding a lock poisons it. The claim it drops in
+	// the unwind, the name waiting on that claim and the reason must all get
+	// through, or the run aborts, hangs, or isn't marked failed.
+	#[test]
+	fn a_poisoned_lock_is_still_a_fault() {
+		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
+		let (dtx, drx) = std::sync::mpsc::channel();
+		std::thread::spawn(move || {
+			let links = Links::default();
+			let key = (1, 2);
+			let waited = std::thread::scope(|s| {
+				let Claim::Mine(mine) = links.claim(key, 2, 0, 0) else {
+					panic!("not claimed");
+				};
+				let waiter = s.spawn(|| matches!(links.claim(key, 2, 0, 0), Claim::Mine(_)));
+				std::thread::sleep(Duration::from_millis(50));
+				s.spawn(|| {
+					guarded(&sh, "a worker", || {
+						let _claim = mine;
+						let _held = (locked(&links.map), locked(&sh.faults.why));
+						panic!("on purpose");
+					});
+				});
+				waiter.join().is_ok_and(|mine| mine)
+			});
+			let poisoned = links.map.is_poisoned() && sh.faults.why.is_poisoned();
+			let left = locked(&links.map).entries.len();
+			let why = locked(&sh.faults.why).clone();
+			dtx.send((waited, poisoned, left, why)).unwrap();
+		});
+		let (waited, poisoned, left, why) = drx
+			.recv_timeout(Duration::from_secs(20))
+			.expect("a poisoned lock hung");
+		assert!(waited && poisoned);
+		assert_eq!(left, 0);
+		assert_eq!(why, ["a worker panicked"]);
 	}
 
 	#[test]
@@ -1774,6 +1913,18 @@ mod tests {
 		_ = fs::remove_dir_all(&d);
 		fs::create_dir_all(&d).unwrap();
 		d
+	}
+
+	// A small buffer, so a read takes several passes.
+	fn read_one(g: &Group, sh: &Shared, j: &Job, prior: Option<&Prior>, links: &Links) {
+		let mut w = Worker {
+			g,
+			sh,
+			links,
+			buf: vec![0u8; 4096],
+			xattr_fail_logged: 0,
+		};
+		w.one_file(j, prior);
 	}
 
 	fn job(root: &Arc<Root>, rel: &str) -> Job {
@@ -1823,17 +1974,7 @@ mod tests {
 		let (sh, rx) = test_shared(d.join("t.sqlite"));
 		let g = test_group(&root);
 		let r = Arc::new(Root::open(&root).unwrap());
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(
-			&g,
-			&sh,
-			&job(&r, "dir/f"),
-			None,
-			&mut buf,
-			&Links::default(),
-			&mut logged,
-		);
+		read_one(&g, &sh, &job(&r, "dir/f"), None, &Links::default());
 		assert_eq!(g.stats.files.load(Relaxed), 0);
 		assert!(rx.try_recv().is_err());
 		fs::remove_dir_all(&d).unwrap();
@@ -1849,6 +1990,7 @@ mod tests {
 		fs::hard_link(d.join("a"), d.join("c")).unwrap();
 		let md = fs::metadata(d.join("a")).unwrap();
 		let fresh = Prior {
+			id: 1,
 			bytes: md.len() as i64,
 			mtime_us: mtime_us(&md),
 			ino: md.ino() as i64,
@@ -1862,22 +2004,12 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
-		let left = |l: &Links| l.map.lock().unwrap().entries.len();
+		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		let left = |l: &Links| locked(&l.map).entries.len();
 		assert_eq!(left(&links), 1);
-		one_file(
-			&g,
-			&sh,
-			&job(&r, "b"),
-			Some(fresh),
-			&mut buf,
-			&links,
-			&mut logged,
-		);
+		read_one(&g, &sh, &job(&r, "b"), Some(&fresh), &links);
 		assert_eq!(g.stats.skip_db.load(Relaxed), 1);
-		one_file(&g, &sh, &job(&r, "c"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "c"), None, &links);
 		if g.stats.xattr_set.load(Relaxed) == 1 {
 			assert_eq!(g.stats.skip_xattr.load(Relaxed), 1);
 		} else {
@@ -1900,12 +2032,10 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "a"), None, &links);
 		let control = g.stats.xattr_set.load(Relaxed);
 		sh.no_write_devs.insert(fs::metadata(&d).unwrap().dev());
-		one_file(&g, &sh, &job(&r, "b"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "b"), None, &links);
 		assert_eq!(g.stats.xattr_set.load(Relaxed), control);
 		assert_eq!(g.stats.xattr_fail.load(Relaxed), 0);
 		let fd = File::open(d.join("b")).unwrap();
@@ -1936,17 +2066,7 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(
-			&g,
-			&sh,
-			&job(&r, "a"),
-			None,
-			&mut buf,
-			&Links::default(),
-			&mut logged,
-		);
+		read_one(&g, &sh, &job(&r, "a"), None, &Links::default());
 		assert_eq!(g.stats.xattr_set.load(Relaxed), 1);
 		let on = OnFile::read(fd.as_raw_fd());
 		assert_eq!(on.b3, Some(*blake3::hash(b"synced").as_bytes()));
@@ -1978,18 +2098,14 @@ mod tests {
 		sh.write_xattrs = true;
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		let mut go = |sh: &Shared, j: Job| {
-			one_file(&g, sh, &j, None, &mut buf, &Links::default(), &mut logged);
+		let go = |sh: &Shared, j: Job| {
+			read_one(&g, sh, &j, None, &Links::default());
 			match rx.try_recv() {
 				Ok(Msg::Hashed(h)) => h.b2b,
 				_ => panic!("nothing recorded"),
 			}
 		};
-		let b2b = |f: &str| -> [u8; 64] {
-			<blake2::Blake2b512 as blake2::Digest>::digest(f.as_bytes()).into()
-		};
+		let b2b = |f: &str| -> [u8; 64] { *blake2b_simd::blake2b(f.as_bytes()).as_array() };
 		let now = |f: &str| {
 			let file = fd(f);
 			OnFile::read(file.as_raw_fd()).b2b_current(mtime_s(&file.metadata().unwrap()))
@@ -2008,6 +2124,46 @@ mod tests {
 		assert_eq!(go(&sh, in_git), Some(b2b("git")));
 		assert_eq!(now("git"), None);
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
+		fs::remove_dir_all(&d).unwrap();
+	}
+
+	// rmlint takes plain unkeyed blake2b-512. The first two are RFC 7693's,
+	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
+	#[test]
+	fn b2b_matches_known_digests() {
+		let d = scratch("b2b_vectors");
+		let long: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+		let cases: [(&[u8], &str); 3] = [
+			(
+				b"",
+				"786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce",
+			),
+			(
+				b"abc",
+				"ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923",
+			),
+			(
+				&long,
+				"8ee2ab50e0b1be2f1c64692013dfe68e15e36d15c4d5ec703b725b5cf5c1ba07299284b7a9ddd0ca725b39105bda7b79fa85fc5defab5819dfa8fee27f79da78",
+			),
+		];
+		let stop = AtomicBool::new(false);
+		let counted = AtomicU64::new(0);
+		for (i, (bytes, want)) in cases.iter().enumerate() {
+			let p = d.join(format!("v{i}"));
+			fs::write(&p, bytes).unwrap();
+			let file = File::open(&p).unwrap();
+			let before = file.metadata().unwrap();
+			for piece in [1, 1000, 1 << 20] {
+				let mut buf = vec![0u8; piece];
+				let s = read_sums(&file, &before, true, &mut buf, &stop, &counted).unwrap();
+				assert_eq!(
+					crate::util::hex(&s.b2b.unwrap()),
+					*want,
+					"case {i}, buf {piece}"
+				);
+			}
+		}
 		fs::remove_dir_all(&d).unwrap();
 	}
 
@@ -2032,5 +2188,38 @@ mod tests {
 			m.fill((3, i), v, 5);
 		}
 		assert!(matches!(m.entries.get(&(2, 0)), Some(None)));
+	}
+
+	fn runs_with(status: &str) -> rusqlite::Connection {
+		let c = rusqlite::Connection::open_in_memory().unwrap();
+		c.execute_batch(
+			"CREATE TABLE runs (id INTEGER PRIMARY KEY, started_us, cutoff_us, status, roots, summary, verify);",
+		)
+		.unwrap();
+		c.execute(
+			"INSERT INTO runs (started_us, cutoff_us, status, roots, verify) VALUES (1, 1, ?1, x'2f61', 0)",
+			[status],
+		)
+		.unwrap();
+		c
+	}
+
+	#[test]
+	fn resume_takes_only_the_statuses_it_knows() {
+		for s in ["stopped", "failed", "running", "killed"] {
+			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);
+			assert!(r.is_ok(), "{s}: {:?}", r.err());
+		}
+		let r = pick_resume(&runs_with("done"), b"/a", Mode::Full);
+		assert!(r.err().is_some_and(|m| m.contains("finished")));
+		// One from a newer version, or a typo by hand.
+		let r = pick_resume(&runs_with("paused"), b"/a", Mode::Full);
+		assert!(
+			r.err()
+				.is_some_and(|m| m.contains("is paused; can't resume"))
+		);
+		// An accept is never the newest scan.
+		let r = pick_resume(&runs_with("accept"), b"/a", Mode::Full);
+		assert!(r.err().is_some_and(|m| m.contains("no scan to resume")));
 	}
 }

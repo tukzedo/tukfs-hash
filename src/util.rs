@@ -10,12 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub fn now_us() -> i64 {
 	SystemTime::now()
 		.duration_since(UNIX_EPOCH)
-		.map(|d| d.as_micros() as i64)
-		.unwrap_or(0)
+		.map_or(0, |d| d.as_micros() as i64)
 }
 
-// The folder resolved and the name left alone, so a symlink stays a symlink.
-// A scan stores names that way, walking down from a resolved root.
+/// The folder resolved and the name left alone, so a symlink stays a symlink.
+/// A scan stores names that way, walking down from a resolved root.
 pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
 	let parent = p
 		.parent()
@@ -34,7 +33,7 @@ pub fn cpath(p: &Path) -> io::Result<CString> {
 
 const B64U: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-// base64url with no padding, the form nemo-anywhere writes.
+/// base64url with no padding, the form nemo-anywhere writes.
 pub fn b64u_encode(data: &[u8]) -> String {
 	let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
 	for chunk in data.chunks(3) {
@@ -43,7 +42,7 @@ pub fn b64u_encode(data: &[u8]) -> String {
 			*chunk.get(1).unwrap_or(&0),
 			*chunk.get(2).unwrap_or(&0),
 		];
-		let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+		let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
 		let chars = chunk.len() + 1;
 		for i in 0..chars {
 			out.push(B64U[(n >> (18 - 6 * i) & 63) as usize] as char);
@@ -76,10 +75,17 @@ pub fn b64u_decode(s: &[u8]) -> Option<Vec<u8>> {
 	Some(out)
 }
 
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
+fn push_hex(out: &mut String, b: u8) {
+	out.push(char::from(HEX[usize::from(b >> 4)]));
+	out.push(char::from(HEX[usize::from(b & 15)]));
+}
+
 pub fn hex(data: &[u8]) -> String {
 	let mut s = String::with_capacity(data.len() * 2);
-	for b in data {
-		s.push_str(&format!("{b:02x}"));
+	for &b in data {
+		push_hex(&mut s, b);
 	}
 	s
 }
@@ -94,7 +100,7 @@ pub fn unhex(s: &[u8]) -> Option<Vec<u8>> {
 		.collect()
 }
 
-// Values in xattrs may end in NUL (rmlint) or a newline (setfattr by hand).
+/// Values in xattrs may end in NUL (rmlint) or a newline (setfattr by hand).
 pub fn trim_value(v: &[u8]) -> &[u8] {
 	let end = v
 		.iter()
@@ -106,7 +112,7 @@ pub fn trim_value(v: &[u8]) -> &[u8] {
 fn tm_of(us: i64) -> libc::tm {
 	let t: libc::time_t = us.div_euclid(1_000_000) as libc::time_t;
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-	unsafe { libc::localtime_r(&t, &mut tm) };
+	unsafe { libc::localtime_r(&raw const t, &raw mut tm) };
 	tm
 }
 
@@ -116,24 +122,24 @@ pub fn local_midnight_us(us: i64) -> i64 {
 	tm.tm_min = 0;
 	tm.tm_sec = 0;
 	tm.tm_isdst = -1;
-	unsafe { libc::mktime(&mut tm) as i64 * 1_000_000 }
+	unsafe { libc::mktime(&raw mut tm) as i64 * 1_000_000 }
 }
 
-// "YYYY-MM-DD" to local midnight.
+/// "YYYY-MM-DD" to local midnight.
 pub fn parse_date(s: &str) -> Option<i64> {
 	let mut it = s.splitn(3, '-').map(|p| p.parse::<i32>().ok());
-	let (y, m, d) = (it.next()??, it.next()??, it.next()??);
-	if !(1970..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+	let (year, month, day) = (it.next()??, it.next()??, it.next()??);
+	if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
 		return None;
 	}
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-	tm.tm_year = y - 1900;
-	tm.tm_mon = m - 1;
-	tm.tm_mday = d;
+	tm.tm_year = year - 1900;
+	tm.tm_mon = month - 1;
+	tm.tm_mday = day;
 	tm.tm_isdst = -1;
-	let t = unsafe { libc::mktime(&mut tm) };
+	let t = unsafe { libc::mktime(&raw mut tm) };
 	// mktime rolls Feb 31 over into March, and says so only in tm.
-	let same_day = tm.tm_year == y - 1900 && tm.tm_mon == m - 1 && tm.tm_mday == d;
+	let same_day = tm.tm_year == year - 1900 && tm.tm_mon == month - 1 && tm.tm_mday == day;
 	(t != -1 && same_day).then_some(t as i64 * 1_000_000)
 }
 
@@ -165,13 +171,16 @@ pub fn human_bytes(n: u64) -> String {
 	}
 }
 
-// A name as text that maps back to its bytes, so 2 names never print the same:
-// a backslash doubled, and control characters and bytes that aren't UTF-8 as
-// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
-// in its columns.
+/// A name as text that maps back to its bytes, so 2 names never print the same:
+/// a backslash doubled, and control characters and bytes that aren't UTF-8 as
+/// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
+/// in its columns.
 pub fn escape_name(b: &[u8]) -> String {
 	let mut out = String::with_capacity(b.len());
-	let hex_byte = |out: &mut String, byte: u8| out.push_str(&format!("\\x{byte:02x}"));
+	let hex_byte = |out: &mut String, byte: u8| {
+		out.push_str("\\x");
+		push_hex(out, byte);
+	};
 	for chunk in b.utf8_chunks() {
 		for c in chunk.valid().chars() {
 			if c == '\\' {
@@ -266,5 +275,25 @@ mod tests {
 		assert_eq!(escape_name(b"a\tb\nc\\d"), "a\\x09b\\x0ac\\\\d");
 		// The escaped form of one name is never another name's plain form.
 		assert_ne!(escape_name(b"\\xe9"), escape_name(b"\xe9"));
+	}
+
+	// Pinned, since rmlint's xattr bytes and the listed names depend on them.
+	#[test]
+	fn hex_and_escape_pinned() {
+		let all: Vec<u8> = (0..=255).collect();
+		let want = all
+			.iter()
+			.map(|b| format!("{b:02x}"))
+			.collect::<Vec<_>>()
+			.concat();
+		assert_eq!(hex(&all), want);
+		assert_eq!(hex(&[]), "");
+		assert_eq!(hex(&[0x0f, 0xf0, 0x5a]), "0ff05a");
+		assert_eq!(escape_name(b""), "");
+		assert_eq!(escape_name(b"\x00\x1f\x7f"), "\\x00\\x1f\\x7f");
+		// C1 controls are escaped byte by byte, as UTF-8.
+		assert_eq!(escape_name("a\u{85}b".as_bytes()), "a\\xc2\\x85b");
+		assert_eq!(escape_name(b"\xff\xfe\\x"), "\\xff\\xfe\\\\x");
+		assert_eq!(escape_name("\u{1f600}\r".as_bytes()), "\u{1f600}\\x0d");
 	}
 }

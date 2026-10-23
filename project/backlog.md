@@ -29,275 +29,38 @@
 
 ## Issues
 
-- The release build uses thin LTO and 4 codegen units, and keeps its symbols.
-	- ID: 2026101916404100
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404105
-	- Requirements  [Feature]:
-		- Set `lto = true`, `codegen-units = 1` and `strip = true` in `[profile.release]`.
-		- Keep `panic = "unwind"`, with a comment. `guarded()` in `scan.rs` catches a worker's panic so the run is marked failed and keeps its events. With abort, the run is left as running.
-	- Note: The binary is 3.43 MB now and 3.02 MB with these, at the same speed. Numbers are in details.md.
-
-- With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
-	- ID: 2026101916404101
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Time a `--rmlint` scan on b23's NVMe group against one without it, to see if it's CPU-bound.
-		- If it is, try `blake2b_simd`, which has an AVX2 path. The digest has to stay the same byte for byte, which integration step 20 checks against rmlint.
-	- Note: One worker hashed cached data at about 1.5 GB/s for blake3 alone, and about 0.5 GB/s with blake2b added. The `blake2` crate has no SIMD path on stable Rust. Hard drive groups won't notice.
-
-- Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
-	- ID: 2026101916404102
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404110
-	- Requirements  [Feature]:
-		- Turn on `pedantic` in a `[lints.clippy]` table in `Cargo.toml`, so the existing `-D warnings` gate holds it.
-		- Fix the mechanical ones, about 30.
-		- Allow the cast lints, with a reason. Stat values are stored as SQLite's `i64`, and rmlint keeps its time as a float.
-		- Long functions have their own item.
-	- Note: The list by lint and line is in details.md.
-
-- Event kinds are passed around as plain strings, next to the `Kind` enum.
-	- ID: 2026101916404103
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404104
-	- Requirements  [Feature]:
-		- `Msg::Event` takes a `Kind` rather than a `&str`. `Kind` moves to `db.rs`.
-		- Add `Kind::Accepted`. `accept.rs` writes "accepted" and "xattr-error" by hand now.
-		- `gone.rs` matches "dir-error", and `report` in `main.rs` matches "%mismatch" and "read-error" in its SQL. Those come from `Kind` too.
-	- Sweep: Every event name written as a string literal.
-	- Note: The stored names don't change, so the tables stay at version 4.
-
-- Run statuses are plain strings, compared in 4 files.
-	- ID: 2026101916404104
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404103
-	- Requirements  [Feature]:
-		- A `RunStatus` enum for running, stopped, failed, done, killed and accept, with its stored text.
-		- `pick_resume` in `scan.rs` matches it with no catch-all arm. A status the program doesn't know is still refused.
-	- Note: The stored text stays as it is.
-
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
-	- Status: Queued
+	- Status: Stalled
+		- Held for a quiet box. Load was 18 on 2026-10-23.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Prereq IDs: 2026101916404100
 	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
 
-- Every skipped file updates its database row by path.
-	- ID: 2026101916404106
+- 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
+	- ID: 2026102308220558
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Stalled
+		- Held for the next change to each function.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
+	- Opened: 20261023-082205
+	- Opened by: split from 2026101916404110
+	- Parent ID: 2026101916404110
 	- Requirements  [Feature]:
-		- `LOOKUP` returns the row id. `Msg::Seen` carries the id, and the writer updates by it, so no path is copied per file.
-	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
+		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
+	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
-- The walk builds each file's full path twice.
-	- ID: 2026101916404107
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: `list_dir` in `scan.rs` joins every entry's path, and `queue` joins it again for files. Keep the first one.
-
-- `hex` and `escape_name` allocate a new string for every byte.
-	- ID: 2026101916404108
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Write each byte into the output string with `write!`, or from a table.
-	- Note: `--rmlint` calls `hex` for every rmlint checksum it writes, 64 bytes each. This also clears 2 pedantic warnings.
-
-- Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
-	- ID: 2026101916404109
+- markdownlint flags README.md and design.md.
+	- ID: 2026102308554905
 	- Type: Task
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- `Links` and the job queue in `scan.rs` use `lock().unwrap()`, and `Faults` uses `if let Ok`. Pick one: `unwrap_or_else(PoisonError::into_inner)` everywhere, or a one-line reason.
-	- Note: `ClaimGuard::drop` runs while a panic unwinds, where a second panic aborts.
-
-- 6 functions run past 100 lines.
-	- ID: 2026101916404110
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404102
-	- Requirements  [Feature]:
-		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
-		- Split `scan::run` into setup, the progress loop, and the finish.
-		- `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
-
-- `scan::Opts` keeps full scan versus `--verify` as a bool.
-	- ID: 2026101916404111
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- A mode enum in place of `verify`.
-	- Note: `Opts` has 4 bools, which pedantic flags.
-
-- Some public types don't derive `Debug`.
-	- ID: 2026101916404112
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: `Opts`, `Plan`, `PathKey`, `Hashed`, `Msg`, `Entry`, `List`, `Source` and `Diff`.
-
-- Public items have `//` comments instead of `///`.
-	- ID: 2026101916404113
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: Only `Kind` and `Sums` use `///`.
-
-- Some clones have no comment saying why.
-	- ID: 2026101916404114
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Restructure where it's cheap, and comment the rest.
-	- Note: `need_db` in `main.rs`, `unlisted` in `gone.rs`, `group_roots` in `mounts.rs`, and `Pair::same` and the mount list in `snapdiff.rs`. All run once at setup. `Arc` clones don't count.
-
-- Errors are plain strings, converted by a local closure in about 8 functions.
-	- ID: 2026101916404115
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: Optional. It's consistent across files today. `anyhow` would replace the closures with `.context()`. Weigh its size cost.
-
-- The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
-	- ID: 2026101916404116
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Move to edition 2024 and collapse the nested `if let` in `mounts.rs`, `scan.rs` and `snapdiff.rs`.
-	- Note: 2024 changes when temporaries in a block's last expression are dropped. The lock guards in `Links` need a look.
-
-- `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
-	- ID: 2026101916404117
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Against: Committed names stay as they are. New code uses names that don't clash.
-
-- The integration test keeps old checks as commented-out code.
-	- ID: 2026101916404118
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Remove the old checks in steps 1, 3 and 5. Keep a one-line why where it explains the current check.
-
-- The integration test has no `##` header block and no History section.
-	- ID: 2026101916404119
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-
-- The integration test's helpers and variables don't follow the house names, and most expansions aren't braced.
-	- ID: 2026101916404120
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Helpers such as `ok`, `check`, `xget` and `wait_started` become `fCamelCase`, and variables camelCase.
-		- Every expansion is braced.
-	- Against: Committed names stay as they are. Worth it only with a bigger rewrite of the script. Bracing has no such limit.
-
-- The integration test uses `[ ]` for 7 checks passed through `expect`.
-	- ID: 2026101916404121
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: `[[` can't be passed as a command, so `expect` needs to take an exit status instead.
-
-- The integration test has 3 copies of the byte-flip Python.
-	- ID: 2026101916404122
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- One `fFlipByte FILE OFFSET MASK` in place of `flip`, `flip1` and the inline copy in step 6.
-
-- The integration test's setup forks 400 times in one loop.
-	- ID: 2026101916404123
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: Step 5 runs `head` once per file. One `python3` call can make all 400.
-
-- The integration test removes its work folder with no check right before that it's the one it made.
-	- ID: 2026101916404124
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+	- Opened: 20261023-085549
+	- Opened by: round gate
+	- Note: Both use `<br>` in the copyright block with no MD033 disable comment, and design.md's event table trips MD060 at line 93. These were on `main` before the round, which changed neither file.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -905,6 +668,129 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 
+- With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
+	- ID: 2026101916404101
+	- Type: Enhancement
+	- Status: Done
+		- It departs from the wording. It was timed by user CPU on a test tree, not by a scan of b23's NVMe group, and blake2b still costs about 3.5 times blake3.
+		- Self-closed per the project's working preferences. The CPU numbers settle it, and a quiet-box NVMe timing can reopen it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Time a `--rmlint` scan on b23's NVMe group against one without it, to see if it's CPU-bound.
+		- If it is, try `blake2b_simd`, which has an AVX2 path. The digest has to stay the same byte for byte, which integration step 20 checks against rmlint.
+	- Note: One worker hashed cached data at about 1.5 GB/s for blake3 alone, and about 0.5 GB/s with blake2b added. The `blake2` crate has no SIMD path on stable Rust. Hard drive groups won't notice.
+	- Progress log:
+		- 2026-10-23: It is CPU-bound. On a 1.7 GB tree, one worker's user CPU went from about 0.43 s to 2.2 s with `--rmlint`, so blake2b alone ran at about 1 GB/s. The test disk's read rate hid it in wall time.
+		- 2026-10-23: Moved to `blake2b_simd`. blake2b went from 1.04 to 1.36 GB/s in memory on b23's Zen 2, and a `--rmlint` scan used about 25% less user CPU. The digests are identical.
+		- 2026-10-23: The release binary went from 3,017,456 to 3,025,648 bytes. The lockfile lost 7 crates and gained none.
+	- Decisions:
+		- Kept the swap. It's 31% faster for 8 KB. Plain blake2b is serial per file, so a bigger gain would need blake2bp, which rmlint doesn't read.
+	- Branch: round-20261023
+	- Test case: `b2b_matches_known_digests`, the RFC 7693 vectors and one 300000-byte input through `read_sums` with 3 buffer sizes. It fails when a read's bytes are dropped. Integration section 20 still matches rmlint 2.10.3 byte for byte, on ext4 and ZFS.
+	- Swept: every `blake2::` use in `src/` (the read loop and the `rmlint_set_only_with_the_flag` helper), `accept.rs`'s `read_sums` call, and the docs, which don't name the crate.
+	- Closed: 20261023-085408
+
+- Event kinds are passed around as plain strings, next to the `Kind` enum.
+	- ID: 2026101916404103
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404104
+	- Requirements  [Feature]:
+		- `Msg::Event` takes a `Kind` rather than a `&str`. `Kind` moves to `db.rs`.
+		- Add `Kind::Accepted`. `accept.rs` writes "accepted" and "xattr-error" by hand now.
+		- `gone.rs` matches "dir-error", and `report` in `main.rs` matches "%mismatch" and "read-error" in its SQL. Those come from `Kind` too.
+	- Sweep: Every event name written as a string literal.
+	- Note: The stored names don't change, so the tables stay at version 4.
+	- Actual effort: Avg
+	- Progress log:
+		- `Kind` is in db.rs, with `Accepted` added, and `Msg::Event` takes a `Kind`. It goes to SQL as its stored name.
+		- accept, gone and `report` use it. `report` builds its damage-first order from `Kind`, rather than `LIKE '%mismatch'`.
+		- Verified: release build, clippy gate, `cargo test --release` (61 passed), and the integration test on ext4 and ZFS.
+		- Verified: the new tests go red with a stored name changed or `cache-mismatch` sorted last, and green again restored.
+		- Swept: every event name written as a string literal in src. Left on purpose: `Kind::name`, the version 4 rename, and tests that check the stored text.
+	- Decisions:
+		- `accepted` sets no exit bit. Only accept writes it, and accept's exit code doesn't come from events, so the table in design.md stays as it is.
+		- A kind this version doesn't know sorts with the rest in `report`, even one ending in "mismatch".
+	- Test case: `db::tests::kind_names_are_the_stored_ones`, `db::tests::enums_are_stored_as_their_text`, and `tests::damage_sorts_first`, which checks the order against the old SQL's rule.
+	- Closed: 20261023-075214
+
+- Run statuses are plain strings, compared in 4 files.
+	- ID: 2026101916404104
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404103
+	- Requirements  [Feature]:
+		- A `RunStatus` enum for running, stopped, failed, done, killed and accept, with its stored text.
+		- `pick_resume` in `scan.rs` matches it with no catch-all arm. A status the program doesn't know is still refused.
+	- Note: The stored text stays as it is.
+	- Actual effort: Low
+	- Progress log:
+		- `RunStatus` is in db.rs beside `Kind`, with its stored text, and goes to SQL as that text. scan, accept, gone and `runs` use it.
+		- `pick_resume` parses the status and matches every variant, with no catch-all. One it can't parse is refused as before.
+		- Verified: `resume_takes_only_the_statuses_it_knows` passes on the old code and the new. The gates as in 2026101916404103.
+		- Verified: with `killed` stored as another text, the round-trip and resume tests go red.
+		- Swept: status literals in SQL and comparisons in src. Left: `RunStatus::text`, tests, and accept's "stopped", which is a read failure's text.
+	- Test case: `db::tests::run_statuses_are_the_stored_ones` and `scan::tests::resume_takes_only_the_statuses_it_knows`.
+	- Closed: 20261023-075214
+
+- Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
+	- ID: 2026101916404102
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404110
+	- Requirements  [Feature]:
+		- Turn on `pedantic` in a `[lints.clippy]` table in `Cargo.toml`, so the existing `-D warnings` gate holds it.
+		- Fix the mechanical ones, about 30.
+		- Allow the cast lints, with a reason. Stat values are stored as SQLite's `i64`, and rmlint keeps its time as a float.
+		- Long functions have their own item.
+	- Note: The list by lint and line is in details.md.
+	- Actual effort: Avg
+	- Progress log:
+		- `pedantic` is on in `[lints.clippy]` in Cargo.toml, so the `-D warnings` gate holds it. The 4 cast lints are allowed there, with the reason.
+		- Fixed the mechanical ones by hand, and `hex` and `escape_name` with 2026101916404108.
+		- `too_many_lines` is allowed on each of the 6 long functions, with a reason naming 2026101916404110. `struct_excessive_bools` is allowed on `Opts`, naming 2026101916404111.
+		- Verified: release build, clippy gate, `cargo test --release` (56 passed), and the integration test on ext4 and ZFS.
+		- Verified: the gate goes red on a pedantic case put back on purpose (`unnested_or_patterns` in xattr.rs), and green again after restoring it.
+		- Swept: `cargo clippy --all-targets` covers the bin and its tests, so every site is checked.
+	- Decisions:
+		- `Hashed::hashed_us` keeps its name, since it matches its column. `struct_field_names` is allowed on that one field.
+		- `unreadable_literal` is allowed on the xattr tests, whose numbers are written as rmlint and stat print them.
+		- `scan::run`, `snapdiff::run`, `db::writer` and `one_file` now borrow what they took by value.
+	- Test case: The clippy gate itself.
+	- Closed: 20261023-074009
+
+- The release build uses thin LTO and 4 codegen units, and keeps its symbols.
+	- ID: 2026101916404100
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404105
+	- Requirements  [Feature]:
+		- Set `lto = true`, `codegen-units = 1` and `strip = true` in `[profile.release]`.
+		- Keep `panic = "unwind"`, with a comment. `guarded()` in `scan.rs` catches a worker's panic so the run is marked failed and keeps its events. With abort, the run is left as running.
+	- Note: The binary is 3.43 MB now and 3.02 MB with these, at the same speed. Numbers are in details.md.
+	- Actual effort: Low
+	- Progress log:
+		- Set fat LTO, 1 codegen unit and strip, and kept `panic = "unwind"` with a comment. The binary went from 3,428,840 to 3,017,456 bytes.
+		- A clean release build now takes about 75 s under load 18, up from about 15 s.
+		- Verified: release build, clippy, `cargo test --release` (54 passed, `a_panic_is_a_fault` included), and the integration test on ext4 and ZFS.
+		- Swept: `[profile.*]` in Cargo.toml; there's only `release`.
+	- Test case: None. It's a build setting, and the test harness always unwinds, so a test can't see the profile's panic mode. `a_panic_is_a_fault` still covers `guarded()`.
+	- Closed: 20261023-072129
+
 - Write rmlint's blake2b too, to the database and its xattrs, from the same read.
 	- ID: 2026101912101896
 	- Type: Feature
@@ -1212,6 +1098,346 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
 
+- The integration test has 3 copies of the byte-flip Python.
+	- ID: 2026101916404122
+	- Type: Task
+	- Status: Done
+		- It departs from the wording. `fFlipByte` takes an optional fourth COUNT argument, default 1, since step 3 and step 6 flip 16 bytes.
+		- Self-closed per the project's working preferences, since the extra argument is what the 16-byte callers need.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- One `fFlipByte FILE OFFSET MASK` in place of `flip`, `flip1` and the inline copy in step 6.
+	- Actual effort: Low
+	- Progress log:
+		- `flip` calls are now `fFlipByte FILE 100 1`, `flip1` calls `FILE 0 1`, and step 6 `FILE 4096 255 16`. Each keeps atime and mtime, as before.
+		- Step 3's heredoc was a fourth copy. It is now `big.bin 1048592 0x5A 16` and `rm.txt 8 0x5A 16`, the same offsets it worked out from the sizes.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash`, 142 ok as before on ext4 and ZFS. With `fFlipByte` made a no-op, 38 checks failed, at least one in the step around each of the 18 call sites.
+	- Swept: every `python3` in the script. What's left is the step 5 writer and the database holder in the WAL step.
+	- Closed: 20261023-085408
+
+- The integration test uses `[ ]` for 7 checks passed through `expect`.
+	- ID: 2026101916404121
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `[[` can't be passed as a command, so `expect` needs to take an exit status instead.
+	- Actual effort: Low
+	- Progress log:
+		- `expect OK FAIL STATUS` now takes a status when its third argument is the only one and a number. The command form still works for grep and the rest.
+		- The 7 checks are `st=0; [[ ... ]] || st=1; expect ... "${st}"`. A bare false `[[ ]]` on its own line exits under `set -e`, and `|| st=1` exempts it.
+		- The 3 `-lt`/`-ge`/`-gt` checks on counts test for digits first, so `[[` never evaluates a non-number.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash`, 142 ok as before on ext4 and ZFS. With all 7 conditions negated, each printed FAIL and the run went on to "7 failed".
+	- Swept: every `[ ]` test in the script; none are left.
+	- Closed: 20261023-085305
+
+- The integration test's setup forks 400 times in one loop.
+	- ID: 2026101916404123
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Step 5 runs `head` once per file. One `python3` call can make all 400.
+	- Actual effort: Low
+	- Progress log:
+		- One `python3` writes `f1` to `f400`, each `i * 16384` random bytes, as before. Step 5 pins no mtimes.
+		- Step 5's setup alone, 3 runs each: ext4 about 4.3 s before and 3.3 s after, ZFS about 5.0 s before and 3.3 s after. Two ZFS runs before took 16 and 29 s while the load spiked to 26. Most of the time is the 1.3 GB of random bytes, not the forks.
+		- The old loop's global `i` had hidden an unused `local i` in `wait_started` from shellcheck, so it loops on `_` now.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash` step 5, same 1,313,996,800 bytes in 400 files, 142 ok as before on ext4 and ZFS.
+	- Swept: section 8's 4-file `head` loop is left. Four forks don't matter.
+	- Closed: 20261023-085305
+
+- The integration test keeps old checks as commented-out code.
+	- ID: 2026101916404118
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Remove the old checks in steps 1, 3 and 5. Keep a one-line why where it explains the current check.
+	- Actual effort: Low
+	- Progress log:
+		- The old checks in steps 1, 3 and 5 are gone. Each keeps a one-line why above the current check.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash`, same 119 `check` and 23 `expect` calls as before.
+	- Closed: 20261023-084410
+
+- The integration test has no `##` header block and no History section.
+	- ID: 2026101916404119
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Actual effort: Low
+	- Progress log:
+		- `##` Purpose, Usage and History lines, then the copyright and license lines, unchanged. Script history at the bottom, from the first commit.
+	- Branch: round-20261023
+	- Test case: none, comments only. `shellcheck` is clean.
+	- Closed: 20261023-084410
+
+- The integration test's helpers and variables don't follow the house names, and most expansions aren't braced.
+	- ID: 2026101916404120
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Helpers such as `ok`, `check`, `xget` and `wait_started` become `fCamelCase`, and variables camelCase.
+		- Every expansion is braced.
+	- Against: Committed names stay as they are. Worth it only with a bigger rewrite of the script. Bracing has no such limit.
+	- Actual effort: Low
+	- Progress log:
+		- Every `$name`, `$1` and `$@` is braced. `$?`, `$$` and `$!` are left bare, as in the helper scripts. The Python snippets are unchanged.
+		- Renames were left, per the Against row. The one new helper, `fCleanup`, has the house name.
+		- Swept: every line of the script, trap strings included. No bare `$name` is left.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash` passes on ext4 and ZFS. With 2 expected values changed, it reported both as FAIL.
+	- Closed: 20261023-084410
+
+- The integration test removes its work folder with no check right before that it's the one it made.
+	- ID: 2026101916404124
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+	- Actual effort: Low
+	- Progress log:
+		- The work folder is made with `mkdir` without `-p`, so a run stops if it already exists. A token for the run goes in `.test-run` inside it right after. `fCleanup`, the exit trap, removes the folder only when the marker holds that token, and otherwise says so and leaves it.
+		- Swept: the 2 later traps in steps 13 and 18 call `fCleanup` too, rather than their own `rm -rf`.
+	- Decisions:
+		- `rm -rf` rather than `trash`. Step 5 alone writes about 1.3 GB, so `trash` would pile that up on every run.
+	- Branch: round-20261023
+	- Test case: by hand, none in the script. With a wrong token or no marker, the folder stayed and the warning printed. With the right token, it was removed. With the folder already there, `mkdir` stopped the run and left it alone. Both full runs left no work folder.
+	- Closed: 20261023-084410
+
+- There's no `rust-version`, so a toolchain older than 1.88 fails on let-chains instead of saying what it needs.
+	- ID: 2026102308303246
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-083032
+	- Opened by: round review
+	- Requirements  [Feature]:
+		- `rust-version = "1.88"` in `[package]`, since edition 2024's let-chains need 1.88.
+	- Actual effort: Low
+	- Progress log:
+		- Added. `cargo metadata` reads it as 1.88, and with a value above the toolchain cargo stops with "requires rustc".
+		- Clippy's `incompatible_msrv` flags nothing at 1.88. It checks std APIs, not language features. The newest MSRV among dependencies is 1.85.
+		- Unverified: a build on 1.88 itself, since no 1.88 toolchain is installed here.
+	- Branch: round-20261023
+	- Test case: none, a manifest field.
+	- Closed: 20261023-083300
+
+- Some clones have no comment saying why.
+	- ID: 2026101916404114
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Restructure where it's cheap, and comment the rest.
+	- Note: `need_db` in `main.rs`, `unlisted` in `gone.rs`, `group_roots` in `mounts.rs`, and `Pair::same` and the mount list in `snapdiff.rs`. All run once at setup. `Arc` clones don't count.
+	- Actual effort: Low
+	- Progress log:
+		- `need_db` borrows, and the scan arm moves the path into `Opts`. `gone` reads its event rows once, and `reached` and `unlisted` both borrow them. `group_roots` and `mount_points` take their `Vec`, which nothing used after. snapdiff's mount list borrows `--mount` and its resolved form. `group_name` borrows too.
+		- `Pair::same` keeps its clone, with a comment: each side owns its name, since a rename gives two.
+		- Verified: release build, clippy gate, fmt, `cargo test --release` (63 passed), and the integration test on ext4 and ZFS.
+		- Swept: every `clone()` and `cloned()` outside `scan.rs`. What's left is `Arc`s and tests.
+	- Branch: round-20261023
+	- Test case: the existing suites. "gone: says what it didn't count" and "--mount through a symlink" in the integration test cover the changed paths.
+	- Closed: 20261023-083300
+
+- Public items have `//` comments instead of `///`.
+	- ID: 2026101916404113
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Only `Kind` and `Sums` use `///`.
+	- Actual effort: Low
+	- Progress log:
+		- The `//` comment above 40 `pub` items in 7 files is now `///`, worded as before. `Beneath::open_read` keeps `//`, since it explains the fallback inside rather than the function. Where one comment covers a pair, such as `RM_B2B_*` and `Parsed`'s line lists, it sits on the first only.
+		- `quick_check` is in backticks. A new `clippy.toml` lets `doc_markdown` take `SQLite` as is, rather than backticking a product name.
+		- Verified: `cargo doc --no-deps`, with and without `--document-private-items`, gives no warnings, and the clippy gate passes.
+		- Swept: every `pub` item in `src` with a `//` comment above it, attributes skipped.
+	- Branch: round-20261023
+	- Test case: none, comments only.
+	- Closed: 20261023-083300
+
+- 6 functions run past 100 lines.
+	- ID: 2026101916404110
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404102, 2026102308220558
+	- Requirements  [Feature]:
+		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
+		- Split `scan::run` into setup, the progress loop, and the finish.
+		- `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
+	- Actual effort: Low
+	- Progress log:
+		- `one_file` is a method on a per-thread `Worker`, which owns the read buffer and the xattr error count, so it takes 2 arguments. It calls `stat`, `judged_already`, `open`, `skip_unread`, `read_judged` and `write_attrs`, in the same order as before. The link claim is filled at the same points, and dropped unfilled on a failed read as before.
+		- `scan::run` calls `begin`, `hands_off`, `groups`, `watch` and `finish`. The writer still starts before the mount table is read, and the database lock is held to the end.
+		- Both allows are gone. The other 4 functions moved to 2026102308220558, and their allows name it.
+		- Nothing new is allocated, cloned or locked per file. User CPU over 20k small files was the same within noise. The binary's text grew by about 5.8 KB of 2.97 MB, mostly in the cold setup and finish code.
+		- Verified: release build, clippy gate, fmt, `cargo test --release` (63 passed), and the integration test on ext4 and ZFS, after each split.
+		- Swept: every `too_many_lines` allow in `src`, and every `one_file` and `scan::run` caller, tests included.
+	- Branch: round-20261023
+	- Test case: the existing unit and integration suites. No failing-first test, since a split changes no behavior. The tests that called `one_file` go through a `read_one` helper with a small buffer.
+	- Closed: 20261023-082226
+
+- The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
+	- ID: 2026101916404116
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Move to edition 2024 and collapse the nested `if let` in `mounts.rs`, `scan.rs` and `snapdiff.rs`.
+	- Note: 2024 changes when temporaries in a block's last expression are dropped. The lock guards in `Links` need a look.
+	- Actual effort: Low
+	- Progress log:
+		- The crate is on edition 2024. The edition migration changed nothing. Its one warning was the tail of `run_events`, where the statement's temporaries now drop at the end of the block, and the block has no locals, so nothing changes.
+		- The 7 nested `if`s clippy's `collapsible_if` flagged are let-chains now: 3 in `mounts.rs`, 2 in `scan.rs` and 2 in `snapdiff.rs`. Each one falls through the same way as before.
+		- rustfmt's 2024 style comes from the edition, since `rustfmt.toml` sets only `hard_tabs`. It sorts imports by version, ends a `return` at a block's tail with a semicolon, and puts the blake2b test vectors one field per line. Left as rustfmt has it.
+		- The `Links` guards are all statements or `let`s, not a block's tail, so the drop-order change doesn't reach them.
+		- Verified: release build on rustc 1.95, the clippy gate on 1.96, fmt, `cargo test --release` (63 passed, the link claim tests included), and the integration test on ext4 and ZFS.
+		- Swept: every nested `if` and `if let` in `src`.
+	- Test case: the existing unit and integration suites, since there's no behavior change.
+	- Closed: 20261023-080947
+
+- Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
+	- ID: 2026101916404109
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- `Links` and the job queue in `scan.rs` use `lock().unwrap()`, and `Faults` uses `if let Ok`. Pick one: `unwrap_or_else(PoisonError::into_inner)` everywhere, or a one-line reason.
+	- Note: `ClaimGuard::drop` runs while a panic unwinds, where a second panic aborts.
+	- Actual effort: Low
+	- Progress log:
+		- Every lock in `scan.rs` goes through `locked()`, which takes the guard back from a poisoned lock. The `Links` claim's condvar wait does the same. `Faults::add` and the finish no longer drop the reasons when the lock is poisoned.
+		- Before, a panic while the link map was locked would have made `ClaimGuard::drop` panic again in the unwind and abort the scan. A poisoned `Faults` lock lost the reason, so the run ended `done` rather than `failed`.
+		- Verified: release build, clippy gate, fmt, `cargo test --release` (63 passed), and the integration test on ext4 and ZFS.
+		- Verified: the new test aborts with `unwrap()` put back in `locked()`, and passes with the fix.
+		- Swept: every `.lock()` and `Condvar::wait` in `src`, tests included. Only `scan.rs` has a Mutex.
+	- Decisions:
+		- `unwrap_or_else(PoisonError::into_inner)` everywhere, not a reason per unwrap. Nothing panics inside these locks short of a bug, and the data they guard stays usable: a half-done link map entry only costs a reread, and the job queue and fault list keep no invariant across a push or recv.
+	- Test case: `scan::tests::a_poisoned_lock_is_still_a_fault`.
+	- Closed: 20261023-080609
+
+- Every skipped file updates its database row by path.
+	- ID: 2026101916404106
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- `LOOKUP` returns the row id. `Msg::Seen` carries the id, and the writer updates by it, so no path is copied per file.
+	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
+	- Actual effort: Low
+	- Progress log:
+		- `Prior` has the `paths` row id, `Msg::Seen` carries it, and the writer updates `WHERE id`. All 3 places that send it use the id.
+		- A lookup error is still `db-error`, not no record. `accept` takes the new column and ignores it.
+		- Verified: release build, clippy gate, `cargo test --release` (62 passed), and the integration test on ext4 and ZFS, whose "every path seen by the run" checks cover it end to end.
+		- Verified: the new test goes red with the update made to hit every row, and green restored.
+		- Swept: every `Msg::Seen` sender in scan.rs, both `lookup` callers, and every `Prior` built in tests.
+	- Decisions:
+		- The id can't go stale within a run. Nothing deletes a `paths` row: `gone` only reads, `prune` deletes `files` rows, and the `Hashed` upsert keeps the row's id. A hard-linked name or a rename is its own path and its own row. Every writer holds the database lock, and `id` is an `INTEGER PRIMARY KEY`, so even a VACUUM keeps it.
+	- Test case: `db::tests::seen_marks_only_its_row`. No failing-first test, since there's no behavior change.
+	- Closed: 20261023-075833
+
+- The walk builds each file's full path twice.
+	- ID: 2026101916404107
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `list_dir` in `scan.rs` joins every entry's path, and `queue` joins it again for files. Keep the first one.
+	- Actual effort: Low
+	- Progress log:
+		- `list_dir` keeps the joined path in its file list, and `queue` sends it as is. Sorting by inode, then path, gives the same order as inode, then name.
+		- Verified: release build, clippy gate, `cargo test --release` (62 passed), and the integration test on ext4 and ZFS.
+		- Swept: folders still join once at the pop in `walk`, from the name. That's once per folder, and keeps the stack small.
+	- Decisions:
+		- A folder's pending batch now holds full paths, not names. That costs the folder path's length per file, at most `FILES_BATCH` files, in a huge folder.
+	- Test case: None. No behavior change; the integration test walks the trees.
+	- Closed: 20261023-075833
+
+- `scan::Opts` keeps full scan versus `--verify` as a bool.
+	- ID: 2026101916404111
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- A mode enum in place of `verify`.
+	- Note: `Opts` has 4 bools, which pedantic flags.
+	- Actual effort: Low
+	- Progress log:
+		- `scan::Mode` is `Full` or `Verify`, in `Opts` and the workers' shared state. `runs.verify` still stores 0 or 1.
+		- `Opts` has 3 bools now, within the lint's limit, so its `struct_excessive_bools` allow is gone.
+		- Verified: the clippy gate passes without the allow, and the integration test's verify steps pass on ext4 and ZFS.
+		- Swept: every `verify` field and argument in src. The `--verify` flag and the `runs.verify` column stay.
+	- Test case: the integration test's `verify:` steps, and `resume_takes_only_the_statuses_it_knows`, which passes a mode.
+	- Closed: 20261023-075214
+
+- `hex` and `escape_name` allocate a new string for every byte.
+	- ID: 2026101916404108
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Write each byte into the output string with `write!`, or from a table.
+	- Note: `--rmlint` calls `hex` for every rmlint checksum it writes, 64 bytes each. This also clears 2 pedantic warnings.
+	- Actual effort: Low
+	- Progress log:
+		- Both write each byte from a 16-character table now.
+		- Verified: `hex_and_escape_pinned` passes on the old code and the new. Integration steps 10 and 20 pass on ext4 and ZFS.
+		- Swept: other `format!` per byte or char in src, by the `format_push_string` lint. None left.
+	- Test case: `util::tests::hex_and_escape_pinned`, beside `hex_round_trip` and `escapes_names`.
+	- Closed: 20261023-074009
+
+- Some public types don't derive `Debug`.
+	- ID: 2026101916404112
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `Opts`, `Plan`, `PathKey`, `Hashed`, `Msg`, `Entry`, `List`, `Source` and `Diff`.
+	- Actual effort: Low
+	- Progress log:
+		- All 9 derive `Debug`. Every field type already had it, so none needed a manual impl.
+		- Swept: every `pub struct` and `pub enum` in src has `Debug` now.
+	- Test case: None. It is a derive, and the build checks it.
+	- Closed: 20261023-074009
+
 - vm-scan writes nothing to its log until the snapshots are taken.
 	- ID: 2026101416080001
 	- Type: Enhancement
@@ -1307,6 +1533,35 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Note: Path text was about 2/3 of a 48 MB test database of 200k paths. A table of folders would roughly halve it, but it needs a schema change. Worth it only if database size or cache pressure shows up.
+
+- `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
+	- ID: 2026101916404117
+	- Type: Task
+	- Status: Canceled
+		- Its own Against row keeps the committed names. New code avoids the clash.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Against: Committed names stay as they are. New code uses names that don't clash.
+
+- Errors are plain strings, converted by a local closure in about 8 functions.
+	- ID: 2026101916404115
+	- Type: Enhancement
+	- Status: Canceled
+		- Neither option beats the closures. `anyhow` costs at least 20 KB and the local trait 4 KB, for the same messages.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Optional. It's consistent across files today. `anyhow` would replace the closures with `.context()`. Weigh its size cost.
+	- Progress log:
+		- Release binary today: 3,033,840 bytes, reproduced on a second build.
+		- `anyhow` for the rusqlite errors only, messages unchanged: 3,054,320 (+20,480). A full move would cost more, since every `String` error would need converting too.
+		- A local `Ctx` trait on `Result<T, E: Display>`, with `.ctx("database")` and `.plain()`: 3,037,936 (+4,096). It also puts the prefix back on every call site, and looks like `anyhow` without being it.
+		- Swept: the 7 `let e = |e: rusqlite::Error| ...` closures, in `accept::run`, `accept::one`, `db::open_rw`, `gone::run`, `main.rs`'s `runs` and `report`, and `scan::begin`. The inline `map_err(|e| format!(...))` sites with a path prefix are one per use and stay too.
+	- Decisions:
+		- Keep the closures. Size comes first, and the errors are on cold paths, so speed doesn't change either way.
+	- Test case: None; no code change.
+	- Closed: 20261023-083612
 
 - vmFreeBSD is shut down for the snapshot, though its agent can freeze.
 	- ID: 2026101416080000

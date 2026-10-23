@@ -29,9 +29,9 @@ fn unescape(s: &str) -> PathBuf {
 			&& i + 3 < b.len()
 			&& b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
 		{
-			let v = (b[i + 1] - b'0') as u32 * 64
-				+ (b[i + 2] - b'0') as u32 * 8
-				+ (b[i + 3] - b'0') as u32;
+			let v = u32::from(b[i + 1] - b'0') * 64
+				+ u32::from(b[i + 2] - b'0') * 8
+				+ u32::from(b[i + 3] - b'0');
 			out.push(v as u8);
 			i += 4;
 		} else {
@@ -68,8 +68,8 @@ pub fn read_mounts() -> Result<Vec<Mount>, String> {
 	Ok(parse_mountinfo(&text))
 }
 
-// The mount a path is on. Later lines are mounted over earlier ones, so the
-// last of the longest matches is the one in effect.
+/// The mount a path is on. Later lines are mounted over earlier ones, so the
+/// last of the longest matches is the one in effect.
 pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
 	let mut best: Option<&Mount> = None;
 	for m in mounts {
@@ -100,16 +100,14 @@ fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 			return;
 		}
 	}
-	if sys.join("partition").exists() {
-		if let Some(parent) = fs::canonicalize(&sys)
+	if sys.join("partition").exists()
+		&& let Some(parent) = fs::canonicalize(&sys)
 			.ok()
-			.and_then(|p| p.parent().map(|p| p.to_path_buf()))
-		{
-			if let Some(name) = parent.file_name() {
-				out.insert(name.to_string_lossy().into_owned());
-				return;
-			}
-		}
+			.and_then(|p| p.parent().map(Path::to_path_buf))
+		&& let Some(name) = parent.file_name()
+	{
+		out.insert(name.to_string_lossy().into_owned());
+		return;
 	}
 	out.insert(kname.to_string());
 }
@@ -127,10 +125,10 @@ fn zpool_disks(pool: &str, out: &mut BTreeSet<String>) -> Result<(), String> {
 	}
 	for line in String::from_utf8_lossy(&o.stdout).lines() {
 		let f = line.trim_start().split('\t').next().unwrap_or("");
-		if f.starts_with("/dev/") {
-			if let Some(k) = kname_of(f) {
-				base_disks(&k, out);
-			}
+		if f.starts_with("/dev/")
+			&& let Some(k) = kname_of(f)
+		{
+			base_disks(&k, out);
 		}
 	}
 	Ok(())
@@ -184,7 +182,7 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 				m.point.display(),
 				m.fstype,
 				m.source
-			))
+			));
 		}
 	}
 	if out.is_empty() {
@@ -210,8 +208,8 @@ pub fn rotational(disk: &str) -> bool {
 	fs::read_to_string(format!("/sys/block/{disk}/queue/rotational")).is_ok_and(|s| s.trim() == "1")
 }
 
-// One worker on anything with a hard drive in it, since one is all it takes
-// to make the whole set wait on seeks. A few on flash.
+/// One worker on anything with a hard drive in it, since one is all it takes
+/// to make the whole set wait on seeks. A few on flash.
 pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	if disks.iter().any(|d| rotational(d)) {
 		1
@@ -222,11 +220,13 @@ pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	}
 }
 
-// Roots that share any disk end up in one group.
-pub fn group_roots(roots: &[(PathBuf, BTreeSet<String>)]) -> Vec<(BTreeSet<String>, Vec<PathBuf>)> {
+/// Roots that share any disk end up in one group.
+pub fn group_roots(
+	roots: Vec<(PathBuf, BTreeSet<String>)>,
+) -> Vec<(BTreeSet<String>, Vec<PathBuf>)> {
 	let mut groups: Vec<(BTreeSet<String>, Vec<PathBuf>)> = Vec::new();
 	for (root, disks) in roots {
-		let mut merged = (disks.clone(), vec![root.clone()]);
+		let mut merged = (disks, vec![root]);
 		let mut keep = Vec::new();
 		for g in groups.drain(..) {
 			if g.0.is_disjoint(&merged.0) {
@@ -245,21 +245,22 @@ pub fn group_roots(roots: &[(PathBuf, BTreeSet<String>)]) -> Vec<(BTreeSet<Strin
 }
 
 pub fn group_name(disks: &BTreeSet<String>) -> String {
-	disks.iter().cloned().collect::<Vec<_>>().join("+")
-}
-
-// Every mount point, for stopping a walk at the edge of its own filesystem.
-pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
-	mounts
+	disks
 		.iter()
-		.map(|m| (m.point.clone(), m.fstype.clone()))
-		.collect()
+		.map(String::as_str)
+		.collect::<Vec<_>>()
+		.join("+")
 }
 
-// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
-// and nothing more, no attributes and no database. A FUSE mount of a disk or
-// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
-// fuseblk for a block device, plain fuse for a file mounted by a user.
+/// Every mount point, for stopping a walk at the edge of its own filesystem.
+pub fn mount_points(mounts: Vec<Mount>) -> BTreeMap<PathBuf, String> {
+	mounts.into_iter().map(|m| (m.point, m.fstype)).collect()
+}
+
+/// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
+/// and nothing more, no attributes and no database. A FUSE mount of a disk or
+/// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
+/// fuseblk for a block device, plain fuse for a file mounted by a user.
 pub fn hands_off(m: &Mount) -> bool {
 	let t = m.fstype.strip_prefix("fuse.").unwrap_or(&m.fstype);
 	match t {
@@ -368,14 +369,14 @@ mod tests {
 
 	#[test]
 	fn groups_share_disks() {
-		let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>();
+		let s = |v: &[&str]| v.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
 		let roots = vec![
 			(PathBuf::from("/a"), s(&["nvme0n1", "nvme1n1"])),
 			(PathBuf::from("/b"), s(&["sda"])),
 			(PathBuf::from("/c"), s(&["nvme1n1"])),
 			(PathBuf::from("/d"), s(&["sdb", "sda"])),
 		];
-		let g = group_roots(&roots);
+		let g = group_roots(roots);
 		assert_eq!(g.len(), 2);
 		assert_eq!(g[0].1, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
 		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);

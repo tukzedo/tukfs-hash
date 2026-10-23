@@ -27,10 +27,11 @@ mod util;
 mod xattr;
 
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 const USAGE: &str = "\
 tukfs-hash - checksum every file, remember it, and notice when one changes on its own
@@ -139,6 +140,7 @@ fn main() {
 	std::process::exit(code);
 }
 
+#[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let shown = |a: &OsStr| util::escape_name(a.as_bytes());
 	let Some(cmd) = argv.first().map(|c| c.to_str().unwrap_or_default()) else {
@@ -161,7 +163,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut threads = Vec::new();
 	let mut since = None;
 	let mut resume = false;
-	let mut verify = false;
+	let mut mode = scan::Mode::Full;
 	let mut write_xattrs = true;
 	let mut rmlint = false;
 	let mut progress = 30;
@@ -215,24 +217,24 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				);
 			}
 			"--resume" => resume = true,
-			"--verify" => verify = true,
+			"--verify" => mode = scan::Mode::Verify,
 			"--progress" => {
 				progress = take_text(&mut it, a)?
 					.parse()
-					.map_err(|_| "--progress takes seconds")?
+					.map_err(|_| "--progress takes seconds")?;
 			}
 			"--run" => {
 				run_id = Some(
 					take_text(&mut it, a)?
 						.parse::<i64>()
 						.map_err(|_| "--run takes a number")?,
-				)
+				);
 			}
 			"--kind" => kind = Some(take_text(&mut it, a)?),
 			"--limit" => {
 				limit = take_text(&mut it, a)?
 					.parse()
-					.map_err(|_| "--limit takes a number")?
+					.map_err(|_| "--limit takes a number")?;
 			}
 			"--old" => old = Some(p(take_value(&mut it, a)?)),
 			"--new" => new = Some(p(take_value(&mut it, a)?)),
@@ -244,7 +246,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			_ => return Err(format!("unknown option {}; see --help", shown(arg))),
 		}
 	}
-	let need_db = || db.clone().ok_or_else(|| "--db is required".to_string());
+	let need_db = || db.as_deref().ok_or("--db is required");
 
 	match cmd {
 		"scan" => {
@@ -254,7 +256,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			if resume && since.is_some() {
 				return Err("--resume uses the old run's date; drop --since".into());
 			}
-			if verify && since.is_some() {
+			if mode == scan::Mode::Verify && since.is_some() {
 				return Err("--verify reads every known file again; drop --since".into());
 			}
 			let stop = Arc::new(AtomicBool::new(false));
@@ -269,21 +271,21 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				signal_hook::flag::register(sig, stop.clone()).map_err(|e| e.to_string())?;
 			}
 			scan::run(
-				scan::Opts {
-					db: need_db()?,
+				&scan::Opts {
+					db: db.ok_or("--db is required")?,
 					roots,
 					excludes,
 					no_xattr,
 					threads,
 					since,
 					resume,
-					verify,
+					mode,
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
 					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
 				},
-				stop,
+				&stop,
 			)
 		}
 		"plan" => {
@@ -299,12 +301,12 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 			Ok(0)
 		}
-		"runs" => runs(&need_db()?),
-		"report" => report(&need_db()?, run_id, kind.as_deref(), limit),
-		"gone" => gone::run(&need_db()?, run_id, limit),
-		"prune" => prune(&need_db()?),
+		"runs" => runs(need_db()?),
+		"report" => report(need_db()?, run_id, kind.as_deref(), limit),
+		"gone" => gone::run(need_db()?, run_id, limit),
+		"prune" => prune(need_db()?),
 		"accept" => accept::run(
-			&need_db()?,
+			need_db()?,
 			&files,
 			&argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
 		),
@@ -320,10 +322,10 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					return Err(
 						"snapdiff takes one of --zfs-diff with --mount, --find-new, or --list"
 							.into(),
-					)
+					);
 				}
 			};
-			snapdiff::run(&old, &new, src, show_all)
+			snapdiff::run(&old, &new, &src, show_all)
 		}
 		_ => Err(format!("unknown command {}; see --help", shown(&argv[0]))),
 	}
@@ -357,7 +359,7 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 		.map_err(e)?;
 	for row in rows {
 		let (id, start, fin, cutoff, status, host, summary, verify) = row.map_err(e)?;
-		let skipping = if status == "accept" {
+		let skipping = if db::RunStatus::parse(&status) == Some(db::RunStatus::Accept) {
 			String::new()
 		} else if verify {
 			", verify".into()
@@ -368,7 +370,7 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 			"run {id} on {} {status}: started {}, finished {}{skipping}",
 			host.unwrap_or_default(),
 			util::fmt_local(start),
-			fin.map(util::fmt_local).unwrap_or_else(|| "-".into()),
+			fin.map_or_else(|| "-".into(), util::fmt_local),
 		);
 		if let Some(s) = summary {
 			for l in s.lines() {
@@ -406,6 +408,23 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	Ok(0)
 }
 
+// The ones that mean damage first.
+fn damage_first(k: db::Kind) -> u8 {
+	use db::Kind as K;
+	match k {
+		K::XattrMismatch | K::RmlintMismatch | K::DbMismatch | K::CacheMismatch => 0,
+		K::ReadError => 1,
+		K::Unsupported
+		| K::Unstable
+		| K::DirError
+		| K::StatError
+		| K::OpenError
+		| K::DbError
+		| K::XattrError
+		| K::Accepted => 2,
+	}
+}
+
 fn report(
 	db: &std::path::Path,
 	run: Option<i64>,
@@ -436,13 +455,16 @@ fn report(
 	for (k, n) in &counts {
 		out!("\t{k}: {n}");
 	}
-	// The ones that mean damage first.
+	let mut order = String::new();
+	for k in db::Kind::ALL {
+		_ = write!(order, " WHEN '{}' THEN {}", k.name(), damage_first(k));
+	}
 	let mut st = conn
-		.prepare(
+		.prepare(&format!(
 			"SELECT kind, path, detail FROM events WHERE run_id = ?1 AND (?2 IS NULL OR kind = ?2)
-			ORDER BY CASE WHEN kind LIKE '%mismatch' THEN 0 WHEN kind = 'read-error' THEN 1 ELSE 2 END, id
-			LIMIT ?3",
-		)
+			ORDER BY CASE kind{order} ELSE 2 END, id
+			LIMIT ?3"
+		))
 		.map_err(e)?;
 	let rows = st
 		.query_map(rusqlite::params![run, kind, limit], |r| {
@@ -458,4 +480,23 @@ fn report(
 		out!("{k}\t{p}\t{}", d.unwrap_or_default());
 	}
 	Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// Same order as the old `LIKE '%mismatch'`, then `read-error`.
+	#[test]
+	fn damage_sorts_first() {
+		for k in db::Kind::ALL {
+			let n = k.name();
+			let was = if n.ends_with("mismatch") {
+				0
+			} else {
+				u8::from(n != "read-error") + 1
+			};
+			assert_eq!(damage_first(k), was, "{n}");
+		}
+	}
 }

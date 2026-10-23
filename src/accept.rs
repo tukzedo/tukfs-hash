@@ -5,12 +5,13 @@
 // checksums, so without this a file changed on purpose, with its time put
 // back, is reported on every run.
 
-use crate::db::{self, Hashed, Msg};
+use crate::db::{self, Hashed, Kind, Msg, RunStatus};
 use crate::mounts::Mount;
-use crate::scan::{self, read_sums, ReadFail, Sums};
+use crate::scan::{self, ReadFail, Sums, read_sums};
 use crate::util::{b64u_encode, canonical_name, now_us, show_path};
 use crate::xattr::{self, OnFile};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
+use std::fmt::Write as _;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -30,8 +31,8 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Its own status, so `scan --resume` never takes it for a stopped scan.
 	conn.execute(
-		"INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?1, 'accept', ?2, ?3)",
-		params![now_us(), scan::host(), args],
+		"INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?1, ?2, ?3, ?4)",
+		params![now_us(), RunStatus::Accept, scan::host(), args],
 	)
 	.map_err(e)?;
 	let run_id = conn.last_insert_rowid();
@@ -61,7 +62,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	}
 	scan::give_back(&db_path);
 	out!("run {run_id}: accepted {taken} of {}", paths.len());
-	Ok(if taken == paths.len() { 0 } else { 1 })
+	Ok(i32::from(taken != paths.len()))
 }
 
 fn fail_text(f: ReadFail) -> String {
@@ -76,6 +77,7 @@ fn digest_text(d: Option<&[u8]>) -> String {
 	d.map_or_else(|| "none".into(), b64u_encode)
 }
 
+#[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 fn one(
 	conn: &mut Connection,
 	run_id: i64,
@@ -132,7 +134,7 @@ fn one(
 		detail.push_str("; rmlint's blake2b removed");
 	}
 	if let Some(t) = &hands_off {
-		detail.push_str(&format!("; attributes left alone on {t}"));
+		let _ = write!(detail, "; attributes left alone on {t}");
 	}
 	let hashed_us = now_us();
 	let (bytes, mt) = (before.len() as i64, scan::mtime_us(&before));
@@ -158,7 +160,7 @@ fn one(
 		run_id,
 		now,
 		Msg::Event {
-			kind: "accepted",
+			kind: Kind::Accepted,
 			path: pbytes.to_vec(),
 			detail,
 		},
@@ -183,7 +185,7 @@ fn one(
 			run_id,
 			now_us(),
 			Msg::Event {
-				kind: "xattr-error",
+				kind: Kind::XattrError,
 				path: pbytes.to_vec(),
 				detail: x.to_string(),
 			},
