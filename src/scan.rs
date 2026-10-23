@@ -427,7 +427,6 @@ pub fn give_back(db: &Path) {
 	}
 }
 
-#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let plan = plan(&o.roots, &o.threads)?;
 	for d in &plan.dropped {
@@ -439,54 +438,14 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let db_path = canonical_db(&o.db)?;
 	let _lock = lock(&db_path)?;
 	let conn = db::open_rw(&db_path)?;
-	let e = |e: rusqlite::Error| format!("database: {e}");
 
 	let started = now_us();
-	let roots = roots_key(&plan.groups);
-	let (run_id, cutoff_us, run_started, earlier) = if o.resume {
-		let r = pick_resume(&conn, &roots, o.mode)?;
-		(r.id, r.cutoff_us, r.started_us, r.summary)
-	} else {
-		// The lock is held, so a run still marked running died without a
-		// word. A new run means it won't be resumed.
-		conn.execute(
-			"UPDATE runs SET status = ?1 WHERE status = ?2",
-			[RunStatus::Killed, RunStatus::Running],
-		)
-		.map_err(e)?;
-		// A verify reads every known file again, however fresh.
-		let cutoff = match o.mode {
-			Mode::Verify => started,
-			Mode::Full => o.since.unwrap_or_else(|| local_midnight_us(started)),
-		};
-		conn.execute(
-			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-			rusqlite::params![
-				started,
-				cutoff,
-				RunStatus::Running,
-				host(),
-				o.args,
-				roots,
-				o.mode == Mode::Verify
-			],
-		)
-		.map_err(e)?;
-		(conn.last_insert_rowid(), cutoff, started, None)
-	};
-	conn.execute(
-		"UPDATE runs SET status = ?1 WHERE id = ?2",
-		rusqlite::params![RunStatus::Running, run_id],
-	)
-	.map_err(e)?;
-	if o.mode == Mode::Verify {
-		out!("run {run_id}: rereading files with a known checksum");
-	} else {
-		out!(
-			"run {run_id}: files checksummed since {} are skipped",
-			fmt_local(cutoff_us)
-		);
-	}
+	let Resumed {
+		id: run_id,
+		cutoff_us,
+		started_us: run_started,
+		summary: earlier,
+	} = begin(&conn, o, &roots_key(&plan.groups), started)?;
 
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
@@ -496,15 +455,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	};
 
 	let mounts = mounts::read_mounts()?;
-	let mut hands_off = BTreeMap::new();
-	for r in plan.groups.iter().flat_map(|g| &g.1) {
-		if let Some(t) = mounts::hands_off_at(&mounts, r) {
-			let dev = fs::metadata(r)
-				.map_err(|e| format!("{}: {e}", r.display()))?
-				.dev();
-			hands_off.insert(r.clone(), (dev, t));
-		}
-	}
+	let hands_off = hands_off(&mounts, &plan.groups)?;
 	let shared = Arc::new(Shared {
 		stop: stop.clone(),
 		faults: faults.clone(),
@@ -531,9 +482,122 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mode: o.mode,
 		tx,
 	});
+	let groups = groups(plan.groups, &hands_off);
 
-	let groups: Vec<Arc<Group>> = plan
-		.groups
+	let mut handles = Vec::new();
+	for g in &groups {
+		let g = g.clone();
+		let sh = shared.clone();
+		handles.push(std::thread::spawn(move || run_group(&g, &sh)));
+	}
+	drop(shared);
+
+	let t0 = Instant::now();
+	watch(&groups, o.progress_secs, t0);
+	for h in handles {
+		// run_group catches its workers' panics; this is in case it can't.
+		if h.join().is_err() {
+			faults.add(stop, "a group panicked".into());
+		}
+	}
+	let (conn, written) = writer
+		.join()
+		.map_err(|_| "the database writer panicked".to_string())?;
+	let mut why = std::mem::take(&mut *locked(&faults.why));
+	why.extend(written.err());
+	let part = Part {
+		run_id,
+		started_us: started,
+		earlier,
+		groups: &groups,
+		t0,
+	};
+	finish(conn, &part, why, stop.load(Relaxed), &db_path)
+}
+
+// Picks up the run to resume, or starts a new one, and marks it running. A new
+// run is its own first part.
+fn begin(
+	conn: &rusqlite::Connection,
+	o: &Opts,
+	roots: &[u8],
+	started: i64,
+) -> Result<Resumed, String> {
+	let e = |e: rusqlite::Error| format!("database: {e}");
+	let r = if o.resume {
+		pick_resume(conn, roots, o.mode)?
+	} else {
+		// The lock is held, so a run still marked running died without a
+		// word. A new run means it won't be resumed.
+		conn.execute(
+			"UPDATE runs SET status = ?1 WHERE status = ?2",
+			[RunStatus::Killed, RunStatus::Running],
+		)
+		.map_err(e)?;
+		// A verify reads every known file again, however fresh.
+		let cutoff = match o.mode {
+			Mode::Verify => started,
+			Mode::Full => o.since.unwrap_or_else(|| local_midnight_us(started)),
+		};
+		conn.execute(
+			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+			rusqlite::params![
+				started,
+				cutoff,
+				RunStatus::Running,
+				host(),
+				o.args,
+				roots,
+				o.mode == Mode::Verify
+			],
+		)
+		.map_err(e)?;
+		Resumed {
+			id: conn.last_insert_rowid(),
+			cutoff_us: cutoff,
+			started_us: started,
+			summary: None,
+		}
+	};
+	conn.execute(
+		"UPDATE runs SET status = ?1 WHERE id = ?2",
+		rusqlite::params![RunStatus::Running, r.id],
+	)
+	.map_err(e)?;
+	if o.mode == Mode::Verify {
+		out!("run {}: rereading files with a known checksum", r.id);
+	} else {
+		out!(
+			"run {}: files checksummed since {} are skipped",
+			r.id,
+			fmt_local(r.cutoff_us)
+		);
+	}
+	Ok(r)
+}
+
+// Roots on NTFS, APFS or HFS+, with their device and filesystem type.
+fn hands_off(
+	mounts: &[mounts::Mount],
+	groups: &[(String, Vec<PathBuf>, usize)],
+) -> Result<BTreeMap<PathBuf, (u64, String)>, String> {
+	let mut out = BTreeMap::new();
+	for r in groups.iter().flat_map(|g| &g.1) {
+		if let Some(t) = mounts::hands_off_at(mounts, r) {
+			let dev = fs::metadata(r)
+				.map_err(|e| format!("{}: {e}", r.display()))?
+				.dev();
+			out.insert(r.clone(), (dev, t));
+		}
+	}
+	Ok(out)
+}
+
+fn groups(
+	planned: Vec<(String, Vec<PathBuf>, usize)>,
+	hands_off: &BTreeMap<PathBuf, (u64, String)>,
+) -> Vec<Arc<Group>> {
+	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|(name, roots, threads)| {
 			Arc::new(Group {
@@ -555,23 +619,17 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			}
 		}
 	}
+	groups
+}
 
-	let mut handles = Vec::new();
-	for g in &groups {
-		let g = g.clone();
-		let sh = shared.clone();
-		handles.push(std::thread::spawn(move || run_group(&g, &sh)));
-	}
-	drop(shared);
-
-	let t0 = Instant::now();
+fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 	let mut last = Instant::now();
 	while !groups.iter().all(|g| g.done.load(Relaxed)) {
 		std::thread::sleep(Duration::from_millis(200));
-		if last.elapsed() >= Duration::from_secs(o.progress_secs.max(1)) {
+		if last.elapsed() >= Duration::from_secs(progress_secs.max(1)) {
 			last = Instant::now();
 			let secs = t0.elapsed().as_secs_f64().max(1.0);
-			for g in &groups {
+			for g in groups {
 				let rate = g.stats.bytes.load(Relaxed) as f64 / secs;
 				out!(
 					"[{}] {} {}/s | {}",
@@ -583,22 +641,29 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			}
 		}
 	}
-	for h in handles {
-		// run_group catches its workers' panics; this is in case it can't.
-		if h.join().is_err() {
-			faults.add(stop, "a group panicked".into());
-		}
-	}
-	let (conn, written) = writer
-		.join()
-		.map_err(|_| "the database writer panicked".to_string())?;
-	let mut why = std::mem::take(&mut *locked(&faults.why));
-	why.extend(written.err());
-	let stopped = stop.load(Relaxed);
+}
+
+// This part of a run, from its start to its summary.
+struct Part<'a> {
+	run_id: i64,
+	started_us: i64,
+	earlier: Option<String>,
+	groups: &'a [Arc<Group>],
+	t0: Instant,
+}
+
+fn finish(
+	conn: rusqlite::Connection,
+	p: &Part,
+	mut why: Vec<String>,
+	stopped: bool,
+	db_path: &Path,
+) -> Result<i32, String> {
+	let run_id = p.run_id;
 	// The stored summary keeps every part's lines; the output shows this
 	// part's. The events line is the whole run's either way.
 	let mut part = String::new();
-	for g in &groups {
+	for g in p.groups {
 		let _ = writeln!(part, "{}: {}", g.name, g.stats.line());
 	}
 	let counts = run_events(&conn, run_id)
@@ -606,12 +671,12 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		.ok();
 	part.push_str(&events_line(counts.as_deref()));
 	let mut summary = String::new();
-	if let Some(prev) = earlier {
+	if let Some(prev) = &p.earlier {
 		for l in prev.lines().filter(|l| !l.starts_with(EVENTS_LINE)) {
 			summary.push_str(l);
 			summary.push('\n');
 		}
-		let _ = writeln!(summary, "resumed {}", fmt_local(started));
+		let _ = writeln!(summary, "resumed {}", fmt_local(p.started_us));
 	}
 	summary.push_str(&part);
 	let mut status = if !why.is_empty() {
@@ -635,12 +700,12 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			db_path.display()
 		);
 	}
-	give_back(&db_path);
+	give_back(db_path);
 
 	out!(
 		"run {run_id} {} after {}s\n{part}",
 		status.text(),
-		t0.elapsed().as_secs()
+		p.t0.elapsed().as_secs()
 	);
 	if !why.is_empty() {
 		why.dedup();
