@@ -19,7 +19,7 @@ use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -1007,8 +1007,13 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 		Ok(st) => st,
 		Err(e) => return sh.faults.add(&sh.stop, format!("{}: {e}", sh.db.display())),
 	};
-	let mut buf = vec![0u8; 1 << 20];
-	let mut xattr_fail_logged = 0;
+	let mut w = Worker {
+		g,
+		sh,
+		links,
+		buf: vec![0u8; 1 << 20],
+		xattr_fail_logged: 0,
+	};
 	loop {
 		let Ok(job) = locked(jobs).recv() else {
 			return;
@@ -1024,15 +1029,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 				continue;
 			}
 		};
-		one_file(
-			g,
-			sh,
-			&job,
-			prior.as_ref(),
-			&mut buf,
-			links,
-			&mut xattr_fail_logged,
-		);
+		w.one_file(&job, prior.as_ref());
 	}
 }
 
@@ -1296,190 +1293,263 @@ fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
 	}))
 }
 
-#[allow(clippy::too_many_lines, reason = "split by 2026101916404110")]
-fn one_file(
-	g: &Group,
-	sh: &Shared,
-	job: &Job,
-	prior: Option<&Prior>,
-	buf: &mut [u8],
-	links: &Links,
-	xattr_fail_logged: &mut u32,
-) {
-	let st = &g.stats;
-	let path = &job.path;
-	let pbytes = path.as_os_str().as_bytes();
-	let rel = job.root.rel(path);
-	let md = match job
-		.root
-		.open_at(rel, libc::O_PATH)
-		.and_then(|f| f.metadata())
-	{
-		Ok(m) if m.file_type().is_file() => m,
-		Ok(_) => return,
-		Err(e) if beneath::moved(&e) => return,
-		Err(e) => {
-			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::StatError, path, e.to_string());
+// One per hashing thread, so the buffer and the counter need no lock.
+struct Worker<'a> {
+	g: &'a Group,
+	sh: &'a Shared,
+	links: &'a Links,
+	buf: Vec<u8>,
+	xattr_fail_logged: u32,
+}
+
+impl<'a> Worker<'a> {
+	fn one_file(&mut self, job: &Job, prior: Option<&Prior>) {
+		let rel = job.root.rel(&job.path);
+		let Some(md) = self.stat(job, rel) else {
+			return;
+		};
+		if self.judged_already(prior, &md) {
 			return;
 		}
-	};
-	st.files.fetch_add(1, Relaxed);
-	let (bytes, mt) = (md.len() as i64, mtime_us(&md));
+		let Some((file, before)) = self.open(job, rel) else {
+			return;
+		};
+		let fd = file.as_raw_fd();
+		let onfile = OnFile::read(fd);
+		let refs = Refs::new(&onfile, prior, &before);
+		if self.skip_unread(job, prior, &refs, &onfile, &before) {
+			return;
+		}
+		let Some((sums, claim)) = self.read_judged(job, prior, &refs, &file, &before) else {
+			return;
+		};
+		refs.tally(&sums, &self.g.stats);
 
-	if let Some(p) = prior {
+		let sh = self.sh;
+		let hashed_us = now_us();
+		if let Some(c) = claim {
+			c.fill((before.len() as i64, mtime_us(&before), sums));
+		}
+		// Once nothing more can be recorded, an attribute would vouch for a read
+		// the database never got.
+		let pbytes = job.path.as_os_str().as_bytes();
+		if !send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) || sh.faults.any.load(Relaxed) {
+			return;
+		}
+		self.write_attrs(job, &refs, &sums, fd, &before, hashed_us);
+	}
+
+	fn stat(&self, job: &Job, rel: &Path) -> Option<fs::Metadata> {
+		let md = match job
+			.root
+			.open_at(rel, libc::O_PATH)
+			.and_then(|f| f.metadata())
+		{
+			Ok(m) if m.file_type().is_file() => m,
+			Ok(_) => return None,
+			Err(e) if beneath::moved(&e) => return None,
+			Err(e) => {
+				self.g.stats.other_err.fetch_add(1, Relaxed);
+				event(self.sh, Kind::StatError, &job.path, e.to_string());
+				return None;
+			}
+		};
+		self.g.stats.files.fetch_add(1, Relaxed);
+		Some(md)
+	}
+
+	fn judged_already(&self, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
+		let (sh, st) = (self.sh, &self.g.stats);
+		let Some(p) = prior else {
+			return false;
+		};
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
 		if (p.hashed_us >= sh.cutoff_us || p.seen_run == sh.run_id)
-			&& p.bytes == bytes
-			&& p.mtime_us == mt
+			&& p.bytes == md.len() as i64
+			&& p.mtime_us == mtime_us(md)
 			&& p.ino == md.ino() as i64
 		{
 			if p.seen_run != sh.run_id {
 				send(sh, Msg::Seen(p.id));
 			}
 			st.skip_db.fetch_add(1, Relaxed);
-			links.passed(&md);
-			return;
+			self.links.passed(md);
+			return true;
+		}
+		false
+	}
+
+	fn open(&self, job: &Job, rel: &Path) -> Option<(File, fs::Metadata)> {
+		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
+		let file = match job.root.open_read(rel) {
+			Ok(f) => f,
+			Err(e) if beneath::moved(&e) => return None,
+			Err(e) => {
+				st.other_err.fetch_add(1, Relaxed);
+				event(sh, Kind::OpenError, path, e.to_string());
+				return None;
+			}
+		};
+		match file.metadata() {
+			Ok(m) if m.file_type().is_file() => Some((file, m)),
+			Ok(_) => None,
+			Err(e) => {
+				st.other_err.fetch_add(1, Relaxed);
+				event(sh, Kind::StatError, path, e.to_string());
+				None
+			}
 		}
 	}
 
-	let file = match job.root.open_read(rel) {
-		Ok(f) => f,
-		Err(e) if beneath::moved(&e) => return,
-		Err(e) => {
-			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::OpenError, path, e.to_string());
-			return;
+	fn skip_unread(
+		&self,
+		job: &Job,
+		prior: Option<&Prior>,
+		refs: &Refs,
+		onfile: &OnFile,
+		before: &fs::Metadata,
+	) -> bool {
+		let (sh, st) = (self.sh, &self.g.stats);
+		// Nothing stored at this size and time to check against: new or edited.
+		// The next full scan reads it.
+		if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
+			st.skip_unknown.fetch_add(1, Relaxed);
+			self.links.passed(before);
+			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+				send(sh, Msg::Seen(p.id));
+			}
+			return true;
 		}
-	};
-	let fd = file.as_raw_fd();
-	let before = match file.metadata() {
-		Ok(m) if m.file_type().is_file() => m,
-		Ok(_) => return,
-		Err(e) => {
-			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::StatError, path, e.to_string());
-			return;
-		}
-	};
-	let (bytes, mt) = (before.len() as i64, mtime_us(&before));
-	let onfile = OnFile::read(fd);
-	let refs = Refs::new(&onfile, prior, &before);
 
-	// Nothing stored at this size and time to check against: new or edited.
-	// The next full scan reads it.
-	if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
-		st.skip_unknown.fetch_add(1, Relaxed);
-		links.passed(&before);
-		if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-			send(sh, Msg::Seen(p.id));
-		}
-		return;
-	}
-
-	// Another name for this inode may have left a fresh set without ever
-	// seeing this name's row, so the row gets a say.
-	if let Some((d, date)) = onfile
-		.b3_fresh(
-			bytes,
-			mt,
-			before.dev(),
-			before.ino(),
-			sh.cutoff_us,
-			now_us(),
-		)
-		.filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d))
-	{
+		// Another name for this inode may have left a fresh set without ever
+		// seeing this name's row, so the row gets a say.
+		let Some((d, date)) = onfile
+			.b3_fresh(
+				before.len() as i64,
+				mtime_us(before),
+				before.dev(),
+				before.ino(),
+				sh.cutoff_us,
+				now_us(),
+			)
+			.filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d))
+		else {
+			return false;
+		};
 		st.skip_xattr.fetch_add(1, Relaxed);
-		links.passed(&before);
+		self.links.passed(before);
+		let pbytes = job.path.as_os_str().as_bytes();
 		send(
 			sh,
-			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, &before, date),
+			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, before, date),
 		);
-		return;
+		true
 	}
 
-	let mut claim = None;
-	if before.nlink() > 1 {
-		match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
-			// Read once, but each name is held to its own records.
-			Claim::Done((_, _, sums)) => {
-				st.links.fetch_add(1, Relaxed);
-				let misses = refs.misses(&sums);
-				if !misses.is_empty() {
-					keep(sh, st, path, prior, misses, "");
-					return;
+	// Sums worth recording, with this name's claim on the inode still to fill.
+	// None once the file is dealt with: a failed read, a mismatch, or another
+	// name's read.
+	fn read_judged(
+		&mut self,
+		job: &Job,
+		prior: Option<&Prior>,
+		refs: &Refs,
+		file: &File,
+		before: &fs::Metadata,
+	) -> Option<(Sums, Option<ClaimGuard<'a>>)> {
+		let (sh, st, links, path) = (self.sh, &self.g.stats, self.links, &job.path);
+		let (bytes, mt) = (before.len() as i64, mtime_us(before));
+		let mut claim = None;
+		if before.nlink() > 1 {
+			match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
+				// Read once, but each name is held to its own records.
+				Claim::Done((_, _, sums)) => {
+					st.links.fetch_add(1, Relaxed);
+					let misses = refs.misses(&sums);
+					if !misses.is_empty() {
+						keep(sh, st, path, prior, misses, "");
+						return None;
+					}
+					refs.tally(&sums, st);
+					let pbytes = path.as_os_str().as_bytes();
+					send(sh, hashed_msg(pbytes, &sums, before, now_us()));
+					return None;
 				}
-				refs.tally(&sums, st);
-				send(sh, hashed_msg(pbytes, &sums, &before, now_us()));
-				return;
+				Claim::Mine(g) => claim = Some(g),
 			}
-			Claim::Mine(g) => claim = Some(g),
+		}
+
+		let want_b2b = sh.rmlint || refs.b2b.is_some();
+		let first = match read_sums(file, before, want_b2b, &mut self.buf, &sh.stop, &st.bytes) {
+			Ok(s) => s,
+			Err(f) => {
+				report_fail(sh, st, path, f);
+				return None;
+			}
+		};
+		st.hashed.fetch_add(1, Relaxed);
+		let verdict = judge(refs, first, || {
+			read_sums(file, before, want_b2b, &mut self.buf, &sh.stop, &st.bytes)
+		});
+		match verdict {
+			Err(f) => {
+				report_fail(sh, st, path, f);
+				None
+			}
+			Ok(Verdict::Clean(s)) => Some((s, claim)),
+			Ok(Verdict::CacheOnly { first, second }) => {
+				st.mismatch.fetch_add(1, Relaxed);
+				event(
+					sh,
+					Kind::CacheMismatch,
+					path,
+					format!(
+						"first read {}, then {} with the cache dropped, which matches what was stored",
+						b64u_encode(&first.b3),
+						b64u_encode(&second.b3)
+					),
+				);
+				Some((second, claim))
+			}
+			Ok(Verdict::Changed { sums, misses, note }) => {
+				if let Some(c) = claim {
+					c.fill((bytes, mt, sums));
+				}
+				keep(sh, st, path, prior, misses, &note);
+				None
+			}
 		}
 	}
 
-	let want_b2b = sh.rmlint || refs.b2b.is_some();
-	let first = match read_sums(&file, &before, want_b2b, buf, &sh.stop, &st.bytes) {
-		Ok(s) => s,
-		Err(f) => return report_fail(sh, st, path, f),
-	};
-	st.hashed.fetch_add(1, Relaxed);
-	let verdict = judge(&refs, first, || {
-		read_sums(&file, &before, want_b2b, buf, &sh.stop, &st.bytes)
-	});
-	let sums = match verdict {
-		Err(f) => return report_fail(sh, st, path, f),
-		Ok(Verdict::Clean(s)) => s,
-		Ok(Verdict::CacheOnly { first, second }) => {
-			st.mismatch.fetch_add(1, Relaxed);
-			event(
-				sh,
-				Kind::CacheMismatch,
-				path,
-				format!(
-					"first read {}, then {} with the cache dropped, which matches what was stored",
-					b64u_encode(&first.b3),
-					b64u_encode(&second.b3)
-				),
-			);
-			second
-		}
-		Ok(Verdict::Changed { sums, misses, note }) => {
-			if let Some(c) = claim {
-				c.fill((bytes, mt, sums));
-			}
-			keep(sh, st, path, prior, misses, &note);
+	fn write_attrs(
+		&mut self,
+		job: &Job,
+		refs: &Refs,
+		sums: &Sums,
+		fd: RawFd,
+		before: &fs::Metadata,
+		hashed_us: i64,
+	) {
+		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
+		// Not inside a git checkout: the files come and go with every checkout,
+		// git already checksums what it keeps, and a ctime change makes git
+		// look at each file again.
+		if !sh.write_xattrs
+			|| job.in_git
+			|| sh.no_write_devs.contains(&before.dev())
+			|| sh.no_xattr.iter().any(|x| path.starts_with(x))
+		{
 			return;
 		}
-	};
-	refs.tally(&sums, st);
-
-	let hashed_us = now_us();
-	if let Some(c) = claim {
-		c.fill((bytes, mt, sums));
-	}
-	// Once nothing more can be recorded, an attribute would vouch for a read
-	// the database never got.
-	if !send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) || sh.faults.any.load(Relaxed) {
-		return;
-	}
-
-	// Not inside a git checkout: the files come and go with every checkout,
-	// git already checksums what it keeps, and a ctime change makes git
-	// look at each file again.
-	if sh.write_xattrs
-		&& !job.in_git
-		&& !sh.no_write_devs.contains(&before.dev())
-		&& !sh.no_xattr.iter().any(|x| path.starts_with(x))
-	{
 		let only_date = refs.xattr == Some(sums.b3);
 		let id = (before.dev(), before.ino());
+		let (bytes, mt) = (before.len() as i64, mtime_us(before));
 		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date);
 		// A current rmlint set got this far only by matching, so this is a
 		// missing or stale one.
 		if let (Ok(()), Some(b2b), None) = (&wrote, sums.b2b, refs.b2b) {
-			wrote = xattr::write_rmlint(fd, &b2b, mtime_s(&before));
+			wrote = xattr::write_rmlint(fd, &b2b, mtime_s(before));
 			if wrote.is_ok() {
 				st.rmlint_set.fetch_add(1, Relaxed);
 			}
@@ -1492,8 +1562,8 @@ fn one_file(
 				st.xattr_fail.fetch_add(1, Relaxed);
 				// A read-only or xattr-less filesystem fails for every
 				// file. A few events are enough to say so.
-				if *xattr_fail_logged < 20 {
-					*xattr_fail_logged += 1;
+				if self.xattr_fail_logged < 20 {
+					self.xattr_fail_logged += 1;
 					event(sh, Kind::XattrError, path, e.to_string());
 				}
 			}
@@ -1780,6 +1850,18 @@ mod tests {
 		d
 	}
 
+	// A small buffer, so a read takes several passes.
+	fn read_one(g: &Group, sh: &Shared, j: &Job, prior: Option<&Prior>, links: &Links) {
+		let mut w = Worker {
+			g,
+			sh,
+			links,
+			buf: vec![0u8; 4096],
+			xattr_fail_logged: 0,
+		};
+		w.one_file(j, prior);
+	}
+
 	fn job(root: &Arc<Root>, rel: &str) -> Job {
 		Job {
 			path: root.path.join(rel),
@@ -1827,17 +1909,7 @@ mod tests {
 		let (sh, rx) = test_shared(d.join("t.sqlite"));
 		let g = test_group(&root);
 		let r = Arc::new(Root::open(&root).unwrap());
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(
-			&g,
-			&sh,
-			&job(&r, "dir/f"),
-			None,
-			&mut buf,
-			&Links::default(),
-			&mut logged,
-		);
+		read_one(&g, &sh, &job(&r, "dir/f"), None, &Links::default());
 		assert_eq!(g.stats.files.load(Relaxed), 0);
 		assert!(rx.try_recv().is_err());
 		fs::remove_dir_all(&d).unwrap();
@@ -1867,22 +1939,12 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "a"), None, &links);
 		let left = |l: &Links| locked(&l.map).entries.len();
 		assert_eq!(left(&links), 1);
-		one_file(
-			&g,
-			&sh,
-			&job(&r, "b"),
-			Some(&fresh),
-			&mut buf,
-			&links,
-			&mut logged,
-		);
+		read_one(&g, &sh, &job(&r, "b"), Some(&fresh), &links);
 		assert_eq!(g.stats.skip_db.load(Relaxed), 1);
-		one_file(&g, &sh, &job(&r, "c"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "c"), None, &links);
 		if g.stats.xattr_set.load(Relaxed) == 1 {
 			assert_eq!(g.stats.skip_xattr.load(Relaxed), 1);
 		} else {
@@ -1905,12 +1967,10 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "a"), None, &links);
 		let control = g.stats.xattr_set.load(Relaxed);
 		sh.no_write_devs.insert(fs::metadata(&d).unwrap().dev());
-		one_file(&g, &sh, &job(&r, "b"), None, &mut buf, &links, &mut logged);
+		read_one(&g, &sh, &job(&r, "b"), None, &links);
 		assert_eq!(g.stats.xattr_set.load(Relaxed), control);
 		assert_eq!(g.stats.xattr_fail.load(Relaxed), 0);
 		let fd = File::open(d.join("b")).unwrap();
@@ -1941,17 +2001,7 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		one_file(
-			&g,
-			&sh,
-			&job(&r, "a"),
-			None,
-			&mut buf,
-			&Links::default(),
-			&mut logged,
-		);
+		read_one(&g, &sh, &job(&r, "a"), None, &Links::default());
 		assert_eq!(g.stats.xattr_set.load(Relaxed), 1);
 		let on = OnFile::read(fd.as_raw_fd());
 		assert_eq!(on.b3, Some(*blake3::hash(b"synced").as_bytes()));
@@ -1983,10 +2033,8 @@ mod tests {
 		sh.write_xattrs = true;
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		let mut buf = vec![0u8; 4096];
-		let mut logged = 0;
-		let mut go = |sh: &Shared, j: Job| {
-			one_file(&g, sh, &j, None, &mut buf, &Links::default(), &mut logged);
+		let go = |sh: &Shared, j: Job| {
+			read_one(&g, sh, &j, None, &Links::default());
 			match rx.try_recv() {
 				Ok(Msg::Hashed(h)) => h.b2b,
 				_ => panic!("nothing recorded"),
