@@ -47,6 +47,7 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 	loop {
 		let fd = f();
 		if fd >= 0 {
+			// SAFETY: the kernel just returned fd, and nothing else owns it.
 			return Ok(unsafe { File::from_raw_fd(fd as RawFd) });
 		}
 		let e = io::Error::last_os_error();
@@ -59,6 +60,7 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 	let c = cpath(Path::new(name))?;
 	retry(|| {
+		// SAFETY: c is NUL-terminated and outlives the call.
 		unsafe { libc::openat(at, c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) }.into()
 	})
 }
@@ -107,6 +109,7 @@ impl Root {
 			mode: 0,
 			resolve: libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_XDEV,
 		};
+		// SAFETY: c and how outlive the call, and OpenHow has the kernel's open_how layout.
 		retry(|| unsafe {
 			libc::syscall(
 				libc::SYS_openat2,
@@ -177,8 +180,10 @@ pub struct List {
 impl List {
 	pub fn new(f: File) -> io::Result<List> {
 		let fd = f.into_raw_fd();
+		// SAFETY: fd came from into_raw_fd, so it's ours. On success the DIR owns it.
 		let Some(dir) = NonNull::new(unsafe { libc::fdopendir(fd) }) else {
 			let e = io::Error::last_os_error();
+			// SAFETY: fdopendir failed, so fd is still ours to close.
 			unsafe { libc::close(fd) };
 			return Err(e);
 		};
@@ -186,12 +191,14 @@ impl List {
 	}
 
 	fn fd(&self) -> RawFd {
+		// SAFETY: dir stays open until Drop.
 		unsafe { libc::dirfd(self.dir.as_ptr()) }
 	}
 
 	fn lstat(&self, name: &[u8]) -> io::Result<libc::stat64> {
 		let c = cpath(Path::new(OsStr::from_bytes(name)))?;
 		let mut st = std::mem::MaybeUninit::<libc::stat64>::uninit();
+		// SAFETY: c outlives the call, and st has room for a stat64.
 		let r = unsafe {
 			libc::fstatat64(
 				self.fd(),
@@ -203,6 +210,7 @@ impl List {
 		if r != 0 {
 			return Err(io::Error::last_os_error());
 		}
+		// SAFETY: fstatat64 returned 0, so st is filled in.
 		Ok(unsafe { st.assume_init() })
 	}
 
@@ -213,6 +221,7 @@ impl List {
 
 impl Drop for List {
 	fn drop(&mut self) {
+		// SAFETY: dir is open, and Drop is the only close.
 		unsafe { libc::closedir(self.dir.as_ptr()) };
 	}
 }
@@ -223,12 +232,16 @@ impl Iterator for List {
 	fn next(&mut self) -> Option<io::Result<Entry>> {
 		loop {
 			// readdir says "the end" and "an error" both with null.
+			// SAFETY: errno is per thread, and any value may be stored in it.
 			unsafe { *libc::__errno_location() = 0 };
+			// SAFETY: dir is open, and &mut self keeps other readers off it.
 			let ent = unsafe { libc::readdir64(self.dir.as_ptr()) };
+			// SAFETY: readdir64 gave null or an entry that's good until the next call on dir.
 			let Some(ent) = (unsafe { ent.as_ref() }) else {
 				let e = io::Error::last_os_error();
 				return (e.raw_os_error() != Some(0)).then_some(Err(e));
 			};
+			// SAFETY: d_name is NUL-terminated within the entry.
 			let name = unsafe { CStr::from_ptr(ent.d_name.as_ptr()) }.to_bytes();
 			if name == b"." || name == b".." {
 				continue;

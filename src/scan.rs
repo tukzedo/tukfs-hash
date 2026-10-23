@@ -392,6 +392,7 @@ pub fn lock(db: &Path) -> Result<File, String> {
 		.write(true)
 		.open(&p)
 		.map_err(|e| format!("{}: {e}", p.display()))?;
+	// SAFETY: f is open for the length of the call.
 	if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
 		return Err(format!(
 			"{} is locked; another scan is using this database",
@@ -422,6 +423,7 @@ pub fn give_back(db: &Path) {
 	};
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
 		if let Ok(c) = crate::util::cpath(&p) {
+			// SAFETY: c is NUL-terminated and outlives the call.
 			unsafe { libc::chown(c.as_ptr(), uid, gid) };
 		}
 	}
@@ -1148,6 +1150,7 @@ pub fn read_sums(
 	read_bytes: &AtomicU64,
 ) -> Result<Sums, ReadFail> {
 	let fd = file.as_raw_fd();
+	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe {
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
@@ -1175,6 +1178,7 @@ pub fn read_sums(
 			}
 		}
 	}
+	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
 	read_bytes.fetch_add(total, Relaxed);
 	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;

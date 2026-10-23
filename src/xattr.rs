@@ -26,6 +26,7 @@ pub const RM_B2B_MTIME: &CStr = c"user.rmlint.blake2b.mtime";
 pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 	let mut buf = vec![0u8; 256];
 	loop {
+		// SAFETY: buf has buf.len() bytes of room, and name is NUL-terminated.
 		let n = unsafe { libc::fgetxattr(fd, name.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
 		if n >= 0 {
 			buf.truncate(n as usize);
@@ -35,6 +36,7 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 		match err.raw_os_error() {
 			Some(libc::ENODATA | libc::ENOTSUP) => return Ok(None),
 			Some(libc::ERANGE) => {
+				// SAFETY: a null buffer of size 0 only asks for the length.
 				let need = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
 				if need < 0 {
 					return Err(io::Error::last_os_error());
@@ -47,6 +49,7 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 }
 
 pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
+	// SAFETY: value is value.len() bytes, and name is NUL-terminated.
 	let r = unsafe { libc::fsetxattr(fd, name.as_ptr(), value.as_ptr().cast(), value.len(), 0) };
 	if r == 0 {
 		Ok(())
@@ -57,6 +60,7 @@ pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
 
 /// A name that isn't there is already gone.
 pub fn fremove(fd: RawFd, name: &CStr) -> io::Result<()> {
+	// SAFETY: name is NUL-terminated.
 	if unsafe { libc::fremovexattr(fd, name.as_ptr()) } == 0 {
 		return Ok(());
 	}

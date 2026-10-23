@@ -72,7 +72,7 @@
 - cicd core: the engine, config, gate and pre-push hook.
 	- ID: 2026102309501601
 	- Type: Feature
-	- Status: Queued
+	- Status: Started
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -84,6 +84,8 @@
 		- `rust-toolchain.toml` and one place for tool pins.
 		- `--version` gives the build number from the commit time.
 		- Each run's temp dir is removed only behind a guard like the integration test's.
+	- Progress log:
+		- 2026-10-23: The engine, config, hook and helpers are in, from shcl's. Every unsafe block has a SAFETY comment now, for the new lint. The gate passes.
 	- Branch: cicd
 
 - cicd leak and security checks.

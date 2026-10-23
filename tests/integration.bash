@@ -523,6 +523,13 @@ else
 	echo "skip rmlint isn't installed; no byte comparison"
 fi
 
+# 21. --version gives the version, and the build number when the pipeline
+# stamped one, then the copyright line from the source.
+ver="$("${bin}" --version)"
+st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+)?$ ]] || st=1
+expect "version line" "version line is [${ver%%$'\n'*}]" "${st}"
+check "copyright line" "${ver#*$'\n'}" "$(sed -n '1s|^// ||p' "${here}/src/main.rs")"
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -544,3 +551,4 @@ fi
 ##		  step 5's 400 files from one python3.
 ##		- 20261023: fSafeRm guards the work folder's rm -rf, and the folder moved
 ##		  under <TMPDIR>/tukfs-hash/.
+##		- 20261023: --version lines.

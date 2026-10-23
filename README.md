@@ -1,5 +1,6 @@
 <!-- markdownlint-disable MD007 -- Unordered list indentation -->
 <!-- markdownlint-disable MD010 -- No hard tabs -->
+<!-- markdownlint-disable MD033 -- No inline html -->
 <!-- markdownlint-disable MD041 -- First line in a file should be a top-level heading -->
 
 # tukfs-hash

@@ -111,7 +111,9 @@ pub fn trim_value(v: &[u8]) -> &[u8] {
 
 fn tm_of(us: i64) -> libc::tm {
 	let t: libc::time_t = us.div_euclid(1_000_000) as libc::time_t;
+	// SAFETY: libc::tm is integers and one pointer, and all zeros is valid for each.
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+	// SAFETY: t and tm are live locals for the call.
 	unsafe { libc::localtime_r(&raw const t, &raw mut tm) };
 	tm
 }
@@ -122,6 +124,7 @@ pub fn local_midnight_us(us: i64) -> i64 {
 	tm.tm_min = 0;
 	tm.tm_sec = 0;
 	tm.tm_isdst = -1;
+	// SAFETY: tm is a live local.
 	unsafe { libc::mktime(&raw mut tm) as i64 * 1_000_000 }
 }
 
@@ -132,11 +135,13 @@ pub fn parse_date(s: &str) -> Option<i64> {
 	if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
 		return None;
 	}
+	// SAFETY: libc::tm is integers and one pointer, and all zeros is valid for each.
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
 	tm.tm_year = year - 1900;
 	tm.tm_mon = month - 1;
 	tm.tm_mday = day;
 	tm.tm_isdst = -1;
+	// SAFETY: tm is a live local.
 	let t = unsafe { libc::mktime(&raw mut tm) };
 	// mktime rolls Feb 31 over into March, and says so only in tm.
 	let same_day = tm.tm_year == year - 1900 && tm.tm_mon == month - 1 && tm.tm_mday == day;

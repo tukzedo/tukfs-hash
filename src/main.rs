@@ -33,6 +33,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+// The build number is empty unless the pipeline passed one in; see build.rs.
+const VERSION: &str = concat!(
+	"tukfs-hash v",
+	env!("CARGO_PKG_VERSION"),
+	env!("TUKFS_HASH_BUILD_SUFFIX")
+);
+const COPYRIGHT: &str = "Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)";
+
 const USAGE: &str = "\
 tukfs-hash - checksum every file, remember it, and notice when one changes on its own
 
@@ -152,7 +160,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		return Ok(0);
 	}
 	if cmd == "--version" {
-		out!("tukfs-hash {}", env!("CARGO_PKG_VERSION"));
+		out!("{VERSION}\n{COPYRIGHT}");
 		return Ok(0);
 	}
 

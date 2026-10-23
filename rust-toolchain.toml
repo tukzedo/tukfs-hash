@@ -1,0 +1,7 @@
+# Pins rustc, clippy and rustfmt, so a lint result doesn't move with the box.
+# Only rustup reads this. Debian's /bin/cargo ignores it, so cicd.bash puts
+# ~/.cargo/bin first. Bump on purpose: change it, run the full pipeline, commit.
+# The dated nightly for the sanitizer and Miri runs is in cicd/tool-pins.env.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

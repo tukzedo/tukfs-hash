@@ -1,5 +1,6 @@
 <!-- markdownlint-disable MD007 -- Unordered list indentation -->
 <!-- markdownlint-disable MD010 -- No hard tabs -->
+<!-- markdownlint-disable MD033 -- No inline html -->
 <!-- markdownlint-disable MD041 -- First line in a file should be a top-level heading -->
 
 # tukfs-hash design
@@ -88,12 +89,12 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Each event kind sets one exit code bit, and the bits add up with 2 for a stop. This table is the rule:
 
-	| Event                                                                                       | Bit
-	| :---                                                                                        | :---
+	| Event                                                                                        | Bit
+	| :---                                                                                         | :---
 	| `b3-xattr-mismatch`, `b2b-rmlint-mismatch`, `b3-db-mismatch`, `cache-mismatch`, `read-error` | 4
-	| `read-unsupported`, `dir-error`, `stat-error`, `open-error`, `db-error`                     | 8
-	| `unstable`, `xattr-error`                                                                   | none
-	| a kind this version doesn't know                                                            | 8
+	| `read-unsupported`, `dir-error`, `stat-error`, `open-error`, `db-error`                      | 8
+	| `unstable`, `xattr-error`                                                                    | none
+	| a kind this version doesn't know                                                             | 8
 
 - `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make it mean nothing. An attribute that can't be written comes after the file was checked.
 
