@@ -85,36 +85,6 @@
 	- Opened by: style and performance review
 	- Against: Committed names stay as they are. New code uses names that don't clash.
 
-- The integration test keeps old checks as commented-out code.
-	- ID: 2026101916404118
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Remove the old checks in steps 1, 3 and 5. Keep a one-line why where it explains the current check.
-
-- The integration test has no `##` header block and no History section.
-	- ID: 2026101916404119
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-
-- The integration test's helpers and variables don't follow the house names, and most expansions aren't braced.
-	- ID: 2026101916404120
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Helpers such as `ok`, `check`, `xget` and `wait_started` become `fCamelCase`, and variables camelCase.
-		- Every expansion is braced.
-	- Against: Committed names stay as they are. Worth it only with a bigger rewrite of the script. Bracing has no such limit.
-
 - The integration test uses `[ ]` for 7 checks passed through `expect`.
 	- ID: 2026101916404121
 	- Type: Task
@@ -143,15 +113,74 @@
 	- Opened by: style and performance review
 	- Note: Step 5 runs `head` once per file. One `python3` call can make all 400.
 
+- The integration test keeps old checks as commented-out code.
+	- ID: 2026101916404118
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Remove the old checks in steps 1, 3 and 5. Keep a one-line why where it explains the current check.
+	- Actual effort: Low
+	- Progress log:
+		- The old checks in steps 1, 3 and 5 are gone. Each keeps a one-line why above the current check.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash`, same 119 `check` and 23 `expect` calls as before.
+	- Closed: 20261023-084410
+
+- The integration test has no `##` header block and no History section.
+	- ID: 2026101916404119
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Actual effort: Low
+	- Progress log:
+		- `##` Purpose, Usage and History lines, then the copyright and license lines, unchanged. Script history at the bottom, from the first commit.
+	- Branch: round-20261023
+	- Test case: none, comments only. `shellcheck` is clean.
+	- Closed: 20261023-084410
+
+- The integration test's helpers and variables don't follow the house names, and most expansions aren't braced.
+	- ID: 2026101916404120
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Helpers such as `ok`, `check`, `xget` and `wait_started` become `fCamelCase`, and variables camelCase.
+		- Every expansion is braced.
+	- Against: Committed names stay as they are. Worth it only with a bigger rewrite of the script. Bracing has no such limit.
+	- Actual effort: Low
+	- Progress log:
+		- Every `$name`, `$1` and `$@` is braced. `$?`, `$$` and `$!` are left bare, as in the helper scripts. The Python snippets are unchanged.
+		- Renames were left, per the Against row. The one new helper, `fCleanup`, has the house name.
+		- Swept: every line of the script, trap strings included. No bare `$name` is left.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash` passes on ext4 and ZFS. With 2 expected values changed, it reported both as FAIL.
+	- Closed: 20261023-084410
+
 - The integration test removes its work folder with no check right before that it's the one it made.
 	- ID: 2026101916404124
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+	- Actual effort: Low
+	- Progress log:
+		- The work folder is made with `mkdir` without `-p`, so a run stops if it already exists. A token for the run goes in `.test-run` inside it right after. `fCleanup`, the exit trap, removes the folder only when the marker holds that token, and otherwise says so and leaves it.
+		- Swept: the 2 later traps in steps 13 and 18 call `fCleanup` too, rather than their own `rm -rf`.
+	- Decisions:
+		- `rm -rf` rather than `trash`. Step 5 alone writes about 1.3 GB, so `trash` would pile that up on every run.
+	- Branch: round-20261023
+	- Test case: by hand, none in the script. With a wrong token or no marker, the folder stayed and the warning printed. With the right token, it was removed. With the folder already there, `mkdir` stopped the run and left it alone. Both full runs left no work folder.
+	- Closed: 20261023-084410
 
 - There's no `rust-version`, so a toolchain older than 1.88 fails on let-chains instead of saying what it needs.
 	- ID: 2026102308303246
