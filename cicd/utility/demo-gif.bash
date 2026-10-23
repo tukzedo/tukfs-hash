@@ -6,7 +6,7 @@
 ##		- The demo gif stage: gen-demo-gif.py draws the scenario against the
 ##		  release binary into the run's temp dir. The gif is GFS-rotated into
 ##		  ROTATE_DIR, unless it's the same as the newest one there, and copied
-##		  to OUT when it differs from what's there.
+##		  to OUT when it's different than what's there.
 ##		- No python3, Pillow or monospace font is a warning and exit 0, so the
 ##		  run goes on. A step that exits wrong, or output with anything
 ##		  personal in it, fails.
