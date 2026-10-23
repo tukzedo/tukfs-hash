@@ -32,7 +32,8 @@
 - With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
 	- ID: 2026101916404101
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Waiting on UAT
+		- It departs from the wording. It was timed by user CPU on a test tree, not by a scan of b23's NVMe group, and blake2b still costs about 3.5 times blake3.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -40,6 +41,15 @@
 		- Time a `--rmlint` scan on b23's NVMe group against one without it, to see if it's CPU-bound.
 		- If it is, try `blake2b_simd`, which has an AVX2 path. The digest has to stay the same byte for byte, which integration step 20 checks against rmlint.
 	- Note: One worker hashed cached data at about 1.5 GB/s for blake3 alone, and about 0.5 GB/s with blake2b added. The `blake2` crate has no SIMD path on stable Rust. Hard drive groups won't notice.
+	- Progress log:
+		- 2026-10-23: It is CPU-bound. On a 1.7 GB tree, one worker's user CPU went from about 0.43 s to 2.2 s with `--rmlint`, so blake2b alone ran at about 1 GB/s. The test disk's read rate hid it in wall time.
+		- 2026-10-23: Moved to `blake2b_simd`. blake2b went from 1.04 to 1.36 GB/s in memory on b23's Zen 2, and a `--rmlint` scan used about 25% less user CPU. The digests are identical.
+		- 2026-10-23: The release binary went from 3,017,456 to 3,025,648 bytes. The lockfile lost 7 crates and gained none.
+	- Decisions:
+		- Kept the swap. It's 31% faster for 8 KB. Plain blake2b is serial per file, so a bigger gain would need blake2bp, which rmlint doesn't read.
+	- Branch: round-20261023
+	- Test case: `b2b_matches_known_digests`, the RFC 7693 vectors and one 300000-byte input through `read_sums` with 3 buffer sizes. It fails when a read's bytes are dropped. Integration section 20 still matches rmlint 2.10.3 byte for byte, on ext4 and ZFS.
+	- Swept: every `blake2::` use in `src/` (the read loop and the `rmlint_set_only_with_the_flag` helper), `accept.rs`'s `read_sums` call, and the docs, which don't name the crate.
 
 - Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
 	- ID: 2026101916404102

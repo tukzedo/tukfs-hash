@@ -1127,7 +1127,7 @@ pub fn read_sums(
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
 	}
 	let mut b3 = blake3::Hasher::new();
-	let mut b2b = want_b2b.then(<blake2::Blake2b512 as blake2::Digest>::new);
+	let mut b2b = want_b2b.then(blake2b_simd::State::new);
 	let mut total: u64 = 0;
 	loop {
 		if stop.load(Relaxed) {
@@ -1138,7 +1138,7 @@ pub fn read_sums(
 			Ok(n) => {
 				b3.update(&buf[..n]);
 				if let Some(h) = b2b.as_mut() {
-					blake2::Digest::update(h, &buf[..n]);
+					h.update(&buf[..n]);
 				}
 				total += n as u64;
 			}
@@ -1162,7 +1162,7 @@ pub fn read_sums(
 	}
 	Ok(Sums {
 		b3: *b3.finalize().as_bytes(),
-		b2b: b2b.map(|h| blake2::Digest::finalize(h).into()),
+		b2b: b2b.map(|h| *h.finalize().as_array()),
 	})
 }
 
@@ -1987,9 +1987,7 @@ mod tests {
 				_ => panic!("nothing recorded"),
 			}
 		};
-		let b2b = |f: &str| -> [u8; 64] {
-			<blake2::Blake2b512 as blake2::Digest>::digest(f.as_bytes()).into()
-		};
+		let b2b = |f: &str| -> [u8; 64] { *blake2b_simd::blake2b(f.as_bytes()).as_array() };
 		let now = |f: &str| {
 			let file = fd(f);
 			OnFile::read(file.as_raw_fd()).b2b_current(mtime_s(&file.metadata().unwrap()))
@@ -2008,6 +2006,37 @@ mod tests {
 		assert_eq!(go(&sh, in_git), Some(b2b("git")));
 		assert_eq!(now("git"), None);
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
+		fs::remove_dir_all(&d).unwrap();
+	}
+
+	// rmlint takes plain unkeyed blake2b-512. The first two are RFC 7693's,
+	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
+	#[test]
+	fn b2b_matches_known_digests() {
+		let d = scratch("b2b_vectors");
+		let long: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+		let cases: [(&[u8], &str); 3] = [
+			(b"", "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"),
+			(b"abc", "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"),
+			(&long, "8ee2ab50e0b1be2f1c64692013dfe68e15e36d15c4d5ec703b725b5cf5c1ba07299284b7a9ddd0ca725b39105bda7b79fa85fc5defab5819dfa8fee27f79da78"),
+		];
+		let stop = AtomicBool::new(false);
+		let counted = AtomicU64::new(0);
+		for (i, (bytes, want)) in cases.iter().enumerate() {
+			let p = d.join(format!("v{i}"));
+			fs::write(&p, bytes).unwrap();
+			let file = File::open(&p).unwrap();
+			let before = file.metadata().unwrap();
+			for piece in [1, 1000, 1 << 20] {
+				let mut buf = vec![0u8; piece];
+				let s = read_sums(&file, &before, true, &mut buf, &stop, &counted).unwrap();
+				assert_eq!(
+					crate::util::hex(&s.b2b.unwrap()),
+					*want,
+					"case {i}, buf {piece}"
+				);
+			}
+		}
 		fs::remove_dir_all(&d).unwrap();
 	}
 
