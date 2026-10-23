@@ -51,6 +51,25 @@
 	- Test case: `b2b_matches_known_digests`, the RFC 7693 vectors and one 300000-byte input through `read_sums` with 3 buffer sizes. It fails when a read's bytes are dropped. Integration section 20 still matches rmlint 2.10.3 byte for byte, on ext4 and ZFS.
 	- Swept: every `blake2::` use in `src/` (the read loop and the `rmlint_set_only_with_the_flag` helper), `accept.rs`'s `read_sums` call, and the docs, which don't name the crate.
 
+- The integration test has 3 copies of the byte-flip Python.
+	- ID: 2026101916404122
+	- Type: Task
+	- Status: Waiting on UAT
+		- It departs from the wording. `fFlipByte` takes an optional fourth COUNT argument, default 1, since step 3 and step 6 flip 16 bytes.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- One `fFlipByte FILE OFFSET MASK` in place of `flip`, `flip1` and the inline copy in step 6.
+	- Actual effort: Low
+	- Progress log:
+		- `flip` calls are now `fFlipByte FILE 100 1`, `flip1` calls `FILE 0 1`, and step 6 `FILE 4096 255 16`. Each keeps atime and mtime, as before.
+		- Step 3's heredoc was a fourth copy. It is now `big.bin 1048592 0x5A 16` and `rm.txt 8 0x5A 16`, the same offsets it worked out from the sizes.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash`, 142 ok as before on ext4 and ZFS. With `fFlipByte` made a no-op, 38 checks failed, at least one in the step around each of the 18 call sites.
+	- Swept: every `python3` in the script. What's left is the step 5 writer and the database holder in the WAL step.
+	- Closed:
+
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
@@ -88,30 +107,38 @@
 - The integration test uses `[ ]` for 7 checks passed through `expect`.
 	- ID: 2026101916404121
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Note: `[[` can't be passed as a command, so `expect` needs to take an exit status instead.
-
-- The integration test has 3 copies of the byte-flip Python.
-	- ID: 2026101916404122
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- One `fFlipByte FILE OFFSET MASK` in place of `flip`, `flip1` and the inline copy in step 6.
+	- Actual effort: Low
+	- Progress log:
+		- `expect OK FAIL STATUS` now takes a status when its third argument is the only one and a number. The command form still works for grep and the rest.
+		- The 7 checks are `st=0; [[ ... ]] || st=1; expect ... "${st}"`. A bare false `[[ ]]` on its own line exits under `set -e`, and `|| st=1` exempts it.
+		- The 3 `-lt`/`-ge`/`-gt` checks on counts test for digits first, so `[[` never evaluates a non-number.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash`, 142 ok as before on ext4 and ZFS. With all 7 conditions negated, each printed FAIL and the run went on to "7 failed".
+	- Swept: every `[ ]` test in the script; none are left.
+	- Closed: 20261023-085305
 
 - The integration test's setup forks 400 times in one loop.
 	- ID: 2026101916404123
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Note: Step 5 runs `head` once per file. One `python3` call can make all 400.
+	- Actual effort: Low
+	- Progress log:
+		- One `python3` writes `f1` to `f400`, each `i * 16384` random bytes, as before. Step 5 pins no mtimes.
+		- Step 5's setup alone, 3 runs each: ext4 about 4.3 s before and 3.3 s after, ZFS about 5.0 s before and 3.3 s after. Two ZFS runs before took 16 and 29 s while the load spiked to 26. Most of the time is the 1.3 GB of random bytes, not the forks.
+		- The old loop's global `i` had hidden an unused `local i` in `wait_started` from shellcheck, so it loops on `_` now.
+	- Branch: round-20261023
+	- Test case: `tests/integration.bash` step 5, same 1,313,996,800 bytes in 400 files, 142 ok as before on ext4 and ZFS.
+	- Swept: section 8's 4-file `head` loop is left. Four forks don't matter.
+	- Closed: 20261023-085305
 
 - The integration test keeps old checks as commented-out code.
 	- ID: 2026101916404118

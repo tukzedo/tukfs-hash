@@ -32,14 +32,23 @@ mkdir -p "${tree}" "${work}/db"
 fails=0
 ok()   { printf 'ok   %s\n' "${1}"; }
 bad()  { printf 'FAIL %s\n' "${1}"; fails=$((fails + 1)); }
-expect() { if "${@:3}"; then ok "${1}"; else bad "${2}"; fi; }
+# expect OK FAIL STATUS, or expect OK FAIL COMMAND... A bare false [[ ]] trips
+# set -e, so its status is caught first: st=0; [[ ... ]] || st=1
+expect() {
+	if [[ "${#}" -eq 3 && "${3}" =~ ^[0-9]+$ ]]; then
+		if [[ "${3}" == 0 ]]; then ok "${1}"; else bad "${2}"; fi
+	elif "${@:3}"; then ok "${1}"; else bad "${2}"; fi
+}
+# fFlipByte FILE OFFSET MASK [COUNT]: xor COUNT bytes (default 1) at OFFSET
+# with MASK, then put the times back.
+fFlipByte() { python3 -I -c 'import os,sys; p,off,mask=sys.argv[1],int(sys.argv[2]),int(sys.argv[3],0); n=int(sys.argv[4]); st=os.stat(p); f=open(p,"r+b"); f.seek(off); b=f.read(n); f.seek(off); f.write(bytes(x^mask for x in b)); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "${1}" "${2}" "${3}" "${4:-1}"; }
 check() { if [[ "${2}" == "${3}" ]]; then ok "${1}"; else bad "${1}: got [${2}], want [${3}]"; fi; }
 q() { sqlite3 "${db}" "${1}"; }
 scan() { local rc=0; "${bin}" scan --db "${db}" --root "${tree}" --progress 3600 "${@}" > "${work}/out.txt" 2>&1 || rc=$?; echo "${rc}"; }
 xget() { getfattr --only-values -n "${2}" "${1}" 2>/dev/null || true; }
 tomorrow="$(date -d tomorrow +%Y-%m-%d)"
 # Waits up to 10 s for a scan to say it has started, rather than guessing.
-wait_started() { local i; for i in $(seq 1 200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
+wait_started() { for _ in $(seq 1 200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
 
 # Varied names, sizes and dates.
 : > "${tree}/empty"
@@ -76,7 +85,7 @@ check "hard link read once" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head 
 check "empty file digest" "$(xget "${tree}/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
 check "size attribute" "$(xget "${tree}/small.txt" user.blake3.bytes)" 6
 check "mtime attribute in microseconds" "$(xget "${tree}/small.txt" user.blake3.mtime)" "$(date -d '2020-02-03 04:05:06.123456' +%s)123456"
-expect "date attribute" "date attribute missing" [ -n "$(xget "${tree}/small.txt" user.blake3.date)" ]
+st=0; [[ -n "$(xget "${tree}/small.txt" user.blake3.date)" ]] || st=1; expect "date attribute" "date attribute missing" "${st}"
 check "no attributes in a git work tree" "$(xget "${tree}/repo/src/main.c" user.blake3.b64u)" ""
 check "no attributes inside .git" "$(xget "${tree}/repo/.git/objects/ab" user.blake3.b64u)" ""
 check "git files still recorded" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/repo/%'")" 2
@@ -86,7 +95,7 @@ check "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT 
 check "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
 check "no events" "$(q 'SELECT count(*) FROM events')" 0
 check "file handed back readable" "$(stat -c %U "${db}")" "$(id -un)"
-expect "database left in rollback mode" "WAL file left behind" [ ! -e "${db}-wal" ]
+st=0; [[ ! -e "${db}-wal" ]] || st=1; expect "database left in rollback mode" "WAL file left behind" "${st}"
 
 # 2. Same day: nothing read again.
 rc="$(scan)"
@@ -97,18 +106,8 @@ check "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" 
 digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${1}'"; }
 x_before="$(xget "${tree}/big.bin" user.blake3.b64u)"
 db_before="$(digest_of "${tree}/big.bin")"
-python3 -I - "${tree}/big.bin" "${tree}/rm.txt" <<'EOF'
-import os, sys
-for p in sys.argv[1:]:
-	st = os.stat(p)
-	with open(p, "r+b") as f:
-		off = min(1048592, st.st_size // 2)
-		f.seek(off)
-		data = f.read(16)
-		f.seek(off)
-		f.write(bytes(b ^ 0x5A for b in data))
-	os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
-EOF
+# rm.txt is 16 bytes, so its flip starts half way and runs off the end.
+fFlipByte "${tree}/big.bin" 1048592 0x5A 16; fFlipByte "${tree}/rm.txt" 8 0x5A 16
 rc="$(scan --since "${tomorrow}")"
 check "corruption exit code" "${rc}" 4
 # big.bin's hard link is held to its own records too.
@@ -130,7 +129,7 @@ rc=0; (cd "${tree}" && "${bin}" accept --db "${db}" ./big.bin "sub dir/big-link.
 check "accept exit" "${rc}" 0
 check "accept logged" "$(last_run "AND kind = 'accepted'")" 3
 expect "accept names the other link" "accept output: $(cat "${work}/accept.txt")" grep -q '1 other name' "${work}/accept.txt"
-expect "accept replaced the attribute" "attribute unchanged" [ "$(xget "${tree}/big.bin" user.blake3.b64u)" != "${x_before}" ]
+st=0; [[ "$(xget "${tree}/big.bin" user.blake3.b64u)" != "${x_before}" ]] || st=1; expect "accept replaced the attribute" "attribute unchanged" "${st}"
 check "accept dropped rmlint's old checksum" "$(xget "${tree}/rm.txt" user.rmlint.blake2b.cksum)" ""
 rc=0; "${bin}" accept --db "${db}" "${tree}/sub dir" "${tree}/small.txt" > /dev/null 2>&1 || rc=$?
 check "accept of a folder fails" "${rc}" 1
@@ -147,10 +146,9 @@ check "edit updates the size attribute" "$(xget "${tree}/small.txt" user.blake3.
 # 5. Stop part way, then resume. A damaged file in the top folder is read
 # before the stop, and the stop and the resumed part both have to say so.
 mkdir -p "${tree}/many"
-for i in $(seq 1 400); do head -c $((i * 16384)) /dev/urandom > "${tree}/many/f${i}"; done
+python3 -I -c 'import os,sys; d=sys.argv[1]; [open(os.path.join(d, f"f{i}"), "wb").write(os.urandom(i * 16384)) for i in range(1, 401)]' "${tree}/many"
 runs_before="$(q 'SELECT count(*) FROM runs')"
-flip1() { python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); b=f.read(1); f.seek(0); f.write(bytes([b[0]^1])); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "${1}"; }
-flip1 "${tree}/rm-stale.txt"
+fFlipByte "${tree}/rm-stale.txt" 0 1
 "${bin}" scan --db "${db}" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
 pid=$!
 wait_started "${work}/stop.txt" || bad "scan never started"
@@ -161,7 +159,7 @@ rc=0; wait "${pid}" || rc=$?
 check "stopped exit code, with the damage found" "${rc}" 6
 check "run marked stopped" "$(q 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" stopped
 part="$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")"
-expect "stopped before the end (${part} of 400)" "did not stop early (${part})" [ "${part}" -lt 400 ]
+st=0; [[ "${part}" =~ ^[0-9]+$ && "${part}" -lt 400 ]] || st=1; expect "stopped before the end (${part} of 400)" "did not stop early (${part})" "${st}"
 rc="$(scan --resume)"
 # The damage found before the stop still counts.
 check "resume exit" "${rc}" 4
@@ -170,7 +168,7 @@ expect "summary counts the whole run" "summary: $(q 'SELECT summary FROM runs OR
 check "resume finished the rest" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")" 400
 check "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_before + 1))"
 skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2)"
-expect "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" [ "${skipped}" -ge "${part}" ]
+st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
 check "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
 
 # 6. snapdiff: same size and time, different bytes.
@@ -180,7 +178,7 @@ cp -p "${work}/old/a" "${work}/new/a"
 printf 'same\n' > "${work}/old/b"; cp -p "${work}/old/b" "${work}/new/b"
 printf 'v1\n' > "${work}/old/c"; printf 'v2 longer\n' > "${work}/new/c"
 touch -d '2001-01-01' "${work}/old/c"
-python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(4096); b=f.read(16); f.seek(4096); f.write(bytes(x^255 for x in b)); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "${work}/new/a"
+fFlipByte "${work}/new/a" 4096 255 16
 printf 'a\nb\nc\nmissing\n' > "${work}/list"
 rc=0; "${bin}" snapdiff --old "${work}/old" --new "${work}/new" --list "${work}/list" > "${work}/sd.txt" 2> /dev/null || rc=$?
 check "snapdiff exit" "${rc}" 4
@@ -204,15 +202,14 @@ mkdir -p "${xt}"
 for f in a b c d; do head -c $((20000 + ${#f} * 777)) /dev/urandom > "${xt}/${f}"; done
 touch -d '2015-05-05 05:05:05.5' "${xt}/a"; touch -d '2019-09-09' "${xt}/c"
 xscan() { local rc=0; "${bin}" scan --db "${work}/db/${1}.sqlite" --root "${xt}" --progress 3600 > "${work}/x.txt" 2>&1 || rc=$?; echo "${rc}"; }
-flip() { python3 -I -c 'import os,sys; p=sys.argv[1]; st=os.stat(p); f=open(p,"r+b"); f.seek(100); b=f.read(1); f.seek(100); f.write(bytes([b[0]^1])); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "${1}"; }
 check "attribute scan exit" "$(xscan x1)" 0
 check "inode attribute" "$(xget "${xt}/a" user.blake3.inode)" "$(stat -c '%d:%i' "${xt}/a"):$(xget "${xt}/a" user.blake3.b64u)"
 check "fresh attributes skip" "$(xscan x2) $(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "0 hashed 0"
 # A copy with a flipped byte, a set from before the inode attribute, and a
 # date in the future.
-cp -a "${xt}/a" "${xt}/a-copy"; flip "${xt}/a-copy"
-setfattr -x user.blake3.inode "${xt}/b" 2> /dev/null || true; flip "${xt}/b"
-setfattr -n user.blake3.date -v "$(( ($(date +%s) + 86400 * 365) * 1000000 ))" "${xt}/c"; flip "${xt}/c"
+cp -a "${xt}/a" "${xt}/a-copy"; fFlipByte "${xt}/a-copy" 100 1
+setfattr -x user.blake3.inode "${xt}/b" 2> /dev/null || true; fFlipByte "${xt}/b" 100 1
+setfattr -n user.blake3.date -v "$(( ($(date +%s) + 86400 * 365) * 1000000 ))" "${xt}/c"; fFlipByte "${xt}/c" 100 1
 check "untrusted attributes read again" "$(xscan x3)" 4
 check "each one is a mismatch" "$(sqlite3 "${work}/db/x3.sqlite" "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${xt}/a-copy ${xt}/b ${xt}/c"
 check "the rest still skip" "$(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "hashed 3"
@@ -223,7 +220,7 @@ sd="${work}/sd"
 mkdir -p "${sd}/old" "${sd}/new" "${sd}/live"
 ln -s "${sd}/live" "${sd}/live-link"
 live="$(realpath "${sd}/live")"
-head -c 5000 /dev/urandom > "${sd}/old/d"; cp -p "${sd}/old/d" "${sd}/new/d"; flip "${sd}/new/d"
+head -c 5000 /dev/urandom > "${sd}/old/d"; cp -p "${sd}/old/d" "${sd}/new/d"; fFlipByte "${sd}/new/d" 100 1
 sdiff() { local rc=0; "${bin}" snapdiff --old "${sd}/old" --new "${sd}/new" "${@}" > "${sd}/out.txt" 2> "${sd}/err.txt" || rc=$?; echo "${rc}"; }
 printf 'M\tF\t%s/d\n' "${live}" > "${sd}/typed"
 check "zfs diff -F read" "$(sdiff --zfs-diff "${sd}/typed" --mount "${live}") $(cut -f1,2 "${sd}/out.txt")" $'4 content-changed-same-mtime\td'
@@ -261,10 +258,10 @@ rc=0; "${bin}" snapdiff --old "${sd}/$(printf 'x\xff')" --new "${sd}/new" --list
 # ZFS with utf8only says EILSEQ rather than ENOENT.
 check "non-UTF-8 argument" "${rc} $(sed 's/: [^:]*$//' "${sd}/err.txt")" "1 tukfs-hash: ${sd}/x\\xff"
 tab="$(printf 't\tab')"
-head -c 3000 /dev/urandom > "${sd}/old/${tab}"; cp -p "${sd}/old/${tab}" "${sd}/new/${tab}"; flip "${sd}/new/${tab}"
+head -c 3000 /dev/urandom > "${sd}/old/${tab}"; cp -p "${sd}/old/${tab}" "${sd}/new/${tab}"; fFlipByte "${sd}/new/${tab}" 100 1
 names="${tab}"
 if [[ "${odd}" == 1 ]]; then
-	head -c 3000 /dev/urandom > "${sd}/old/$(printf 'caf\xe9')"; cp -p "${sd}/old/$(printf 'caf\xe9')" "${sd}/new/"; flip "${sd}/new/$(printf 'caf\xe9')"
+	head -c 3000 /dev/urandom > "${sd}/old/$(printf 'caf\xe9')"; cp -p "${sd}/old/$(printf 'caf\xe9')" "${sd}/new/"; fFlipByte "${sd}/new/$(printf 'caf\xe9')" 100 1
 	names+=$'\n'"$(printf 'caf\xe9')"
 fi
 printf '%s\n' "${names}" > "${sd}/names"
@@ -273,7 +270,7 @@ check "snapdiff escapes names" "$(sdiff --list "${sd}/names") $(cut -f2 "${sd}/o
 rt="${work}/rt"; mkdir -p "${rt}"
 head -c 3000 /dev/urandom > "${rt}/${tab}"
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
-flip "${rt}/${tab}"
+fFlipByte "${rt}/${tab}" 100 1
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || true
 "${bin}" report --db "${work}/db/rt.sqlite" > "${work}/report2.txt"
 check "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"${rt}/t\\\\x09ab"$'\t' "${work}/report2.txt")" 1
@@ -286,7 +283,7 @@ hscan() { local rc=0; "${bin}" scan --db "${work}/db/${1}.sqlite" --root "${hl}"
 hq() { sqlite3 "${work}/db/${1}.sqlite" "${2}"; }
 check "linked file first scan" "$(hscan hl --no-xattrs)" 0
 ln "${hl}/b_old" "${hl}/a_new"
-flip "${hl}/b_old"
+fFlipByte "${hl}/b_old" 100 1
 check "other name compared with its own row" "$(hscan hl --no-xattrs --since "${tomorrow}") $(hq hl "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch ${hl}/b_old"
 # A fresh set left through one name doesn't vouch for the other. The set's
 # digest is the damaged one, as nemo-anywhere would write after the damage,
@@ -295,7 +292,7 @@ rm -f "${hl}/a_new"
 head -c 50000 /dev/urandom > "${hl}/b_old"
 check "linked file first scan, again" "$(hscan hl2 --no-xattrs)" 0
 hq hl2 "UPDATE paths SET hashed_us = hashed_us - 172800000000"
-flip "${hl}/b_old"
+fFlipByte "${hl}/b_old" 100 1
 mkdir -p "${work}/hlc"; cp -p "${hl}/b_old" "${work}/hlc/x"
 "${bin}" scan --db "${work}/db/hlc.sqlite" --root "${work}/hlc" --progress 3600 > /dev/null 2>&1 || true
 # Quoted, or a digest starting 0s or 0x is decoded by setfattr.
@@ -328,7 +325,7 @@ chmod 000 "${ud}/locked" "${ud}/open/c"
 # Put back on any exit, or the cleanup can't remove them.
 trap 'chmod 755 "${ud}/locked" 2> /dev/null || true; chmod 644 "${ud}/open/c" 2> /dev/null || true; fCleanup' EXIT
 check "unreadable folder and file" "$(uscan --since "${tomorrow}") $(uq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY path)")" "8 dir-error ${ud}/locked, open-error ${ud}/open/c"
-flip1 "${ud}/open/a"
+fFlipByte "${ud}/open/a" 0 1
 rc="$(uscan --since "${tomorrow}")"
 chmod 755 "${ud}/locked"; chmod 644 "${ud}/open/c"
 check "and a mismatch" "${rc}" 12
@@ -372,7 +369,7 @@ sqlite3 "${wdb}" 'PRAGMA journal_mode=WAL' > /dev/null
 python3 -I -c 'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("SELECT count(*) FROM runs").fetchall(); print("open", flush=True); time.sleep(120)' "${wdb}" > "${work}/holder.txt" &
 holder=$!
 for _ in $(seq 1 200); do grep -q open "${work}/holder.txt" && break; sleep 0.05; done
-flip1 "${wl}/f"
+fFlipByte "${wl}/f" 0 1
 rc="$(wscan --since "${tomorrow}")"
 kill "${holder}"; wait "${holder}" 2> /dev/null || true
 check "held open: exit" "${rc}" 4
@@ -389,7 +386,7 @@ fdb="${work}/db/wf.sqlite"
 fscan() { local rc=0; "${bin}" scan --db "${fdb}" --root "${wf}" --no-xattrs --progress 3600 "${@}" > "${work}/wf.txt" 2>&1 || rc=$?; echo "${rc}"; }
 fq() { sqlite3 "${fdb}" "${1}"; }
 fscan > /dev/null
-flip1 "${wf}/a"
+fFlipByte "${wf}/a" 0 1
 sleep 0.01; printf 'two, edited\n' > "${wf}/b"
 fq "CREATE TRIGGER refuse BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;"
 check "a refused row fails the run" "$(fscan --since "${tomorrow}") $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "1 failed"
@@ -413,7 +410,7 @@ check "verify: first scan" "$(vscan)" 0
 check "verify: known files read the same day" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "0 hashed 3"
 printf 'new\n' > "${vt}/n1"
 sleep 0.01; printf 'edited\n' >> "${vt}/k3"
-flip1 "${vt}/k2"
+fFlipByte "${vt}/k2" 0 1
 k1c="$(stat -c %z "${vt}/k1")"
 check "verify: exit and reads" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "4 hashed 2"
 check "verify: only the damaged file flagged" "$(vq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY kind)")" "b3-db-mismatch ${vt}/k2, b3-xattr-mismatch ${vt}/k2"
@@ -461,7 +458,7 @@ check "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gon
 # 19. prune removes only contents no name points at.
 orphans="$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)')"
 paths_before="$(q 'SELECT count(*) FROM paths')"
-expect "prune: edits left contents behind (${orphans})" "nothing to prune" [ "${orphans}" -gt 0 ]
+st=0; [[ "${orphans}" =~ ^[0-9]+$ && "${orphans}" -gt 0 ]] || st=1; expect "prune: edits left contents behind (${orphans})" "nothing to prune" "${st}"
 rc=0; "${bin}" prune --db "${db}" > "${work}/prune.txt" 2>&1 || rc=$?
 check "prune: exit and count" "${rc} $(cat "${work}/prune.txt")" "0 removed ${orphans} content(s) no name points at"
 check "prune: none left, every name kept" "$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)') $(q 'SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id')" "0 ${paths_before}"
@@ -498,7 +495,7 @@ if command -v rmlint > /dev/null; then
 	theirs="$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)"
 	setfattr -x user.rmlint.blake2b.cksum "${rp}/a"; setfattr -x user.rmlint.blake2b.mtime "${rp}/a"
 	"${bin}" scan --db "${rdb}" --root "${rp}" --rmlint --progress 3600 > /dev/null 2>&1 || true
-	expect "rmlint: rmlint wrote a set" "rmlint left nothing" [ "${#theirs}" -gt 100 ]
+	st=0; [[ "${#theirs}" -gt 100 ]] || st=1; expect "rmlint: rmlint wrote a set" "rmlint left nothing" "${st}"
 	check "rmlint: same bytes as rmlint's" "$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)" "${theirs}"
 else
 	echo "skip rmlint isn't installed; no byte comparison"
@@ -521,3 +518,5 @@ fi
 ##		- 20261023: Header and history. Old commented-out checks dropped, every
 ##		  expansion braced, adn the work folder is removed only when its marker
 ##		  holds the run's token.
+##		- 20261023: expect takes a status for [[ ]] checks, one fFlipByte, and
+##		  step 5's 400 files from one python3.
