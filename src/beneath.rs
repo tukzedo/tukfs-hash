@@ -269,18 +269,9 @@ impl Iterator for List {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 	use std::fs;
 	use std::io::Read;
-
-	fn scratch(tag: &str) -> PathBuf {
-		let d = std::env::temp_dir().join(format!(
-			"test_tukfs-hash_beneath_{tag}_{}",
-			std::process::id()
-		));
-		_ = fs::remove_dir_all(&d);
-		fs::create_dir_all(&d).unwrap();
-		d
-	}
 
 	fn both(root: &Path) -> [Root; 2] {
 		let slow = Root::open(root).unwrap();
@@ -292,7 +283,8 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_symlink_on_the_way_is_not_followed() {
-		let d = scratch("symlink");
+		let _id = test_id("0vCpSK");
+		let d = scratch("beneath_symlink");
 		let (root, outside) = (d.join("root"), d.join("outside"));
 		fs::create_dir_all(root.join("real")).unwrap();
 		fs::create_dir_all(&outside).unwrap();
@@ -321,12 +313,12 @@ mod tests {
 				.unwrap_err();
 			assert!(moved(&e), "{e}");
 		}
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	// /dev/shm is its own mount on most Linux boxes; skipped where it isn't.
 	#[test]
 	fn another_filesystem_is_not_entered() {
+		let _id = test_id("0vCpSL");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
 		};
@@ -349,7 +341,8 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_listing_has_names_kinds_and_inodes() {
-		let d = scratch("list");
+		let _id = test_id("0vCpSM");
+		let d = scratch("beneath_list");
 		fs::create_dir(d.join("sub")).unwrap();
 		fs::write(d.join("f"), "x").unwrap();
 		std::os::unix::fs::symlink("f", d.join("l")).unwrap();
@@ -376,6 +369,5 @@ mod tests {
 				("sub".into(), ino("sub"), Kind::Dir),
 			]
 		);
-		fs::remove_dir_all(&d).unwrap();
 	}
 }

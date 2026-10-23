@@ -233,9 +233,11 @@ pub fn write_b3(
 #[allow(clippy::unreadable_literal, reason = "as rmlint and stat print them")]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 
 	#[test]
 	fn rmlint_time_tolerance() {
+		let _id = test_id("0vCUr8");
 		let of = OnFile {
 			b2b: Some([7; 64]),
 			b2b_mtime_s: Some(1692238421.9263258),
@@ -249,6 +251,7 @@ mod tests {
 	// Expected values are from rmlint 2.10.3 and C's printf.
 	#[test]
 	fn rmlint_time_text() {
+		let _id = test_id("0vEgni");
 		let t = |s: i64, ns: i64| g17(s as f64 + ns as f64 / 1e9);
 		assert_eq!(t(1620310089, 123456789), "1620310089.1234567");
 		assert_eq!(t(1704096000, 351000100), "1704096000.3510001");
@@ -266,25 +269,26 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_reads_back() {
-		let p = std::env::temp_dir().join(format!("test_tukfs-hash_rmset_{}", std::process::id()));
+		let _id = test_id("0vEgnj");
+		let d = scratch("xattr_rmset");
+		let p = d.join("f");
 		std::fs::write(&p, "x").unwrap();
 		let f = std::fs::File::open(&p).unwrap();
 		let fd = std::os::fd::AsRawFd::as_raw_fd(&f);
 		let mt = 1620310089.0 + 123456789.0 / 1e9;
 		if write_rmlint(fd, &[0xab; 64], mt).is_err() {
 			eprintln!("no user xattrs here; skipped");
-			std::fs::remove_file(&p).unwrap();
 			return;
 		}
 		let raw = fget(fd, RM_B2B_CKSUM).unwrap().unwrap();
 		assert_eq!(raw.len(), 129);
 		assert_eq!(raw.last(), Some(&0));
 		assert_eq!(OnFile::read(fd).b2b_current(mt), Some([0xab; 64]));
-		std::fs::remove_file(&p).unwrap();
 	}
 
 	#[test]
 	fn b3_needs_size_and_time() {
+		let _id = test_id("0vCUr9");
 		let of = OnFile {
 			b3: Some([1; 32]),
 			b3_bytes: Some(10),
@@ -298,6 +302,7 @@ mod tests {
 
 	#[test]
 	fn b3_fresh_needs_our_inode_and_a_sane_date() {
+		let _id = test_id("0vCnaf");
 		let of = OnFile {
 			b3: Some([1; 32]),
 			b3_bytes: Some(10),
@@ -329,6 +334,7 @@ mod tests {
 
 	#[test]
 	fn inode_text_round_trip() {
+		let _id = test_id("0vCnag");
 		let d = [9u8; 32];
 		let t = inode_text(u64::MAX, 3, &d);
 		assert_eq!(

@@ -91,12 +91,20 @@ PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
 ## without ruff skips them with a note, even under --gate.
 PY_LINT_CMD=(ruff check --config cicd/ruff.toml --)
 PY_FMT_CHECK_CMD=(ruff format --check --config cicd/ruff.toml --)
+## "label|command", eval'd after the rest. Every test prints its status line
+## with its test ID, and a test with none, or 2 that share one, fails here
+## rather than going by unseen.
+LINT_EXTRA=(
+	'test IDs|python3 cicd/utility/test-ids.py check'
+)
 
 ## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
 ## integration test on a release build, once per root below, each in a dir of
 ## its own made under <root>/tukfs-hash/. "label|root". A root that isn't there
 ## skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
-TEST_CMD=(cargo test --release -j "${CPU_CAP}" --locked -- --test-threads "${CPU_CAP}")
+## libtest-quiet.bash drops libtest's per-test lines, since each test prints
+## its own with its test ID.
+TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release -j "${CPU_CAP}" --locked -- --test-threads "${CPU_CAP}")
 IT_CMD=(tests/integration.bash)
 IT_ROOTS=(
 	"ext4|${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}"
@@ -250,3 +258,5 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: The leak checks, their image, and clippy over all features.
 ##		- 2026-10-23: The profiler, and ruff over the pipeline's Python.
 ##		- 2026-10-23: The demo gif.
+##		- 2026-10-23: Test IDs: the check in the lint stage, and the unit
+##		  tests' status lines.

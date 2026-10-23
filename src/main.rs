@@ -504,12 +504,17 @@ fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
 }
 
 #[cfg(test)]
+mod testutil;
+
+#[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::test_id;
 
 	// Same order as the old `LIKE '%mismatch'`, then `read-error`.
 	#[test]
 	fn damage_sorts_first() {
+		let _id = test_id("0vG4fc");
 		for k in db::Kind::ALL {
 			let n = k.name();
 			let was = if n.ends_with("mismatch") {

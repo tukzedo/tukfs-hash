@@ -17,7 +17,7 @@
 ##	   2. build (debug)
 ##	   3. lint (clippy, shellcheck over every tracked *.bash, markdownlint over
 ##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1, ruff
-##	      over every tracked .py)
+##	      over every tracked .py, then LINT_EXTRA, such as the test ID check)
 ##	   4. tests (cargo test, then the integration test once per test root),
 ##	      then the slow leak checks
 ##	   5. profiler (a flamegraph of a scan, from an in-process sampler, into
@@ -122,7 +122,7 @@ export CPU_CAP CARGO_BUILD_JOBS="${CPU_CAP}" RUST_TEST_THREADS="${CPU_CAP}"
 
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
-RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=()
+RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); LINT_EXTRA=()
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
 PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
@@ -478,7 +478,7 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
 	fEcho_Clean "Build (debug) ..: ${BUILD_CMD[*]}"
-	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff")"
+	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
 	if ((tests_off)); then
 		fEcho_Clean "Tests ..........: (skipped)"
 	else
@@ -621,6 +621,9 @@ fStageBuild(){
 ## One lint tool, its output also into the lint log.
 lint_log="/dev/null"
 fLintRun(){ local rc=0; "$@" 2>&1 | tee -a "${lint_log}" || rc=$?; return "${rc}"; }
+## An eval'd one. Without its own ERR trap, since a finding isn't the run
+## aborting.
+fLintEval(){ trap - ERR; eval "$1"; }
 ## A missing tool fails under --gate and is a noted skip otherwise.
 fLintTool(){   ## fLintTool NAME -> 0 when it's here
 	command -v "$1" >/dev/null 2>&1 && return 0
@@ -634,7 +637,7 @@ fLintTool(){   ## fLintTool NAME -> 0 when it's here
 ## fails if any of them did.
 fStageLint(){
 	local -a failed=() files=() shFiles=() mdFiles=() psFiles=() pyFiles=()
-	local f skip s
+	local f skip s c
 	fStep 3 "Lint"
 	if ((lint_off)); then fStepSkip "lint skipped"; return 0; fi
 	if ((! gate_mode)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
@@ -688,6 +691,10 @@ fStageLint(){
 			fi
 		fi
 	fi
+	for c in "${LINT_EXTRA[@]}"; do
+		fEcho_Clean "${c%%|*}: ${c#*|}"
+		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
+	done
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
 	((${#failed[@]} == 0)) || fDie "lint: ${failed[*]} found something; the output is above"
@@ -1181,3 +1188,4 @@ exit 0
 ##		  rotated flamegraph and flame-report.py's summary. ruff in the lint
 ##		  stage, and the profiling build in the cache prune.
 ##		- 2026-10-23: The demo gif's settings in the plan.
+##		- 2026-10-23: LINT_EXTRA, for the test ID check.

@@ -139,23 +139,36 @@
 - Test IDs for every test.
 	- ID: 2026102309501606
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
 	- Requirements  [Feature]:
 		- Each Rust and integration test gets a base 62 ID from its first commit time.
+	- Progress log:
+		- 2026-10-23: 213 tests have IDs, 66 Rust tests and 147 integration checks. Each one's status line shows its ID, and libtest's own per-test lines are left out of the run's output. The 2 rmlint checks print a skip line with their IDs when rmlint isn't there.
+		- 2026-10-23: Each time is from the first commit of the test's lines, or of its fn name when that's older. Tests from the same commit got the next free second, in file order. `cicd/utility/test-ids.py new` gives the next one.
+		- 2026-10-23: `test-ids.py check` is in the lint stage. Verified: the gate failed on a test with no ID and on 2 checks sharing one, and passed with both put back.
 	- Branch: cicd
+	- Closed: 20261023-155700
 
 - Rust unit tests leave `test_tukfs-hash_*` folders in TMPDIR when they fail or are stopped.
 	- ID: 2026102309501607
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
-	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't.
+	- Actual fix [Bug]:
+		- The unit tests get their folders from one helper in `src/testutil.rs`, under `<TMPDIR>/tukfs-hash/`, and each goes when its test ends, by a panic too.
+		- The first folder a run makes also clears what killed runs left, once it's a day old and its pid is gone. Only a strict name right under that folder goes, and only when it isn't a link, its real path matches, it's ours, and it doesn't reach into another filesystem.
+	- Progress log:
+		- 2026-10-23: Verified: a run killed part way left 7 folders. The next run left them alone, and once they were a day old the one after removed them all. A failed test's folder went with a read-only folder inside it, and a young one, a live pid's, a link and a name that isn't ours were all left.
+	- Test case: `testutil::tests::a_scratch_folder_goes_on_a_panic` and `testutil::tests::only_a_dead_runs_old_folders_are_swept`.
+	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't. Folders made before this change, directly in TMPDIR, aren't swept.
+	- Branch: cicd
+	- Closed: 20261023-155700
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902

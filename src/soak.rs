@@ -11,6 +11,7 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+use crate::testutil::{Scratch, scratch, test_id};
 use crate::util::{local_midnight_us, now_us};
 use crate::{accept, gone, scan};
 use std::fmt::Write as _;
@@ -27,7 +28,7 @@ const ROUNDS: usize = 20;
 const MARGIN: usize = 4096;
 
 struct Tree {
-	dir: PathBuf,
+	_dir: Scratch,
 	root: PathBuf,
 	db: PathBuf,
 	flipped: [PathBuf; 2],
@@ -35,8 +36,7 @@ struct Tree {
 }
 
 fn tree() -> Tree {
-	let dir = std::env::temp_dir().join(format!("test_tukfs-hash_soak_{}", std::process::id()));
-	_ = fs::remove_dir_all(&dir);
+	let dir = scratch("soak");
 	let root = dir.join("tree");
 	fs::create_dir_all(root.join("sub dir")).unwrap();
 	fs::create_dir_all(dir.join("db")).unwrap();
@@ -52,7 +52,7 @@ fn tree() -> Tree {
 		flipped: [root.join("big.bin"), root.join("sub dir/big-link.bin")],
 		edited: root.join("edited.txt"),
 		root,
-		dir,
+		_dir: dir,
 	}
 }
 
@@ -114,6 +114,7 @@ fn heap() -> Heap {
 
 #[test]
 fn the_heap_holds_steady() {
+	let _id = test_id("0vG98N");
 	let out = std::env::var_os("TUKFS_SOAK_OUT").map_or_else(std::env::temp_dir, PathBuf::from);
 	let t = tree();
 	// On the stack, so the table itself isn't growth.
@@ -183,5 +184,4 @@ fn the_heap_holds_steady() {
 		ROUNDS / 2
 	);
 	drop(prof);
-	fs::remove_dir_all(&t.dir).unwrap();
 }

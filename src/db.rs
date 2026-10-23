@@ -522,11 +522,13 @@ pub fn writer(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 	use std::sync::mpsc::sync_channel;
 
 	// What's in databases already. A new variant has to be added here too.
 	#[test]
 	fn kind_names_are_the_stored_ones() {
+		let _id = test_id("0vG4fZ");
 		let stored = |k: Kind| match k {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
 			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
@@ -554,6 +556,7 @@ mod tests {
 
 	#[test]
 	fn run_statuses_are_the_stored_ones() {
+		let _id = test_id("0vG4fa");
 		let stored = |s: RunStatus| match s {
 			RunStatus::Running => "running",
 			RunStatus::Stopped => "stopped",
@@ -577,6 +580,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn enums_are_stored_as_their_text() {
+		let _id = test_id("0vG4fb");
 		init();
 		let c = Connection::open_in_memory().unwrap();
 		let (k, s): (String, String) = c
@@ -589,17 +593,18 @@ mod tests {
 		assert_eq!((k.as_str(), s.as_str()), ("dir-error", "killed"));
 	}
 
-	fn temp_db(tag: &str) -> std::path::PathBuf {
-		let dir =
-			std::env::temp_dir().join(format!("test_tukfs-hash_db_{tag}_{}", std::process::id()));
-		std::fs::create_dir_all(&dir).unwrap();
-		dir.join("t.sqlite")
+	// The folder goes with the Scratch, so a test holds it to its end.
+	fn temp_db(tag: &str) -> (crate::testutil::Scratch, std::path::PathBuf) {
+		let dir = scratch(&format!("db_{tag}"));
+		let p = dir.join("t.sqlite");
+		(dir, p)
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn round_trip_and_non_utf8_names() {
-		let p = temp_db("rt");
+		let _id = test_id("0vCUqt");
+		let (_dir, p) = temp_db("rt");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
 		let t = std::thread::spawn(move || writer(conn, 1, &rx, || {}));
@@ -640,7 +645,6 @@ mod tests {
 		assert_eq!(typ, "text");
 		drop(st);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	fn hashed(path: &[u8], d: u8) -> Msg {
@@ -666,7 +670,8 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_bad_row_keeps_the_events() {
-		let p = temp_db("wfail");
+		let _id = test_id("0vCp8f");
+		let (_dir, p) = temp_db("wfail");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
 			"CREATE TRIGGER boom BEFORE INSERT ON paths BEGIN SELECT RAISE(ABORT, 'boom'); END;",
@@ -696,13 +701,13 @@ mod tests {
 		assert_eq!(n("SELECT count(*) FROM events"), 2);
 		assert_eq!(n("SELECT count(*) FROM paths"), 0);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn close_rw_says_when_wal_stays() {
-		let p = temp_db("walstays");
+		let _id = test_id("0vCp8g");
+		let (_dir, p) = temp_db("walstays");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let conn = open_rw(&p).unwrap();
 		let other = Connection::open(&p).unwrap();
@@ -714,13 +719,13 @@ mod tests {
 		drop(other);
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		assert!(!p.with_extension("sqlite-wal").exists());
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn seen_marks_only_its_row() {
-		let p = temp_db("seen");
+		let _id = test_id("0vG4lZ");
+		let (_dir, p) = temp_db("seen");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
 		let t = std::thread::spawn(move || writer(conn, 1, &rx, || {}));
@@ -744,13 +749,13 @@ mod tests {
 		assert_eq!(lookup(&mut st, b"/x/b").unwrap().unwrap().seen_run, 1);
 		drop(st);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn lookup_error_is_not_no_row() {
-		let p = temp_db("lookup");
+		let _id = test_id("0vCo6l");
+		let (_dir, p) = temp_db("lookup");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
 			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 3);
@@ -763,13 +768,13 @@ mod tests {
 		assert!(lookup(&mut st, b"/x/junk").is_err());
 		drop(st);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_1_forward() {
-		let p = temp_db("schema1");
+		let _id = test_id("0vCoNa");
+		let (_dir, p) = temp_db("schema1");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		// Was only roots dropped. Schema 1 had neither column.
@@ -796,13 +801,13 @@ mod tests {
 			.unwrap();
 		assert_eq!(schema, SCHEMA);
 		close_rw(c).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_2_forward() {
-		let p = temp_db("schema2");
+		let _id = test_id("0vCoNb");
+		let (_dir, p) = temp_db("schema2");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		c.execute_batch(
@@ -823,13 +828,13 @@ mod tests {
 			.unwrap();
 		assert_eq!((roots, verify), (b"/a".to_vec(), 0));
 		close_rw(c).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_3_forward() {
-		let p = temp_db("schema3");
+		let _id = test_id("0vEiNC");
+		let (_dir, p) = temp_db("schema3");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		c.execute_batch(
@@ -855,13 +860,13 @@ mod tests {
 			.unwrap();
 		assert_eq!(kinds, "b2b-rmlint-mismatch read-error");
 		close_rw(c).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn prune_drops_only_unnamed_contents() {
-		let p = temp_db("prune");
+		let _id = test_id("0vCpfE");
+		let (_dir, p) = temp_db("prune");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
 			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 1), (2, x'02', 2), (3, x'03', 3);
@@ -880,19 +885,18 @@ mod tests {
 		assert_eq!(ids, [1, 3]);
 		assert_eq!(prune(&conn).unwrap(), 0);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn refuses_other_schema() {
-		let p = temp_db("schema");
+		let _id = test_id("0vCUqu");
+		let (_dir, p) = temp_db("schema");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		c.execute("UPDATE meta SET value = 99 WHERE key = 'schema'", [])
 			.unwrap();
 		drop(c);
 		assert!(open_rw(&p).unwrap_err().contains("version"));
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 }
