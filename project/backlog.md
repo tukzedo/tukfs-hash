@@ -96,7 +96,7 @@
 - cicd profiler stage and flamegraph report.
 	- ID: 2026102309501604
 	- Type: Feature
-	- Status: Started
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -111,7 +111,11 @@
 		- 2026-10-23: Verified: the attribution check failed with libc on the sampler's blocklist and with the unwinder fix taken out, and passed with both back.
 		- 2026-10-23: Verified: a full run without publish or dogfood passes, draws the graph and prints the report, and leaves no workload behind.
 		- 2026-10-23: pprof's crates brought 2 advisories in quick-xml's reader, which inferno doesn't use, now ignored with the reason, and CodeQL findings from uuid's `Display` all over the tree. CodeQL's copy now leaves the profiling build out. Both pass again.
+		- 2026-10-23: Verified: the attribution check failed the run with libc on the blocklist, before any graph, and passed with it put back. A full run without publish or leak checks then passed in 2m 01s, the profiler stage in 33 s. `--gate` and `--quick` skip the stage.
+		- 2026-10-23: Verified: `flame-report.py --check` printed NEW, then SEEN, and exits 2 on a missing dir, a file that isn't a graph, and one cut off.
+	- Note: Not done here: the session-start check in per-project memory, which lives outside the repo.
 	- Branch: cicd
+	- Closed: 20261023-151600
 
 - cicd demo gif.
 	- ID: 2026102309501605
