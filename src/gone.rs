@@ -4,8 +4,8 @@
 // Names a finished scan didn't see. See design.md, Gone.
 
 use crate::db::{self, Kind, RunStatus};
-use rusqlite::types::ValueRef;
 use rusqlite::OptionalExtension;
+use rusqlite::types::ValueRef;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;

@@ -7,10 +7,10 @@
 
 use crate::db::{self, Hashed, Kind, Msg, RunStatus};
 use crate::mounts::Mount;
-use crate::scan::{self, read_sums, ReadFail, Sums};
+use crate::scan::{self, ReadFail, Sums, read_sums};
 use crate::util::{b64u_encode, canonical_name, now_us, show_path};
 use crate::xattr::{self, OnFile};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::fmt::Write as _;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;

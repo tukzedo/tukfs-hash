@@ -121,12 +121,12 @@ pub fn parse_zfs_diff(text: &[u8], mounts: &[PathBuf]) -> Parsed {
 		}
 		// Without -H a rename is "old -> new" in one field. Spaces in names are
 		// escaped, so the arrow can't be part of one.
-		if kind == b"R" {
-			if let Some(last) = f.pop() {
-				match last.windows(4).position(|w| w == b" -> ") {
-					Some(at) => f.extend([&last[..at], &last[at + 4..]]),
-					None => f.push(last),
-				}
+		if kind == b"R"
+			&& let Some(last) = f.pop()
+		{
+			match last.windows(4).position(|w| w == b" -> ") {
+				Some(at) => f.extend([&last[..at], &last[at + 4..]]),
+				None => f.push(last),
 			}
 		}
 		// A link count change ends in "(+1)" or "(-1)".
@@ -415,10 +415,10 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 		Source::ZfsDiff(f, mount) => {
 			let mut mounts = vec![mount.clone()];
 			// zfs prints the real mount point, and --mount may go through a symlink.
-			if let Ok(real) = fs::canonicalize(mount) {
-				if real != *mount {
-					mounts.push(real);
-				}
+			if let Ok(real) = fs::canonicalize(mount)
+				&& real != *mount
+			{
+				mounts.push(real);
 			}
 			let parsed = parse_zfs_diff(&read(f)?, &mounts);
 			if let Some((line_no, text)) = parsed.outside.first() {

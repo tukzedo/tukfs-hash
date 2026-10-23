@@ -30,8 +30,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 const USAGE: &str = "\
 tukfs-hash - checksum every file, remember it, and notice when one changes on its own
@@ -322,7 +322,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					return Err(
 						"snapdiff takes one of --zfs-diff with --mount, --find-new, or --list"
 							.into(),
-					)
+					);
 				}
 			};
 			snapdiff::run(&old, &new, &src, show_all)

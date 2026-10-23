@@ -9,7 +9,7 @@
 // with newer tables, is refused and left alone.
 
 use rusqlite::types::{ToSqlOutput, ValueRef};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, ToSql};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, ToSql, params};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -423,8 +423,10 @@ pub fn apply(
 				.execute(params![run_id, id])?;
 		}
 		Msg::Event { kind, path, detail } => {
-			tx.prepare_cached("INSERT INTO events (run_id, at_us, kind, path, detail) VALUES (?1, ?2, ?3, ?4, ?5)")?
-				.execute(params![run_id, now, kind, PathKey(&path), detail])?;
+			tx.prepare_cached(
+				"INSERT INTO events (run_id, at_us, kind, path, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+			)?
+			.execute(params![run_id, now, kind, PathKey(&path), detail])?;
 		}
 	}
 	Ok(())

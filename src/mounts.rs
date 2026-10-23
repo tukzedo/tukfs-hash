@@ -100,16 +100,14 @@ fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 			return;
 		}
 	}
-	if sys.join("partition").exists() {
-		if let Some(parent) = fs::canonicalize(&sys)
+	if sys.join("partition").exists()
+		&& let Some(parent) = fs::canonicalize(&sys)
 			.ok()
 			.and_then(|p| p.parent().map(Path::to_path_buf))
-		{
-			if let Some(name) = parent.file_name() {
-				out.insert(name.to_string_lossy().into_owned());
-				return;
-			}
-		}
+		&& let Some(name) = parent.file_name()
+	{
+		out.insert(name.to_string_lossy().into_owned());
+		return;
 	}
 	out.insert(kname.to_string());
 }
@@ -127,10 +125,10 @@ fn zpool_disks(pool: &str, out: &mut BTreeSet<String>) -> Result<(), String> {
 	}
 	for line in String::from_utf8_lossy(&o.stdout).lines() {
 		let f = line.trim_start().split('\t').next().unwrap_or("");
-		if f.starts_with("/dev/") {
-			if let Some(k) = kname_of(f) {
-				base_disks(&k, out);
-			}
+		if f.starts_with("/dev/")
+			&& let Some(k) = kname_of(f)
+		{
+			base_disks(&k, out);
 		}
 	}
 	Ok(())
@@ -184,7 +182,7 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 				m.point.display(),
 				m.fstype,
 				m.source
-			))
+			));
 		}
 	}
 	if out.is_empty() {

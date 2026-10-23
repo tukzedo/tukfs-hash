@@ -104,17 +104,6 @@
 	- Opened by: style and performance review
 	- Note: Optional. It's consistent across files today. `anyhow` would replace the closures with `.context()`. Weigh its size cost.
 
-- The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
-	- ID: 2026101916404116
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Move to edition 2024 and collapse the nested `if let` in `mounts.rs`, `scan.rs` and `snapdiff.rs`.
-	- Note: 2024 changes when temporaries in a block's last expression are dropped. The lock guards in `Links` need a look.
-
 - `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
 	- ID: 2026101916404117
 	- Type: Task
@@ -192,6 +181,27 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
+	- ID: 2026101916404116
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Move to edition 2024 and collapse the nested `if let` in `mounts.rs`, `scan.rs` and `snapdiff.rs`.
+	- Note: 2024 changes when temporaries in a block's last expression are dropped. The lock guards in `Links` need a look.
+	- Actual effort: Low
+	- Progress log:
+		- The crate is on edition 2024. The edition migration changed nothing. Its one warning was the tail of `run_events`, where the statement's temporaries now drop at the end of the block, and the block has no locals, so nothing changes.
+		- The 7 nested `if`s clippy's `collapsible_if` flagged are let-chains now: 3 in `mounts.rs`, 2 in `scan.rs` and 2 in `snapdiff.rs`. Each one falls through the same way as before.
+		- rustfmt's 2024 style comes from the edition, since `rustfmt.toml` sets only `hard_tabs`. It sorts imports by version, ends a `return` at a block's tail with a semicolon, and puts the blake2b test vectors one field per line. Left as rustfmt has it.
+		- The `Links` guards are all statements or `let`s, not a block's tail, so the drop-order change doesn't reach them.
+		- Verified: release build on rustc 1.95, the clippy gate on 1.96, fmt, `cargo test --release` (63 passed, the link claim tests included), and the integration test on ext4 and ZFS.
+		- Swept: every nested `if` and `if let` in `src`.
+	- Test case: the existing unit and integration suites, since there's no behavior change.
+	- Closed: 20261023-080947
 
 - Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
 	- ID: 2026101916404109

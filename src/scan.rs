@@ -24,7 +24,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -39,11 +39,7 @@ pub enum Mode {
 impl Mode {
 	// From runs.verify.
 	fn stored(verify: bool) -> Mode {
-		if verify {
-			Mode::Verify
-		} else {
-			Mode::Full
-		}
+		if verify { Mode::Verify } else { Mode::Full }
 	}
 }
 
@@ -177,10 +173,10 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<
 		RunStatus::Done => {
 			return Err(format!(
 				"--resume: the last scan, run {id}, finished. Start a new one without --resume."
-			))
+			));
 		}
 		RunStatus::Accept => {
-			return Err(format!("--resume: run {id} is {status}; can't resume it"))
+			return Err(format!("--resume: run {id} is {status}; can't resume it"));
 		}
 	}
 	let Some(was) = was else {
@@ -198,12 +194,12 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<
 		(Mode::Verify, Mode::Full) => {
 			return Err(format!(
 				"--resume: run {id} was a --verify run. Resume it with --verify, or start a new scan without --resume."
-			))
+			));
 		}
 		(Mode::Full, Mode::Verify) => {
 			return Err(format!(
 				"--resume: run {id} was a full scan. Resume it without --verify, or start a new --verify without --resume."
-			))
+			));
 		}
 		(Mode::Full, Mode::Full) | (Mode::Verify, Mode::Verify) => {}
 	}
@@ -371,10 +367,10 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 	for (disks, rs) in mounts::group_roots(&kept) {
 		let mut n = mounts::default_threads(&disks);
 		for (p, t) in threads {
-			if let Ok(c) = fs::canonicalize(p) {
-				if rs.iter().any(|r| c.starts_with(r) || r.starts_with(&c)) {
-					n = *t;
-				}
+			if let Ok(c) = fs::canonicalize(p)
+				&& rs.iter().any(|r| c.starts_with(r) || r.starts_with(&c))
+			{
+				n = *t;
 			}
 		}
 		groups.push((mounts::group_name(&disks), rs, n.max(1)));
@@ -1191,13 +1187,13 @@ impl<'a> Refs<'a> {
 				),
 			));
 		}
-		if let (Some(stored), Some(now)) = (self.b2b, s.b2b) {
-			if stored != now {
-				out.push((
-					Kind::RmlintMismatch,
-					format!("on file {}, read now {}", hex(&stored), hex(&now)),
-				));
-			}
+		if let (Some(stored), Some(now)) = (self.b2b, s.b2b)
+			&& stored != now
+		{
+			out.push((
+				Kind::RmlintMismatch,
+				format!("on file {}, read now {}", hex(&stored), hex(&now)),
+			));
 		}
 		if let Some(p) = self.db.filter(|p| p.b3 != s.b3) {
 			out.push((
@@ -2025,9 +2021,18 @@ mod tests {
 		let d = scratch("b2b_vectors");
 		let long: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
 		let cases: [(&[u8], &str); 3] = [
-			(b"", "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"),
-			(b"abc", "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"),
-			(&long, "8ee2ab50e0b1be2f1c64692013dfe68e15e36d15c4d5ec703b725b5cf5c1ba07299284b7a9ddd0ca725b39105bda7b79fa85fc5defab5819dfa8fee27f79da78"),
+			(
+				b"",
+				"786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce",
+			),
+			(
+				b"abc",
+				"ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923",
+			),
+			(
+				&long,
+				"8ee2ab50e0b1be2f1c64692013dfe68e15e36d15c4d5ec703b725b5cf5c1ba07299284b7a9ddd0ca725b39105bda7b79fa85fc5defab5819dfa8fee27f79da78",
+			),
 		];
 		let stop = AtomicBool::new(false);
 		let counted = AtomicU64::new(0);
@@ -2096,9 +2101,10 @@ mod tests {
 		assert!(r.err().is_some_and(|m| m.contains("finished")));
 		// One from a newer version, or a typo by hand.
 		let r = pick_resume(&runs_with("paused"), b"/a", Mode::Full);
-		assert!(r
-			.err()
-			.is_some_and(|m| m.contains("is paused; can't resume")));
+		assert!(
+			r.err()
+				.is_some_and(|m| m.contains("is paused; can't resume"))
+		);
 		// An accept is never the newest scan.
 		let r = pick_resume(&runs_with("accept"), b"/a", Mode::Full);
 		assert!(r.err().is_some_and(|m| m.contains("no scan to resume")));
