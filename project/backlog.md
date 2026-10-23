@@ -65,7 +65,8 @@
 - 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
 	- ID: 2026102308220558
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Stalled
+		- Held for the next change to each function.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-082205
 	- Opened by: split from 2026101916404110
