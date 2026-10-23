@@ -200,6 +200,7 @@ pub fn close_rw(conn: Connection) -> Result<(), String> {
 
 #[derive(Debug, Clone)]
 pub struct Prior {
+	pub id: i64,
 	pub bytes: i64,
 	pub mtime_us: i64,
 	pub ino: i64,
@@ -208,7 +209,7 @@ pub struct Prior {
 	pub b3: Vec<u8>,
 }
 
-pub const LOOKUP: &str = "SELECT p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
+pub const LOOKUP: &str = "SELECT p.id, p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
 // Only a missing row means nothing is known. A busy or broken database is not
@@ -216,12 +217,13 @@ pub const LOOKUP: &str = "SELECT p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen
 pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Result<Option<Prior>> {
 	stmt.query_row([PathKey(path)], |r| {
 		Ok(Prior {
-			bytes: r.get(0)?,
-			mtime_us: r.get(1)?,
-			ino: r.get(2)?,
-			hashed_us: r.get(3)?,
-			seen_run: r.get(4)?,
-			b3: r.get(5)?,
+			id: r.get(0)?,
+			bytes: r.get(1)?,
+			mtime_us: r.get(2)?,
+			ino: r.get(3)?,
+			hashed_us: r.get(4)?,
+			seen_run: r.get(5)?,
+			b3: r.get(6)?,
 		})
 	})
 	.optional()
@@ -373,7 +375,8 @@ impl ToSql for RunStatus {
 #[derive(Debug)]
 pub enum Msg {
 	Hashed(Box<Hashed>),
-	Seen(Vec<u8>),
+	// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
+	Seen(i64),
 	Event {
 		kind: Kind,
 		path: Vec<u8>,
@@ -415,9 +418,9 @@ pub fn apply(
 				run_id
 			])?;
 		}
-		Msg::Seen(p) => {
-			tx.prepare_cached("UPDATE paths SET seen_run = ?1 WHERE path = ?2")?
-				.execute(params![run_id, PathKey(&p)])?;
+		Msg::Seen(id) => {
+			tx.prepare_cached("UPDATE paths SET seen_run = ?1 WHERE id = ?2")?
+				.execute(params![run_id, id])?;
 		}
 		Msg::Event { kind, path, detail } => {
 			tx.prepare_cached("INSERT INTO events (run_id, at_us, kind, path, detail) VALUES (?1, ?2, ?3, ?4, ?5)")?
@@ -685,6 +688,35 @@ mod tests {
 		drop(other);
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		assert!(!p.with_extension("sqlite-wal").exists());
+		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn seen_marks_only_its_row() {
+		let p = temp_db("seen");
+		let conn = open_rw(&p).unwrap();
+		let (tx, rx) = sync_channel(16);
+		let t = std::thread::spawn(move || writer(conn, 1, &rx, || {}));
+		tx.send(hashed(b"/x/a", 1)).unwrap();
+		tx.send(hashed(b"/x/b", 2)).unwrap();
+		drop(tx);
+		let (conn, r) = t.join().unwrap();
+		r.unwrap();
+		let mut st = conn.prepare(LOOKUP).unwrap();
+		let a = lookup(&mut st, b"/x/a").unwrap().unwrap();
+		drop(st);
+
+		let (tx, rx) = sync_channel(16);
+		let t = std::thread::spawn(move || writer(conn, 2, &rx, || {}));
+		tx.send(Msg::Seen(a.id)).unwrap();
+		drop(tx);
+		let (conn, r) = t.join().unwrap();
+		r.unwrap();
+		let mut st = conn.prepare(LOOKUP).unwrap();
+		assert_eq!(lookup(&mut st, b"/x/a").unwrap().unwrap().seen_run, 2);
+		assert_eq!(lookup(&mut st, b"/x/b").unwrap().unwrap().seen_run, 1);
+		drop(st);
+		close_rw(conn).unwrap();
 		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 

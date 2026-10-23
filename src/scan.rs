@@ -811,7 +811,7 @@ fn list_dir(
 	// Asked first, since a big folder's files are queued before the listing
 	// ends.
 	let mut in_git = git_above || list.has(".git");
-	let mut files: Vec<(u64, Box<OsStr>)> = Vec::new();
+	let mut files: Vec<(u64, PathBuf)> = Vec::new();
 	let mut subdirs = Vec::new();
 	for (seen, ent) in list.enumerate() {
 		// The rest of the folder goes unread after an error. An EIO in a
@@ -858,12 +858,12 @@ fn list_dir(
 			subdirs.push(ent.name);
 			continue;
 		}
-		files.push((ent.ino, ent.name));
+		files.push((ent.ino, p));
 		if files.len() >= FILES_BATCH {
-			queue(root, &dir, &mut files, in_git, jobs)?;
+			queue(root, &mut files, in_git, jobs)?;
 		}
 	}
-	queue(root, &dir, &mut files, in_git, jobs)?;
+	queue(root, &mut files, in_git, jobs)?;
 	subdirs.sort_unstable_by(|a, b| b.cmp(a));
 	Ok(Some(Frame {
 		dir,
@@ -874,15 +874,14 @@ fn list_dir(
 
 fn queue(
 	root: &Arc<Root>,
-	dir: &Path,
-	files: &mut Vec<(u64, Box<OsStr>)>,
+	files: &mut Vec<(u64, PathBuf)>,
 	in_git: bool,
 	jobs: &SyncSender<Job>,
 ) -> Result<(), Closed> {
 	files.sort_unstable();
-	for (_, name) in files.drain(..) {
+	for (_, path) in files.drain(..) {
 		let job = Job {
-			path: dir.join(&*name),
+			path,
 			in_git,
 			root: root.clone(),
 		};
@@ -1287,8 +1286,8 @@ fn keep(
 		st.mismatch.fetch_add(1, Relaxed);
 		event(sh, kind, path, format!("{detail}{note}"));
 	}
-	if prior.is_some_and(|p| p.seen_run != sh.run_id) {
-		send(sh, Msg::Seen(path.as_os_str().as_bytes().to_vec()));
+	if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+		send(sh, Msg::Seen(p.id));
 	}
 }
 
@@ -1344,7 +1343,7 @@ fn one_file(
 			&& p.ino == md.ino() as i64
 		{
 			if p.seen_run != sh.run_id {
-				send(sh, Msg::Seen(pbytes.to_vec()));
+				send(sh, Msg::Seen(p.id));
 			}
 			st.skip_db.fetch_add(1, Relaxed);
 			links.passed(&md);
@@ -1380,8 +1379,8 @@ fn one_file(
 	if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
 		st.skip_unknown.fetch_add(1, Relaxed);
 		links.passed(&before);
-		if prior.is_some_and(|p| p.seen_run != sh.run_id) {
-			send(sh, Msg::Seen(pbytes.to_vec()));
+		if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+			send(sh, Msg::Seen(p.id));
 		}
 		return;
 	}
@@ -1531,6 +1530,7 @@ mod tests {
 
 	fn prior(b: u8) -> Prior {
 		Prior {
+			id: 1,
 			bytes: 1,
 			mtime_us: 1,
 			ino: 1,
@@ -1822,6 +1822,7 @@ mod tests {
 		fs::hard_link(d.join("a"), d.join("c")).unwrap();
 		let md = fs::metadata(d.join("a")).unwrap();
 		let fresh = Prior {
+			id: 1,
 			bytes: md.len() as i64,
 			mtime_us: mtime_us(&md),
 			ino: md.ino() as i64,

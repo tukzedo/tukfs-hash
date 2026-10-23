@@ -62,26 +62,6 @@
 	- Prereq IDs: 2026101916404100
 	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
 
-- Every skipped file updates its database row by path.
-	- ID: 2026101916404106
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- `LOOKUP` returns the row id. `Msg::Seen` carries the id, and the writer updates by it, so no path is copied per file.
-	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
-
-- The walk builds each file's full path twice.
-	- ID: 2026101916404107
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: `list_dir` in `scan.rs` joins every entry's path, and `queue` joins it again for files. Keep the first one.
-
 - Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
 	- ID: 2026101916404109
 	- Type: Task
@@ -223,6 +203,46 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- Every skipped file updates its database row by path.
+	- ID: 2026101916404106
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- `LOOKUP` returns the row id. `Msg::Seen` carries the id, and the writer updates by it, so no path is copied per file.
+	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
+	- Actual effort: Low
+	- Progress log:
+		- `Prior` has the `paths` row id, `Msg::Seen` carries it, and the writer updates `WHERE id`. All 3 places that send it use the id.
+		- A lookup error is still `db-error`, not no record. `accept` takes the new column and ignores it.
+		- Verified: release build, clippy gate, `cargo test --release` (62 passed), and the integration test on ext4 and ZFS, whose "every path seen by the run" checks cover it end to end.
+		- Verified: the new test goes red with the update made to hit every row, and green restored.
+		- Swept: every `Msg::Seen` sender in scan.rs, both `lookup` callers, and every `Prior` built in tests.
+	- Decisions:
+		- The id can't go stale within a run. Nothing deletes a `paths` row: `gone` only reads, `prune` deletes `files` rows, and the `Hashed` upsert keeps the row's id. A hard-linked name or a rename is its own path and its own row. Every writer holds the database lock, and `id` is an `INTEGER PRIMARY KEY`, so even a VACUUM keeps it.
+	- Test case: `db::tests::seen_marks_only_its_row`. No failing-first test, since there's no behavior change.
+	- Closed: 20261023-075833
+
+- The walk builds each file's full path twice.
+	- ID: 2026101916404107
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: `list_dir` in `scan.rs` joins every entry's path, and `queue` joins it again for files. Keep the first one.
+	- Actual effort: Low
+	- Progress log:
+		- `list_dir` keeps the joined path in its file list, and `queue` sends it as is. Sorting by inode, then path, gives the same order as inode, then name.
+		- Verified: release build, clippy gate, `cargo test --release` (62 passed), and the integration test on ext4 and ZFS.
+		- Swept: folders still join once at the pop in `walk`, from the name. That's once per folder, and keeps the stack small.
+	- Decisions:
+		- A folder's pending batch now holds full paths, not names. That costs the folder path's length per file, at most `FILES_BATCH` files, in a huge folder.
+	- Test case: None. No behavior change; the integration test walks the trees.
+	- Closed: 20261023-075833
 
 - Event kinds are passed around as plain strings, next to the `Kind` enum.
 	- ID: 2026101916404103
