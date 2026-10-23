@@ -37,7 +37,8 @@
 ##	   --quick             leave out the steps config.bash lists in QUICK_SKIP,
 ##	                       the leak checks, profiler and demo gif
 ##	   --slow              everything, the same as no options. Not with --quick
-##	   --leakcheck         add the slow leak checks to --gate or --quick
+##	   --leakcheck         add the slow leak checks to --quick. --gate never
+##	                       runs them
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
 ##	                       --leakcheck
 ##	   -q, --quiet         unattended and quiet: no preflight block, and cargo
@@ -228,8 +229,9 @@ if ((quick)); then
 	PROFILE_ENABLE=0; GIF_ENABLE=0
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
-## A run with no options does everything, the leak checks included.
-if ((no_leakcheck)) || { ((gate_mode || quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
+## A run with no options does everything, the leak checks included. The gate
+## is the pre-push hook, and stays fast.
+if ((no_leakcheck || gate_mode)) || { ((quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
 
 ## A run at least as thorough as the gate records the tree it tested.
 record_green=1
@@ -695,7 +697,7 @@ fRunIt(){   ## fRunIt LABEL ROOT
 
 ## Stage 4: tests, then the slow leak checks.
 fStageTests(){
-	local r step
+	local r step t0
 	fStep 4 "Tests"
 	if ((tests_off)); then fStepSkip "tests skipped"; return 0; fi
 	fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=${TMPDIR})"
@@ -709,7 +711,9 @@ fStageTests(){
 	## Last, since the slow ones take a long time and the rest should report first.
 	for step in "${LEAKCHECK_STEPS[@]}"; do
 		fEcho_Clean "leak check: ${step}"
+		t0="${SECONDS}"
 		eval "${step}" || fDie "leak check failed: ${step}"
+		fEcho_Clean "leak check took $(fMinSec $((SECONDS - t0))): ${step}"
 	done
 	if ((${#LEAKCHECK_STEPS[@]})); then fEcho "OK: leak checks"; fi
 	fRecordGreen
@@ -1093,3 +1097,5 @@ exit 0
 ##		  times. The integration test runs once per test root in config.bash. Run
 ##		  dirs, the frozen copy in them, and stale build cache entries are
 ##		  removed only behind guards. --slow, and a build number for --version.
+##		- 2026-10-23: --gate always leaves the leak checks out, and each one's
+##		  time is shown.

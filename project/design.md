@@ -164,6 +164,24 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The dogfood copy goes to `~/synced/0-0/common/exec/util/linux/bin/tukfs-hash`, where the scan wrappers look, rather than the `app/linux/` dir. `utility/dogfood_tukfs-hash` keeps up to 10 dated versions in `~/.local/bin/tukfs-hash_versions/`, with a link to the newest at `~/.local/bin/tukfs-hash`.
 
+## Leak and memory checks
+
+- A full run, and `--quick --leakcheck`, ends the tests stage with the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, then Miri, and CodeQL. Any report fails the run. `--gate` never runs them, since it's the pre-push hook.
+
+- The sanitizers, Miri and CodeQL run in the image from `cicd/container/`, with the pinned nightly and CodeQL, no network, and only the run's own dirs and `target/leakcheck/` mounted. Its crates are fetched once per lock file into `target/leakcheck/cargo-home`. Without docker they run on the host with a note, and CodeQL skips.
+
+- The soak and the advisory scan run on the host. A scan finds its workers from the root's disks through `/dev`, which a container doesn't have, and cargo-deny fetches RustSec's database.
+
+- The soak, `src/soak.rs`, runs scan, change, scan, status and accept 20 times in one process, and holds the heap at round 20 to round 10 within 4 KB. The Rust heap is dhat's count. SQLite's is its own, since it allocates through libc, which dhat doesn't see. Both are back to 0 bytes live after every round, so the margin can be small. It's behind the `soak` feature, since dhat then counts every allocation in the test binary.
+
+- The bundled SQLite is built by clang with the same sanitizer as the Rust code, with its lookaside and page cache pools off so each block is a malloc of its own.
+
+- SQLite sets itself up on first use with plain reads and writes, and TSan caught 2 test threads doing that at once. `db::init()` does it once, behind a `Once`, before any connection opens. A scan already did it on the main thread before its workers started.
+
+- Miri skips what it can't run: SQLite, which is C, xattrs, `openat2` and `mktime`. 2 tests of safe code that take it over 15 minutes are skipped too. Each says why in its `#[cfg_attr(miri, ignore = ...)]`.
+
+- CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the shipped binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
+
 ## Rejected
 
 - PostgreSQL. Hashing runs at disk speed and one SQLite writer keeps up easily. A server adds a daemon and a data folder, and a single file is easier to snapshot and copy.

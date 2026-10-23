@@ -52,6 +52,7 @@ TOOL_PINS=(
 	"shellcheck|${PIN_SHELLCHECK}|shellcheck --version"
 	"markdownlint|${PIN_MARKDOWNLINT}|markdownlint --version"
 	"nightly|${PIN_NIGHTLY}|rustup toolchain list"
+	"cargo-deny|${PIN_CARGO_DENY}|cargo deny --version"
 	"cargo-zigbuild|${PIN_CARGO_ZIGBUILD}|cargo-zigbuild --version"
 	"zig|${PIN_ZIG}|zig version"
 	"nfpm|${PIN_NFPM}|go version -m \"${NFPM}\""
@@ -80,7 +81,8 @@ BUILD_CMD=(cargo build -j "${CPU_CAP}" --locked)
 ## undocumented_unsafe_blocks. shellcheck takes every tracked *.bash plus these.
 ## markdownlint takes every tracked .md but license.md, which is the GPL's own
 ## text and stays as published. MD013 is line length, and the docs never wrap.
-LINT_CMD=(cargo clippy -j "${CPU_CAP}" --locked --all-targets -- -D warnings)
+## All features, or the soak test behind its feature goes unlinted.
+LINT_CMD=(cargo clippy -j "${CPU_CAP}" --locked --all-targets --all-features -- -D warnings)
 SHELLCHECK_EXTRA=(cicd/hooks/pre-push cicd/utility/n8git_backup-and-publish cicd/tool-pins.env utility/dogfood_tukfs-hash)
 MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
@@ -98,10 +100,37 @@ IT_ROOTS=(
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
 )
 
-## Stage 4, last: the slow leak and memory checks, eval'd in order. A run with
-## no flags runs them; --gate and --quick only with --leakcheck.
-## Filled by 2026102309501602.
-LEAKCHECK_STEPS=()
+## Stage 4, last: the slow leak and memory checks, eval'd in order, quick ones
+## first. A run with no flags runs them, and --quick only with --leakcheck.
+## --gate never does. Any report fails. The sanitizers, Miri and CodeQL run in
+## the image below when docker answers, else on the host with a note.
+LEAKCHECK_STEPS=(
+	## Known advisories for every crate in Cargo.lock. On the host, since it
+	## fetches RustSec's database. Offline is a noted skip.
+	'cicd/utility/advisories.bash'
+	## The main actions 20 times over in one process, with the heap at round
+	## 20 held to round 10. The table goes in cicd/artifacts/soak/. On the
+	## host, since a scan needs the real disks.
+	'cicd/utility/soak.bash'
+	## The unit tests under ASan and LSan, then TSan, then Miri, each in a
+	## build dir of its own under target/leakcheck.
+	'cicd/utility/sanitize-rust.bash --asan'
+	'cicd/utility/sanitize-rust.bash --tsan'
+	'cicd/utility/sanitize-rust.bash --miri'
+	## Over the tree with every crate vendored. The SARIF and findings go in
+	## cicd/artifacts/codeql/.
+	'cicd/utility/codeql-scan.bash'
+)
+
+## The leak check image, from CTR_DIR, tagged by a hash of it and
+## CTR_CONTEXT_EXTRA. The nightly and CodeQL come from tool-pins.env.
+CTR_DIR="cicd/container"
+CTR_IMAGE="${APP_NAME}-cicd"
+CTR_CONTEXT_EXTRA=(rust-toolchain.toml cicd/tool-pins.env)
+## The checks' own build dirs, and the image's cargo home, kept between runs
+## so they start warm. Under target, which the frozen copy links back to.
+LEAK_DIR="${root}/target/leakcheck"
+CTR_CARGO_HOME="${LEAK_DIR}/cargo-home"
 
 ## Stage 5: profiler, eval'd. Filled by 2026102309501604.
 PROFILE_ENABLE=0
@@ -183,3 +212,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: Created from shcl's config.bash, trimmed to one crate.
 ##		- 2026-10-23: arm64 through zig, packages, release checks, the
 ##		  artifact names and dogfood. cargo's home is remapped in the builds.
+##		- 2026-10-23: The leak checks, their image, and clippy over all features.

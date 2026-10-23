@@ -72,7 +72,7 @@
 - cicd leak and security checks.
 	- ID: 2026102309501602
 	- Type: Feature
-	- Status: Queued
+	- Status: Started
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -83,6 +83,8 @@
 		- Known-advisory scan of the dependencies.
 		- CodeQL over the vendored tree, and a soak test of repeated scans.
 		- Each check watched to fail once before it's trusted.
+	- Progress log:
+		- 2026-10-23: The leak check image, the advisory scan, ASan, TSan, Miri and the soak are in. TSan found SQLite's first-time setup racing when two test threads opened a database at once, so it's now done once before any connection.
 	- Branch: cicd
 
 - cicd release builds, packages and dogfood.

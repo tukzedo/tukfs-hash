@@ -259,6 +259,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
 	fn dates() {
 		let d = parse_date("2026-10-13").unwrap();
 		assert_eq!(local_midnight_us(d + 5 * 3600 * 1_000_000), d);

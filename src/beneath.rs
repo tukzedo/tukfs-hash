@@ -290,6 +290,7 @@ mod tests {
 
 	// A folder swapped for a symlink after it was listed.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_symlink_on_the_way_is_not_followed() {
 		let d = scratch("symlink");
 		let (root, outside) = (d.join("root"), d.join("outside"));
@@ -346,6 +347,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_listing_has_names_kinds_and_inodes() {
 		let d = scratch("list");
 		fs::create_dir(d.join("sub")).unwrap();

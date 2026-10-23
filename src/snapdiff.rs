@@ -711,6 +711,7 @@ transid marker was 12\n";
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "3 MB byte by byte; over 15 min under Miri, safe code")]
 	fn finds_a_scribble() {
 		let dir = std::env::temp_dir().join(format!("test_tukfs-hash_cmp_{}", std::process::id()));
 		fs::create_dir_all(&dir).unwrap();

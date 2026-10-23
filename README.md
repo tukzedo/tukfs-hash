@@ -86,6 +86,8 @@ The integration test needs `sqlite3`, `getfattr`, `setfattr` and `b2sum`, and a 
 
 `rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline: format, build, lint, tests, release builds for x86_64 and arm64 Linux with a `.deb` and an `.rpm` of each, dogfood and publish. `cicd/cicd.bash --gate` is the merge gate, which the pre-push hook runs after `git config core.hooksPath cicd/hooks`. `--help` lists the rest.
 
+A full run also has the leak and memory checks: the tests under ASan, TSan and Miri on the nightly that `cicd/tool-pins.env` names, a heap soak of repeated scans, CodeQL over every crate, and `cargo deny check advisories`. The sanitizers, Miri and CodeQL run in a docker image built from `cicd/container/` the first time, which takes a few minutes and about 4 GB. Without docker they use the host's nightly, and CodeQL is skipped. `--no-leakcheck` leaves them all out.
+
 Release builds are reproducible: 2 builds of one commit give the same bytes, packages included, wherever the checkout is.
 
 ## Copyright and license

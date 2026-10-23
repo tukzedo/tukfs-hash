@@ -4,13 +4,15 @@
 ##		Stops what a script started before its EXIT trap takes away the files
 ##		those processes use. A TERM to the script's PID alone runs its EXIT
 ##		trap at once and leaves its children running, over a temp dir that's
-##		about to go. Sourced by cicd.bash.
+##		about to go. Sourced by cicd.bash and the leak checks.
 ##	Functions:
 ##		fStopDescendants   TERM every process under this shell, wait up to
 ##		                   TUKFS_STOP_WAIT seconds (30) for them to go, then
-##		                   KILL the rest. A PID in stop_keep is passed over,
-##		                   with what it started, such as the tee a script logs
-##		                   through.
+##		                   KILL the rest. A container named in a file listed in
+##		                   stop_cidfiles that's still running is then killed by
+##		                   docker, since a KILLed `docker run` leaves it up.
+##		                   A PID in stop_keep is passed over, with what it
+##		                   started, such as the tee a script logs through.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -19,7 +21,8 @@
 ##	SPDX-License-Identifier: MIT
 
 
-declare -a stop_keep=()
+## Container ID files, from --cidfile. The caller removes one once its run ends.
+declare -a stop_cidfiles=() stop_keep=()
 
 ## Alive, and not a zombie waiting for its parent to reap it.
 fStopAlive(){
@@ -31,7 +34,7 @@ fStopAlive(){
 
 ## Builtins only, so the walk itself starts no process that would be on the list.
 fStopDescendants(){
-	local f line pid ppid wait="${TUKFS_STOP_WAIT:-30}" i=0 left=0
+	local f line pid ppid wait="${TUKFS_STOP_WAIT:-30}" engine="${TUKFS_DOCKER:-docker}" cid="" i=0 left=0
 	local -A kids=() keep=()
 	local -a todo=() found=()
 	## A subshell running a trap it took with it isn't the script.
@@ -65,9 +68,17 @@ fStopDescendants(){
 		fi
 		printf '[ cleanup: stopped %s process(es) the run left%s ]\n' "${#found[@]}" "$( ((left)) && echo ", ${left} by KILL after ${wait} s")" >&2
 	fi
+	for f in "${stop_cidfiles[@]}"; do
+		cid=""; { read -r cid < "${f}"; } 2>/dev/null || true
+		if [[ -n "${cid}" ]]; then
+			"${engine}" kill "${cid}" >/dev/null 2>&1 && echo "[ cleanup: killed container ${cid:0:12} ]" >&2 || true
+		fi
+	done
+	stop_cidfiles=()
 	return 0
 }
 
 
 ##	History:
 ##		- 2026-10-23: Copied into tukfs-hash from shcl's cicd, without the container parts.
+##		- 2026-10-23: The container part back, for the leak check image.

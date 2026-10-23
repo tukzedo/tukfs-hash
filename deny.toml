@@ -1,0 +1,9 @@
+# cargo-deny's settings, for cicd/utility/advisories.bash, which runs only
+# the advisories check: vulnerable, unsound and unmaintained crates, by
+# RustSec's database. The soak's dhat counts, since it runs too.
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+version = 2

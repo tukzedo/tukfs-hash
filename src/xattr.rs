@@ -264,6 +264,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_reads_back() {
 		let p = std::env::temp_dir().join(format!("test_tukfs-hash_rmset_{}", std::process::id()));
 		std::fs::write(&p, "x").unwrap();

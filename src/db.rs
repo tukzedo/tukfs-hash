@@ -82,7 +82,25 @@ pub fn path_text(v: ValueRef<'_>) -> String {
 	}
 }
 
+/// SQLite sets itself up on first use with plain reads and writes, which race
+/// when two threads get there at once. So once, here, before any connection.
+/// The PRNG is seeded too, since the first open of a file sets its pid the
+/// same way.
+pub fn init() {
+	static ONCE: std::sync::Once = std::sync::Once::new();
+	ONCE.call_once(|| {
+		let mut b = [0u8; 1];
+		// SAFETY: neither takes a pointer but b, which outlives the call and is
+		// as long as the length passed.
+		unsafe {
+			rusqlite::ffi::sqlite3_initialize();
+			rusqlite::ffi::sqlite3_randomness(1, b.as_mut_ptr().cast());
+		}
+	});
+}
+
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
+	init();
 	let fresh = !path.exists();
 	let conn = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
 	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
@@ -169,6 +187,7 @@ pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 }
 
 pub fn open_ro(path: &Path) -> Result<Connection, String> {
+	init();
 	let conn = Connection::open_with_flags(
 		path,
 		OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -556,7 +575,9 @@ mod tests {
 
 	// Bound as text, so a query by the old literal still finds the row.
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn enums_are_stored_as_their_text() {
+		init();
 		let c = Connection::open_in_memory().unwrap();
 		let (k, s): (String, String) = c
 			.query_row(
@@ -576,6 +597,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn round_trip_and_non_utf8_names() {
 		let p = temp_db("rt");
 		let conn = open_rw(&p).unwrap();
@@ -642,6 +664,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_bad_row_keeps_the_events() {
 		let p = temp_db("wfail");
 		let conn = open_rw(&p).unwrap();
@@ -677,6 +700,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn close_rw_says_when_wal_stays() {
 		let p = temp_db("walstays");
 		close_rw(open_rw(&p).unwrap()).unwrap();
@@ -694,6 +718,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn seen_marks_only_its_row() {
 		let p = temp_db("seen");
 		let conn = open_rw(&p).unwrap();
@@ -723,6 +748,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn lookup_error_is_not_no_row() {
 		let p = temp_db("lookup");
 		let conn = open_rw(&p).unwrap();
@@ -741,6 +767,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_1_forward() {
 		let p = temp_db("schema1");
 		close_rw(open_rw(&p).unwrap()).unwrap();
@@ -773,6 +800,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_2_forward() {
 		let p = temp_db("schema2");
 		close_rw(open_rw(&p).unwrap()).unwrap();
@@ -799,6 +827,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_3_forward() {
 		let p = temp_db("schema3");
 		close_rw(open_rw(&p).unwrap()).unwrap();
@@ -830,6 +859,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn prune_drops_only_unnamed_contents() {
 		let p = temp_db("prune");
 		let conn = open_rw(&p).unwrap();
@@ -854,6 +884,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn refuses_other_schema() {
 		let p = temp_db("schema");
 		close_rw(open_rw(&p).unwrap()).unwrap();

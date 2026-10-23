@@ -1775,6 +1775,7 @@ mod tests {
 
 	// More files than the job queue holds, and no worker to take them.
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_group_with_no_workers_ends() {
 		let dir = std::env::temp_dir().join(format!(
 			"test_tukfs-hash_scan_noworkers_{}",
@@ -1968,6 +1969,7 @@ mod tests {
 
 	// A folder swapped for a symlink after the walk listed it.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_swapped_folder_is_not_followed() {
 		let d = scratch("swap");
 		let (root, outside) = (d.join("root"), d.join("outside"));
@@ -1987,6 +1989,7 @@ mod tests {
 	// Names skipped by the database or the attributes count down too, so the
 	// entry goes once all are seen.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn skipped_links_count_down() {
 		let d = scratch("links");
 		fs::write(d.join("a"), "linked").unwrap();
@@ -2026,6 +2029,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn nothing_written_on_a_hands_off_device() {
 		let d = scratch("handsoff");
 		fs::write(d.join("a"), "win").unwrap();
@@ -2054,6 +2058,7 @@ mod tests {
 
 	// Dropbox files get ours too (backlog ...29), and Dropbox's own is left be.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn dropbox_files_get_attributes() {
 		let d = scratch("dropbox");
 		fs::write(d.join("a"), "synced").unwrap();
@@ -2086,6 +2091,7 @@ mod tests {
 	// --rmlint leaves rmlint's set where none is current, and the blake2b goes
 	// to the database either way.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_only_with_the_flag() {
 		let d = scratch("rmlint");
 		for f in ["plain", "flagged", "stale", "git"] {
@@ -2153,7 +2159,10 @@ mod tests {
 		];
 		let stop = AtomicBool::new(false);
 		let counted = AtomicU64::new(0);
-		for (i, (bytes, want)) in cases.iter().enumerate() {
+		// The long one takes Miri over 15 minutes. The short ones still go
+		// through the hashers' unsafe code there.
+		let n = if cfg!(miri) { 2 } else { cases.len() };
+		for (i, (bytes, want)) in cases.iter().take(n).enumerate() {
 			let p = d.join(format!("v{i}"));
 			fs::write(&p, bytes).unwrap();
 			let file = File::open(&p).unwrap();
@@ -2172,6 +2181,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "2^18 entries; over 15 min under Miri, and safe code")]
 	fn the_link_map_is_capped() {
 		let mut m = LinkMap::default();
 		let v = (1, 1, sums(1));
@@ -2195,6 +2205,7 @@ mod tests {
 	}
 
 	fn runs_with(status: &str) -> rusqlite::Connection {
+		db::init();
 		let c = rusqlite::Connection::open_in_memory().unwrap();
 		c.execute_batch(
 			"CREATE TABLE runs (id INTEGER PRIMARY KEY, started_us, cutoff_us, status, roots, summary, verify);",
@@ -2209,6 +2220,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn resume_takes_only_the_statuses_it_knows() {
 		for s in ["stopped", "failed", "running", "killed"] {
 			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);

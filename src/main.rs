@@ -23,6 +23,8 @@ mod gone;
 mod mounts;
 mod scan;
 mod snapdiff;
+#[cfg(all(test, feature = "soak"))]
+mod soak;
 mod util;
 mod xattr;
 
