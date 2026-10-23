@@ -88,7 +88,7 @@
 - cicd release builds, packages and dogfood.
 	- ID: 2026102309501603
 	- Type: Feature
-	- Status: Queued
+	- Status: Started
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -98,6 +98,8 @@
 		- x86_64 and arm64 release builds, `.deb` and `.rpm`, and a sha256 sums file, all named by version.
 		- Two builds of one commit give the same bytes.
 		- Dogfood install, plus a `dogfood_tukfs-hash` script and its launchers.
+	- Progress log:
+		- 2026-10-23: The arm64 build goes through zig, bundled SQLite included, and costs about what x86_64 does. Two checkouts at different paths gave the same bytes for both.
 	- Branch: cicd
 
 - cicd profiler stage and flamegraph report.

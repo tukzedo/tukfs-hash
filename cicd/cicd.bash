@@ -16,12 +16,13 @@
 ##	   1. format (in place; check-only under --gate)
 ##	   2. build (debug)
 ##	   3. lint (clippy, shellcheck over every tracked *.bash, markdownlint over
-##	      every tracked .md)
+##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1)
 ##	   4. tests (cargo test, then the integration test once per test root),
 ##	      then the slow leak checks
 ##	   5. profiler
-##	   6. release builds (native, cross targets, packages)
-##	   7. dogfood
+##	   6. release builds (native, cross targets, packages, release checks),
+##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file
+##	   7. dogfood (the native release build, and the dogfood runner)
 ##	   8. demo gif
 ##	   9. backup + publish to git
 ##	   A stage config.bash has off prints one skip line. Cleanup comes last.
@@ -34,7 +35,7 @@
 ##	                       missing tool fails it. Unattended, and no release,
 ##	                       dogfood, gif or publish
 ##	   --quick             leave out the steps config.bash lists in QUICK_SKIP,
-##	                       the leak checks, packages, profiler and demo gif
+##	                       the leak checks, profiler and demo gif
 ##	   --slow              everything, the same as no options. Not with --quick
 ##	   --leakcheck         add the slow leak checks to --gate or --quick
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
@@ -49,7 +50,8 @@
 ##	   --no-fmt            skip the format stage
 ##	   --no-lint           skip the lint stage
 ##	   --no-tests          skip the tests stage, leak checks included
-##	   --no-cross          skip the cross targets (the native release builds)
+##	   --no-cross          skip the cross targets; the native release still
+##	                       builds
 ##	   --no-package        skip the packages
 ##	   --no-profile        skip the profiler
 ##	   --no-release        skip the release builds, and the dogfood and gif
@@ -116,8 +118,9 @@ export CPU_CAP CARGO_BUILD_JOBS="${CPU_CAP}" RUST_TEST_THREADS="${CPU_CAP}"
 
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
+RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=()
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
-PROFILE_CMD=''; PACKAGE_CMD=''; DOGFOOD_CMD=''; GIF_CMD=''
+PROFILE_CMD=''; PACKAGE_CMD=''; GIF_CMD=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
@@ -220,9 +223,10 @@ fQuickDrop(){   ## fQuickDrop ARRAY_NAME
 	done
 	steps_q7w=("${kept[@]}")
 }
+## Packages stay in, since nfpm takes about a second for all of them.
 if ((quick)); then
-	PACKAGE_ENABLE=0; PROFILE_ENABLE=0; GIF_ENABLE=0
-	for list in LEAKCHECK_STEPS CROSS_TARGETS IT_ROOTS; do fQuickDrop "${list}"; done
+	PROFILE_ENABLE=0; GIF_ENABLE=0
+	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
 ## A run with no options does everything, the leak checks included.
 if ((no_leakcheck)) || { ((gate_mode || quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
@@ -260,6 +264,31 @@ trap 'rc=$?; run_said=1; printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n\n
 ## Git that talks to the remote goes through gitsby where it's installed, so it
 ## uses the account the repo belongs to. Plain git on a box without it.
 fGitRemote(){ if command -v gitsby >/dev/null 2>&1; then gitsby raw git "$@"; else git "$@"; fi; }
+
+## Dogfood helpers, from shcl's engine.
+## First existing and writable dir from the list; nothing when there's none.
+fFirstWritableDir(){ local d; for d in "$@"; do if [[ -d "${d}" && -w "${d}" ]]; then echo "${d}"; break; fi; done; return 0; }
+## 0 when a running process was started from this file.
+fInUse(){   ## fInUse PATH
+	local path exe
+	path="$(readlink -f -- "$1" 2>/dev/null)" || return 1
+	for exe in /proc/[0-9]*/exe; do
+		if [[ "$(readlink -- "${exe}" 2>/dev/null || true)" == "${path}" ]]; then return 0; fi
+	done
+	return 1
+}
+## Through a temp file in the same dir and a rename, so a copy started by hand
+## never sees a half-written file, and the sync never sends one.
+fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
+	local src="$1" dir="$2" name="$3" mode="$4" tmp="$2/.$3.$$.tmp"
+	if cp -f -- "${src}" "${tmp}" && chmod "${mode}" -- "${tmp}" && mv -f -- "${tmp}" "${dir}/${name}"; then
+		fEcho "OK: installed ${dir}/${name}"
+		return 0
+	fi
+	rm -f -- "${tmp}"
+	fEcho "WARNING: could not install ${dir}/${name}"
+	return 1
+}
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -416,6 +445,8 @@ commit_time="$(git -C "${root}" log -1 --format=%ct "${gate_rev:-HEAD}" 2>/dev/n
 if [[ -n "${commit_time}" ]]; then
 	build_number="$(fBuildNumber "${commit_time}")" || fDie "no build number from the commit time"
 	export "${BUILD_ENV_NAME}=${build_number}"
+	## The packages' mtimes, and anything else that would read the clock.
+	export SOURCE_DATE_EPOCH="${commit_time}"
 fi
 
 
@@ -440,7 +471,7 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
 	fEcho_Clean "Build (debug) ..: ${BUILD_CMD[*]}"
-	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint")"
+	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer")"
 	if ((tests_off)); then
 		fEcho_Clean "Tests ..........: (skipped)"
 	else
@@ -450,9 +481,21 @@ if ((! quiet && ! inner_run)); then
 	fi
 	fEcho_Clean "Leak checks ....: $( ((${#LEAKCHECK_STEPS[@]})) && echo "${#LEAKCHECK_STEPS[@]}, at the end of the tests" || echo '(none in this run)')"
 	fEcho_Clean "Profiler .......: $(fOnOff "${PROFILE_ENABLE}" 'on')"
-	fEcho_Clean "Release ........: $( ((release_off)) && echo '(skipped)' || echo "native + ${#CROSS_TARGETS[@]} cross target(s)")"
-	fEcho_Clean "Packages .......: $(fOnOff "${PACKAGE_ENABLE}" 'on')"
-	fEcho_Clean "Dogfood ........: $(fOnOff "${DOGFOOD_ENABLE}" 'on')"
+	if ((release_off)); then
+		fEcho_Clean "Release ........: (skipped)"
+	else
+		_rel="${RELEASE_NATIVE_OSARCH}"; for _t in "${CROSS_TARGETS[@]}"; do _t="${_t#*|}"; _rel+=", ${_t%%|*}"; done
+		fEcho_Clean "Release ........: ${_rel}, into ${RELEASE_ARTIFACT_DIR:-(nowhere)}"
+		fEcho_Clean "Release checks .: ${#RELEASE_CHECKS[@]}"
+	fi
+	fEcho_Clean "Packages .......: $(fOnOff "${PACKAGE_ENABLE}" '.deb and .rpm')"
+	if ((DOGFOOD_ENABLE)) && ((${#DOGFOOD_DESTS[@]})); then
+		_dfd="$(fFirstWritableDir "${DOGFOOD_DESTS[@]}")"
+		if [[ -n "${_dfd}" ]]; then _dfd="${_dfd}/${EXE_NAME}"; else _dfd="(no writable dest; skips)"; fi
+		fEcho_Clean "Dogfood ........: ${_dfd}"
+	else
+		fEcho_Clean "Dogfood ........: (off)"
+	fi
 	fEcho_Clean "Demo gif .......: $(fOnOff "${GIF_ENABLE}" 'on')"
 	if ((${#GIT_PUBLISH[@]})); then
 		fEcho_Clean "Publish (last) .: ${GIT_PUBLISH[*]}$( [[ -n "${publish_msg}" ]] && echo " (\"${publish_msg}\")" || echo ' (asks for the message now)')"
@@ -583,7 +626,7 @@ fLintTool(){   ## fLintTool NAME -> 0 when it's here
 ## Stage 3: lint. Every tool runs, so the log has all of it, and then the stage
 ## fails if any of them did.
 fStageLint(){
-	local -a failed=() files=() shFiles=() mdFiles=()
+	local -a failed=() files=() shFiles=() mdFiles=() psFiles=()
 	local f skip s
 	fStep 3 "Lint"
 	if ((lint_off)); then fStepSkip "lint skipped"; return 0; fi
@@ -596,6 +639,7 @@ fStageLint(){
 		[[ -f "${root}/${f}" ]] || continue
 		case "${f}" in
 			*.bash) shFiles+=("${f}") ;;
+			*.ps1)  psFiles+=("${f}") ;;
 			*.md)
 				skip=0
 				for s in "${MARKDOWN_SKIP[@]}"; do if [[ "${f}" == "${s}" ]]; then skip=1; fi; done
@@ -617,6 +661,10 @@ fStageLint(){
 	elif fLintTool markdownlint; then
 		fEcho_Clean "markdownlint: ${#mdFiles[@]} file(s), ${MARKDOWNLINT_CMD[*]}"
 		if fLintRun "${MARKDOWNLINT_CMD[@]}" "${mdFiles[@]}"; then fEcho "OK: markdownlint clean"; else failed+=(markdownlint); fi
+	fi
+	if ((${#psFiles[@]})) && ((${#PS_LINT_CMD[@]})) && fLintTool "${PS_LINT_CMD[0]}"; then
+		fEcho_Clean "PSScriptAnalyzer: ${#psFiles[@]} file(s)"
+		if fLintRun "${PS_LINT_CMD[@]}" "${psFiles[@]}"; then fEcho "OK: PSScriptAnalyzer clean"; else failed+=(PSScriptAnalyzer); fi
 	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
@@ -689,40 +737,116 @@ fStageProfile(){
 	fStepPass
 }
 
-## Stage 6: the native release build, its version line checked, then the cross
-## targets and packages config.bash has.
+## The release set's file names, which download links depend on:
+## <exe>-<version>-<os-arch>, the same plus .deb or .rpm, and
+## <exe>-<version>-sha256sums.txt. Anything else in the dir is left alone.
+fReleaseName(){ [[ "$1" =~ ^${EXE_NAME}-[0-9][0-9A-Za-z.+~-]*-(linux-[a-z0-9_]+(\.deb|\.rpm)?|sha256sums\.txt)$ ]]; }
+
+## Stage 6: the native release build and the cross targets, copied under their
+## release names into a stage dir in the run's temp dir. Then the packages and
+## the release checks over that, and only when all of them pass does the set
+## replace the one in RELEASE_ARTIFACT_DIR, with its sums file.
+## For the eval'd config strings: release_stage, release_work, ver and
+## staged_osarchs, the os-arch of each build, native first.
+release_stage=""; release_work=""; ver=""
+declare -a staged_osarchs=()
 fStageRelease(){
-	local ver="" want="" got="" t label cmd
+	local t label osarch art cmd c f n artDir sums
+	local -a built=() names=()
 	fStep 6 "Release builds"
 	if ((release_off)); then fStepSkip "release builds skipped"; return 0; fi
+	ver="$(fVersion)"
+	[[ -n "${ver}" ]] || fDie "no version in ${VERSION_MANIFEST}"
 	fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
 	"${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
 	[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
-	ver="$(fVersion)"
-	[[ -n "${ver}" ]] || fDie "no version in ${VERSION_MANIFEST}"
-	want="${EXE_NAME} v${ver}${build_number:+ build ${build_number}}"
-	got="$("${root}/${RELEASE_NATIVE_BIN}" --version 2>&1 || true)"
-	[[ "${got%%$'\n'*}" == "${want}" ]] || fDie "the release binary says '${got%%$'\n'*}', not '${want}'"
 	## Bytes, since du gives what a compressed filesystem stores.
-	fEcho "OK: ${RELEASE_NATIVE_BIN}: ${want} ($(stat -c %s -- "${root}/${RELEASE_NATIVE_BIN}") bytes)"
+	fEcho "OK: ${RELEASE_NATIVE_OSARCH}: ${RELEASE_NATIVE_BIN} ($(stat -c %s -- "${root}/${RELEASE_NATIVE_BIN}") bytes)"
+	built=("${RELEASE_NATIVE_OSARCH}|${RELEASE_NATIVE_BIN}")
 	for t in "${CROSS_TARGETS[@]}"; do
-		label="${t%%|*}"; cmd="${t#*|}"
-		fEcho_Clean "cross: ${label}"
+		label="${t%%|*}"; t="${t#*|}"; osarch="${t%%|*}"; t="${t#*|}"; art="${t%%|*}"; cmd="${t#*|}"
+		fEcho_Clean "cross: ${label}: ${cmd}"
 		eval "${cmd}" || fDie "cross build failed: ${label}"
-		fEcho "OK: ${label}"
+		[[ -f "${root}/${art}" ]] || fDie "no binary for ${label} at ${art}"
+		fEcho "OK: ${osarch}: ${art} ($(stat -c %s -- "${root}/${art}") bytes)"
+		built+=("${osarch}|${art}")
+	done
+	[[ -n "${RELEASE_ARTIFACT_DIR}" ]] || { fStepPass; return 0; }
+
+	release_stage="${TMPDIR}/release"; release_work="${TMPDIR}/release-work"
+	mkdir -- "${release_stage}" "${release_work}" || fDie "could not make the release stage dir"
+	staged_osarchs=()
+	for t in "${built[@]}"; do
+		osarch="${t%%|*}"; n="${EXE_NAME}-${ver}-${osarch}"
+		fReleaseName "${n}" || fDie "${n}: not a release name; check the os-arch in config.bash"
+		cp -- "${root}/${t#*|}" "${release_stage}/${n}" || fDie "could not stage ${n}"
+		chmod 0755 -- "${release_stage}/${n}"
+		if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then touch -d "@${SOURCE_DATE_EPOCH}" -- "${release_stage}/${n}"; fi
+		staged_osarchs+=("${osarch}")
 	done
 	if ((PACKAGE_ENABLE)) && [[ -n "${PACKAGE_CMD}" ]]; then
+		fEcho_Clean "packages"
 		eval "${PACKAGE_CMD}" || fDie "packages failed"
-		fEcho "OK: packages"
 	fi
+	for c in "${RELEASE_CHECKS[@]}"; do
+		fEcho_Clean "release check: ${c%%|*}"
+		eval "${c#*|}" || fDie "release check failed: ${c%%|*}"
+	done
+	if ((${#RELEASE_CHECKS[@]})); then fEcho "OK: ${#RELEASE_CHECKS[@]} release check(s)"; fi
+
+	## The old set goes first, by name and one file at a time, so a dir that
+	## isn't the release set can't lose more than its release files.
+	artDir="${root}/${RELEASE_ARTIFACT_DIR}"
+	mkdir -p -- "${artDir}" || fDie "could not make ${RELEASE_ARTIFACT_DIR}"
+	for f in "${artDir}/${EXE_NAME}-"*; do
+		if [[ -f "${f}" && ! -L "${f}" ]] && fReleaseName "${f##*/}"; then rm -f -- "${f}"; fi
+	done
+	for f in "${release_stage}"/*; do
+		n="${f##*/}"
+		fReleaseName "${n}" || fDie "the stage dir has ${n}, which isn't a release name"
+		mv -f -- "${f}" "${artDir}/${n}" || fDie "could not move ${n} into ${RELEASE_ARTIFACT_DIR}"
+		names+=("${n}")
+	done
+	sums="${EXE_NAME}-${ver}-sha256sums.txt"
+	( cd "${artDir}" && sha256sum -- "${names[@]}" > "${sums}" ) || fDie "could not write ${sums}"
+	fEcho_Clean "$(cd "${artDir}" && stat -c '%10s  %n' -- "${names[@]}" "${sums}")"
+	fEcho "OK: ${#names[@]} release file(s) and ${sums} in ${RELEASE_ARTIFACT_DIR}/"
+	if ((${#CROSS_TARGETS[@]} == 0)); then fEcho_Clean "note: no cross targets in this run, so the set is the native build alone"; fi
 	fStepPass
 }
 
-## Stage 7: dogfood.
+## Stage 7: the native release build into the first writable dest, unless
+## that copy is running or already has these bytes. Then the dogfood runner and
+## its launcher, where they changed.
 fStageDogfood(){
+	local src="" dest="" runner rSrc rDir sorry=0
+	local -a parts=()
 	fStep 7 "Dogfood"
-	if ((! DOGFOOD_ENABLE)) || [[ -z "${DOGFOOD_CMD}" ]]; then fStepSkip "dogfood off in config.bash, or skipped"; return 0; fi
-	eval "${DOGFOOD_CMD}" || fDie "dogfood failed"
+	if ((! DOGFOOD_ENABLE)) || ((! ${#DOGFOOD_DESTS[@]})); then fStepSkip "dogfood off in config.bash, or skipped"; return 0; fi
+	src="${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}"
+	[[ -n "${RELEASE_ARTIFACT_DIR}" && -f "${src}" ]] || fDie "no native release build at ${src}"
+	dest="$(fFirstWritableDir "${DOGFOOD_DESTS[@]}")"
+	if [[ -z "${dest}" ]]; then
+		fEcho "WARNING: no dogfood dest is there and writable (${DOGFOOD_DESTS[*]}); skipped"
+	elif cmp -s -- "${src}" "${dest}/${EXE_NAME}"; then
+		fEcho "OK: ${dest}/${EXE_NAME} is already this build"
+	elif fInUse "${dest}/${EXE_NAME}"; then
+		fEcho "WARNING: ${dest}/${EXE_NAME} is running; dogfood copy skipped"
+	else
+		fInstallAtomic "${src}" "${dest}" "${EXE_NAME}" 0755 || sorry=1
+	fi
+	## "source|dir|dir...". Into each dir that's there.
+	for runner in "${DOGFOOD_RUNNERS[@]}"; do
+		IFS='|' read -r -a parts <<< "${runner}"
+		rSrc="${root}/${parts[0]}"
+		[[ -f "${rSrc}" ]] || fDie "no dogfood runner at ${parts[0]}"
+		for rDir in "${parts[@]:1}"; do
+			if [[ ! -d "${rDir}" || ! -w "${rDir}" ]]; then fEcho "WARNING: ${rDir} isn't there or writable; ${rSrc##*/} not copied"; continue; fi
+			if cmp -s -- "${rSrc}" "${rDir}/${rSrc##*/}"; then fEcho_Clean "${rDir}/${rSrc##*/} is current"; continue; fi
+			fInstallAtomic "${rSrc}" "${rDir}" "${rSrc##*/}" 0755 || sorry=1
+		done
+	done
+	((sorry == 0)) || fDie "dogfood: an install failed; see above"
 	fStepPass
 }
 

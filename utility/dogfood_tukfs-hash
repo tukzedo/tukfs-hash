@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+##	Purpose:
+##		- Lets 'dogfood_tukfs-hash' be typed at a shell without knowing it's a
+##		  pwsh script. Hands off to dogfood_tukfs-hash.ps1 in the same window,
+##		  with every argument passed through.
+##		- Lives in util/linux/bash, and the .ps1 in util/0_crossplatform beside
+##		  it. The repo keeps both in utility/.
+##	History: At bottom of script.
+
+##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+##	Licensed under The MIT License (MIT). Full text at:
+##		https://mit-license.org/
+##	SPDX-License-Identifier: MIT
+
+set -eu
+
+## Through any links, so the lookup below works from a link on PATH too.
+self="${BASH_SOURCE[0]}"
+while [[ -L "${self}" ]]; do
+	target="$(readlink "${self}")"
+	if [[ "${target}" == /* ]]; then self="${target}"
+	else                             self="$(dirname "${self}")/${target}"; fi
+done
+selfDir="$(cd -P "$(dirname "${self}")" && pwd)"
+
+ps1=""
+for candidate in \
+	"${selfDir}/../../0_crossplatform/dogfood_tukfs-hash.ps1" \
+	"${selfDir}/dogfood_tukfs-hash.ps1" \
+	"${HOME}/synced/0-0/common/exec/util/0_crossplatform/dogfood_tukfs-hash.ps1"; do
+	if [[ -f "${candidate}" ]]; then ps1="${candidate}"; break; fi
+done
+if [[ -z "${ps1}" ]]; then
+	echo "dogfood_tukfs-hash: dogfood_tukfs-hash.ps1 not found" >&2
+	exit 1
+fi
+if ! command -v pwsh >/dev/null 2>&1; then
+	echo "dogfood_tukfs-hash: needs PowerShell 7 (pwsh) on PATH" >&2
+	exit 1
+fi
+
+exec pwsh -NoProfile -File "${ps1}" "$@"
+
+
+##	History:
+##		- 2026-10-23: Created from shcl's dogfood_shcl.

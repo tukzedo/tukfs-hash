@@ -10,9 +10,9 @@
 ##		  stays generic.
 ##		- Command arrays run from the repo root. Plain strings are eval'd by the
 ##		  engine, with CPU_CAP and the run's other variables in scope.
-##		- A hook stage that's off here (profiler, packages, dogfood, demo gif)
-##		  prints a skip line and nothing else. The backlog items that fill them
-##		  are named beside each.
+##		- A hook stage that's off here (profiler, demo gif) prints a skip line
+##		  and nothing else. The backlog items that fill them are named beside
+##		  each.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -42,13 +42,29 @@ RUN_TMP_PREFIX="cicd_tukfs-hash_qx7j"
 ## "name|version|command": the version has to show up in the command's output.
 ## shellcheck source=tool-pins.env
 source "${here}/tool-pins.env"
+## nfpm is go-installed, and ~/.go/bin isn't always on PATH. package.bash
+## reads NFPM.
+NFPM="$(command -v nfpm 2>/dev/null || echo "${HOME}/.go/bin/nfpm")"
+export NFPM
 RUST_PIN="$(sed -n '/^channel *= *"/{ s/^channel *= *"\([^"]*\)".*/\1/p; q; }' "${root}/rust-toolchain.toml" 2>/dev/null || true)"
 TOOL_PINS=(
 	"rustc|${RUST_PIN}|rustc --version"
 	"shellcheck|${PIN_SHELLCHECK}|shellcheck --version"
 	"markdownlint|${PIN_MARKDOWNLINT}|markdownlint --version"
 	"nightly|${PIN_NIGHTLY}|rustup toolchain list"
+	"cargo-zigbuild|${PIN_CARGO_ZIGBUILD}|cargo-zigbuild --version"
+	"zig|${PIN_ZIG}|zig version"
+	"nfpm|${PIN_NFPM}|go version -m \"${NFPM}\""
+	"PSScriptAnalyzer|${PIN_PSSA}|pwsh -NoProfile -Command \"(Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1).Version.ToString()\""
 )
+
+## Paths into cargo's home end up in panic messages, so they're mapped to one
+## name and the bytes don't depend on whose home it is. The checkout's own
+## paths are already relative. Every cargo call gets it, or the release builds
+## would rebuild what the tests built. Added once, since the run on the frozen
+## copy reads this file again.
+_remap="--remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}=/cargo"
+if [[ " ${RUSTFLAGS:-} " != *" ${_remap} "* ]]; then export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${_remap}"; fi
 
 ## Stage 1: format. FMT_CMD rewrites in place; FMT_CHECK_CMD fails on a diff
 ## and is what --gate runs. rustfmt.toml has the style. Bash is never formatted.
@@ -65,9 +81,11 @@ BUILD_CMD=(cargo build -j "${CPU_CAP}" --locked)
 ## markdownlint takes every tracked .md but license.md, which is the GPL's own
 ## text and stays as published. MD013 is line length, and the docs never wrap.
 LINT_CMD=(cargo clippy -j "${CPU_CAP}" --locked --all-targets -- -D warnings)
-SHELLCHECK_EXTRA=(cicd/hooks/pre-push cicd/utility/n8git_backup-and-publish cicd/tool-pins.env)
+SHELLCHECK_EXTRA=(cicd/hooks/pre-push cicd/utility/n8git_backup-and-publish cicd/tool-pins.env utility/dogfood_tukfs-hash)
 MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
+## Every tracked .ps1, with PSScriptAnalyzerSettings.psd1 at the repo root.
+PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
 
 ## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
 ## integration test on a release build, once per root below, each in a dir of
@@ -89,26 +107,56 @@ LEAKCHECK_STEPS=()
 PROFILE_ENABLE=0
 PROFILE_CMD=''
 
-## Stage 6: release builds. The native one is also what the integration test
+## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
+## mounts and snapshots. The native one is also what the integration test
 ## runs, so it's usually already built by then. Cross targets are
-## "label|command", eval'd. Packages are one eval'd string.
-## Both filled by 2026102309501603.
+## "label|os-arch|binary|command", the command eval'd. arm64 goes through zig,
+## which also builds the bundled SQLite, and takes about as long as x86_64.
+## Each build is named <exe>-<version>-<os-arch> in RELEASE_ARTIFACT_DIR, with
+## <exe>-<version>-sha256sums.txt beside them. Download links depend on these
+## names, so they stay.
 RELEASE_NATIVE_CMD=(cargo build --release -j "${CPU_CAP}" --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
-CROSS_TARGETS=()
-PACKAGE_ENABLE=0
-PACKAGE_CMD=''
+RELEASE_NATIVE_OSARCH="linux-x86_64"
+CROSS_TARGETS=(
+	"Linux arm64 (zig)|linux-arm64|target/aarch64-unknown-linux-gnu/release/${EXE_NAME}|cargo zigbuild --release -j \${CPU_CAP} --locked --target aarch64-unknown-linux-gnu"
+)
+RELEASE_ARTIFACT_DIR="cicd/artifacts/release"
+## A .deb and an .rpm per build, from cicd/packaging/nfpm.yaml, into the stage
+## dir before the checks run. The binary is all they hold.
+PACKAGE_ENABLE=1
+PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_work}"'
+## Over the stage dir, once everything's built and packaged; "label|command",
+## eval'd. A failure keeps the whole set out of RELEASE_ARTIFACT_DIR.
+RELEASE_CHECKS=(
+	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}"'
+	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
+	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
+)
 
-## Stage 7: dogfood, eval'd. Filled by 2026102309501603.
-DOGFOOD_ENABLE=0
-DOGFOOD_CMD=''
+## Stage 7: dogfood. The native release build goes into the first of these
+## that's there and writable, under EXE_NAME, since the scan wrappers and root
+## steps run it from there. Not when that copy is running. No arm64 dest,
+## since the synced tree has no dir for one. TUKFS_CICD_DOGFOOD_UTIL moves
+## the whole util tree, for a test.
+DOGFOOD_ENABLE=1
+_dfUtil="${TUKFS_CICD_DOGFOOD_UTIL:-${HOME}/synced/0-0/common/exec/util}"
+DOGFOOD_DESTS=("${_dfUtil}/linux/bin")
+## The dogfood runner and its launcher, into each dir that's there, when they
+## changed. "source|dir|dir...".
+DOGFOOD_RUNNERS=(
+	"utility/dogfood_tukfs-hash.ps1|${_dfUtil}/0_crossplatform"
+	"utility/dogfood_tukfs-hash|${_dfUtil}/linux/bash"
+)
 
 ## Stage 8: demo gif, eval'd. Filled by 2026102309501605.
 GIF_ENABLE=0
 GIF_CMD=''
 
 ## What --quick leaves out, each matched as plain text against one step of
-## LEAKCHECK_STEPS, CROSS_TARGETS or IT_ROOTS. Nothing yet takes long enough.
+## LEAKCHECK_STEPS, CROSS_TARGETS, RELEASE_CHECKS or IT_ROOTS. Nothing yet
+## takes long enough. The arm64 build and the packages each take less than
+## the native build they come after.
 QUICK_SKIP=()
 
 ## Stages 2-6 run from a frozen copy of the tree. These link back to the
@@ -133,3 +181,5 @@ PUBLISH_AUTO_MESSAGE=""
 
 ##	History:
 ##		- 2026-10-23: Created from shcl's config.bash, trimmed to one crate.
+##		- 2026-10-23: arm64 through zig, packages, release checks, the
+##		  artifact names and dogfood. cargo's home is remapped in the builds.
