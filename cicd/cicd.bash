@@ -357,15 +357,18 @@ gate_skips="${run_tmp}/gate-skips"
 ## A run that stops early: whatever it started, then its dirs. fCleanup has
 ## done this already on a whole run.
 fRunTmpGone(){
-	local d total=0 left_frozen=""
+	local d kb="" total=0 left_frozen=""
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
+	((${#run_dirs[@]})) || { fFrozenGone || true; return 0; }
+	## Measured first, while the frozen copy is still in it.
+	for d in "${run_dirs[@]}"; do
+		kb="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
+		if [[ "${kb}" =~ ^[0-9]{1,15}$ ]]; then total=$((total + kb)); fi
+	done
 	left_frozen="${frozen_root}"
 	fFrozenGone || true
-	((${#run_dirs[@]})) || return 0
-	for d in "${run_dirs[@]}"; do
-		if fRunDirGone "${d}"; then total=$((total + gone_kb)); fi
-	done
+	for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
 	## git's record of a copy it couldn't take down, now that the dir is gone.
 	if [[ -n "${left_frozen}" ]]; then fFrozenRemove "${root}" "${left_frozen}" || true; fi
 	if ((! inner_run)); then printf '[ cleanup: removed this run'\''s temp files, about %s ]\n' "$(fSize "${total}")" >&2; fi
