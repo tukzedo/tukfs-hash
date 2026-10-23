@@ -3,7 +3,7 @@
 
 // Names a finished scan didn't see. See design.md, Gone.
 
-use crate::db;
+use crate::db::{self, Kind, RunStatus};
 use rusqlite::types::ValueRef;
 use rusqlite::OptionalExtension;
 use std::collections::{HashMap, HashSet};
@@ -72,9 +72,9 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> 
 			.optional(),
 		None => conn
 			.query_row(
-				"SELECT id, status, roots FROM runs WHERE status = 'done' AND roots IS NOT NULL
+				"SELECT id, status, roots FROM runs WHERE status = ?1 AND roots IS NOT NULL
 				ORDER BY id DESC LIMIT 1",
-				[],
+				[RunStatus::Done],
 				row,
 			)
 			.optional(),
@@ -83,7 +83,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> 
 	let Some((id, status, roots)) = found else {
 		return Err(run.map_or_else(|| none_yet.into(), |id| format!("no run {id}")));
 	};
-	if status != "done" {
+	if RunStatus::parse(&status) != Some(RunStatus::Done) {
 		return Err(format!(
 			"run {id} is {status}; only a finished scan says what's gone"
 		));
@@ -118,7 +118,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> 
 		let mut rows = st.query([id]).map_err(e)?;
 		while let Some(r) = rows.next().map_err(e)? {
 			let path = bytes_of(r.get_ref(1).map_err(e)?);
-			if r.get_ref(0).map_err(e)?.as_str().ok() == Some("dir-error") {
+			if r.get_ref(0).map_err(e)?.as_str().ok() == Some(Kind::DirError.name()) {
 				unlisted.push(path.clone());
 			}
 			reached.insert(path);

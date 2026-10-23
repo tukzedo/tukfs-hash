@@ -239,12 +239,143 @@ pub struct Hashed {
 	pub hashed_us: i64,
 }
 
+/// What an event says about a file. The names are stored, so they don't change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+	XattrMismatch,
+	RmlintMismatch,
+	DbMismatch,
+	CacheMismatch,
+	ReadError,
+	Unsupported,
+	Unstable,
+	DirError,
+	StatError,
+	OpenError,
+	DbError,
+	XattrError,
+	Accepted,
+}
+
+impl Kind {
+	pub const ALL: [Kind; 13] = [
+		Kind::XattrMismatch,
+		Kind::RmlintMismatch,
+		Kind::DbMismatch,
+		Kind::CacheMismatch,
+		Kind::ReadError,
+		Kind::Unsupported,
+		Kind::Unstable,
+		Kind::DirError,
+		Kind::StatError,
+		Kind::OpenError,
+		Kind::DbError,
+		Kind::XattrError,
+		Kind::Accepted,
+	];
+
+	pub fn name(self) -> &'static str {
+		match self {
+			Kind::XattrMismatch => "b3-xattr-mismatch",
+			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
+			Kind::DbMismatch => "b3-db-mismatch",
+			Kind::CacheMismatch => "cache-mismatch",
+			Kind::ReadError => "read-error",
+			Kind::Unsupported => "read-unsupported",
+			Kind::Unstable => "unstable",
+			Kind::DirError => "dir-error",
+			Kind::StatError => "stat-error",
+			Kind::OpenError => "open-error",
+			Kind::DbError => "db-error",
+			Kind::XattrError => "xattr-error",
+			Kind::Accepted => "accepted",
+		}
+	}
+
+	pub fn parse(name: &str) -> Option<Kind> {
+		Kind::ALL.into_iter().find(|k| k.name() == name)
+	}
+
+	// 4 is something flagged, 8 is something left unchecked. Unstable files
+	// are live ones, like a running VM's disk, and would set 8 on every run.
+	// A failed attribute write comes after the check. Only accept writes
+	// accepted, and it isn't a scan's to count.
+	pub fn exit_bits(self) -> i32 {
+		match self {
+			Kind::XattrMismatch
+			| Kind::RmlintMismatch
+			| Kind::DbMismatch
+			| Kind::CacheMismatch
+			| Kind::ReadError => 4,
+			Kind::Unsupported
+			| Kind::DirError
+			| Kind::StatError
+			| Kind::OpenError
+			| Kind::DbError => 8,
+			Kind::Unstable | Kind::XattrError | Kind::Accepted => 0,
+		}
+	}
+}
+
+impl ToSql for Kind {
+	fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+		Ok(ToSqlOutput::Borrowed(ValueRef::Text(
+			self.name().as_bytes(),
+		)))
+	}
+}
+
+/// A run's `status`, as stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStatus {
+	Running,
+	Stopped,
+	Failed,
+	Done,
+	Killed,
+	Accept,
+}
+
+impl RunStatus {
+	pub const ALL: [RunStatus; 6] = [
+		RunStatus::Running,
+		RunStatus::Stopped,
+		RunStatus::Failed,
+		RunStatus::Done,
+		RunStatus::Killed,
+		RunStatus::Accept,
+	];
+
+	pub fn text(self) -> &'static str {
+		match self {
+			RunStatus::Running => "running",
+			RunStatus::Stopped => "stopped",
+			RunStatus::Failed => "failed",
+			RunStatus::Done => "done",
+			RunStatus::Killed => "killed",
+			RunStatus::Accept => "accept",
+		}
+	}
+
+	pub fn parse(text: &str) -> Option<RunStatus> {
+		RunStatus::ALL.into_iter().find(|s| s.text() == text)
+	}
+}
+
+impl ToSql for RunStatus {
+	fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+		Ok(ToSqlOutput::Borrowed(ValueRef::Text(
+			self.text().as_bytes(),
+		)))
+	}
+}
+
 #[derive(Debug)]
 pub enum Msg {
 	Hashed(Box<Hashed>),
 	Seen(Vec<u8>),
 	Event {
-		kind: &'static str,
+		kind: Kind,
 		path: Vec<u8>,
 		detail: String,
 	},
@@ -369,6 +500,69 @@ mod tests {
 	use super::*;
 	use std::sync::mpsc::sync_channel;
 
+	// What's in databases already. A new variant has to be added here too.
+	#[test]
+	fn kind_names_are_the_stored_ones() {
+		let stored = |k: Kind| match k {
+			Kind::XattrMismatch => "b3-xattr-mismatch",
+			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
+			Kind::DbMismatch => "b3-db-mismatch",
+			Kind::CacheMismatch => "cache-mismatch",
+			Kind::ReadError => "read-error",
+			Kind::Unsupported => "read-unsupported",
+			Kind::Unstable => "unstable",
+			Kind::DirError => "dir-error",
+			Kind::StatError => "stat-error",
+			Kind::OpenError => "open-error",
+			Kind::DbError => "db-error",
+			Kind::XattrError => "xattr-error",
+			Kind::Accepted => "accepted",
+		};
+		let names: std::collections::BTreeSet<_> = Kind::ALL.iter().map(|k| k.name()).collect();
+		assert_eq!(names.len(), 13, "ALL is missing one, or 2 share a name");
+		for k in Kind::ALL {
+			assert_eq!(k.name(), stored(k));
+			assert_eq!(Kind::parse(stored(k)), Some(k));
+		}
+		assert_eq!(Kind::parse("b2-rmlint-mismatch"), None);
+		assert_eq!(Kind::parse(""), None);
+	}
+
+	#[test]
+	fn run_statuses_are_the_stored_ones() {
+		let stored = |s: RunStatus| match s {
+			RunStatus::Running => "running",
+			RunStatus::Stopped => "stopped",
+			RunStatus::Failed => "failed",
+			RunStatus::Done => "done",
+			RunStatus::Killed => "killed",
+			RunStatus::Accept => "accept",
+		};
+		let texts: std::collections::BTreeSet<_> =
+			RunStatus::ALL.iter().map(|s| s.text()).collect();
+		assert_eq!(texts.len(), 6, "ALL is missing one, or 2 share a text");
+		for s in RunStatus::ALL {
+			assert_eq!(s.text(), stored(s));
+			assert_eq!(RunStatus::parse(stored(s)), Some(s));
+		}
+		assert_eq!(RunStatus::parse("Done"), None);
+		assert_eq!(RunStatus::parse("paused"), None);
+	}
+
+	// Bound as text, so a query by the old literal still finds the row.
+	#[test]
+	fn enums_are_stored_as_their_text() {
+		let c = Connection::open_in_memory().unwrap();
+		let (k, s): (String, String) = c
+			.query_row(
+				"SELECT ?1, ?2",
+				params![Kind::DirError, RunStatus::Killed],
+				|r| Ok((r.get(0)?, r.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!((k.as_str(), s.as_str()), ("dir-error", "killed"));
+	}
+
 	fn temp_db(tag: &str) -> std::path::PathBuf {
 		let dir =
 			std::env::temp_dir().join(format!("test_tukfs-hash_db_{tag}_{}", std::process::id()));
@@ -436,7 +630,7 @@ mod tests {
 
 	fn ev(path: &[u8]) -> Msg {
 		Msg::Event {
-			kind: "b3-db-mismatch",
+			kind: Kind::DbMismatch,
 			path: path.to_vec(),
 			detail: String::new(),
 		}

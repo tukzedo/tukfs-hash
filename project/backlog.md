@@ -51,34 +51,6 @@
 	- Test case: `b2b_matches_known_digests`, the RFC 7693 vectors and one 300000-byte input through `read_sums` with 3 buffer sizes. It fails when a read's bytes are dropped. Integration section 20 still matches rmlint 2.10.3 byte for byte, on ext4 and ZFS.
 	- Swept: every `blake2::` use in `src/` (the read loop and the `rmlint_set_only_with_the_flag` helper), `accept.rs`'s `read_sums` call, and the docs, which don't name the crate.
 
-- Event kinds are passed around as plain strings, next to the `Kind` enum.
-	- ID: 2026101916404103
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404104
-	- Requirements  [Feature]:
-		- `Msg::Event` takes a `Kind` rather than a `&str`. `Kind` moves to `db.rs`.
-		- Add `Kind::Accepted`. `accept.rs` writes "accepted" and "xattr-error" by hand now.
-		- `gone.rs` matches "dir-error", and `report` in `main.rs` matches "%mismatch" and "read-error" in its SQL. Those come from `Kind` too.
-	- Sweep: Every event name written as a string literal.
-	- Note: The stored names don't change, so the tables stay at version 4.
-
-- Run statuses are plain strings, compared in 4 files.
-	- ID: 2026101916404104
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404103
-	- Requirements  [Feature]:
-		- A `RunStatus` enum for running, stopped, failed, done, killed and accept, with its stored text.
-		- `pick_resume` in `scan.rs` matches it with no catch-all arm. A status the program doesn't know is still refused.
-	- Note: The stored text stays as it is.
-
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
@@ -133,17 +105,6 @@
 		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
 		- Split `scan::run` into setup, the progress loop, and the finish.
 		- `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
-
-- `scan::Opts` keeps full scan versus `--verify` as a bool.
-	- ID: 2026101916404111
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- A mode enum in place of `verify`.
-	- Note: `Opts` has 4 bools, which pedantic flags.
 
 - Public items have `//` comments instead of `///`.
 	- ID: 2026101916404113
@@ -262,6 +223,74 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- Event kinds are passed around as plain strings, next to the `Kind` enum.
+	- ID: 2026101916404103
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404104
+	- Requirements  [Feature]:
+		- `Msg::Event` takes a `Kind` rather than a `&str`. `Kind` moves to `db.rs`.
+		- Add `Kind::Accepted`. `accept.rs` writes "accepted" and "xattr-error" by hand now.
+		- `gone.rs` matches "dir-error", and `report` in `main.rs` matches "%mismatch" and "read-error" in its SQL. Those come from `Kind` too.
+	- Sweep: Every event name written as a string literal.
+	- Note: The stored names don't change, so the tables stay at version 4.
+	- Actual effort: Avg
+	- Progress log:
+		- `Kind` is in db.rs, with `Accepted` added, and `Msg::Event` takes a `Kind`. It goes to SQL as its stored name.
+		- accept, gone and `report` use it. `report` builds its damage-first order from `Kind`, rather than `LIKE '%mismatch'`.
+		- Verified: release build, clippy gate, `cargo test --release` (61 passed), and the integration test on ext4 and ZFS.
+		- Verified: the new tests go red with a stored name changed or `cache-mismatch` sorted last, and green again restored.
+		- Swept: every event name written as a string literal in src. Left on purpose: `Kind::name`, the version 4 rename, and tests that check the stored text.
+	- Decisions:
+		- `accepted` sets no exit bit. Only accept writes it, and accept's exit code doesn't come from events, so the table in design.md stays as it is.
+		- A kind this version doesn't know sorts with the rest in `report`, even one ending in "mismatch".
+	- Test case: `db::tests::kind_names_are_the_stored_ones`, `db::tests::enums_are_stored_as_their_text`, and `tests::damage_sorts_first`, which checks the order against the old SQL's rule.
+	- Closed: 20261023-075214
+
+- Run statuses are plain strings, compared in 4 files.
+	- ID: 2026101916404104
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404103
+	- Requirements  [Feature]:
+		- A `RunStatus` enum for running, stopped, failed, done, killed and accept, with its stored text.
+		- `pick_resume` in `scan.rs` matches it with no catch-all arm. A status the program doesn't know is still refused.
+	- Note: The stored text stays as it is.
+	- Actual effort: Low
+	- Progress log:
+		- `RunStatus` is in db.rs beside `Kind`, with its stored text, and goes to SQL as that text. scan, accept, gone and `runs` use it.
+		- `pick_resume` parses the status and matches every variant, with no catch-all. One it can't parse is refused as before.
+		- Verified: `resume_takes_only_the_statuses_it_knows` passes on the old code and the new. The gates as in 2026101916404103.
+		- Verified: with `killed` stored as another text, the round-trip and resume tests go red.
+		- Swept: status literals in SQL and comparisons in src. Left: `RunStatus::text`, tests, and accept's "stopped", which is a read failure's text.
+	- Test case: `db::tests::run_statuses_are_the_stored_ones` and `scan::tests::resume_takes_only_the_statuses_it_knows`.
+	- Closed: 20261023-075214
+
+- `scan::Opts` keeps full scan versus `--verify` as a bool.
+	- ID: 2026101916404111
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- A mode enum in place of `verify`.
+	- Note: `Opts` has 4 bools, which pedantic flags.
+	- Actual effort: Low
+	- Progress log:
+		- `scan::Mode` is `Full` or `Verify`, in `Opts` and the workers' shared state. `runs.verify` still stores 0 or 1.
+		- `Opts` has 3 bools now, within the lint's limit, so its `struct_excessive_bools` allow is gone.
+		- Verified: the clippy gate passes without the allow, and the integration test's verify steps pass on ext4 and ZFS.
+		- Swept: every `verify` field and argument in src. The `--verify` flag and the `runs.verify` column stay.
+	- Test case: the integration test's `verify:` steps, and `resume_takes_only_the_statuses_it_knows`, which passes a mode.
+	- Closed: 20261023-075214
 
 - Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
 	- ID: 2026101916404102

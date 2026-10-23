@@ -5,7 +5,7 @@
 // checksums, so without this a file changed on purpose, with its time put
 // back, is reported on every run.
 
-use crate::db::{self, Hashed, Msg};
+use crate::db::{self, Hashed, Kind, Msg, RunStatus};
 use crate::mounts::Mount;
 use crate::scan::{self, read_sums, ReadFail, Sums};
 use crate::util::{b64u_encode, canonical_name, now_us, show_path};
@@ -31,8 +31,8 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Its own status, so `scan --resume` never takes it for a stopped scan.
 	conn.execute(
-		"INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?1, 'accept', ?2, ?3)",
-		params![now_us(), scan::host(), args],
+		"INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?1, ?2, ?3, ?4)",
+		params![now_us(), RunStatus::Accept, scan::host(), args],
 	)
 	.map_err(e)?;
 	let run_id = conn.last_insert_rowid();
@@ -160,7 +160,7 @@ fn one(
 		run_id,
 		now,
 		Msg::Event {
-			kind: "accepted",
+			kind: Kind::Accepted,
 			path: pbytes.to_vec(),
 			detail,
 		},
@@ -185,7 +185,7 @@ fn one(
 			run_id,
 			now_us(),
 			Msg::Event {
-				kind: "xattr-error",
+				kind: Kind::XattrError,
 				path: pbytes.to_vec(),
 				detail: x.to_string(),
 			},

@@ -27,6 +27,7 @@ mod util;
 mod xattr;
 
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -162,7 +163,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut threads = Vec::new();
 	let mut since = None;
 	let mut resume = false;
-	let mut verify = false;
+	let mut mode = scan::Mode::Full;
 	let mut write_xattrs = true;
 	let mut rmlint = false;
 	let mut progress = 30;
@@ -216,7 +217,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				);
 			}
 			"--resume" => resume = true,
-			"--verify" => verify = true,
+			"--verify" => mode = scan::Mode::Verify,
 			"--progress" => {
 				progress = take_text(&mut it, a)?
 					.parse()
@@ -255,7 +256,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			if resume && since.is_some() {
 				return Err("--resume uses the old run's date; drop --since".into());
 			}
-			if verify && since.is_some() {
+			if mode == scan::Mode::Verify && since.is_some() {
 				return Err("--verify reads every known file again; drop --since".into());
 			}
 			let stop = Arc::new(AtomicBool::new(false));
@@ -278,7 +279,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					threads,
 					since,
 					resume,
-					verify,
+					mode,
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
@@ -358,7 +359,7 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 		.map_err(e)?;
 	for row in rows {
 		let (id, start, fin, cutoff, status, host, summary, verify) = row.map_err(e)?;
-		let skipping = if status == "accept" {
+		let skipping = if db::RunStatus::parse(&status) == Some(db::RunStatus::Accept) {
 			String::new()
 		} else if verify {
 			", verify".into()
@@ -407,6 +408,23 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	Ok(0)
 }
 
+// The ones that mean damage first.
+fn damage_first(k: db::Kind) -> u8 {
+	use db::Kind as K;
+	match k {
+		K::XattrMismatch | K::RmlintMismatch | K::DbMismatch | K::CacheMismatch => 0,
+		K::ReadError => 1,
+		K::Unsupported
+		| K::Unstable
+		| K::DirError
+		| K::StatError
+		| K::OpenError
+		| K::DbError
+		| K::XattrError
+		| K::Accepted => 2,
+	}
+}
+
 fn report(
 	db: &std::path::Path,
 	run: Option<i64>,
@@ -437,13 +455,16 @@ fn report(
 	for (k, n) in &counts {
 		out!("\t{k}: {n}");
 	}
-	// The ones that mean damage first.
+	let mut order = String::new();
+	for k in db::Kind::ALL {
+		_ = write!(order, " WHEN '{}' THEN {}", k.name(), damage_first(k));
+	}
 	let mut st = conn
-		.prepare(
+		.prepare(&format!(
 			"SELECT kind, path, detail FROM events WHERE run_id = ?1 AND (?2 IS NULL OR kind = ?2)
-			ORDER BY CASE WHEN kind LIKE '%mismatch' THEN 0 WHEN kind = 'read-error' THEN 1 ELSE 2 END, id
-			LIMIT ?3",
-		)
+			ORDER BY CASE kind{order} ELSE 2 END, id
+			LIMIT ?3"
+		))
 		.map_err(e)?;
 	let rows = st
 		.query_map(rusqlite::params![run, kind, limit], |r| {
@@ -459,4 +480,23 @@ fn report(
 		out!("{k}\t{p}\t{}", d.unwrap_or_default());
 	}
 	Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// Same order as the old `LIKE '%mismatch'`, then `read-error`.
+	#[test]
+	fn damage_sorts_first() {
+		for k in db::Kind::ALL {
+			let n = k.name();
+			let was = if n.ends_with("mismatch") {
+				0
+			} else {
+				u8::from(n != "read-error") + 1
+			};
+			assert_eq!(damage_first(k), was, "{n}");
+		}
+	}
 }

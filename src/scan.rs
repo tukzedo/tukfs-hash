@@ -7,7 +7,7 @@
 // contents did is the thing this is looking for.
 
 use crate::beneath::{self, Root};
-use crate::db::{self, Hashed, Msg, Prior};
+use crate::db::{self, Hashed, Kind, Msg, Prior, RunStatus};
 use crate::mounts;
 use crate::util::{
 	b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us,
@@ -28,8 +28,26 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+/// A full scan, or `--verify`, which rereads only files with a known
+/// checksum. See design.md, Runs and exit codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+	Full,
+	Verify,
+}
+
+impl Mode {
+	// From runs.verify.
+	fn stored(verify: bool) -> Mode {
+		if verify {
+			Mode::Verify
+		} else {
+			Mode::Full
+		}
+	}
+}
+
 #[derive(Debug)]
-#[allow(clippy::struct_excessive_bools, reason = "see 2026101916404111")]
 pub struct Opts {
 	pub db: PathBuf,
 	pub roots: Vec<PathBuf>,
@@ -38,81 +56,11 @@ pub struct Opts {
 	pub threads: Vec<(PathBuf, usize)>,
 	pub since: Option<i64>,
 	pub resume: bool,
-	pub verify: bool,
+	pub mode: Mode,
 	pub write_xattrs: bool,
 	pub rmlint: bool,
 	pub progress_secs: u64,
 	pub args: String,
-}
-
-/// What an event says about a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-	XattrMismatch,
-	RmlintMismatch,
-	DbMismatch,
-	CacheMismatch,
-	ReadError,
-	Unsupported,
-	Unstable,
-	DirError,
-	StatError,
-	OpenError,
-	DbError,
-	XattrError,
-}
-
-impl Kind {
-	const ALL: [Kind; 12] = [
-		Kind::XattrMismatch,
-		Kind::RmlintMismatch,
-		Kind::DbMismatch,
-		Kind::CacheMismatch,
-		Kind::ReadError,
-		Kind::Unsupported,
-		Kind::Unstable,
-		Kind::DirError,
-		Kind::StatError,
-		Kind::OpenError,
-		Kind::DbError,
-		Kind::XattrError,
-	];
-
-	pub fn name(self) -> &'static str {
-		match self {
-			Kind::XattrMismatch => "b3-xattr-mismatch",
-			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
-			Kind::DbMismatch => "b3-db-mismatch",
-			Kind::CacheMismatch => "cache-mismatch",
-			Kind::ReadError => "read-error",
-			Kind::Unsupported => "read-unsupported",
-			Kind::Unstable => "unstable",
-			Kind::DirError => "dir-error",
-			Kind::StatError => "stat-error",
-			Kind::OpenError => "open-error",
-			Kind::DbError => "db-error",
-			Kind::XattrError => "xattr-error",
-		}
-	}
-
-	// 4 is something flagged, 8 is something left unchecked. Unstable files
-	// are live ones, like a running VM's disk, and would set 8 on every run.
-	// A failed attribute write comes after the check.
-	fn exit_bits(self) -> i32 {
-		match self {
-			Kind::XattrMismatch
-			| Kind::RmlintMismatch
-			| Kind::DbMismatch
-			| Kind::CacheMismatch
-			| Kind::ReadError => 4,
-			Kind::Unsupported
-			| Kind::DirError
-			| Kind::StatError
-			| Kind::OpenError
-			| Kind::DbError => 8,
-			Kind::Unstable | Kind::XattrError => 0,
-		}
-	}
 }
 
 // Every part of a resumed run counts, and a file reported again by a later
@@ -130,12 +78,7 @@ fn exit_bits(counts: &[(String, i64)]) -> i32 {
 	counts
 		.iter()
 		.filter(|(_, n)| *n > 0)
-		.map(|(k, _)| {
-			Kind::ALL
-				.iter()
-				.find(|x| x.name() == k)
-				.map_or(8, |x| x.exit_bits())
-		})
+		.map(|(k, _)| Kind::parse(k).map_or(8, Kind::exit_bits))
 		.fold(0, |a, b| a | b)
 }
 
@@ -200,12 +143,12 @@ struct Resumed {
 // roots and in the same mode. An older stopped run would bring back an old
 // skip date, and the other wrapper's run would be finished over the wrong
 // roots.
-fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Result<Resumed, String> {
+fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<Resumed, String> {
 	let row = conn
 		.query_row(
 			"SELECT id, status, cutoff_us, started_us, roots, summary, verify FROM runs
-			WHERE status != 'accept' ORDER BY id DESC LIMIT 1",
-			[],
+			WHERE status != ?1 ORDER BY id DESC LIMIT 1",
+			[RunStatus::Accept],
 			|r| {
 				Ok((
 					Resumed {
@@ -226,14 +169,19 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Resul
 		return Err("--resume: no scan to resume".into());
 	};
 	let id = run.id;
-	match status.as_str() {
-		"stopped" | "failed" | "running" | "killed" => {}
-		"done" => {
+	let Some(known) = RunStatus::parse(&status) else {
+		return Err(format!("--resume: run {id} is {status}; can't resume it"));
+	};
+	match known {
+		RunStatus::Stopped | RunStatus::Failed | RunStatus::Running | RunStatus::Killed => {}
+		RunStatus::Done => {
 			return Err(format!(
 				"--resume: the last scan, run {id}, finished. Start a new one without --resume."
 			))
 		}
-		other => return Err(format!("--resume: run {id} is {other}; can't resume it")),
+		RunStatus::Accept => {
+			return Err(format!("--resume: run {id} is {status}; can't resume it"))
+		}
 	}
 	let Some(was) = was else {
 		return Err(format!(
@@ -246,20 +194,20 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], verify: bool) -> Resul
 			roots_diff(&was, roots)
 		));
 	}
-	match (was_verify, verify) {
-		(true, false) => {
+	match (Mode::stored(was_verify), mode) {
+		(Mode::Verify, Mode::Full) => {
 			return Err(format!(
 				"--resume: run {id} was a --verify run. Resume it with --verify, or start a new scan without --resume."
 			))
 		}
-		(false, true) => {
+		(Mode::Full, Mode::Verify) => {
 			return Err(format!(
 				"--resume: run {id} was a full scan. Resume it without --verify, or start a new --verify without --resume."
 			))
 		}
-		_ => {}
+		(Mode::Full, Mode::Full) | (Mode::Verify, Mode::Verify) => {}
 	}
-	if status == "running" || status == "killed" {
+	if matches!(known, RunStatus::Running | RunStatus::Killed) {
 		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
 	}
 	Ok(run)
@@ -347,7 +295,7 @@ struct Shared {
 	write_xattrs: bool,
 	// blake2b for every file read, not only ones with a current rmlint set.
 	rmlint: bool,
-	verify: bool,
+	mode: Mode,
 	tx: SyncSender<Msg>,
 }
 
@@ -495,32 +443,42 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let started = now_us();
 	let roots = roots_key(&plan.groups);
 	let (run_id, cutoff_us, run_started, earlier) = if o.resume {
-		let r = pick_resume(&conn, &roots, o.verify)?;
+		let r = pick_resume(&conn, &roots, o.mode)?;
 		(r.id, r.cutoff_us, r.started_us, r.summary)
 	} else {
 		// The lock is held, so a run still marked running died without a
 		// word. A new run means it won't be resumed.
 		conn.execute(
-			"UPDATE runs SET status = 'killed' WHERE status = 'running'",
-			[],
+			"UPDATE runs SET status = ?1 WHERE status = ?2",
+			[RunStatus::Killed, RunStatus::Running],
 		)
 		.map_err(e)?;
 		// A verify reads every known file again, however fresh.
-		let cutoff = if o.verify {
-			started
-		} else {
-			o.since.unwrap_or_else(|| local_midnight_us(started))
+		let cutoff = match o.mode {
+			Mode::Verify => started,
+			Mode::Full => o.since.unwrap_or_else(|| local_midnight_us(started)),
 		};
 		conn.execute(
-			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6)",
-			rusqlite::params![started, cutoff, host(), o.args, roots, o.verify],
+			"INSERT INTO runs (started_us, cutoff_us, status, host, args, roots, verify) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+			rusqlite::params![
+				started,
+				cutoff,
+				RunStatus::Running,
+				host(),
+				o.args,
+				roots,
+				o.mode == Mode::Verify
+			],
 		)
 		.map_err(e)?;
 		(conn.last_insert_rowid(), cutoff, started, None)
 	};
-	conn.execute("UPDATE runs SET status = 'running' WHERE id = ?1", [run_id])
-		.map_err(e)?;
-	if o.verify {
+	conn.execute(
+		"UPDATE runs SET status = ?1 WHERE id = ?2",
+		rusqlite::params![RunStatus::Running, run_id],
+	)
+	.map_err(e)?;
+	if o.mode == Mode::Verify {
 		out!("run {run_id}: rereading files with a known checksum");
 	} else {
 		out!(
@@ -567,9 +525,9 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mount_points: mounts::mount_points(&mounts),
 		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
 		// A quick check leaves ctimes alone.
-		write_xattrs: o.write_xattrs && !o.verify,
+		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
-		verify: o.verify,
+		mode: o.mode,
 		tx,
 	});
 
@@ -660,18 +618,18 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	}
 	summary.push_str(&part);
 	let mut status = if !why.is_empty() {
-		"failed"
+		RunStatus::Failed
 	} else if stopped {
-		"stopped"
+		RunStatus::Stopped
 	} else {
-		"done"
+		RunStatus::Done
 	};
 	if let Err(x) = conn.execute(
 		"UPDATE runs SET status = ?1, finished_us = ?2, summary = ?3 WHERE id = ?4",
 		rusqlite::params![status, now_us(), summary, run_id],
 	) {
 		why.push(format!("database: {x}"));
-		status = "failed";
+		status = RunStatus::Failed;
 	}
 	// Everything is committed by now, so this can't change the result.
 	if let Err(x) = db::close_rw(conn) {
@@ -683,7 +641,8 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	give_back(&db_path);
 
 	out!(
-		"run {run_id} {status} after {}s\n{part}",
+		"run {run_id} {} after {}s\n{part}",
+		status.text(),
 		t0.elapsed().as_secs()
 	);
 	if !why.is_empty() {
@@ -743,7 +702,7 @@ fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
 	_ = send(
 		sh,
 		Msg::Event {
-			kind: kind.name(),
+			kind,
 			path: path.as_os_str().as_bytes().to_vec(),
 			detail,
 		},
@@ -1418,7 +1377,7 @@ fn one_file(
 
 	// Nothing stored at this size and time to check against: new or edited.
 	// The next full scan reads it.
-	if sh.verify && refs.xattr.is_none() && refs.db.is_none() {
+	if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
 		st.skip_unknown.fetch_add(1, Relaxed);
 		links.passed(&before);
 		if prior.is_some_and(|p| p.seen_run != sh.run_id) {
@@ -1676,7 +1635,7 @@ mod tests {
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
 			rmlint: false,
-			verify: false,
+			mode: Mode::Full,
 			tx,
 		};
 		(sh, rx)
@@ -1731,8 +1690,8 @@ mod tests {
 		};
 		let eio = io::Error::from_raw_os_error(libc::EIO);
 		let nope = io::Error::from_raw_os_error(libc::EOPNOTSUPP);
-		assert_eq!(kind(ReadFail::Io(eio, 4096)), "read-error");
-		assert_eq!(kind(ReadFail::Io(nope, 0)), "read-unsupported");
+		assert_eq!(kind(ReadFail::Io(eio, 4096)), Kind::ReadError);
+		assert_eq!(kind(ReadFail::Io(nope, 0)), Kind::Unsupported);
 		assert_eq!(
 			(st.read_err.load(Relaxed), st.other_err.load(Relaxed)),
 			(1, 1)
@@ -2075,5 +2034,37 @@ mod tests {
 			m.fill((3, i), v, 5);
 		}
 		assert!(matches!(m.entries.get(&(2, 0)), Some(None)));
+	}
+
+	fn runs_with(status: &str) -> rusqlite::Connection {
+		let c = rusqlite::Connection::open_in_memory().unwrap();
+		c.execute_batch(
+			"CREATE TABLE runs (id INTEGER PRIMARY KEY, started_us, cutoff_us, status, roots, summary, verify);",
+		)
+		.unwrap();
+		c.execute(
+			"INSERT INTO runs (started_us, cutoff_us, status, roots, verify) VALUES (1, 1, ?1, x'2f61', 0)",
+			[status],
+		)
+		.unwrap();
+		c
+	}
+
+	#[test]
+	fn resume_takes_only_the_statuses_it_knows() {
+		for s in ["stopped", "failed", "running", "killed"] {
+			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);
+			assert!(r.is_ok(), "{s}: {:?}", r.err());
+		}
+		let r = pick_resume(&runs_with("done"), b"/a", Mode::Full);
+		assert!(r.err().is_some_and(|m| m.contains("finished")));
+		// One from a newer version, or a typo by hand.
+		let r = pick_resume(&runs_with("paused"), b"/a", Mode::Full);
+		assert!(r
+			.err()
+			.is_some_and(|m| m.contains("is paused; can't resume")));
+		// An accept is never the newest scan.
+		let r = pick_resume(&runs_with("accept"), b"/a", Mode::Full);
+		assert!(r.err().is_some_and(|m| m.contains("no scan to resume")));
 	}
 }
