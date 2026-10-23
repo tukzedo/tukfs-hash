@@ -75,26 +75,6 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
-- Public items have `//` comments instead of `///`.
-	- ID: 2026101916404113
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: Only `Kind` and `Sums` use `///`.
-
-- Some clones have no comment saying why.
-	- ID: 2026101916404114
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- Restructure where it's cheap, and comment the rest.
-	- Note: `need_db` in `main.rs`, `unlisted` in `gone.rs`, `group_roots` in `mounts.rs`, and `Pair::same` and the mount list in `snapdiff.rs`. All run once at setup. `Arc` clones don't count.
-
 - Errors are plain strings, converted by a local closure in about 8 functions.
 	- ID: 2026101916404115
 	- Type: Enhancement
@@ -181,6 +161,62 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- There's no `rust-version`, so a toolchain older than 1.88 fails on let-chains instead of saying what it needs.
+	- ID: 2026102308303246
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-083032
+	- Opened by: round review
+	- Requirements  [Feature]:
+		- `rust-version = "1.88"` in `[package]`, since edition 2024's let-chains need 1.88.
+	- Actual effort: Low
+	- Progress log:
+		- Added. `cargo metadata` reads it as 1.88, and with a value above the toolchain cargo stops with "requires rustc".
+		- Clippy's `incompatible_msrv` flags nothing at 1.88. It checks std APIs, not language features. The newest MSRV among dependencies is 1.85.
+		- Unverified: a build on 1.88 itself, since no 1.88 toolchain is installed here.
+	- Branch: round-20261023
+	- Test case: none, a manifest field.
+	- Closed: 20261023-083300
+
+- Some clones have no comment saying why.
+	- ID: 2026101916404114
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- Restructure where it's cheap, and comment the rest.
+	- Note: `need_db` in `main.rs`, `unlisted` in `gone.rs`, `group_roots` in `mounts.rs`, and `Pair::same` and the mount list in `snapdiff.rs`. All run once at setup. `Arc` clones don't count.
+	- Actual effort: Low
+	- Progress log:
+		- `need_db` borrows, and the scan arm moves the path into `Opts`. `gone` reads its event rows once, and `reached` and `unlisted` both borrow them. `group_roots` and `mount_points` take their `Vec`, which nothing used after. snapdiff's mount list borrows `--mount` and its resolved form. `group_name` borrows too.
+		- `Pair::same` keeps its clone, with a comment: each side owns its name, since a rename gives two.
+		- Verified: release build, clippy gate, fmt, `cargo test --release` (63 passed), and the integration test on ext4 and ZFS.
+		- Swept: every `clone()` and `cloned()` outside `scan.rs`. What's left is `Arc`s and tests.
+	- Branch: round-20261023
+	- Test case: the existing suites. "gone: says what it didn't count" and "--mount through a symlink" in the integration test cover the changed paths.
+	- Closed: 20261023-083300
+
+- Public items have `//` comments instead of `///`.
+	- ID: 2026101916404113
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Only `Kind` and `Sums` use `///`.
+	- Actual effort: Low
+	- Progress log:
+		- The `//` comment above 40 `pub` items in 7 files is now `///`, worded as before. `Beneath::open_read` keeps `//`, since it explains the fallback inside rather than the function. Where one comment covers a pair, such as `RM_B2B_*` and `Parsed`'s line lists, it sits on the first only.
+		- `quick_check` is in backticks. A new `clippy.toml` lets `doc_markdown` take `SQLite` as is, rather than backticking a product name.
+		- Verified: `cargo doc --no-deps`, with and without `--document-private-items`, gives no warnings, and the clippy gate passes.
+		- Swept: every `pub` item in `src` with a `//` comment above it, attributes skipped.
+	- Branch: round-20261023
+	- Test case: none, comments only.
+	- Closed: 20261023-083300
 
 - 6 functions run past 100 lines.
 	- ID: 2026101916404110

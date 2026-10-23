@@ -13,8 +13,8 @@ pub fn now_us() -> i64 {
 		.map_or(0, |d| d.as_micros() as i64)
 }
 
-// The folder resolved and the name left alone, so a symlink stays a symlink.
-// A scan stores names that way, walking down from a resolved root.
+/// The folder resolved and the name left alone, so a symlink stays a symlink.
+/// A scan stores names that way, walking down from a resolved root.
 pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
 	let parent = p
 		.parent()
@@ -33,7 +33,7 @@ pub fn cpath(p: &Path) -> io::Result<CString> {
 
 const B64U: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-// base64url with no padding, the form nemo-anywhere writes.
+/// base64url with no padding, the form nemo-anywhere writes.
 pub fn b64u_encode(data: &[u8]) -> String {
 	let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
 	for chunk in data.chunks(3) {
@@ -100,7 +100,7 @@ pub fn unhex(s: &[u8]) -> Option<Vec<u8>> {
 		.collect()
 }
 
-// Values in xattrs may end in NUL (rmlint) or a newline (setfattr by hand).
+/// Values in xattrs may end in NUL (rmlint) or a newline (setfattr by hand).
 pub fn trim_value(v: &[u8]) -> &[u8] {
 	let end = v
 		.iter()
@@ -125,7 +125,7 @@ pub fn local_midnight_us(us: i64) -> i64 {
 	unsafe { libc::mktime(&raw mut tm) as i64 * 1_000_000 }
 }
 
-// "YYYY-MM-DD" to local midnight.
+/// "YYYY-MM-DD" to local midnight.
 pub fn parse_date(s: &str) -> Option<i64> {
 	let mut it = s.splitn(3, '-').map(|p| p.parse::<i32>().ok());
 	let (year, month, day) = (it.next()??, it.next()??, it.next()??);
@@ -171,10 +171,10 @@ pub fn human_bytes(n: u64) -> String {
 	}
 }
 
-// A name as text that maps back to its bytes, so 2 names never print the same:
-// a backslash doubled, and control characters and bytes that aren't UTF-8 as
-// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
-// in its columns.
+/// A name as text that maps back to its bytes, so 2 names never print the same:
+/// a backslash doubled, and control characters and bytes that aren't UTF-8 as
+/// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
+/// in its columns.
 pub fn escape_name(b: &[u8]) -> String {
 	let mut out = String::with_capacity(b.len());
 	let hex_byte = |out: &mut String, byte: u8| {

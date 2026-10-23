@@ -27,8 +27,8 @@ pub enum Source {
 	List(PathBuf),
 }
 
-// A file to compare, by its name in each snapshot. find-new gives the inode
-// too, which finds the old copy after a rename.
+/// A file to compare, by its name in each snapshot. find-new gives the inode
+/// too, which finds the old copy after a rename.
 #[derive(Debug, PartialEq)]
 pub struct Pair {
 	pub old: PathBuf,
@@ -39,6 +39,7 @@ pub struct Pair {
 impl Pair {
 	fn same(p: PathBuf) -> Pair {
 		Pair {
+			// Owned per side, since a rename gives two names.
 			old: p.clone(),
 			new: p,
 			ino: None,
@@ -49,7 +50,7 @@ impl Pair {
 #[derive(Debug, Default, PartialEq)]
 pub struct Parsed {
 	pub pairs: Vec<Pair>,
-	// Line number and text.
+	/// Line number and text.
 	pub unusable: Vec<(usize, Vec<u8>)>,
 	pub outside: Vec<(usize, Vec<u8>)>,
 }
@@ -91,7 +92,7 @@ fn is_link_delta(f: &[u8]) -> bool {
 		&& f[2..f.len() - 1].iter().all(u8::is_ascii_digit)
 }
 
-fn strip_mount(p: &[u8], mounts: &[PathBuf]) -> Option<PathBuf> {
+fn strip_mount(p: &[u8], mounts: &[&Path]) -> Option<PathBuf> {
 	let p = Path::new(OsStr::from_bytes(p));
 	mounts
 		.iter()
@@ -99,10 +100,10 @@ fn strip_mount(p: &[u8], mounts: &[PathBuf]) -> Option<PathBuf> {
 		.map(Path::to_path_buf)
 }
 
-// Takes -H or not, -t and -F. M and R lines are compared, and so is a path
-// with both a - and a + line, which is a file replaced by a new one, as rsync,
-// tar and atomic saves do.
-pub fn parse_zfs_diff(text: &[u8], mounts: &[PathBuf]) -> Parsed {
+/// Takes -H or not, -t and -F. M and R lines are compared, and so is a path
+/// with both a - and a + line, which is a file replaced by a new one, as rsync,
+/// tar and atomic saves do.
+pub fn parse_zfs_diff(text: &[u8], mounts: &[&Path]) -> Parsed {
 	let mut parsed = Parsed::default();
 	let (mut removed, mut added) = (BTreeSet::new(), BTreeSet::new());
 	for (i, line) in text.split(|&c| c == b'\n').enumerate() {
@@ -239,8 +240,8 @@ pub struct Diff {
 	pub runs: Vec<(u64, u64)>,
 }
 
-// Byte runs that differ. Runs a few bytes apart are merged, since a scribble
-// rarely changes every byte it touches.
+/// Byte runs that differ. Runs a few bytes apart are merged, since a scribble
+/// rarely changes every byte it touches.
 pub fn compare(mut fa: File, mut fb: File) -> io::Result<Diff> {
 	let mut ba = vec![0u8; 1 << 20];
 	let mut bb = vec![0u8; 1 << 20];
@@ -413,13 +414,10 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 	// snapshots, find-new files in the new one, and a list can name anything.
 	let (parsed, need_old, need_new) = match src {
 		Source::ZfsDiff(f, mount) => {
-			let mut mounts = vec![mount.clone()];
 			// zfs prints the real mount point, and --mount may go through a symlink.
-			if let Ok(real) = fs::canonicalize(mount)
-				&& real != *mount
-			{
-				mounts.push(real);
-			}
+			let resolved = fs::canonicalize(mount).ok().filter(|r| r != mount);
+			let mut mounts = vec![mount.as_path()];
+			mounts.extend(resolved.as_deref());
 			let parsed = parse_zfs_diff(&read(f)?, &mounts);
 			if let Some((line_no, text)) = parsed.outside.first() {
 				return Err(format!(
@@ -585,8 +583,8 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 mod tests {
 	use super::*;
 
-	fn mounts(m: &str) -> Vec<PathBuf> {
-		vec![PathBuf::from(m)]
+	fn mounts(m: &str) -> Vec<&Path> {
+		vec![Path::new(m)]
 	}
 
 	fn same(p: &str) -> Pair {
@@ -671,7 +669,7 @@ mod tests {
 		// Either spelling of the mount point is taken.
 		let p = parse_zfs_diff(
 			b"M\t/real/u/a\n",
-			&[PathBuf::from("/home/u"), PathBuf::from("/real/u")],
+			&[Path::new("/home/u"), Path::new("/real/u")],
 		);
 		assert_eq!(p.pairs, vec![same("a")]);
 	}

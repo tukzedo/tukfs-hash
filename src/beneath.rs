@@ -33,8 +33,8 @@ struct OpenHow {
 	resolve: u64,
 }
 
-// Not where the walk saw it: gone, swapped for a symlink or a file, or under a
-// mount made since. Nothing was there to check.
+/// Not where the walk saw it: gone, swapped for a symlink or a file, or under a
+/// mount made since. Nothing was there to check.
 pub fn moved(e: &io::Error) -> bool {
 	e.kind() == io::ErrorKind::NotFound
 		|| matches!(
@@ -168,7 +168,7 @@ pub struct Entry {
 	pub kind: io::Result<Kind>,
 }
 
-// A folder's entries, read from an fd rather than by name.
+/// A folder's entries, read from an fd rather than by name.
 #[derive(Debug)]
 pub struct List {
 	dir: NonNull<libc::DIR>,

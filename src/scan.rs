@@ -320,9 +320,9 @@ pub struct Plan {
 	pub dropped: Vec<String>,
 }
 
-// Roots that resolve to the same place, or sit inside another root on the same
-// filesystem, are dropped, so nothing is read twice. Bind mounts are the usual
-// cause here.
+/// Roots that resolve to the same place, or sit inside another root on the same
+/// filesystem, are dropped, so nothing is read twice. Bind mounts are the usual
+/// cause here.
 pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, String> {
 	let mounts = mounts::read_mounts()?;
 	let mut dropped = Vec::new();
@@ -364,7 +364,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		kept.push((c, disks));
 	}
 	let mut groups = Vec::new();
-	for (disks, rs) in mounts::group_roots(&kept) {
+	for (disks, rs) in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);
 		for (p, t) in threads {
 			if let Ok(c) = fs::canonicalize(p)
@@ -407,9 +407,9 @@ pub fn host() -> String {
 		.unwrap_or_default()
 }
 
-// Hand the files back to whoever ran this through sudo, so reports and
-// queries need no root. The WAL files are only there when leaving WAL mode
-// failed.
+/// Hand the files back to whoever ran this through sudo, so reports and
+/// queries need no root. The WAL files are only there when leaving WAL mode
+/// failed.
 pub fn give_back(db: &Path) {
 	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
 	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
@@ -474,7 +474,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			.iter()
 			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
 			.collect(),
-		mount_points: mounts::mount_points(&mounts),
+		mount_points: mounts::mount_points(mounts),
 		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
@@ -796,7 +796,7 @@ pub fn lock_path(db: &Path) -> PathBuf {
 	PathBuf::from(s)
 }
 
-// The database may not exist yet, so only its folder can be resolved.
+/// The database may not exist yet, so only its folder can be resolved.
 pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
 	crate::util::canonical_name(db)
 }
@@ -1102,7 +1102,7 @@ pub fn mtime_us(md: &fs::Metadata) -> i64 {
 	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
 }
 
-// rmlint's time, as it works it out.
+/// rmlint's time, as it works it out.
 pub fn mtime_s(md: &fs::Metadata) -> f64 {
 	md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9
 }
@@ -1136,9 +1136,9 @@ pub enum ReadFail {
 	Unstable,
 }
 
-// Reads the whole file from the start. Its cached pages are dropped first, so
-// a scribble in the page cache isn't taken for what's on disk. ZFS ignores the
-// advice; see design.md, Reading files.
+/// Reads the whole file from the start. Its cached pages are dropped first, so
+/// a scribble in the page cache isn't taken for what's on disk. ZFS ignores the
+/// advice; see design.md, Reading files.
 pub fn read_sums(
 	file: &File,
 	before: &fs::Metadata,

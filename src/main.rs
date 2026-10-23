@@ -246,7 +246,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			_ => return Err(format!("unknown option {}; see --help", shown(arg))),
 		}
 	}
-	let need_db = || db.clone().ok_or_else(|| "--db is required".to_string());
+	let need_db = || db.as_deref().ok_or("--db is required");
 
 	match cmd {
 		"scan" => {
@@ -272,7 +272,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 			scan::run(
 				&scan::Opts {
-					db: need_db()?,
+					db: db.ok_or("--db is required")?,
 					roots,
 					excludes,
 					no_xattr,
@@ -301,12 +301,12 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 			Ok(0)
 		}
-		"runs" => runs(&need_db()?),
-		"report" => report(&need_db()?, run_id, kind.as_deref(), limit),
-		"gone" => gone::run(&need_db()?, run_id, limit),
-		"prune" => prune(&need_db()?),
+		"runs" => runs(need_db()?),
+		"report" => report(need_db()?, run_id, kind.as_deref(), limit),
+		"gone" => gone::run(need_db()?, run_id, limit),
+		"prune" => prune(need_db()?),
 		"accept" => accept::run(
-			&need_db()?,
+			need_db()?,
 			&files,
 			&argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
 		),

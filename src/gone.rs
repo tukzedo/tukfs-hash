@@ -109,24 +109,22 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> 
 
 	// A name with an event was reached, and the names under a folder that
 	// couldn't be listed weren't looked for.
-	let mut reached = HashSet::new();
-	let mut unlisted = Vec::new();
+	let mut events = Vec::new();
 	{
 		let mut st = conn
 			.prepare("SELECT kind, path FROM events WHERE run_id = ?1")
 			.map_err(e)?;
 		let mut rows = st.query([id]).map_err(e)?;
 		while let Some(r) = rows.next().map_err(e)? {
-			let path = bytes_of(r.get_ref(1).map_err(e)?);
-			if r.get_ref(0).map_err(e)?.as_str().ok() == Some(Kind::DirError.name()) {
-				unlisted.push(path.clone());
-			}
-			reached.insert(path);
+			let unlisted = r.get_ref(0).map_err(e)?.as_str().ok() == Some(Kind::DirError.name());
+			events.push((unlisted, bytes_of(r.get_ref(1).map_err(e)?)));
 		}
 	}
-	let unlisted: Vec<&Path> = unlisted
+	let reached: HashSet<&[u8]> = events.iter().map(|(_, b)| b.as_slice()).collect();
+	let unlisted: Vec<&Path> = events
 		.iter()
-		.map(|b| Path::new(OsStr::from_bytes(b)))
+		.filter(|(u, _)| *u)
+		.map(|(_, b)| Path::new(OsStr::from_bytes(b)))
 		.collect();
 
 	let mut st = conn

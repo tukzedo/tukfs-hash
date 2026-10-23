@@ -68,8 +68,8 @@ pub fn read_mounts() -> Result<Vec<Mount>, String> {
 	Ok(parse_mountinfo(&text))
 }
 
-// The mount a path is on. Later lines are mounted over earlier ones, so the
-// last of the longest matches is the one in effect.
+/// The mount a path is on. Later lines are mounted over earlier ones, so the
+/// last of the longest matches is the one in effect.
 pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
 	let mut best: Option<&Mount> = None;
 	for m in mounts {
@@ -208,8 +208,8 @@ pub fn rotational(disk: &str) -> bool {
 	fs::read_to_string(format!("/sys/block/{disk}/queue/rotational")).is_ok_and(|s| s.trim() == "1")
 }
 
-// One worker on anything with a hard drive in it, since one is all it takes
-// to make the whole set wait on seeks. A few on flash.
+/// One worker on anything with a hard drive in it, since one is all it takes
+/// to make the whole set wait on seeks. A few on flash.
 pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	if disks.iter().any(|d| rotational(d)) {
 		1
@@ -220,11 +220,13 @@ pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	}
 }
 
-// Roots that share any disk end up in one group.
-pub fn group_roots(roots: &[(PathBuf, BTreeSet<String>)]) -> Vec<(BTreeSet<String>, Vec<PathBuf>)> {
+/// Roots that share any disk end up in one group.
+pub fn group_roots(
+	roots: Vec<(PathBuf, BTreeSet<String>)>,
+) -> Vec<(BTreeSet<String>, Vec<PathBuf>)> {
 	let mut groups: Vec<(BTreeSet<String>, Vec<PathBuf>)> = Vec::new();
 	for (root, disks) in roots {
-		let mut merged = (disks.clone(), vec![root.clone()]);
+		let mut merged = (disks, vec![root]);
 		let mut keep = Vec::new();
 		for g in groups.drain(..) {
 			if g.0.is_disjoint(&merged.0) {
@@ -243,21 +245,22 @@ pub fn group_roots(roots: &[(PathBuf, BTreeSet<String>)]) -> Vec<(BTreeSet<Strin
 }
 
 pub fn group_name(disks: &BTreeSet<String>) -> String {
-	disks.iter().cloned().collect::<Vec<_>>().join("+")
-}
-
-// Every mount point, for stopping a walk at the edge of its own filesystem.
-pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
-	mounts
+	disks
 		.iter()
-		.map(|m| (m.point.clone(), m.fstype.clone()))
-		.collect()
+		.map(String::as_str)
+		.collect::<Vec<_>>()
+		.join("+")
 }
 
-// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
-// and nothing more, no attributes and no database. A FUSE mount of a disk or
-// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
-// fuseblk for a block device, plain fuse for a file mounted by a user.
+/// Every mount point, for stopping a walk at the edge of its own filesystem.
+pub fn mount_points(mounts: Vec<Mount>) -> BTreeMap<PathBuf, String> {
+	mounts.into_iter().map(|m| (m.point, m.fstype)).collect()
+}
+
+/// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
+/// and nothing more, no attributes and no database. A FUSE mount of a disk or
+/// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
+/// fuseblk for a block device, plain fuse for a file mounted by a user.
 pub fn hands_off(m: &Mount) -> bool {
 	let t = m.fstype.strip_prefix("fuse.").unwrap_or(&m.fstype);
 	match t {
@@ -373,7 +376,7 @@ mod tests {
 			(PathBuf::from("/c"), s(&["nvme1n1"])),
 			(PathBuf::from("/d"), s(&["sdb", "sda"])),
 		];
-		let g = group_roots(&roots);
+		let g = group_roots(roots);
 		assert_eq!(g.len(), 2);
 		assert_eq!(g[0].1, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
 		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);

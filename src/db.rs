@@ -61,8 +61,8 @@ CREATE TABLE events (
 CREATE INDEX events_run_kind ON events(run_id, kind);
 ";
 
-// Names are bytes on Linux. Most are UTF-8 and go in as text, so the sqlite3
-// shell can match them with a plain string; the rest go in as blobs.
+/// Names are bytes on Linux. Most are UTF-8 and go in as text, so the sqlite3
+/// shell can match them with a plain string; the rest go in as blobs.
 #[derive(Debug)]
 pub struct PathKey<'a>(pub &'a [u8]);
 
@@ -149,8 +149,8 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	Ok(conn)
 }
 
-// A database a newer program hasn't opened for writing yet can lack columns
-// that readers ask for.
+/// A database a newer program hasn't opened for writing yet can lack columns
+/// that readers ask for.
 pub fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
 	conn.query_row(
 		"SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2",
@@ -160,7 +160,7 @@ pub fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Res
 	.map(|n| n > 0)
 }
 
-// Contents no name points at any more. Every edit leaves one behind.
+/// Contents no name points at any more. Every edit leaves one behind.
 pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 	conn.execute(
 		"DELETE FROM files WHERE NOT EXISTS (SELECT 1 FROM paths WHERE paths.file_id = files.id)",
@@ -178,14 +178,14 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	Ok(conn)
 }
 
-// Puts the file back in rollback mode, so a user without write access to the
-// folder can still open it read-only after a run as root. Leaving WAL mode
-// checkpoints on its own; an explicit TRUNCATE checkpoint after quick_check
-// fails with "table is locked" on SQLite 3.46 to 3.50.
-//
-// It needs the file to itself, so another reader makes it fail, at once or
-// after the busy wait. Everything is committed by then, so the caller only
-// warns, and a long wait would only hold up the result.
+/// Puts the file back in rollback mode, so a user without write access to the
+/// folder can still open it read-only after a run as root. Leaving WAL mode
+/// checkpoints on its own; an explicit TRUNCATE checkpoint after `quick_check`
+/// fails with "table is locked" on SQLite 3.46 to 3.50.
+///
+/// It needs the file to itself, so another reader makes it fail, at once or
+/// after the busy wait. Everything is committed by then, so the caller only
+/// warns, and a long wait would only hold up the result.
 pub fn close_rw(conn: Connection) -> Result<(), String> {
 	conn.busy_timeout(Duration::from_secs(5)).ok();
 	let mode = conn
@@ -212,8 +212,8 @@ pub struct Prior {
 pub const LOOKUP: &str = "SELECT p.id, p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
-// Only a missing row means nothing is known. A busy or broken database is not
-// the same as no record, and taking it for one would overwrite the row unseen.
+/// Only a missing row means nothing is known. A busy or broken database is not
+/// the same as no record, and taking it for one would overwrite the row unseen.
 pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Result<Option<Prior>> {
 	stmt.query_row([PathKey(path)], |r| {
 		Ok(Prior {
@@ -298,10 +298,10 @@ impl Kind {
 		Kind::ALL.into_iter().find(|k| k.name() == name)
 	}
 
-	// 4 is something flagged, 8 is something left unchecked. Unstable files
-	// are live ones, like a running VM's disk, and would set 8 on every run.
-	// A failed attribute write comes after the check. Only accept writes
-	// accepted, and it isn't a scan's to count.
+	/// 4 is something flagged, 8 is something left unchecked. Unstable files
+	/// are live ones, like a running VM's disk, and would set 8 on every run.
+	/// A failed attribute write comes after the check. Only accept writes
+	/// accepted, and it isn't a scan's to count.
 	pub fn exit_bits(self) -> i32 {
 		match self {
 			Kind::XattrMismatch
@@ -384,7 +384,7 @@ pub enum Msg {
 	},
 }
 
-// One message's rows, inside the caller's transaction.
+/// One message's rows, inside the caller's transaction.
 pub fn apply(
 	tx: &rusqlite::Transaction<'_>,
 	run_id: i64,
@@ -444,12 +444,12 @@ fn commit(conn: &mut Connection, run_id: i64, msgs: &mut Vec<Msg>) -> rusqlite::
 	tx.commit()
 }
 
-// The only thread that writes. Batches go in at most a second apart, so a stop
-// or a crash loses little. Events go first and on their own, so a bad row
-// among the rest can't take a mismatch down with it.
-//
-// After a failure the rest are dropped, but events are still kept, until one
-// of those fails too. `halt` is called once, to stop the workers.
+/// The only thread that writes. Batches go in at most a second apart, so a stop
+/// or a crash loses little. Events go first and on their own, so a bad row
+/// among the rest can't take a mismatch down with it.
+///
+/// After a failure the rest are dropped, but events are still kept, until one
+/// of those fails too. `halt` is called once, to stop the workers.
 pub fn writer(
 	mut conn: Connection,
 	run_id: i64,
