@@ -72,6 +72,16 @@ work="${scratch}"; src="${work}/src"; db="${work}/db"
 mkdir -p -- "${src}/tests" "${src}/.cargo" "${work}/rtarget" "${work}/tmp"
 export TMPDIR="${work}/tmp"
 cp -a -- Cargo.toml Cargo.lock build.rs src "${src}/"
+## The profiling build never ships, and uuid's Display, which comes in with
+## pprof, reads to CodeQL as a secret that every format! in the tree could
+## log. So the copy has no profiling feature, pprof or src/profiling.rs, and
+## its lock loses their crates, which only removes lines.
+sed -i -e '/^pprof = /d' -e '/^profiling = /d' "${src}/Cargo.toml"
+rm -f -- "${src}/src/profiling.rs"
+if grep -qE '^(pprof|profiling) = ' "${src}/Cargo.toml" || ! (cd "${src}" && cargo metadata --format-version 1 --offline >/dev/null 2>"${work}/relock.log"); then
+	cat "${work}/relock.log" 2>/dev/null || true; echo "codeql-scan: could not leave the profiling crates out of the copy" >&2; exit 2
+fi
+if grep -q '^name = "pprof"$' "${src}/Cargo.lock"; then echo "codeql-scan: the copy's lock still has pprof" >&2; exit 2; fi
 ## A read through a null pointer, from shcl's bait. An integration test of
 ## its own, so it's in the crate's targets without touching ours.
 bait="tests/codeql_bait.rs"
@@ -211,3 +221,4 @@ echo "codeql-scan: OK: nothing found in our code or the crates, the bait was cau
 
 ##	History:
 ##		- 2026-10-23: Copied from shcl's, for Rust alone, over the vendored tree.
+##		- 2026-10-23: The profiling build's crates are left out of the copy.

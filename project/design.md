@@ -198,6 +198,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Before any graph is drawn, an attribution check runs 2 threads for the same time: 2 loops at 3 to 1 inlined into one function, and a reader of a cached file. The loops have to split about 3 to 1, and the reader has to get a share. Each of those fails with its fix taken out.
 
+- pprof's crates count for the advisory scan, which ignores 2 advisories in quick-xml's reader, since inferno only writes. CodeQL's copy of the tree leaves them out, and `src/profiling.rs`. uuid is one of them, and its `Display` read to CodeQL as a secret that every `format!` in the tree could log.
+
 - The report buckets self time by the nearest caller it knows: blake3, blake2b, SQLite, xattr reads, xattr writes, file reads and the walk. They're keyed on function names, so a rename moves time into "other".
 
 ## Rejected
