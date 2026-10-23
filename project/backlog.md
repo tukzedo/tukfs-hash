@@ -56,8 +56,8 @@
 - A full cicd pipeline, per the directives' "CICD process" section.
 	- ID: 2026102309501600
 	- Type: Feature
-	- Status: Started
-		- Broken into the 6 children below, worked in order on one branch.
+	- Status: Done
+		- All 7 children are Done, and a full run passed with every stage on.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -71,8 +71,9 @@
 		- 2026-10-23: The dogfood runner keeps a version with no GFS role while the pool is under 10 versions and 1 GB, and never goes under 5. It used to drop one at 7. A running version is found by its real path, so a linked home doesn't hide it either. Verified: 7 small versions all stayed, 12 went to 10, 8 of 300 MB to 5, 8 of 150 MB to 6, and 4 of 2 GB all stayed. A running one that the budget left out stayed, through a linked home too, where before it was removed.
 		- 2026-10-23: A stopped run kills the containers it started before anything else, by the IDs its steps leave in the run's temp dir. Verified: stopped during a leak step whose container ignored TERM, the run used to leave the container up after it was gone, and now takes it down in about a second. A stop during ASan left no container, process or temp dir.
 		- 2026-10-23: A demo gif with the same bytes as the newest one in `../private/demo/gif/` isn't rotated in. Verified: a second render of the same bytes was left out, and a changed one went in. The 2 extra copies already there were removed.
-		- 2026-10-23: Left: a run with the ZFS integration test root.
+		- 2026-10-23: A full run with no flags passed in 17 minutes: lint, unit tests, both integration roots (ext4 and ZFS), every leak check, the profiler, release builds and packages, dogfood and the gif. CodeQL is 11 of those minutes.
 	- Branch: cicd
+	- Closed: 20261023-164000
 
 - cicd release builds, packages and dogfood.
 	- ID: 2026102309501603
