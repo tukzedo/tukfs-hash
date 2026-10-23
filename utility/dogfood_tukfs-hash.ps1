@@ -21,7 +21,8 @@
 ##	The pool keeps at most 10 versions and at least 5, and between those only
 ##	as many as fit in 1 GB. Which ones stay is a GFS rotation: the oldest, the
 ##	newest, the last of each recent hour, day, week, month and year, and the
-##	few most recent. Each is named tukfs-hash_<yyyyMMdd-HHmmss>_<role>, from
+##	few most recent. Under 10 and 1 GB, versions with none of those roles stay
+##	too, as spares. Each is named tukfs-hash_<yyyyMMdd-HHmmss>_<role>, from
 ##	the build's write time in local time. Old versions go one file at a time,
 ##	matched by that name, and never one that's running.
 ##
@@ -228,17 +229,22 @@ function Get-GfsRole {
 }
 
 ## The names that fit the budget. The newest goes in first whatever it weighs,
-## since the fixed name points at it, then the oldest, then the rest newest
-## first until the count or the bytes run out.
+## since the fixed name points at it, then the oldest, then those with a GFS
+## role, then those without, each newest first. A version with no role still
+## stays while the pool is under the count and the bytes.
 function Select-Budget {
 	[CmdletBinding()]
 	param([object[]]$Versions, [hashtable]$Roles)
 	$keep = [Collections.Generic.HashSet[string]]::new()
-	$ranked = @($Versions | Where-Object { $Roles.ContainsKey($_.Name) } | Sort-Object -Property Stamp -Descending)
+	$ranked = @($Versions | Sort-Object -Property Stamp, Name -Descending)
 	if ($ranked.Count -eq 0) { return , $keep }
 	$order = @($ranked[0])
 	if ($ranked.Count -gt 1) { $order += $ranked[-1] }
-	if ($ranked.Count -gt 2) { $order += $ranked[1..($ranked.Count - 2)] }
+	if ($ranked.Count -gt 2) {
+		$middle = @($ranked[1..($ranked.Count - 2)])
+		$order += @($middle | Where-Object { $Roles.ContainsKey($_.Name) })
+		$order += @($middle | Where-Object { -not $Roles.ContainsKey($_.Name) })
+	}
 	$bytes = 0
 	foreach ($v in $order) {
 		if ($keep.Count -ge $MaxVersions) { break }
@@ -247,6 +253,24 @@ function Select-Budget {
 		$bytes += $v.File.Length
 	}
 	return , $keep
+}
+
+## The path with every link on the way resolved, the way /proc shows what a
+## process runs. Nothing when part of it isn't there.
+function Resolve-RealPath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param([string]$Path, [int]$Depth = 0)
+	if ($Depth -gt 100) { return $null }
+	$full = [IO.Path]::GetFullPath($Path)
+	if ($full -eq '/') { return '/' }
+	$parent = Resolve-RealPath -Path ([IO.Path]::GetDirectoryName($full)) -Depth ($Depth + 1)
+	if ($null -eq $parent) { return $null }
+	$at = Join-Path -Path $parent -ChildPath ([IO.Path]::GetFileName($full))
+	$item = Get-Item -LiteralPath $at -Force -ErrorAction SilentlyContinue
+	if ($null -eq $item) { return $null }
+	if ($item.LinkType -ne 'SymbolicLink') { return $at }
+	return Resolve-RealPath -Path ([IO.Path]::GetFullPath("$($item.Target)", $parent)) -Depth ($Depth + 1)
 }
 
 ## The image paths of what's running now. A process that can't be read isn't
@@ -267,9 +291,13 @@ function Invoke-Rotation {
 	$roles = Get-GfsRole -Versions $versions
 	$keep = Select-Budget -Versions $versions -Roles $roles
 	$running = Get-RunningPath
+	## A running one shows by its real path, which isn't the pool's when a
+	## link is on the way, such as a linked home.
+	$realPool = Resolve-RealPath -Path $PoolDir
 	foreach ($v in $versions) {
 		if ($keep.Contains($v.Name)) { continue }
-		if ($running -contains $v.File.FullName) {
+		$realFile = if ($realPool) { Join-Path -Path $realPool -ChildPath $v.Name } else { $v.File.FullName }
+		if ($running -contains $v.File.FullName -or $running -contains $realFile) {
 			Write-Note "$($v.Name) is running, so it stays for now"
 			continue
 		}
@@ -281,7 +309,8 @@ function Invoke-Rotation {
 	}
 	foreach ($v in $versions) {
 		if (-not $keep.Contains($v.Name)) { continue }
-		$want = "${ProgramName}_$($v.Stamp.ToString($StampFormat, $Invariant))_$($roles[$v.Name])"
+		$role = if ($roles.ContainsKey($v.Name)) { $roles[$v.Name] } else { 'spare' }
+		$want = "${ProgramName}_$($v.Stamp.ToString($StampFormat, $Invariant))_$role"
 		if ($v.Name -ceq $want) { continue }
 		$wantPath = Join-Path -Path $PoolDir -ChildPath $want
 		if (Test-Path -LiteralPath $wantPath) { continue }
@@ -389,3 +418,5 @@ exit $LASTEXITCODE
 ##	History:
 ##		- 2026-10-23: Created from shcl's dogfood_shcl.ps1, Linux only. The
 ##		  fixed name is a link, and anything else there is left alone.
+##		- 2026-10-23: A version with no GFS role is kept while the pool is
+##		  under 10 and 1 GB, and a running one is found through a linked home.

@@ -5,7 +5,8 @@
 ##	Purpose:
 ##		- The demo gif stage: gen-demo-gif.py draws the scenario against the
 ##		  release binary into the run's temp dir. The gif is GFS-rotated into
-##		  ROTATE_DIR, and copied to OUT when it differs from what's there.
+##		  ROTATE_DIR, unless it's the same as the newest one there, and copied
+##		  to OUT when it differs from what's there.
 ##		- No python3, Pillow or monospace font is a warning and exit 0, so the
 ##		  run goes on. A step that exits wrong, or output with anything
 ##		  personal in it, fails.
@@ -79,15 +80,32 @@ else
 	esac
 fi
 
+## The newest gif the rotation kept, by the stamp in its name, or nothing.
+fNewestKept(){
+	local f="" last=""
+	for f in "${rotReal}"/demo_*.gif; do
+		[[ -f "${f}" && ! -L "${f}" && "${f##*/}" =~ ^demo_[0-9]{8}-[0-9]{6}_[a-z]+\.gif$ ]] || continue
+		if [[ -z "${last}" || "${f##*/}" > "${last##*/}" ]]; then last="${f}"; fi
+	done
+	echo "${last}"
+}
+
 newest="${gif}"
 if [[ -n "${rotReal}" ]]; then
-	## Born "frequent". The rotation gives it another role, by the stamp.
-	cp -- "${gif}" "${rotReal}/demo_${stamp}_frequent.gif"
-	gfs_rotate "${rotReal}" demo gif >/dev/null
-	newest="$(compgen -G "${rotReal}/demo_${stamp}_*.gif" || true)"
-	newest="${newest%%$'\n'*}"
-	[[ -n "${newest}" ]] || { echo "demo-gif: the new gif went missing from ${rotReal} in the rotation" >&2; exit 1; }
-	echo "rotated: ${newest}"
+	kept="$(fNewestKept)"
+	## Most runs draw the same bytes, and each one would be another copy.
+	if [[ -n "${kept}" ]] && cmp -s -- "${gif}" "${kept}"; then
+		newest="${kept}"
+		echo "not rotated, since ${kept##*/} is already this gif"
+	else
+		## Born "frequent". The rotation gives it another role, by the stamp.
+		cp -- "${gif}" "${rotReal}/demo_${stamp}_frequent.gif"
+		gfs_rotate "${rotReal}" demo gif >/dev/null
+		newest="$(compgen -G "${rotReal}/demo_${stamp}_*.gif" || true)"
+		newest="${newest%%$'\n'*}"
+		[[ -n "${newest}" ]] || { echo "demo-gif: the new gif went missing from ${rotReal} in the rotation" >&2; exit 1; }
+		echo "rotated: ${newest}"
+	fi
 fi
 
 if cmp -s -- "${newest}" "${out}"; then
@@ -102,3 +120,4 @@ fi
 
 ##	History:
 ##		- 2026-10-23: Created, from shcl's gif stage.
+##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.

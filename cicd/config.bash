@@ -216,7 +216,8 @@ DOGFOOD_RUNNERS=(
 ## Stage 8: demo gif, eval'd. cicd/demo/scenario.toml runs against the
 ## native release build from stage 6, in a home in the run's temp dir, and
 ## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
-## the private dir beside the checkout, and copied to GIF_OUT when it differs.
+## the private dir beside the checkout, unless it's the same as the newest
+## there, and copied to GIF_OUT when it differs.
 ## No Pillow or font warns and passes. --quick and --gate leave it out.
 GIF_ENABLE=1
 GIF_SCENARIO="cicd/demo/scenario.toml"
@@ -260,3 +261,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: The demo gif.
 ##		- 2026-10-23: Test IDs: the check in the lint stage, and the unit
 ##		  tests' status lines.
+##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.

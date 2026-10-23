@@ -67,6 +67,11 @@
 		- Feature branches merge into `dev`. A `dev` to `main` merge is a release.
 	- Decisions:
 		- `dev` made from `main` at `d5fd7cf` on 2026-10-23, since the project had grown enough for one.
+	- Progress log:
+		- 2026-10-23: The dogfood runner keeps a version with no GFS role while the pool is under 10 versions and 1 GB, and never goes under 5. It used to drop one at 7. A running version is found by its real path, so a linked home doesn't hide it either. Verified: 7 small versions all stayed, 12 went to 10, 8 of 300 MB to 5, 8 of 150 MB to 6, and 4 of 2 GB all stayed. A running one that the budget left out stayed, through a linked home too, where before it was removed.
+		- 2026-10-23: A stopped run kills the containers it started before anything else, by the IDs its steps leave in the run's temp dir. Verified: stopped during a leak step whose container ignored TERM, the run used to leave the container up after it was gone, and now takes it down in about a second. A stop during ASan left no container, process or temp dir.
+		- 2026-10-23: A demo gif with the same bytes as the newest one in `../private/demo/gif/` isn't rotated in. Verified: a second render of the same bytes was left out, and a changed one went in. The 2 extra copies already there were removed.
+		- 2026-10-23: Left: a run with the ZFS integration test root.
 	- Branch: cicd
 
 - cicd release builds, packages and dogfood.

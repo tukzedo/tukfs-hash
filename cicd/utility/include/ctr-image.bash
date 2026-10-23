@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #  shellcheck disable=2034  ## 'variable appears unused.' stop_cidfiles is read by stop-descendants.bash.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' root, APP_NAME, CPU_CAP, the CTR_ settings and the PINs come from config.bash, sourced first.
+#  shellcheck disable=2154  ## 'referenced but not assigned.' root, APP_NAME, CPU_CAP, the CTR_ settings, the PINs and stop_cidfile come from config.bash and stop-descendants.bash, sourced first.
 
 ##	Purpose:
 ##		The leak check image, for the scripts that run their tools in it.
@@ -66,6 +66,22 @@ fCtrTag(){   ## fCtrTag DIR
 }
 
 fCtrSize(){ "${TUKFS_DOCKER:-docker}" image inspect --format '{{.Size}}' "$1" 2>/dev/null || echo 0; }
+
+## docker run, with a cidfile a stop finds, for every container here. The
+## cidfile goes in TUKFS_CID_DIR, else in DIR.
+fCtrRun(){   ## fCtrRun DIR RUN_ARG...
+	local engine="${TUKFS_DOCKER:-docker}" rc=0 cidfile="" f
+	local -a kept=()
+	fStopCidfile "$1" || { echo "ctr-image: no dir for a cidfile" >&2; return 2; }
+	cidfile="${stop_cidfile}"
+	shift
+	stop_cidfiles+=("${cidfile}")
+	"${engine}" run --cidfile "${cidfile}" "$@" || rc=$?
+	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
+	stop_cidfiles=("${kept[@]}")
+	rm -f -- "${cidfile}"
+	return "${rc}"
+}
 fCtrGB(){ awk -v b="${1:-0}" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 
 ## The label is what finds a <none> image of ours, and only ours.
@@ -77,9 +93,9 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 		--build-arg "CODEQL_SHA256=${PIN_CODEQL_SHA256}" --build-arg "JOBS=${CPU_CAP:-1}" \
 		"${ctx}" >/dev/null || return 1
 	## It has to answer before the old one goes.
-	have="$("${engine}" run --rm --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
+	have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
 	if [[ "${have}" != "${PIN_CODEQL}" ]]; then echo "ctr-image: ${tag} has CodeQL '${have}', not ${PIN_CODEQL}" >&2; return 1; fi
-	have="$("${engine}" run --rm --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
+	have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
 	if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${have}"; then
 		echo "ctr-image: ${tag} has no ${PIN_NIGHTLY}" >&2; return 1
 	fi
@@ -111,13 +127,13 @@ fCtrReady(){   ## fCtrReady WORK
 
 ## The crates for an offline run. Most runs find the stamp current and skip it.
 fCtrFetch(){   ## fCtrFetch WORK
-	local engine="${TUKFS_DOCKER:-docker}" work="$1" want="" got="" ch=""
+	local work="$1" want="" got="" ch=""
 	mkdir -p -- "${CTR_CARGO_HOME}" "${work}/home" "${work}/tmp" || return 1
 	ch="$(realpath -e -- "${CTR_CARGO_HOME}")" || return 1
 	want="$(sha256sum < "${root}/Cargo.lock" | cut -c1-16) ${ctr_tag}"
 	{ read -r got < "${ch}/.fetched"; } 2>/dev/null || true
 	[[ "${got}" != "${want}" ]] || return 0
-	if "${engine}" run --rm --init --label "${CTR_IMAGE}" --cpus "${CPU_CAP:-1}" --user "$(id -u):$(id -g)" \
+	if fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --cpus "${CPU_CAP:-1}" --user "$(id -u):$(id -g)" \
 		-v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" -w "${root}" \
 		-e "TMPDIR=${work}/tmp" -e "HOME=${work}/home" -e "CARGO_HOME=${ch}" \
 		"${ctr_tag}" bash "${root}/cicd/utility/include/ctr-fetch.bash" "${PIN_NIGHTLY}"; then
@@ -129,7 +145,7 @@ fCtrFetch(){   ## fCtrFetch WORK
 }
 
 fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
-	local engine="${TUKFS_DOCKER:-docker}" work="$1" rw="$2" rc=0 d cidfile ch=""
+	local work="$1" rw="$2" rc=0 d ch=""
 	local -a rwMount=() rwDirs=()
 	shift 2
 	mkdir -p -- "${work}/home" "${work}/tmp" "${CTR_CARGO_HOME}" || return 2
@@ -143,17 +159,12 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 		rwMount+=(-v "${d}:${d}")
 	done
 	## A stop takes the container down too, even when its client won't go.
-	cidfile="${work}/ctr.cid"
-	rm -f -- "${cidfile}"
-	stop_cidfiles=("${cidfile}")
-	"${engine}" run --rm --init --cidfile "${cidfile}" --label "${CTR_IMAGE}" --network none --cpus "${CPU_CAP:-1}" \
+	fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --network none --cpus "${CPU_CAP:-1}" \
 		--user "$(id -u):$(id -g)" -v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" \
 		"${rwMount[@]}" -w "${root}" \
 		-e TUKFS_IN_IMAGE=1 -e TINI_KILL_PROCESS_GROUP=1 -e "CPU_CAP=${CPU_CAP:-1}" -e "TMPDIR=${work}/tmp" \
 		-e "HOME=${work}/home" -e "CARGO_HOME=${ch}" -e CARGO_NET_OFFLINE=true -e "TUKFS_GATE_STRICT=${TUKFS_GATE_STRICT:-}" \
 		"${ctr_tag}" bash "$@" || rc=$?
-	stop_cidfiles=()
-	rm -f -- "${cidfile}"
 	return "${rc}"
 }
 
@@ -162,3 +173,5 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		- 2026-10-23: Copied from shcl's, for the leak checks only: one image,
 ##		  the nightly and CodeQL from tool-pins.env, a fetch run for the
 ##		  crates, and the old image and build cache cleared after a build.
+##		- 2026-10-23: Every container through fCtrRun, with a cidfile in the
+##		  run's cid dir, so a stop of the whole run finds it.

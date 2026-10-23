@@ -79,7 +79,8 @@
 ##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, with
 ##	  TMPDIR pointed into it, so what a failed test leaves goes with it. It and
 ##	  the integration test's dirs are removed at the end, even when the run
-##	  fails or is stopped, and only by fSafeRm.
+##	  fails or is stopped, and only by fSafeRm. A stop kills the containers
+##	  the run started first.
 ##	- Stages 2-6 run from a copy of the tree taken after the format stage,
 ##	  uncommitted work included, so a merge, checkout or edit during a run
 ##	  can't reach them. The copy sits in the run's temp dir.
@@ -390,6 +391,13 @@ run_tmp_root="$(realpath -e -- "${TMPDIR:-/tmp}" 2>/dev/null || true)"
 fRunDirMake "${run_tmp_root}" run
 run_tmp="${made_dir}"
 export TMPDIR="${run_tmp}"
+## Every container a step starts leaves its ID here, so a stop of the run
+## kills each one, however far down its client is.
+if ((! inner_run)); then
+	mkdir -- "${run_tmp}/cid" || fDie "could not make ${run_tmp}/cid"
+	export TUKFS_CID_DIR="${run_tmp}/cid"
+	stop_cid_dir="${TUKFS_CID_DIR}"
+fi
 gate_skips="${run_tmp}/gate-skips"
 : > "${gate_skips}"
 
@@ -1188,4 +1196,5 @@ exit 0
 ##		  rotated flamegraph and flame-report.py's summary. ruff in the lint
 ##		  stage, and the profiling build in the cache prune.
 ##		- 2026-10-23: The demo gif's settings in the plan.
-##		- 2026-10-23: LINT_EXTRA, for the test ID check.
+##		- 2026-10-23: LINT_EXTRA, for the test ID check. A cid dir in the run's
+##		  temp dir, so a stop kills every container the run started.
