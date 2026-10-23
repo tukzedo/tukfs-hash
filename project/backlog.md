@@ -87,7 +87,8 @@
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
-	- Status: Queued
+	- Status: Stalled
+		- Held for a quiet box. Load was 18 on 2026-10-23.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -212,7 +213,8 @@
 - `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
 	- ID: 2026101916404117
 	- Type: Task
-	- Status: Queued
+	- Status: Canceled
+		- Its own Against row keeps the committed names. New code avoids the clash.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
