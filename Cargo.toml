@@ -13,5 +13,9 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 signal-hook = "0.3"
 
 [profile.release]
-lto = "thin"
-codegen-units = 4
+lto = true
+codegen-units = 1
+strip = true
+# guarded() in scan.rs catches a worker's panic so the run is marked failed.
+# With abort the run would be left as running.
+panic = "unwind"

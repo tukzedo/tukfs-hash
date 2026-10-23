@@ -29,19 +29,6 @@
 
 ## Issues
 
-- The release build uses thin LTO and 4 codegen units, and keeps its symbols.
-	- ID: 2026101916404100
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Related IDs: 2026101916404105
-	- Requirements  [Feature]:
-		- Set `lto = true`, `codegen-units = 1` and `strip = true` in `[profile.release]`.
-		- Keep `panic = "unwind"`, with a comment. `guarded()` in `scan.rs` catches a worker's panic so the run is marked failed and keeps its events. With abort, the run is left as running.
-	- Note: The binary is 3.43 MB now and 3.02 MB with these, at the same speed. Numbers are in details.md.
-
 - With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
 	- ID: 2026101916404101
 	- Type: Enhancement
@@ -298,6 +285,27 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- The release build uses thin LTO and 4 codegen units, and keeps its symbols.
+	- ID: 2026101916404100
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Related IDs: 2026101916404105
+	- Requirements  [Feature]:
+		- Set `lto = true`, `codegen-units = 1` and `strip = true` in `[profile.release]`.
+		- Keep `panic = "unwind"`, with a comment. `guarded()` in `scan.rs` catches a worker's panic so the run is marked failed and keeps its events. With abort, the run is left as running.
+	- Note: The binary is 3.43 MB now and 3.02 MB with these, at the same speed. Numbers are in details.md.
+	- Actual effort: Low
+	- Progress log:
+		- Set fat LTO, 1 codegen unit and strip, and kept `panic = "unwind"` with a comment. The binary went from 3,428,840 to 3,017,456 bytes.
+		- A clean release build now takes about 75 s under load 18, up from about 15 s.
+		- Verified: release build, clippy, `cargo test --release` (54 passed, `a_panic_is_a_fault` included), and the integration test on ext4 and ZFS.
+		- Swept: `[profile.*]` in Cargo.toml; there's only `release`.
+	- Test case: None. It's a build setting, and the test harness always unwinds, so a test can't see the profile's panic mode. `a_panic_is_a_fault` still covers `guarded()`.
+	- Closed: 20261023-072129
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
