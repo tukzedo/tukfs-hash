@@ -29,6 +29,15 @@
 
 ## Issues
 
+- markdownlint flags README.md and design.md.
+	- ID: 2026102308554905
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-085549
+	- Opened by: round gate
+	- Note: Both use `<br>` in the copyright block with no MD033 disable comment, and design.md's event table trips MD060 at line 93. These were on `main` before the round, which changed neither file.
+
 - With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
 	- ID: 2026101916404101
 	- Type: Enhancement
