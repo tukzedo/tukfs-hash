@@ -53,6 +53,118 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
+- A full cicd pipeline, per the directives' "CICD process" section.
+	- ID: 2026102309501600
+	- Type: Feature
+	- Status: Started
+		- Broken into the 6 children below, worked in order on one branch.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Requirements  [Feature]:
+		- `cicd/cicd.bash`, built from shcl's engine and its `config.bash`, with sister scripts copied in rather than called.
+		- Linux only, x86_64 and arm64, since the tool reads Linux xattrs, mounts and snapshots.
+		- Feature branches merge into `dev`. A `dev` to `main` merge is a release.
+	- Decisions:
+		- `dev` made from `main` at `d5fd7cf` on 2026-10-23, since the project had grown enough for one.
+	- Branch: cicd
+
+- cicd core: the engine, config, gate and pre-push hook.
+	- ID: 2026102309501601
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Requirements  [Feature]:
+		- Remote sync, format, debug build, lint, tests, publish and cleanup stages, with the flags the directives list.
+		- `--gate` as a pre-push hook through `core.hooksPath`.
+		- Lint output rotated into `cicd/artifacts/lint/`, with a `--check` that prints only what's new.
+		- `rust-toolchain.toml` and one place for tool pins.
+		- `--version` gives the build number from the commit time.
+		- Each run's temp dir is removed only behind a guard like the integration test's.
+	- Branch: cicd
+
+- cicd leak and security checks.
+	- ID: 2026102309501602
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Prereq IDs: 2026102309501601
+	- Requirements  [Feature]:
+		- AddressSanitizer and LeakSanitizer, ThreadSanitizer, and Miri on a pinned nightly.
+		- Known-advisory scan of the dependencies.
+		- CodeQL over the vendored tree, and a soak test of repeated scans.
+		- Each check watched to fail once before it's trusted.
+	- Branch: cicd
+
+- cicd release builds, packages and dogfood.
+	- ID: 2026102309501603
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Prereq IDs: 2026102309501601
+	- Requirements  [Feature]:
+		- x86_64 and arm64 release builds, `.deb` and `.rpm`, and a sha256 sums file, all named by version.
+		- Two builds of one commit give the same bytes.
+		- Dogfood install, plus a `dogfood_tukfs-hash` script and its launchers.
+	- Branch: cicd
+
+- cicd profiler stage and flamegraph report.
+	- ID: 2026102309501604
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Prereq IDs: 2026102309501601
+	- Requirements  [Feature]:
+		- A flamegraph of a scan, rotated into `cicd/artifacts/profiling/`, from an in-process sampler since `perf` can't record on b23.
+		- `cicd/utility/flame-report.py`, with `--check` for session start.
+	- Branch: cicd
+
+- cicd demo gif.
+	- ID: 2026102309501605
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Prereq IDs: 2026102309501603
+	- Requirements  [Feature]:
+		- A fake-terminal gif of a scan and a flagged file, from an editable `cicd/demo/script.txt`, at the top of README.md.
+	- Branch: cicd
+
+- Test IDs for every test.
+	- ID: 2026102309501606
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Requirements  [Feature]:
+		- Each Rust and integration test gets a base 62 ID from its first commit time.
+	- Branch: cicd
+
+- Rust unit tests leave `test_tukfs-hash_*` folders in TMPDIR when they fail or are stopped.
+	- ID: 2026102309501607
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't.
+
 - markdownlint flags README.md and design.md.
 	- ID: 2026102308554905
 	- Type: Task
