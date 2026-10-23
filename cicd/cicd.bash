@@ -242,7 +242,10 @@ fEcho(){       if [[ -n "$*"     ]]; then fEcho_Clean "[ $* ]"; else fEcho_Clean
 fEcho_Force(){ fEcho_ResetBlankCounter; fEcho "$*"; }
 _letterbox="••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
 fSection(){ fEcho_Clean; fEcho_Clean "${_letterbox}"; fEcho "$*"; }
-fDie(){ { fEcho_Force "FAILED: $*"; echo; } >&2; exit 1; }
+## Set once the run has said how it ended, so the EXIT trap knows a stop by
+## its silence. $? there is 0 after a TERM.
+run_said=0
+fDie(){ run_said=1; { fEcho_Force "FAILED: $*"; echo; } >&2; exit 1; }
 fNow(){ printf '%(%Y%m%d-%H%M%S)T' -1; }
 ## A stage opens with its start line and closes with a PASS or SKIP line.
 step_n=0; step_name=""
@@ -252,7 +255,7 @@ fStepSkip(){ fEcho_Clean "${1:-skipped}"; fEcho "$(fNow); SKIP: Step ${step_n} o
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 ## KB to a size a person reads.
 fSize(){ if (($1 >= 1048576)); then printf '%d.%d GB' $(($1 / 1048576)) $(($1 % 1048576 * 10 / 1048576)); else printf '%d MB' $((($1 + 512) / 1024)); fi; }
-trap 'rc=$?; printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit $rc' ERR
+trap 'rc=$?; run_said=1; printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit $rc' ERR
 
 ## Git that talks to the remote goes through gitsby where it's installed, so it
 ## uses the account the repo belongs to. Plain git on a box without it.
@@ -355,9 +358,11 @@ gate_skips="${run_tmp}/gate-skips"
 : > "${gate_skips}"
 
 ## A run that stops early: whatever it started, then its dirs. fCleanup has
-## done this already on a whole run.
+## done this already on a whole run. A stop says so in the form lint-report.bash
+## takes for a finished run.
 fRunTmpGone(){
 	local d kb="" total=0 left_frozen=""
+	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
 	((${#run_dirs[@]})) || { fFrozenGone || true; return 0; }
@@ -468,8 +473,10 @@ fi
 ## already goes through this one.
 if ((! gate_mode && ! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
-	exec > >(tee "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
-	## It has to outlive the stop, or the cleanup lines are lost.
+	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C
+	## reaches the whole process group, so it ignores that too, and ends when
+	## the run closes its end.
+	exec > >(trap '' INT TERM; exec tee "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
 	stop_keep+=("$!")
 fi
 
@@ -696,7 +703,8 @@ fStageRelease(){
 	want="${EXE_NAME} v${ver}${build_number:+ build ${build_number}}"
 	got="$("${root}/${RELEASE_NATIVE_BIN}" --version 2>&1 || true)"
 	[[ "${got%%$'\n'*}" == "${want}" ]] || fDie "the release binary says '${got%%$'\n'*}', not '${want}'"
-	fEcho "OK: ${RELEASE_NATIVE_BIN}: ${want} ($(du -h "${root}/${RELEASE_NATIVE_BIN}" | cut -f1))"
+	## Bytes, since du gives what a compressed filesystem stores.
+	fEcho "OK: ${RELEASE_NATIVE_BIN}: ${want} ($(stat -c %s -- "${root}/${RELEASE_NATIVE_BIN}") bytes)"
 	for t in "${CROSS_TARGETS[@]}"; do
 		label="${t%%|*}"; cmd="${t#*|}"
 		fEcho_Clean "cross: ${label}"
@@ -797,7 +805,7 @@ fRunFrozen(){
 	TUKFS_RUN_PART=build TUKFS_GREEN_TREE="${green}" bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
 	_wasLastEchoBlank=1
-	## A stopped run stays a stopped run.
+	## A stopped run stays a stopped run, and the EXIT trap says so.
 	if ((rc > 128)); then exit "${rc}"; fi
 	((rc == 0)) || fDie "the run in the frozen copy failed; its output is above"
 }
@@ -940,8 +948,9 @@ if ((! inner_run)); then
 	fStagePublish
 fi
 fCleanup
-if ((inner_run)); then exit 0; fi
+if ((inner_run)); then run_said=1; exit 0; fi
 
+run_said=1
 fSection "${APP_NAME} CI/CD: done. ($(fMinSec $((SECONDS - started))))"
 fEcho_Clean
 exit 0
