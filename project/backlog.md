@@ -69,28 +69,6 @@
 		- `dev` made from `main` at `d5fd7cf` on 2026-10-23, since the project had grown enough for one.
 	- Branch: cicd
 
-- cicd core: the engine, config, gate and pre-push hook.
-	- ID: 2026102309501601
-	- Type: Feature
-	- Status: Started
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261023-095016
-	- Opened by: round settings answer
-	- Parent ID: 2026102309501600
-	- Requirements  [Feature]:
-		- Remote sync, format, debug build, lint, tests, publish and cleanup stages, with the flags the directives list.
-		- `--gate` as a pre-push hook through `core.hooksPath`.
-		- Lint output rotated into `cicd/artifacts/lint/`, with a `--check` that prints only what's new.
-		- `rust-toolchain.toml` and one place for tool pins.
-		- `--version` gives the build number from the commit time.
-		- Each run's temp dir is removed only behind a guard like the integration test's.
-	- Progress log:
-		- 2026-10-23: The engine, config, hook and helpers are in, from shcl's. Every unsafe block has a SAFETY comment now, for the new lint. The gate passes.
-		- 2026-10-23: Verified: the gate fails on a clippy warning, a failing unit test and a format diff, each on its own, and passes again with the file put back.
-		- 2026-10-23: Verified: publish, and the pre-push hook's gate, its skip of a tree that passed, and its refusal of a broken commit.
-		- 2026-10-23: Verified: a run stopped part way, by TERM or Ctrl+C, leaves no temp dir, frozen copy or process behind. The stale build cache entries go, and the warm ones stay.
-	- Branch: cicd
-
 - cicd leak and security checks.
 	- ID: 2026102309501602
 	- Type: Feature
@@ -937,6 +915,30 @@
 	- Actual fix: Nothing to change, since the scan already writes them there. A test checks a file with Dropbox's attribute gets ours and keeps its own, and design.md says why.
 	- Acceptance signoff: Self-closed: per the answer. The test fails when the scan skips such files.
 	- Closed: 20261014-104500
+
+- cicd core: the engine, config, gate and pre-push hook.
+	- ID: 2026102309501601
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Requirements  [Feature]:
+		- Remote sync, format, debug build, lint, tests, publish and cleanup stages, with the flags the directives list.
+		- `--gate` as a pre-push hook through `core.hooksPath`.
+		- Lint output rotated into `cicd/artifacts/lint/`, with a `--check` that prints only what's new.
+		- `rust-toolchain.toml` and one place for tool pins.
+		- `--version` gives the build number from the commit time.
+		- Each run's temp dir is removed only behind a guard like the integration test's.
+	- Progress log:
+		- 2026-10-23: The engine, config, hook and helpers are in, from shcl's. Every unsafe block has a SAFETY comment now, for the new lint. The gate passes.
+		- 2026-10-23: Verified: the gate fails on a clippy warning, a failing unit test and a format diff, each on its own, and passes again with the file put back.
+		- 2026-10-23: Verified: publish, and the pre-push hook's gate, its skip of a tree that passed, and its refusal of a broken commit.
+		- 2026-10-23: Verified: a run stopped part way, by TERM or Ctrl+C, leaves no temp dir, frozen copy or process behind. The stale build cache entries go, and the warm ones stay.
+		- 2026-10-23: Verified: `--gate`, `--quick --no-publish` and a full run without publish all pass, in under 2 minutes each, and a drifted pin warns.
+	- Branch: cicd
+	- Closed: 20261023-104516
 
 - The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
 	- ID: 2026101406340925
