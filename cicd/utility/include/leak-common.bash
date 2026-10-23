@@ -15,6 +15,8 @@
 ##			                    a one-line note, to run on the host. RW is
 ##			                    the dirs it writes, joined by ':'. Nothing in
 ##			                    the image itself, or with TUKFS_NO_IMAGE set.
+##			                    leak_host_note=0 leaves the note to the
+##			                    caller, with the reason in leak_why.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -38,24 +40,32 @@ source "${here}/utility/include/scratch.bash"
 ## shellcheck source=../../config.bash
 source "${here}/config.bash"
 
+## Why it's on the host, for a caller that sets leak_host_note=0 and says
+## so itself.
+leak_why=""
 fLeakInImage(){
-	local name="$1" script="$2" rw="$3" why="" rc=0
+	local name="$1" script="$2" rw="$3" rc=0
 	shift 3
 	((in_image)) && return 0
-	if [[ -n "${TUKFS_NO_IMAGE:-}" ]]; then echo "note: ${name}: TUKFS_NO_IMAGE is set, so on the host"; return 0; fi
-	source "${here}/utility/include/ctr-image.bash"
-	why="$(fCtrWhyNot)"
-	if [[ -n "${why}" ]]; then echo "note: ${name}: no leak check image, since ${why}, so on the host"; return 0; fi
-	fScratchMake ctr || exit 2
-	if ! fCtrReady "${scratch}"; then
-		echo "note: ${name}: the leak check image couldn't be set up, so on the host"
-		fScratchGone || true
-		return 0
+	if [[ -n "${TUKFS_NO_IMAGE:-}" ]]; then
+		leak_why="TUKFS_NO_IMAGE is set"
+	else
+		source "${here}/utility/include/ctr-image.bash"
+		leak_why="$(fCtrWhyNot)"
 	fi
-	fCtrFetch "${scratch}"
-	fCtrRunSelf "${scratch}" "${rw}" "${script}" "$@" || rc=$?
-	fScratchGone || true
-	exit "${rc}"
+	if [[ -z "${leak_why}" ]]; then
+		fScratchMake ctr || exit 2
+		if fCtrReady "${scratch}"; then
+			fCtrFetch "${scratch}"
+			fCtrRunSelf "${scratch}" "${rw}" "${script}" "$@" || rc=$?
+			fScratchGone || true
+			exit "${rc}"
+		fi
+		leak_why="the leak check image couldn't be set up"
+		fScratchGone || true
+	fi
+	if ((${leak_host_note:-1})); then echo "note: ${name}: ${leak_why}, so on the host"; fi
+	return 0
 }
 
 

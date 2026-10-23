@@ -79,7 +79,8 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 	## It has to answer before the old one goes.
 	have="$("${engine}" run --rm --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
 	if [[ "${have}" != "${PIN_CODEQL}" ]]; then echo "ctr-image: ${tag} has CodeQL '${have}', not ${PIN_CODEQL}" >&2; return 1; fi
-	if ! "${engine}" run --rm --network none "${tag}" rustup toolchain list 2>/dev/null | grep -q -- "^${PIN_NIGHTLY}-"; then
+	have="$("${engine}" run --rm --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
+	if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${have}"; then
 		echo "ctr-image: ${tag} has no ${PIN_NIGHTLY}" >&2; return 1
 	fi
 	## Not -f, so an image a container still has stays.

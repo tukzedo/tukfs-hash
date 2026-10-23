@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 #  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
+#  shellcheck disable=2034  ## 'variable appears unused.' leak_host_note is read by leak-common.bash.
 #  shellcheck disable=2154  ## 'referenced but not assigned.' PIN_ and LEAK_ settings come from config.bash, through leak-common.bash.
 
 ##	Purpose:
@@ -51,6 +52,7 @@ if (($#)); then echo "codeql-scan: takes no arguments (see the header)" >&2; exi
 start="${SECONDS}"
 art="${root}/cicd/artifacts/codeql"
 mkdir -p -- "${art}" "${LEAK_DIR}"
+leak_host_note=0
 fLeakInImage codeql-scan "${me}/codeql-scan.bash" "${art}"
 
 missing=()
@@ -60,7 +62,7 @@ done
 if command -v codeql >/dev/null 2>&1 && [[ "$(codeql version --format=terse 2>/dev/null)" != "${PIN_CODEQL}" ]]; then missing+=("codeql ${PIN_CODEQL}"); fi
 if ((${#missing[@]})); then
 	((in_image)) && { echo "codeql-scan: the leak check image has no ${missing[*]}" >&2; exit 2; }
-	echo "note: codeql-scan: skipped, since there's no ${missing[*]} here, and no leak check image"
+	echo "note: codeql-scan: skipped, since ${leak_why:-the image is off}, and the host has no ${missing[*]}"
 	exit 0
 fi
 export RUSTUP_TOOLCHAIN="${PIN_NIGHTLY}"

@@ -69,24 +69,6 @@
 		- `dev` made from `main` at `d5fd7cf` on 2026-10-23, since the project had grown enough for one.
 	- Branch: cicd
 
-- cicd leak and security checks.
-	- ID: 2026102309501602
-	- Type: Feature
-	- Status: Started
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261023-095016
-	- Opened by: round settings answer
-	- Parent ID: 2026102309501600
-	- Prereq IDs: 2026102309501601
-	- Requirements  [Feature]:
-		- AddressSanitizer and LeakSanitizer, ThreadSanitizer, and Miri on a pinned nightly.
-		- Known-advisory scan of the dependencies.
-		- CodeQL over the vendored tree, and a soak test of repeated scans.
-		- Each check watched to fail once before it's trusted.
-	- Progress log:
-		- 2026-10-23: The leak check image, the advisory scan, ASan, TSan, Miri and the soak are in. TSan found SQLite's first-time setup racing when two test threads opened a database at once, so it's now done once before any connection.
-	- Branch: cicd
-
 - cicd release builds, packages and dogfood.
 	- ID: 2026102309501603
 	- Type: Feature
@@ -926,6 +908,30 @@
 	- Actual fix: Nothing to change, since the scan already writes them there. A test checks a file with Dropbox's attribute gets ours and keeps its own, and design.md says why.
 	- Acceptance signoff: Self-closed: per the answer. The test fails when the scan skips such files.
 	- Closed: 20261014-104500
+
+- cicd leak and security checks.
+	- ID: 2026102309501602
+	- Type: Feature
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-095016
+	- Opened by: round settings answer
+	- Parent ID: 2026102309501600
+	- Prereq IDs: 2026102309501601
+	- Requirements  [Feature]:
+		- AddressSanitizer and LeakSanitizer, ThreadSanitizer, and Miri on a pinned nightly.
+		- Known-advisory scan of the dependencies.
+		- CodeQL over the vendored tree, and a soak test of repeated scans.
+		- Each check watched to fail once before it's trusted.
+	- Progress log:
+		- 2026-10-23: The leak check image, the advisory scan, ASan, TSan, Miri and the soak are in. TSan found SQLite's first-time setup racing when two test threads opened a database at once, so it's now done once before any connection.
+		- 2026-10-23: CodeQL is in, over the tree with every crate vendored. Nothing in our code. Its 42 findings in the crates were in code the shipped binary doesn't build, or were looked at, found not to be bugs, and listed in `cicd/codeql/vendored-reviewed.tsv`.
+		- 2026-10-23: Verified: each check failed once. LSan on a `Box::leak`, ASan on a read past a `Vec` in an unsafe block, TSan on 2 threads bumping one static, Miri on a `bool` made from 2, the soak on a static `Vec` that kept every path, and the advisory scan on `time` 0.1.43. CodeQL has to report its planted null read on every run.
+		- 2026-10-23: Verified: a full run without publish passes all 6 in 18m 48s, about 4 minutes of it building the image. Without that it's about 15 minutes, 11 of them CodeQL. `--quick --leakcheck` runs all 6 and passes. `--quick`, `--gate`, `--gate --leakcheck` and `--no-leakcheck` leave them out.
+		- 2026-10-23: Verified: with no docker, the sanitizers and Miri run on the host with a note, and CodeQL skips with one.
+	- Note: The ZFS integration test root was left out of these runs.
+	- Branch: cicd
+	- Closed: 20261023-132127
 
 - cicd core: the engine, config, gate and pre-push hook.
 	- ID: 2026102309501601

@@ -55,7 +55,8 @@ fLeakInImage "sanitize-rust ${mode}" "${me}/sanitize-rust.bash" "${LEAK_DIR}" "$
 
 ## Asking cargo through rustup would install a missing toolchain on the
 ## spot, so the list says whether it's here.
-if ! rustup toolchain list 2>/dev/null | grep -q -- "^${PIN_NIGHTLY}-"; then
+toolchains="$(rustup toolchain list 2>/dev/null || true)"
+if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${toolchains}"; then
 	echo "note: sanitize-rust ${mode}: skipped, since ${PIN_NIGHTLY} isn't installed (rustup toolchain install ${PIN_NIGHTLY} --component rust-src,miri)"
 	exit 0
 fi
