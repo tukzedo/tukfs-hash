@@ -62,17 +62,6 @@
 	- Prereq IDs: 2026101916404100
 	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
 
-- Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
-	- ID: 2026101916404109
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Requirements  [Feature]:
-		- `Links` and the job queue in `scan.rs` use `lock().unwrap()`, and `Faults` uses `if let Ok`. Pick one: `unwrap_or_else(PoisonError::into_inner)` everywhere, or a one-line reason.
-	- Note: `ClaimGuard::drop` runs while a panic unwinds, where a second panic aborts.
-
 - 6 functions run past 100 lines.
 	- ID: 2026101916404110
 	- Type: Enhancement
@@ -203,6 +192,28 @@
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
+
+- Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
+	- ID: 2026101916404109
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Requirements  [Feature]:
+		- `Links` and the job queue in `scan.rs` use `lock().unwrap()`, and `Faults` uses `if let Ok`. Pick one: `unwrap_or_else(PoisonError::into_inner)` everywhere, or a one-line reason.
+	- Note: `ClaimGuard::drop` runs while a panic unwinds, where a second panic aborts.
+	- Actual effort: Low
+	- Progress log:
+		- Every lock in `scan.rs` goes through `locked()`, which takes the guard back from a poisoned lock. The `Links` claim's condvar wait does the same. `Faults::add` and the finish no longer drop the reasons when the lock is poisoned.
+		- Before, a panic while the link map was locked would have made `ClaimGuard::drop` panic again in the unwind and abort the scan. A poisoned `Faults` lock lost the reason, so the run ended `done` rather than `failed`.
+		- Verified: release build, clippy gate, fmt, `cargo test --release` (63 passed), and the integration test on ext4 and ZFS.
+		- Verified: the new test aborts with `unwrap()` put back in `locked()`, and passes with the fix.
+		- Swept: every `.lock()` and `Condvar::wait` in `src`, tests included. Only `scan.rs` has a Mutex.
+	- Decisions:
+		- `unwrap_or_else(PoisonError::into_inner)` everywhere, not a reason per unwrap. Nothing panics inside these locks short of a bug, and the data they guard stays usable: a half-done link map entry only costs a reread, and the job queue and fault list keep no invariant across a push or recv.
+	- Test case: `scan::tests::a_poisoned_lock_is_still_a_fault`.
+	- Closed: 20261023-080609
 
 - Every skipped file updates its database row by path.
 	- ID: 2026101916404106

@@ -25,7 +25,7 @@ use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// A full scan, or `--verify`, which rereads only files with a known
@@ -274,11 +274,16 @@ impl Faults {
 	}
 
 	fn add(&self, stop: &AtomicBool, why: String) {
-		if let Ok(mut v) = self.why.lock() {
-			v.push(why);
-		}
+		locked(&self.why).push(why);
 		self.halt(stop);
 	}
+}
+
+// A worker's panic is caught and fails the run, so a lock it poisoned has to
+// stay usable. Otherwise a ClaimGuard dropped in the unwind aborts, or the
+// reason is lost and the run isn't marked failed.
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+	m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct Shared {
@@ -591,11 +596,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let (conn, written) = writer
 		.join()
 		.map_err(|_| "the database writer panicked".to_string())?;
-	let mut why: Vec<String> = faults
-		.why
-		.lock()
-		.map(|mut v| std::mem::take(&mut *v))
-		.unwrap_or_default();
+	let mut why = std::mem::take(&mut *locked(&faults.why));
 	why.extend(written.err());
 	let stopped = stop.load(Relaxed);
 	// The stored summary keeps every part's lines; the output shows this
@@ -955,18 +956,14 @@ struct ClaimGuard<'a> {
 
 impl ClaimGuard<'_> {
 	fn fill(self, v: LinkVal) {
-		self.links
-			.map
-			.lock()
-			.unwrap()
-			.fill(self.key, v, self.others);
+		locked(&self.links.map).fill(self.key, v, self.others);
 	}
 }
 
 impl Drop for ClaimGuard<'_> {
 	// Unfilled means the read failed or was stopped; let the next name try.
 	fn drop(&mut self) {
-		let mut m = self.links.map.lock().unwrap();
+		let mut m = locked(&self.links.map);
 		if matches!(m.entries.get(&self.key), Some(None)) {
 			m.entries.remove(&self.key);
 		}
@@ -976,7 +973,7 @@ impl Drop for ClaimGuard<'_> {
 
 impl Links {
 	fn claim(&self, key: (u64, u64), nlink: u64, bytes: i64, mt: i64) -> Claim<'_> {
-		let mut m = self.map.lock().unwrap();
+		let mut m = locked(&self.map);
 		loop {
 			match m.entries.get(&key) {
 				Some(Some((v, _))) if v.0 == bytes && v.1 == mt => {
@@ -984,7 +981,7 @@ impl Links {
 					m.count_down(key);
 					return Claim::Done(v);
 				}
-				Some(None) => m = self.cv.wait(m).unwrap(),
+				Some(None) => m = self.cv.wait(m).unwrap_or_else(PoisonError::into_inner),
 				_ => {
 					m.entries.insert(key, None);
 					return Claim::Mine(ClaimGuard {
@@ -1000,7 +997,7 @@ impl Links {
 	// A name skipped without a claim still counts as seen.
 	fn passed(&self, md: &fs::Metadata) {
 		if md.nlink() > 1 {
-			self.map.lock().unwrap().count_down((md.dev(), md.ino()));
+			locked(&self.map).count_down((md.dev(), md.ino()));
 		}
 	}
 }
@@ -1017,7 +1014,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 	let mut buf = vec![0u8; 1 << 20];
 	let mut xattr_fail_logged = 0;
 	loop {
-		let Ok(job) = jobs.lock().unwrap().recv() else {
+		let Ok(job) = locked(jobs).recv() else {
 			return;
 		};
 		if sh.stop.load(Relaxed) {
@@ -1663,7 +1660,7 @@ mod tests {
 		let (dtx, drx) = std::sync::mpsc::channel();
 		std::thread::spawn(move || {
 			run_group(&g, &sh);
-			let why = sh.faults.why.lock().unwrap().clone();
+			let why = locked(&sh.faults.why).clone();
 			dtx.send((g.done.load(Relaxed), sh.stop.load(Relaxed), why))
 				.unwrap();
 		});
@@ -1708,7 +1705,7 @@ mod tests {
 		});
 		assert!(done.load(Relaxed));
 		assert!(sh.faults.any.load(Relaxed) && sh.stop.load(Relaxed));
-		assert_eq!(*sh.faults.why.lock().unwrap(), ["a worker panicked"]);
+		assert_eq!(*locked(&sh.faults.why), ["a worker panicked"]);
 		// And a panic past the guard still marks the group done.
 		let done = AtomicBool::new(false);
 		let r = std::panic::catch_unwind(|| {
@@ -1716,6 +1713,44 @@ mod tests {
 			panic!("on purpose");
 		});
 		assert!(r.is_err() && done.load(Relaxed));
+	}
+
+	// A worker that panics holding a lock poisons it. The claim it drops in
+	// the unwind, the name waiting on that claim and the reason must all get
+	// through, or the run aborts, hangs, or isn't marked failed.
+	#[test]
+	fn a_poisoned_lock_is_still_a_fault() {
+		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
+		let (dtx, drx) = std::sync::mpsc::channel();
+		std::thread::spawn(move || {
+			let links = Links::default();
+			let key = (1, 2);
+			let waited = std::thread::scope(|s| {
+				let Claim::Mine(mine) = links.claim(key, 2, 0, 0) else {
+					panic!("not claimed");
+				};
+				let waiter = s.spawn(|| matches!(links.claim(key, 2, 0, 0), Claim::Mine(_)));
+				std::thread::sleep(Duration::from_millis(50));
+				s.spawn(|| {
+					guarded(&sh, "a worker", || {
+						let _claim = mine;
+						let _held = (locked(&links.map), locked(&sh.faults.why));
+						panic!("on purpose");
+					});
+				});
+				waiter.join().is_ok_and(|mine| mine)
+			});
+			let poisoned = links.map.is_poisoned() && sh.faults.why.is_poisoned();
+			let left = locked(&links.map).entries.len();
+			let why = locked(&sh.faults.why).clone();
+			dtx.send((waited, poisoned, left, why)).unwrap();
+		});
+		let (waited, poisoned, left, why) = drx
+			.recv_timeout(Duration::from_secs(20))
+			.expect("a poisoned lock hung");
+		assert!(waited && poisoned);
+		assert_eq!(left, 0);
+		assert_eq!(why, ["a worker panicked"]);
 	}
 
 	#[test]
@@ -1839,7 +1874,7 @@ mod tests {
 		let mut buf = vec![0u8; 4096];
 		let mut logged = 0;
 		one_file(&g, &sh, &job(&r, "a"), None, &mut buf, &links, &mut logged);
-		let left = |l: &Links| l.map.lock().unwrap().entries.len();
+		let left = |l: &Links| locked(&l.map).entries.len();
 		assert_eq!(left(&links), 1);
 		one_file(
 			&g,
