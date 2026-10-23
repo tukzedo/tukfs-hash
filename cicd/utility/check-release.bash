@@ -52,7 +52,7 @@ fArchCheck(){   ## fArchCheck STAGE_DIR PREFIX OS-ARCH...
 			*) fDie "arch: no rule for ${osarch}" ;;
 		esac
 		desc="$(file -b -- "${bin}")"
-		[[ "${desc}" =~ ^ELF\ 64-bit\ LSB\ (pie\ )?executable,\ ${want}, ]] || fDie "${bin##*/} isn't a ${want} executable: ${desc}"
+		[[ "${desc}" =~ ^ELF\ 64-bit\ LSB\ (pie\ )?executable,\ ${want}, ]] || fDie "${bin##*/} should be ${want}, but file says: ${desc}"
 		fOk "${bin##*/}: ${desc%%, interpreter*}"
 	done
 }

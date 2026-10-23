@@ -154,6 +154,16 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
 
+- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. x86_64 is built natively, and arm64 through `cargo-zigbuild`, which also compiles the bundled SQLite. arm64 takes about as long as x86_64, so every run builds both.
+
+- The release set, in `cicd/artifacts/release/`, is named `tukfs-hash-<version>-linux-x86_64` and `tukfs-hash-<version>-linux-arm64`, the same names plus `.deb` and `.rpm`, and `tukfs-hash-<version>-sha256sums.txt`. Download links depend on these, so they stay. The x86_64 name is never amd64, though the `.deb` has to say amd64 inside.
+
+- The packages hold `/usr/bin/tukfs-hash` and nothing else. They depend on the glibc the binary was linked for, read off the binary: 2.39 for x86_64, since it's linked against this box's, and 2.30 for arm64. x86_64 also needs `libgcc_s`.
+
+- 2 builds of one commit give the same bytes, packages included. The build number and the packages' mtimes come from the commit time. cargo's home is mapped to `/cargo` in panic messages, so whose home it is doesn't matter, and the checkout's own paths are already relative. Release checks run over the set before it replaces the old one: the stamped `--version`, each build's architecture, and each package's files and bytes.
+
+- The dogfood copy goes to `~/synced/0-0/common/exec/util/linux/bin/tukfs-hash`, where the scan wrappers look, rather than the `app/linux/` dir. `utility/dogfood_tukfs-hash` keeps up to 10 dated versions in `~/.local/bin/tukfs-hash_versions/`, with a link to the newest at `~/.local/bin/tukfs-hash`.
+
 ## Rejected
 
 - PostgreSQL. Hashing runs at disk speed and one SQLite writer keeps up easily. A server adds a daemon and a data folder, and a single file is easier to snapshot and copy.
