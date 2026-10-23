@@ -53,6 +53,15 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
+- Dropping each file's cached pages before reading it costs about as much CPU as blake3.
+	- ID: 2026102316421705
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-164217
+	- Opened by: first profiler graph
+	- Note: On the 1.5 GB profiler workload, `posix_fadvise` was 16% of self time against 15% for blake3. `read_sums` drops the pages on ext4 and btrfs so a read can't come from a cached copy. Look at whether one call per file, or skipping it for files the page cache can't hold, keeps that promise for less.
+
 - A full cicd pipeline, per the directives' "CICD process" section.
 	- ID: 2026102309501600
 	- Type: Feature
