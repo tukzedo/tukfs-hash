@@ -1217,9 +1217,11 @@
 	- Progress log:
 		- The work folder is made with `mkdir` without `-p`, so a run stops if it already exists. A token for the run goes in `.test-run` inside it right after. `fCleanup`, the exit trap, removes the folder only when the marker holds that token, and otherwise says so and leaves it.
 		- Swept: the 2 later traps in steps 13 and 18 call `fCleanup` too, rather than their own `rm -rf`.
+		- Asked for more checks on 2026-10-23. `fSafeRm` does the `rm -rf` now, and refuses an empty or relative path, `..`, a system folder or home, a link, and any name that isn't `.../tmp/<folder>/test_tukfs-hash_itzq_<stamp>_<pid>`. The work folder moved under `<TMPDIR>/tukfs-hash/` to fit, and `rm` stays on one filesystem.
+		- Verified: shellcheck, and both full runs left no work folder. A by-hand run refused 9 bad paths, kept a link's target, and removed the one good folder.
 	- Decisions:
 		- `rm -rf` rather than `trash`. Step 5 alone writes about 1.3 GB, so `trash` would pile that up on every run.
-	- Branch: round-20261023
+	- Branch: round-20261023, then safe-rm
 	- Test case: by hand, none in the script. With a wrong token or no marker, the folder stayed and the warning printed. With the right token, it was removed. With the folder already there, `mkdir` stopped the run and left it alone. Both full runs left no work folder.
 	- Closed: 20261023-084410
 
