@@ -75,15 +75,6 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
-- Errors are plain strings, converted by a local closure in about 8 functions.
-	- ID: 2026101916404115
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Note: Optional. It's consistent across files today. `anyhow` would replace the closures with `.context()`. Weigh its size cost.
-
 - `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
 	- ID: 2026101916404117
 	- Type: Task
@@ -1484,6 +1475,25 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Note: Path text was about 2/3 of a 48 MB test database of 200k paths. A table of folders would roughly halve it, but it needs a schema change. Worth it only if database size or cache pressure shows up.
+
+- Errors are plain strings, converted by a local closure in about 8 functions.
+	- ID: 2026101916404115
+	- Type: Enhancement
+	- Status: Canceled
+		- Neither option beats the closures. `anyhow` costs at least 20 KB and the local trait 4 KB, for the same messages.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Note: Optional. It's consistent across files today. `anyhow` would replace the closures with `.context()`. Weigh its size cost.
+	- Progress log:
+		- Release binary today: 3,033,840 bytes, reproduced on a second build.
+		- `anyhow` for the rusqlite errors only, messages unchanged: 3,054,320 (+20,480). A full move would cost more, since every `String` error would need converting too.
+		- A local `Ctx` trait on `Result<T, E: Display>`, with `.ctx("database")` and `.plain()`: 3,037,936 (+4,096). It also puts the prefix back on every call site, and looks like `anyhow` without being it.
+		- Swept: the 7 `let e = |e: rusqlite::Error| ...` closures, in `accept::run`, `accept::one`, `db::open_rw`, `gone::run`, `main.rs`'s `runs` and `report`, and `scan::begin`. The inline `map_err(|e| format!(...))` sites with a path prefix are one per use and stay too.
+	- Decisions:
+		- Keep the closures. Size comes first, and the errors are on cold paths, so speed doesn't change either way.
+	- Test case: None; no code change.
+	- Closed: 20261023-083612
 
 - vmFreeBSD is shut down for the snapshot, though its agent can freeze.
 	- ID: 2026101416080000
