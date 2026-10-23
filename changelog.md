@@ -16,4 +16,6 @@
 
 - The local pipeline also runs the tests under AddressSanitizer, ThreadSanitizer and Miri, a soak of repeated scans, CodeQL, and a known-advisory scan.
 
+- The local pipeline also draws a flamegraph of a scan and a rescan on each full run, with a summary of where the time went, and lints its own Python.
+
 - SQLite is set up once before the first connection, rather than by whichever thread opens one first.

@@ -96,7 +96,7 @@
 - cicd profiler stage and flamegraph report.
 	- ID: 2026102309501604
 	- Type: Feature
-	- Status: Queued
+	- Status: Started
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -105,6 +105,11 @@
 	- Requirements  [Feature]:
 		- A flamegraph of a scan, rotated into `cicd/artifacts/profiling/`, from an in-process sampler since `perf` can't record on b23.
 		- `cicd/utility/flame-report.py`, with `--check` for session start.
+	- Progress log:
+		- 2026-10-23: The `profiling` feature and profile, the attribution check, the workload, the stage and the report are in. A release build is the same bytes as before.
+		- 2026-10-23: A thread in the kernel gets about a third of the samples where half would be fair, so the graph shows each scan's user and system time beside it.
+		- 2026-10-23: Verified: the attribution check failed with libc on the sampler's blocklist and with the unwinder fix taken out, and passed with both back.
+		- 2026-10-23: Verified: a full run without publish or dogfood passes, draws the graph and prints the report, and leaves no workload behind.
 	- Branch: cicd
 
 - cicd demo gif.

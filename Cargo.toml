@@ -14,10 +14,16 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 signal-hook = "0.3"
 # The soak test's heap counter, and nothing else. See src/soak.rs.
 dhat = { version = "0.3", optional = true }
+# The cicd profiler's sampler, in-process since perf can't record on b23. Its
+# flamegraph writer is inferno, which is CDDL-1.0, so a build with this never
+# leaves the box. See src/profiling.rs.
+pprof = { version = "0.14", default-features = false, features = ["flamegraph"], optional = true }
 
 [features]
 # The soak test, run alone by cicd/utility/soak.bash.
 soak = ["dep:dhat"]
+# The cicd profiler stage only, with the profile below.
+profiling = ["dep:pprof"]
 
 [profile.release]
 lto = true
@@ -26,6 +32,12 @@ strip = true
 # guarded() in scan.rs catches a worker's panic so the run is marked failed.
 # With abort the run would be left as running.
 panic = "unwind"
+
+# release, with names kept so the flamegraph can say where the time went.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "limited"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

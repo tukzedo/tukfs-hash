@@ -10,9 +10,8 @@
 ##		  stays generic.
 ##		- Command arrays run from the repo root. Plain strings are eval'd by the
 ##		  engine, with CPU_CAP and the run's other variables in scope.
-##		- A hook stage that's off here (profiler, demo gif) prints a skip line
-##		  and nothing else. The backlog items that fill them are named beside
-##		  each.
+##		- A hook stage that's off here (demo gif) prints a skip line and
+##		  nothing else. The backlog item that fills it is named beside it.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -57,6 +56,7 @@ TOOL_PINS=(
 	"zig|${PIN_ZIG}|zig version"
 	"nfpm|${PIN_NFPM}|go version -m \"${NFPM}\""
 	"PSScriptAnalyzer|${PIN_PSSA}|pwsh -NoProfile -Command \"(Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1).Version.ToString()\""
+	"ruff|${PIN_RUFF}|ruff --version"
 )
 
 ## Paths into cargo's home end up in panic messages, so they're mapped to one
@@ -88,6 +88,10 @@ MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
 ## Every tracked .ps1, with PSScriptAnalyzerSettings.psd1 at the repo root.
 PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
+## Every tracked .py, by cicd/ruff.toml's rules, then its format. A box
+## without ruff skips them with a note, even under --gate.
+PY_LINT_CMD=(ruff check --config cicd/ruff.toml --)
+PY_FMT_CHECK_CMD=(ruff format --check --config cicd/ruff.toml --)
 
 ## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
 ## integration test on a release build, once per root below, each in a dir of
@@ -132,9 +136,33 @@ CTR_CONTEXT_EXTRA=(rust-toolchain.toml cicd/tool-pins.env)
 LEAK_DIR="${root}/target/leakcheck"
 CTR_CARGO_HOME="${LEAK_DIR}/cargo-home"
 
-## Stage 5: profiler, eval'd. Filled by 2026102309501604.
-PROFILE_ENABLE=0
-PROFILE_CMD=''
+## Stage 5: profiler. A build like release with names kept and pprof's
+## sampler in it, src/profiling.rs, since perf can't record on b23. First
+## PROFILE_CHECK, the sampler's attribution against a workload whose answer
+## is known, then PROFILE_WORKLOAD_GEN and each PROFILE_TIMED step in order,
+## timed. All are eval'd from the repo root, with PROFILE_BIN, PROFILE_WORKLOAD
+## and TUKFS_PROFILE_DIR exported. The scans add their samples to one
+## flamegraph, which goes into PROFILE_OUT_DIR as flame_<stamp>_<role>.svg,
+## GFS-rotated, and flame-report.py's summary of it goes in the log.
+## The workload is a tree on ext4, with its database beside it, in a dir of
+## this run's under PROFILE_ROOT, removed after. TUKFS_CICD_PROFILE_ROOT
+## overrides it, and a root that isn't there falls back to the run's temp dir.
+## --quick and --gate leave the stage out.
+PROFILE_ENABLE=1
+PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling -j "${CPU_CAP}" --locked)
+PROFILE_BIN="target/profiling/${EXE_NAME}"
+PROFILE_OUT_DIR="cicd/artifacts/profiling"
+PROFILE_ROOT="${TUKFS_CICD_PROFILE_ROOT:-${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}}"
+PROFILE_CHECK='TUKFS_PROFILE_CHECK=1 "${PROFILE_BIN}"'
+PROFILE_WORKLOAD_GEN='cicd/utility/profile-workload.bash gen "${PROFILE_WORKLOAD}"'
+## "name|command". Any failure fails the stage. The rescan reads every file
+## again, with blake2b, since its --since is after the first scan, and has to
+## find the changed ones, which is exit 4.
+PROFILE_TIMED=(
+	'first scan|TUKFS_PROFILE_LABEL=first-scan "${PROFILE_BIN}" scan --db "${PROFILE_WORKLOAD}/db/profile.sqlite" --root "${PROFILE_WORKLOAD}/tree" --progress 3600'
+	'change|cicd/utility/profile-workload.bash change "${PROFILE_WORKLOAD}"'
+	'rescan --rmlint|TUKFS_PROFILE_LABEL=rescan "${PROFILE_BIN}" scan --db "${PROFILE_WORKLOAD}/db/profile.sqlite" --root "${PROFILE_WORKLOAD}/tree" --progress 3600 --rmlint --since "$(date -d tomorrow +%F)"; [[ $? -eq 4 ]]'
+)
 
 ## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
 ## mounts and snapshots. The native one is also what the integration test
@@ -196,7 +224,8 @@ FROZEN_LINKS=(target cicd/artifacts)
 GATE_TARGET_DIR="target-gate"
 
 ## Build caches the cleanup prunes: entries from an older toolchain, and those
-## of crates gone from Cargo.lock. target-gate is the pre-push hook's.
+## of crates gone from Cargo.lock, under debug, release and profiling.
+## target-gate is the pre-push hook's.
 CACHE_DIRS=(target target-gate)
 
 ## Run and lint logs, gitignored and GFS-rotated. lint-report.bash reads them.
@@ -213,3 +242,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: arm64 through zig, packages, release checks, the
 ##		  artifact names and dogfood. cargo's home is remapped in the builds.
 ##		- 2026-10-23: The leak checks, their image, and clippy over all features.
+##		- 2026-10-23: The profiler, and ruff over the pipeline's Python.

@@ -182,6 +182,24 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the shipped binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
 
+## Profiling
+
+- A full run draws a flamegraph of a scan into `cicd/artifacts/profiling/`, GFS-rotated, and prints `cicd/utility/flame-report.py`'s summary of it in the log. `--quick` and `--gate` leave it out.
+
+- `perf` can't record on b23, since `kernel.perf_event_paranoid` is 3, so the sampler is pprof, in the process, on SIGPROF. It's behind the `profiling` feature and the `profiling` cargo profile, which is release with names kept. pprof's flamegraph writer is inferno, which is CDDL-1.0, so a build with the feature never leaves the box. A release build doesn't change by a byte. The hook in `src/main.rs` sits at the bottom of the file so the lines above keep their numbers, which are in the release build's panic messages.
+
+- The workload is a generated tree of about 1.5 GB on ext4, synced first so the scan reads the disk: a first scan, then bytes changed with the mtime put back and some ordinary edits, then a rescan with `--rmlint` and a `--since` past the first scan, so every file is read again with blake2b. Each scan adds its samples to one graph, under its own name below the root.
+
+- libc isn't on the sampler's blocklist, unlike shcl's, since a scan's reads and attribute calls end there. libgcc, the vdso and the loader are, since unwinding from inside them isn't safe. `_Unwind_FindEnclosingFunction` is answered in the binary, as in shcl, or LTO leaves one name on most of a scan.
+
+- A thread in the kernel gets fewer SIGPROFs than its share: about 35% against a busy thread in user code, where 50% would be fair. So the graph understates system time. The subtitle has each scan's user and system CPU from `getrusage`, which doesn't, and wall time past the CPU is waiting on the disk. Read I/O against hashing off those.
+
+- blake3's assembly has no unwind info and no symbol sizes, so its samples come back with no name. The profiling build names them by where the functions start.
+
+- Before any graph is drawn, an attribution check runs 2 threads for the same time: 2 loops at 3 to 1 inlined into one function, and a reader of a cached file. The loops have to split about 3 to 1, and the reader has to get a share. Each of those fails with its fix taken out.
+
+- The report buckets self time by the nearest caller it knows: blake3, blake2b, SQLite, xattr reads, xattr writes, file reads and the walk. They're keyed on function names, so a rename moves time into "other".
+
 ## Rejected
 
 - PostgreSQL. Hashing runs at disk speed and one SQLite writer keeps up easily. A server adds a daemon and a data folder, and a single file is easier to snapshot and copy.

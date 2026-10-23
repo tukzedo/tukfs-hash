@@ -140,7 +140,7 @@ fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<St
 fn main() {
 	// Paths can be any bytes, so not env::args, which panics on them.
 	let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
-	let code = match real_main(&argv) {
+	let code = match sampled(|| real_main(&argv)) {
 		Ok(c) => c,
 		Err(e) => {
 			err!("tukfs-hash: {e}");
@@ -490,6 +490,17 @@ fn report(
 		out!("{k}\t{p}\t{}", d.unwrap_or_default());
 	}
 	Ok(0)
+}
+
+// Down here so the lines above keep their numbers, which the release build's
+// panic messages have in them.
+#[cfg(feature = "profiling")]
+mod profiling;
+#[cfg(feature = "profiling")]
+use profiling::sampled;
+#[cfg(not(feature = "profiling"))]
+fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
+	f()
 }
 
 #[cfg(test)]

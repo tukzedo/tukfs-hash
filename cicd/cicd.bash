@@ -16,10 +16,12 @@
 ##	   1. format (in place; check-only under --gate)
 ##	   2. build (debug)
 ##	   3. lint (clippy, shellcheck over every tracked *.bash, markdownlint over
-##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1)
+##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1, ruff
+##	      over every tracked .py)
 ##	   4. tests (cargo test, then the integration test once per test root),
 ##	      then the slow leak checks
-##	   5. profiler
+##	   5. profiler (a flamegraph of a scan, from an in-process sampler, into
+##	      PROFILE_OUT_DIR, and flame-report.py's summary of it)
 ##	   6. release builds (native, cross targets, packages, release checks),
 ##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file
 ##	   7. dogfood (the native release build, and the dogfood runner)
@@ -119,9 +121,10 @@ export CPU_CAP CARGO_BUILD_JOBS="${CPU_CAP}" RUST_TEST_THREADS="${CPU_CAP}"
 
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
-RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=()
+RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=()
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
-PROFILE_CMD=''; PACKAGE_CMD=''; GIF_CMD=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
+PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
+PACKAGE_CMD=''; GIF_CMD=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
@@ -297,7 +300,8 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 ## Temp dirs, and the only rm -rf this script does
 
 ## Every dir the run makes is <root>/tukfs-hash/<prefix>_<kind>_<stamp>_<pid>[_<label>],
-## with this run's token in its mark file.
+## with this run's token in its mark file. The kinds are run, it for the
+## integration test, and prof for the profiler's workload.
 run_mark=".cicd-run"
 run_token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 declare -a run_dirs=()   ## made by this run, removed at the end
@@ -309,7 +313,7 @@ fSafePath(){
 	if [[ -z "${p}" || "${p}" != /* || "${p}" == *..* || "${p}" == *//* || "${p}" == *$'\n'* ]]; then
 		printf 'cleanup: refused, bad path: "%s"\n' "${p}" >&2; return 1
 	fi
-	if ! [[ "${p}" =~ ^(/[A-Za-z0-9._+-]+)+/tukfs-hash/${RUN_TMP_PREFIX}_(run|it)_[0-9]{8}-[0-9]{6}_[0-9]+(_[a-z0-9]+)?$ ]]; then
+	if ! [[ "${p}" =~ ^(/[A-Za-z0-9._+-]+)+/tukfs-hash/${RUN_TMP_PREFIX}_(run|it|prof)_[0-9]{8}-[0-9]{6}_[0-9]+(_[a-z0-9]+)?$ ]]; then
 		printf 'cleanup: refused, not a cicd run dir: %s\n' "${p}" >&2; return 1
 	fi
 	for fhs in / /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var "${HOME:-/}"; do
@@ -473,7 +477,7 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
 	fEcho_Clean "Build (debug) ..: ${BUILD_CMD[*]}"
-	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer")"
+	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff")"
 	if ((tests_off)); then
 		fEcho_Clean "Tests ..........: (skipped)"
 	else
@@ -482,7 +486,7 @@ if ((! quiet && ! inner_run)); then
 		fEcho_Clean "Integration ....: ${_its%, }"
 	fi
 	fEcho_Clean "Leak checks ....: $( ((${#LEAKCHECK_STEPS[@]})) && echo "${#LEAKCHECK_STEPS[@]}, at the end of the tests" || echo '(none in this run)')"
-	fEcho_Clean "Profiler .......: $(fOnOff "${PROFILE_ENABLE}" 'on')"
+	fEcho_Clean "Profiler .......: $(fOnOff "${PROFILE_ENABLE}" "${#PROFILE_TIMED[@]} step(s) on a tree under ${PROFILE_ROOT:-the temp dir} -> ${PROFILE_OUT_DIR:-(nowhere)}/")"
 	if ((release_off)); then
 		fEcho_Clean "Release ........: (skipped)"
 	else
@@ -628,7 +632,7 @@ fLintTool(){   ## fLintTool NAME -> 0 when it's here
 ## Stage 3: lint. Every tool runs, so the log has all of it, and then the stage
 ## fails if any of them did.
 fStageLint(){
-	local -a failed=() files=() shFiles=() mdFiles=() psFiles=()
+	local -a failed=() files=() shFiles=() mdFiles=() psFiles=() pyFiles=()
 	local f skip s
 	fStep 3 "Lint"
 	if ((lint_off)); then fStepSkip "lint skipped"; return 0; fi
@@ -642,6 +646,7 @@ fStageLint(){
 		case "${f}" in
 			*.bash) shFiles+=("${f}") ;;
 			*.ps1)  psFiles+=("${f}") ;;
+			*.py)   pyFiles+=("${f}") ;;
 			*.md)
 				skip=0
 				for s in "${MARKDOWN_SKIP[@]}"; do if [[ "${f}" == "${s}" ]]; then skip=1; fi; done
@@ -667,6 +672,20 @@ fStageLint(){
 	if ((${#psFiles[@]})) && ((${#PS_LINT_CMD[@]})) && fLintTool "${PS_LINT_CMD[0]}"; then
 		fEcho_Clean "PSScriptAnalyzer: ${#psFiles[@]} file(s)"
 		if fLintRun "${PS_LINT_CMD[@]}" "${psFiles[@]}"; then fEcho "OK: PSScriptAnalyzer clean"; else failed+=(PSScriptAnalyzer); fi
+	fi
+	## Not through fLintTool: a box without ruff skips it even under --gate.
+	if ((${#pyFiles[@]})) && ((${#PY_LINT_CMD[@]})); then
+		if ! command -v "${PY_LINT_CMD[0]}" >/dev/null 2>&1; then
+			fEcho "NOTE: ${PY_LINT_CMD[0]} isn't installed; ${#pyFiles[@]} Python file(s) not linted"
+			echo "${PY_LINT_CMD[0]}" >> "${gate_skips}"
+		else
+			fEcho_Clean "ruff: ${#pyFiles[@]} file(s)"
+			if fLintRun "${PY_LINT_CMD[@]}" "${pyFiles[@]}" && fLintRun "${PY_FMT_CHECK_CMD[@]}" "${pyFiles[@]}"; then
+				fEcho "OK: ruff clean"
+			else
+				failed+=(ruff)
+			fi
+		fi
 	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
@@ -733,11 +752,67 @@ fRecordGreen(){
 	return 0
 }
 
-## Stage 5: profiler.
+## Seconds since an EPOCHREALTIME, to 2 places, with no fork.
+fSecsSince(){ local us=$(( ${EPOCHREALTIME/./} - ${1/./} )); printf '%d.%02d s' $((us / 1000000)) $((us % 1000000 / 10000)); }
+
+## Stage 5: profiler. The attribution check comes before any graph is drawn,
+## since a graph that names the wrong code is worse than none. A failed build,
+## check or step fails the run. The report never does, and never touches the
+## --check marker, which is the session start's.
 fStageProfile(){
+	local base="" fsType="" work="" step="" name="" cmd="" t0="" svg="" profDir="" latest=""
 	fStep 5 "Profiler"
-	if ((! PROFILE_ENABLE)) || [[ -z "${PROFILE_CMD}" ]]; then fStepSkip "profiler off in config.bash, or skipped"; return 0; fi
-	eval "${PROFILE_CMD}" || fDie "profiler failed"
+	if ((! PROFILE_ENABLE)) || ((! ${#PROFILE_BUILD_CMD[@]})); then fStepSkip "profiler off in config.bash, or skipped"; return 0; fi
+	fEcho_Clean "${PROFILE_BUILD_CMD[*]}"
+	"${PROFILE_BUILD_CMD[@]}" || fDie "profiling build failed"
+	export PROFILE_BIN="${root}/${PROFILE_BIN}"
+	[[ -x "${PROFILE_BIN}" ]] || fDie "no profiling binary at ${PROFILE_BIN}"
+	if [[ -n "${PROFILE_CHECK}" ]]; then
+		fEcho_Clean "attribution check: ${PROFILE_CHECK}"
+		eval "${PROFILE_CHECK}" || fDie "profiler attribution check failed; its graph would name the wrong code"
+	fi
+
+	base="${PROFILE_ROOT}"
+	if [[ -z "${base}" || ! -d "${base}" ]]; then
+		fEcho "NOTE: the profiler root ${base:-(none)} isn't there; the workload goes in the run's temp dir"
+		base="${run_tmp_root}"
+	fi
+	fRunDirMake "${base}" prof
+	work="${made_dir}"
+	fsType="$(stat -f -c %T -- "${work}" 2>/dev/null || true)"
+	if [[ "${fsType}" != ext2/ext3 ]]; then fEcho "WARNING: the profiler workload is on ${fsType:-unknown}, not ext4"; fi
+	export PROFILE_WORKLOAD="${work}" TUKFS_PROFILE_DIR="${work}/samples"
+	mkdir -- "${TUKFS_PROFILE_DIR}" || fDie "could not make ${TUKFS_PROFILE_DIR}"
+	fEcho_Clean "workload: ${PROFILE_WORKLOAD_GEN}  (in ${work})"
+	eval "${PROFILE_WORKLOAD_GEN}" || fDie "the profiler workload failed"
+	for step in "${PROFILE_TIMED[@]}"; do
+		name="${step%%|*}"; cmd="${step#*|}"
+		fEcho_Clean "profile step: ${name}"
+		t0="${EPOCHREALTIME}"
+		## In an if, so a step can test its own exit, as the rescan's 4.
+		if ! eval "${cmd}"; then fDie "profiler step failed: ${name}"; fi
+		fEcho_Clean "profile timing: ${name} $(fSecsSince "${t0}")"
+	done
+	svg="${TUKFS_PROFILE_DIR}/flame.svg"
+	[[ -s "${svg}" ]] || fDie "the profiler drew no flamegraph"
+
+	## Born "frequent". The rotation gives it another role, by the stamp.
+	profDir="${root}/${PROFILE_OUT_DIR}"
+	mkdir -p -- "${profDir}" || fDie "could not make ${PROFILE_OUT_DIR}"
+	mv -f -- "${svg}" "${profDir}/flame_${stamp}_frequent.svg" || fDie "could not move the flamegraph into ${PROFILE_OUT_DIR}"
+	gfs_rotate "${profDir}" flame svg >/dev/null 2>&1 || true
+	latest="$(compgen -G "${profDir}/flame_${stamp}_*.svg" || true)"
+	latest="${latest%%$'\n'*}"
+	[[ -n "${latest}" ]] || fDie "the flamegraph went missing from ${PROFILE_OUT_DIR} in the rotation"
+	unset PROFILE_WORKLOAD TUKFS_PROFILE_DIR
+	if fRunDirGone "${work}"; then freed_kb=$((freed_kb + gone_kb)); fi
+	fEcho "OK: flamegraph: ${latest#"${root}/"}"
+	if command -v python3 >/dev/null 2>&1; then
+		fEcho_Clean
+		python3 "${here}/utility/flame-report.py" --dir "${profDir}" || fEcho_Clean "hot spots: no report; the reason is above"
+	else
+		fEcho "WARNING: python3 isn't installed; no hot spot report"
+	fi
 	fStepPass
 }
 
@@ -948,12 +1023,13 @@ fRunFrozen(){
 ## Cleanup
 
 ## rm -rf for a build cache entry: TARGET/<profile>/<area>/<name>, or the same
-## under a target triple, no links, and ours.
+## under a target triple, no links, and ours. The profiles are debug, release
+## and profiling.
 fSafeRmCache(){   ## fSafeRmCache CACHE_REAL PATH
 	local cache="$1" p="$2" real=""
 	[[ "${cache}" == /* && "${cache}" != *//* && "${cache}" != *..* ]] || return 1
 	[[ "${p}" == "${cache}/"* && "${p}" != *..* && "${p}" != *$'\n'* ]] || return 1
-	[[ "${p#"${cache}/"}" =~ ^([a-z0-9_-]+/)?(debug|release)/(deps|build|\.fingerprint|incremental)/[A-Za-z0-9_.+-]+$ ]] || return 1
+	[[ "${p#"${cache}/"}" =~ ^([a-z0-9_-]+/)?(debug|release|profiling)/(deps|build|\.fingerprint|incremental)/[A-Za-z0-9_.+-]+$ ]] || return 1
 	real="$(realpath -e -- "${p}" 2>/dev/null || true)"
 	[[ "${real}" == "${p}" && ! -L "${p}" && -O "${p}" ]] || return 1
 	rm -rf --one-file-system -- "${p}"
@@ -973,7 +1049,7 @@ fPruneCache(){   ## fPruneCache DIR
 	while read -r name; do crates["${name//-/_}"]=1; done < <(sed -n 's/^name = "\([^"]*\)"$/\1/p' "${root}/Cargo.lock")
 	## Names of what cargo makes for a unit: lib<crate>-<hash>.<ext>, <crate>-<hash>[.<ext>],
 	## and build_script_build-<hash> beside its package's dir.
-	for area in "${cache}"/{,*/}{debug,release}/{deps,build,.fingerprint,incremental}; do
+	for area in "${cache}"/{,*/}{debug,release,profiling}/{deps,build,.fingerprint,incremental}; do
 		[[ -d "${area}" && ! -L "${area}" ]] || continue
 		while IFS=$'\t' read -r -d '' mt e; do
 			[[ "${mt}" =~ ^[0-9]{1,15}$ ]] || continue
@@ -1002,7 +1078,7 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 	local base="" d="" got="" pid="" kb=0 n=0 size=0
 	base="$(realpath -e -- "$1" 2>/dev/null || true)"
 	[[ -n "${base}" && -d "${base}/tukfs-hash" ]] || { echo "0 0"; return 0; }
-	for d in "${base}/tukfs-hash/${RUN_TMP_PREFIX}"_{run,it}_*; do
+	for d in "${base}/tukfs-hash/${RUN_TMP_PREFIX}"_{run,it,prof}_*; do
 		[[ -d "${d}" && ! -L "${d}" ]] || continue
 		fSafePath "${d}" 2>/dev/null || continue
 		[[ "${d}" =~ _[0-9]{8}-[0-9]{6}_([0-9]+)(_[a-z0-9]+)?$ ]] || continue
@@ -1041,7 +1117,7 @@ fCleanup(){
 			if ((n)); then gone+=("${n} stale build cache entries in ${c}"); total=$((total + kb)); fi
 		done
 	fi
-	for r in "${run_tmp_root}" "${IT_ROOTS[@]#*|}"; do
+	for r in "${run_tmp_root}" "${IT_ROOTS[@]#*|}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do
 		out="$(fSweepStale "${r}")"; read -r n kb <<< "${out}"
 		if ((n)); then gone+=("${n} dir(s) of killed runs under ${r}"); total=$((total + kb)); fi
 	done
@@ -1099,3 +1175,7 @@ exit 0
 ##		  removed only behind guards. --slow, and a build number for --version.
 ##		- 2026-10-23: --gate always leaves the leak checks out, and each one's
 ##		  time is shown.
+##		- 2026-10-23: The profiler stage, from shcl's: its attribution check, a
+##		  generated workload in a run dir of its own, a timed line per step, a
+##		  rotated flamegraph and flame-report.py's summary. ruff in the lint
+##		  stage, and the profiling build in the cache prune.
