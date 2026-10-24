@@ -32,7 +32,7 @@
 - A stopped cicd run can leave its temp dir and a locked frozen copy.
 	- ID: 2026102407311809
 	- Type: Bug
-	- Status: Waiting for answers
+	- Status: Queued
 		- Waits on the 2026102407311809 question in questions.md, on how to cover a run that dies before its EXIT trap starts.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-073118
@@ -55,6 +55,7 @@
 		- 2026-10-24: Still open: `timeout | grep` from a shell with job control still fails on each of about 10 stops at 15 s. The second TERM comes before the trap's first command can ignore it, and the run dies with no trap at all. Starting the frozen copy's run in the background and waiting for it made no difference.
 		- Swept: the 4 leak and release scripts whose EXIT traps call `fStopDescendants` get the same ignore through it. The integration test's own stop has a separate bug, filed as 2026102408015248.
 	- Decisions:
+		- 2026-10-24 answer: do both (a) and (b). Trap INT, TERM and HUP explicitly and run long steps in the background with `wait`, and have the next run take down a dead run's dir and frozen copy as soon as its PID is gone.
 		- Once a stop has begun, a second Ctrl+C or TERM no longer cuts it short. The wait is still capped by `TUKFS_STOP_WAIT`, 30 s, and then KILL.
 		- A reader that quits early, such as `| head`, no longer stops the run, since the log's `tee` keeps going.
 	- Branch: round-20261024
