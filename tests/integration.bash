@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#  shellcheck disable=1091  ## 'Not following.' The stop include is checked on its own.
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
 ##		root and no mounts, so mount boundaries are left to `plan` on a real box.
@@ -17,6 +18,8 @@ work="$(realpath -e -- "${TMPDIR:-/tmp}")/tukfs-hash/test_tukfs-hash_itzq_$(date
 # The exit trap removes it only while the marker holds this run's token, so
 # a folder this run didn't make is never touched.
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
+# A TERM to this shell alone leaves its children writing into the folder.
+source "${here}/cicd/utility/include/stop-descendants.bash"
 mkdir -p -- "${work%/*}"
 mkdir -- "${work}"
 printf '%s\n' "${token}" > "${work}/.test-run"
@@ -42,6 +45,7 @@ fSafeRm() {
 }
 fCleanup() {
 	local got=''
+	fStopDescendants
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
 	fSafeRm "${work}" || true
@@ -563,3 +567,5 @@ fi
 ##		- 20261023: The date after the build number. wait_started waits 60 s.
 ##		- 20261023: A test ID on every check, shown on its status line, and a
 ##		  skip line for each check left out.
+##		- 20261024: A stop takes down what the test started before the work
+##		  folder goes.

@@ -1138,8 +1138,29 @@ pub enum ReadFail {
 	Unstable,
 }
 
-/// Reads the whole file from the start. Its cached pages are dropped first, so
-/// a scribble in the page cache isn't taken for what's on disk. ZFS ignores the
+/// `O_DIRECT` wants the buffer, offset and length on the device's block size.
+const DIRECT_ALIGN: usize = 4096;
+
+/// Turns `O_DIRECT` on or off for an open fd. False if the filesystem won't.
+fn set_direct(fd: RawFd, on: bool) -> bool {
+	// SAFETY: fd is open, and F_GETFL/F_SETFL only touch its status flags.
+	unsafe {
+		let flags = libc::fcntl(fd, libc::F_GETFL);
+		if flags < 0 {
+			return false;
+		}
+		let want = if on {
+			flags | libc::O_DIRECT
+		} else {
+			flags & !libc::O_DIRECT
+		};
+		want == flags || libc::fcntl(fd, libc::F_SETFL, want) == 0
+	}
+}
+
+/// Reads the whole file from the start, past the page cache where the
+/// filesystem allows it. Its cached pages are dropped first either way, so a
+/// scribble in the page cache isn't taken for what's on disk. ZFS ignores the
 /// advice; see design.md, Reading files.
 pub fn read_sums(
 	file: &File,
@@ -1155,32 +1176,52 @@ pub fn read_sums(
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
 	}
+	// Reading around the page cache costs a fraction of filling it and then
+	// dropping it again (2026102316421705). Where the filesystem won't, or
+	// balks mid-file, it's a plain read and the drops above and below do it.
+	let lead = buf.as_ptr().align_offset(DIRECT_ALIGN).min(buf.len());
+	let aligned_len = (buf.len() - lead) & !(DIRECT_ALIGN - 1);
+	let mut direct = !cfg!(miri) && aligned_len > 0 && set_direct(fd, true);
 	let mut b3 = blake3::Hasher::new();
 	let mut b2b = want_b2b.then(blake2b_simd::State::new);
 	let mut total: u64 = 0;
-	loop {
+	let outcome = loop {
 		if stop.load(Relaxed) {
-			return Err(ReadFail::Stopped);
+			break Err(ReadFail::Stopped);
 		}
-		match file.read_at(buf, total) {
-			Ok(0) => break,
+		let chunk = if direct {
+			&mut buf[lead..lead + aligned_len]
+		} else {
+			&mut *buf
+		};
+		match file.read_at(chunk, total) {
+			Ok(0) => break Ok(()),
 			Ok(n) => {
-				b3.update(&buf[..n]);
+				b3.update(&chunk[..n]);
 				if let Some(h) = b2b.as_mut() {
-					h.update(&buf[..n]);
+					h.update(&chunk[..n]);
 				}
 				total += n as u64;
 			}
 			Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-			Err(e) => {
-				read_bytes.fetch_add(total, Relaxed);
-				return Err(ReadFail::Io(e, total));
+			Err(e)
+				if direct && matches!(e.raw_os_error(), Some(libc::EINVAL | libc::EOPNOTSUPP)) =>
+			{
+				set_direct(fd, false);
+				direct = false;
 			}
+			Err(e) => break Err(ReadFail::Io(e, total)),
 		}
+	};
+	if direct {
+		set_direct(fd, false);
 	}
 	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
-	read_bytes.fetch_add(total, Relaxed);
+	if !matches!(outcome, Err(ReadFail::Stopped)) {
+		read_bytes.fetch_add(total, Relaxed);
+	}
+	outcome?;
 	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;
 	if after.len() != before.len()
 		|| mtime_us(&after) != mtime_us(before)
@@ -2172,6 +2213,42 @@ mod tests {
 					*want,
 					"case {i}, buf {piece}"
 				);
+			}
+		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "O_DIRECT isn't modelled, and 1 MB reads")]
+	fn direct_reads_hash_every_byte() {
+		let _id = test_id("0vGJvz");
+		let d = scratch("scan_direct_reads");
+		let stop = AtomicBool::new(false);
+		let counted = AtomicU64::new(0);
+		let mut store = vec![0u8; (1 << 20) + 2 * DIRECT_ALIGN];
+		let lead = store.as_ptr().align_offset(DIRECT_ALIGN);
+		// On the block size, a byte off it, and too small to go direct.
+		let bufs = [
+			(lead, lead + (1 << 20)),
+			(lead + 1, store.len()),
+			(lead, lead + 1000),
+		];
+		for len in [0usize, 1, 4095, 4096, 4097, 3 * 4096 + 123, (1 << 20) + 7] {
+			let bytes: Vec<u8> = (0..len).map(|i| (i % 253) as u8).collect();
+			let p = d.join(format!("d{len}"));
+			fs::write(&p, &bytes).unwrap();
+			let file = File::open(&p).unwrap();
+			let before = file.metadata().unwrap();
+			for (from, to) in bufs {
+				let s = read_sums(&file, &before, false, &mut store[from..to], &stop, &counted)
+					.unwrap();
+				assert_eq!(
+					s.b3,
+					*blake3::hash(&bytes).as_bytes(),
+					"len {len}, buf {from}..{to}"
+				);
+				// SAFETY: the fd is open.
+				let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+				assert_eq!(flags & libc::O_DIRECT, 0, "O_DIRECT left on, len {len}");
 			}
 		}
 	}

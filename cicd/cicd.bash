@@ -44,6 +44,8 @@
 ##	                       runs them
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
 ##	                       --leakcheck
+##	   --no-codeql         leave out the leak check steps that name codeql,
+##	                       and keep the rest
 ##	   -q, --quiet         unattended and quiet: no preflight block, and cargo
 ##	                       and the publisher get their own quiet flags. Stage
 ##	                       lines, results and warnings still print
@@ -52,6 +54,7 @@
 ##	                       and -m=MSG
 ##	   --no-sync           skip the remote sync
 ##	   --no-fmt            skip the format stage
+##	   --no-debug          skip the debug build
 ##	   --no-lint           skip the lint stage
 ##	   --no-tests          skip the tests stage, leak checks included
 ##	   --no-cross          skip the cross targets; the native release still
@@ -73,9 +76,9 @@
 ##	  CPU_CAP set by the caller wins.
 ##	- A run that passes the tests records the tree it tested
 ##	  (utility/green-tree.bash), and the pre-push hook lets a push of that tree
-##	  through without running the gate again. --quick, --no-fmt, --no-lint,
-##	  --no-tests, a missing tool and a missing test root each keep a run from
-##	  recording.
+##	  through without running the gate again. --quick, --no-fmt, --no-debug,
+##	  --no-lint, --no-tests, a missing tool and a missing test root each keep
+##	  a run from recording.
 ##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, with
 ##	  TMPDIR pointed into it, so what a failed test leaves goes with it. It and
 ##	  the integration test's dirs are removed at the end, even when the run
@@ -157,7 +160,7 @@ started=${SECONDS}
 ## Options
 
 assume_yes=0; quiet=0; gate_mode=0; quick=0; slow=0; cli_message=""; sync_enable=1; gate_partial=0
-leakcheck_flag=0; no_leakcheck=0; no_freeze=0; fmt_off=0; lint_off=0; tests_off=0; release_off=0
+leakcheck_flag=0; no_leakcheck=0; no_codeql=0; no_freeze=0; fmt_off=0; debug_off=0; lint_off=0; tests_off=0; release_off=0
 ## The options the run on the frozen copy takes over.
 inner_pass=()
 while (($#)); do case "$1" in
@@ -166,10 +169,12 @@ while (($#)); do case "$1" in
 	--slow)                   slow=1; shift ;;
 	--leakcheck)              leakcheck_flag=1; inner_pass+=("$1"); shift ;;
 	--no-leakcheck)           no_leakcheck=1; inner_pass+=("$1"); shift ;;
+	--no-codeql)              no_codeql=1; inner_pass+=("$1"); shift ;;
 	-q|--quiet)               quiet=1; assume_yes=1; QUIET_FLAG="-q"; export CARGO_TERM_QUIET=true; shift ;;
 	-y|--yes)                 assume_yes=1; shift ;;
 	--no-sync)                sync_enable=0; shift ;;
 	--no-fmt)                 fmt_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-debug)               debug_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-lint)                lint_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-tests)               tests_off=1; LEAKCHECK_STEPS=(); gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-cross)               CROSS_TARGETS=(); inner_pass+=("$1"); shift ;;
@@ -237,6 +242,12 @@ fi
 ## A run with no options does everything, the leak checks included. The gate
 ## is the pre-push hook, and stays fast.
 if ((no_leakcheck || gate_mode)) || { ((quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
+## CodeQL is most of a full run's time, so it goes off alone.
+if ((no_codeql)); then
+	_kept=()
+	for _step in "${LEAKCHECK_STEPS[@]}"; do [[ "${_step,,}" == *codeql* ]] || _kept+=("${_step}"); done
+	LEAKCHECK_STEPS=("${_kept[@]}")
+fi
 
 ## A run at least as thorough as the gate records the tree it tested.
 record_green=1
@@ -406,6 +417,8 @@ gate_skips="${run_tmp}/gate-skips"
 ## takes for a finished run.
 fRunTmpGone(){
 	local d kb="" total=0 left_frozen=""
+	## Before the first write, for the same reason fStopDescendants does it.
+	trap '' INT TERM HUP PIPE
 	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
@@ -494,7 +507,7 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean "Temp dir .......: ${run_tmp}"
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
-	fEcho_Clean "Build (debug) ..: ${BUILD_CMD[*]}"
+	fEcho_Clean "Build (debug) ..: $( ((debug_off)) && echo '(skipped)' || echo "${BUILD_CMD[*]}")"
 	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
 	if ((tests_off)); then
 		fEcho_Clean "Tests ..........: (skipped)"
@@ -542,8 +555,9 @@ if ((! gate_mode && ! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "$
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
 	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C
 	## reaches the whole process group, so it ignores that too, and ends when
-	## the run closes its end.
-	exec > >(trap '' INT TERM; exec tee "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
+	## the run closes its end. -p keeps it writing the log after a reader such
+	## as grep is gone, since the same stop takes that down too.
+	exec > >(trap '' INT TERM; exec tee -p "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
 	stop_keep+=("$!")
 fi
 
@@ -629,6 +643,7 @@ fStageFormat(){
 ## Stage 2: debug build.
 fStageBuild(){
 	fStep 2 "Build (debug)"
+	if ((debug_off)); then fStepSkip "debug build skipped"; return 0; fi
 	fEcho_Clean "${BUILD_CMD[*]}"
 	"${BUILD_CMD[@]}" || fDie "debug build failed"
 	fEcho "OK: debug build"
@@ -1208,3 +1223,6 @@ exit 0
 ##		- 2026-10-23: LINT_EXTRA, for the test ID check. A cid dir in the run's
 ##		  temp dir, so a stop kills every container the run started.
 ##		- 2026-10-23: A build that isn't a tagged release shows its date.
+##		- 2026-10-24: --no-debug, and --no-codeql for CodeQL on its own.
+##		- 2026-10-24: A stop's cleanup ignores further signals and a gone
+##		  reader, and the run log outlives the reader.

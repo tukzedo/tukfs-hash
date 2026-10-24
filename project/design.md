@@ -46,6 +46,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	- A name skipped by its row or attributes counts as seen too. Names outside the roots never come, so a group keeps only its newest 262,144 results, and a later name of an older one is read again.
 
 - A file's cached pages are dropped before it's read, so a scribble in the page cache isn't hashed as if it were on disk. ZFS ignores that advice and answers from the ARC, so there a second read can't tell memory from disk.
+	- The read itself is `O_DIRECT` where the filesystem takes it, so the bytes go from the disk to the read buffer and nothing is cached. Filling the page cache and then dropping it cost about as much CPU as blake3 did.
+	- Where `O_DIRECT` is refused, at the start or partway through, it's a plain read, and the drops before and after it still apply. ZFS 2.3 takes it with `direct=standard`, but whether a block already in the ARC is still served from there hasn't been checked, so the line above stands.
 
 - An EIO on ZFS means a block failed its checksum with no good copy left. It's reported the same as a mismatch.
 
@@ -169,6 +171,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 ## Leak and memory checks
 
 - A full run, and `--quick --leakcheck`, ends the tests stage with the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, then Miri, and CodeQL. Any report fails the run. `--gate` never runs them, since it's the pre-push hook.
+
+- `--no-codeql` leaves out only CodeQL, which is about 11 of a full run's 17 minutes. It drops each leak check step whose command names codeql.
 
 - The sanitizers, Miri and CodeQL run in the image from `cicd/container/`, with the pinned nightly and CodeQL, no network, and only the run's own dirs and `target/leakcheck/` mounted. Its crates are fetched once per lock file into `target/leakcheck/cargo-home`. Without docker they run on the host with a note, and CodeQL skips.
 
