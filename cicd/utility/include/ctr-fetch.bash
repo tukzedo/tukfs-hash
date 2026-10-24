@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 ##	Purpose:
-##		Run by ctr-image.bash's fCtrFetch in the leak check image, with
-##		network: the crates Cargo.lock names, then the ones -Zbuild-std takes
-##		for the nightly's std, into CARGO_HOME, so the checks can run offline.
+##		Run by ctr-image.bash's fCtrFetch in an image, with network: the
+##		crates Cargo.lock names, then with NIGHTLY the ones -Zbuild-std takes
+##		for its std, into CARGO_HOME, so the checks can run offline.
 ##	Syntax:
-##		ctr-fetch.bash NIGHTLY
+##		ctr-fetch.bash [NIGHTLY]
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -16,11 +16,13 @@
 
 set -Eeuo pipefail
 
-nightly="${1:?usage: ctr-fetch.bash NIGHTLY}"
+nightly="${1:-}"
 cargo fetch --locked --quiet
+[[ -n "${nightly}" ]] || exit 0
 lib="$(rustc "+${nightly}" --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml"
 cargo "+${nightly}" fetch --locked --quiet --manifest-path "${lib}"
 
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-10-23: NIGHTLY is optional, for the release image.

@@ -852,12 +852,12 @@ fStageRelease(){
 	if ((release_off)); then fStepSkip "release builds skipped"; return 0; fi
 	ver="$(fVersion)"
 	[[ -n "${ver}" ]] || fDie "no version in ${VERSION_MANIFEST}"
-	fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
-	"${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
-	[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
+	fEcho_Clean "${RELEASE_BUILD_CMD[*]}"
+	"${RELEASE_BUILD_CMD[@]}" || fDie "release build failed"
+	[[ -x "${root}/${RELEASE_BUILD_BIN}" ]] || fDie "no release binary at ${RELEASE_BUILD_BIN}"
 	## Bytes, since du gives what a compressed filesystem stores.
-	fEcho "OK: ${RELEASE_NATIVE_OSARCH}: ${RELEASE_NATIVE_BIN} ($(stat -c %s -- "${root}/${RELEASE_NATIVE_BIN}") bytes)"
-	built=("${RELEASE_NATIVE_OSARCH}|${RELEASE_NATIVE_BIN}")
+	fEcho "OK: ${RELEASE_NATIVE_OSARCH}: ${RELEASE_BUILD_BIN} ($(stat -c %s -- "${root}/${RELEASE_BUILD_BIN}") bytes)"
+	built=("${RELEASE_NATIVE_OSARCH}|${RELEASE_BUILD_BIN}")
 	for t in "${CROSS_TARGETS[@]}"; do
 		label="${t%%|*}"; t="${t#*|}"; osarch="${t%%|*}"; t="${t#*|}"; art="${t%%|*}"; cmd="${t#*|}"
 		fEcho_Clean "cross: ${label}: ${cmd}"

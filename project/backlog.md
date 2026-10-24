@@ -62,6 +62,41 @@
 	- Opened by: first profiler graph
 	- Note: On the 1.5 GB profiler workload, `posix_fadvise` was 16% of self time against 15% for blake3. `read_sums` drops the pages on ext4 and btrfs so a read can't come from a cached copy. Look at whether one call per file, or skipping it for files the page cache can't hold, keeps that promise for less.
 
+- The x86_64 release needs glibc 2.39, since it's built against this box's.
+	- ID: 2026102318460622
+	- Type: Enhancement
+	- Status: Done
+		- Both builds need glibc 2.28 now, and the packages depend on that.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-184606
+	- Opened by: answer on the cicd decisions
+	- Requirements  [Feature]:
+		- Build both release targets in a pinned container with an old glibc, so the floor is low and doesn't move with the box.
+		- Run each release build in that container, arm64 included.
+		- A release check fails a build whose floor is above the set one.
+	- Progress log:
+		- 2026-10-23: Both targets build in a Debian 10 image, `cicd/container-release/`, through `cicd/utility/release-build.bash`. arm64 is cross-built there, so zig is no longer used.
+		- 2026-10-23: Verified: a full run passed. Both builds need glibc 2.28. A clean rebuild from another path gave the same bytes for both. The integration test passed on the x86_64 release build, and the arm64 unit tests passed under qemu. The glibc check failed on a host build that needs 2.39, and the arm64 test check failed on a planted failing test.
+	- Branch: glibc-gate
+	- Closed: 20261023-194500
+
+- The pre-push gate runs on every push, docs-only ones and pushes to `main` included.
+	- ID: 2026102318460623
+	- Type: Enhancement
+	- Status: Done
+		- Pushes to `main` and docs-only pushes go through without the gate.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-184606
+	- Opened by: answer on the cicd decisions
+	- Requirements  [Feature]:
+		- No gate on a push to `main`, since what goes there already passed it on `dev`.
+		- A push that changes only docs skips the gate, on `dev` too.
+	- Progress log:
+		- 2026-10-23: Docs are `.md` files and anything under `assets/`. A new remote branch, or a remote commit this clone doesn't have, still runs the gate.
+		- 2026-10-23: Verified: a docs-only push to `dev` and a push to `main` skipped it, and a code push to `dev` started it.
+	- Branch: glibc-gate
+	- Closed: 20261023-194500
+
 - A full cicd pipeline, per the directives' "CICD process" section.
 	- ID: 2026102309501600
 	- Type: Feature
@@ -147,6 +182,7 @@
 		- 2026-10-23: The stage, `cicd/utility/gen-demo-gif.py`, the scenario and its script are in, and the gif is at the top of README.md. It shows a scan, a byte changed in one file with its time put back, a `--verify` scan that exits 4, and the report naming the file.
 		- 2026-10-23: Verified: a full run without publish or leak checks drew the gif in 6 s, rotated it into `../private/demo/gif/` and updated `assets/demo.gif`. A second run gave the same bytes and left it alone. 960x540, 496 frames, 29.6 s with the black, about 880 KB, every frame time a whole number of 20 ms frames.
 		- 2026-10-23: Verified: no Pillow and no font each warn and pass. A temp path in the output, a step with the wrong exit code, and a link inside the private dir each fail.
+		- 2026-10-23: The scan's disk name is shown as sda. It was the real one, which changed between runs and redrew the gif each time.
 	- Note: Dogfood and the ZFS integration test root were left out of these runs.
 	- Branch: cicd
 	- Closed: 20261023-153243

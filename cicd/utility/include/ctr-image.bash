@@ -4,18 +4,21 @@
 #  shellcheck disable=2154  ## 'referenced but not assigned.' root, APP_NAME, CPU_CAP, the CTR_ settings, the PINs and stop_cidfile come from config.bash and stop-descendants.bash, sourced first.
 
 ##	Purpose:
-##		The leak check image, for the scripts that run their tools in it.
-##		Source stop-descendants.bash and config.bash first, with root set to
-##		the repo root.
+##		The leak check image, or the release one, for the scripts that run
+##		their tools in it. Source stop-descendants.bash and config.bash
+##		first, with root set to the repo root.
+##			fCtrUseRelease      the functions below work on the release image
+##			                    from then on, not the leak check one.
 ##			fCtrWhyNot          nothing when the image can run here, else why
 ##			                    not: it's x86_64 only, and docker (or
 ##			                    TUKFS_DOCKER) counts once its daemon answers.
 ##			fCtrReady WORK      the image's tag into ctr_tag, building it
 ##			                    first if it isn't here. WORK is a scratch dir.
 ##			fCtrFetch WORK      fill CTR_CARGO_HOME, with network, with the
-##			                    crates Cargo.lock names and the ones
-##			                    -Zbuild-std takes. Once per lock file and
-##			                    nightly. Offline, a note, and what's cached.
+##			                    crates Cargo.lock names, and for the leak
+##			                    checks the ones -Zbuild-std takes. Once per
+##			                    lock file and image. Offline, a note, and
+##			                    what's cached.
 ##			fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##			                    run SCRIPT in the image, with no network, as
 ##			                    the caller's uid, on CPU_CAP cores. The repo
@@ -25,6 +28,8 @@
 ##			                    TMPDIR and HOME are in WORK, so on the host's
 ##			                    filesystem, with its user xattrs.
 ##			                    TUKFS_IN_IMAGE=1 tells the script where it is.
+##			                    The build number and SOURCE_DATE_EPOCH go in
+##			                    when they're set.
 ##			                    Returns the script's exit, or 2.
 ##		A build replaces the image of the old recipe, once the new one has
 ##		answered, and then prunes the build cache and any <none> image of ours.
@@ -38,6 +43,13 @@
 
 
 ctr_tag=""
+ctr_kind="leak"
+
+fCtrUseRelease(){
+	ctr_kind="release"
+	CTR_DIR="${REL_CTR_DIR}"; CTR_IMAGE="${REL_CTR_IMAGE}"
+	CTR_CONTEXT_EXTRA=("${REL_CTR_CONTEXT_EXTRA[@]}"); CTR_CARGO_HOME="${REL_CTR_CARGO_HOME}"
+}
 
 ## An installed docker with no daemon behind it is no docker at all. The
 ## timeout is for a DOCKER_HOST that never replies.
@@ -87,17 +99,27 @@ fCtrGB(){ awk -v b="${1:-0}" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 ## The label is what finds a <none> image of ours, and only ours.
 fCtrBuild(){   ## fCtrBuild TAG DIR
 	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" id="" have="" bytes=0 freed=0 pruned=""
-	local -a gone=()
-	"${engine}" build -q --label "${CTR_IMAGE}" -t "${tag}" \
-		--build-arg "NIGHTLY=${PIN_NIGHTLY}" --build-arg "CODEQL_VER=${PIN_CODEQL}" \
-		--build-arg "CODEQL_SHA256=${PIN_CODEQL_SHA256}" --build-arg "JOBS=${CPU_CAP:-1}" \
-		"${ctx}" >/dev/null || return 1
+	local -a gone=() args=()
+	if [[ "${ctr_kind}" == leak ]]; then
+		args=(--build-arg "NIGHTLY=${PIN_NIGHTLY}" --build-arg "CODEQL_VER=${PIN_CODEQL}"
+			--build-arg "CODEQL_SHA256=${PIN_CODEQL_SHA256}" --build-arg "JOBS=${CPU_CAP:-1}")
+	fi
+	"${engine}" build -q --label "${CTR_IMAGE}" -t "${tag}" "${args[@]}" "${ctx}" >/dev/null || return 1
 	## It has to answer before the old one goes.
-	have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
-	if [[ "${have}" != "${PIN_CODEQL}" ]]; then echo "ctr-image: ${tag} has CodeQL '${have}', not ${PIN_CODEQL}" >&2; return 1; fi
-	have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
-	if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${have}"; then
-		echo "ctr-image: ${tag} has no ${PIN_NIGHTLY}" >&2; return 1
+	if [[ "${ctr_kind}" == leak ]]; then
+		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
+		if [[ "${have}" != "${PIN_CODEQL}" ]]; then echo "ctr-image: ${tag} has CodeQL '${have}', not ${PIN_CODEQL}" >&2; return 1; fi
+		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
+		if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${have}"; then
+			echo "ctr-image: ${tag} has no ${PIN_NIGHTLY}" >&2; return 1
+		fi
+	else
+		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" ldd --version 2>/dev/null | head -n 1 || true)"
+		if [[ "${have}" != *" ${GLIBC_FLOOR}" ]]; then echo "ctr-image: ${tag} has '${have}', not glibc ${GLIBC_FLOOR}" >&2; return 1; fi
+		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
+		if ! grep -q -- "^${RUST_PIN}-" <<<"${have}"; then
+			echo "ctr-image: ${tag} has no ${RUST_PIN}" >&2; return 1
+		fi
 	fi
 	## Not -f, so an image a container still has stays.
 	while IFS= read -r old; do
@@ -130,13 +152,15 @@ fCtrFetch(){   ## fCtrFetch WORK
 	local work="$1" want="" got="" ch=""
 	mkdir -p -- "${CTR_CARGO_HOME}" "${work}/home" "${work}/tmp" || return 1
 	ch="$(realpath -e -- "${CTR_CARGO_HOME}")" || return 1
+	local -a nightly=()
+	if [[ "${ctr_kind}" == leak ]]; then nightly=("${PIN_NIGHTLY}"); fi
 	want="$(sha256sum < "${root}/Cargo.lock" | cut -c1-16) ${ctr_tag}"
 	{ read -r got < "${ch}/.fetched"; } 2>/dev/null || true
 	[[ "${got}" != "${want}" ]] || return 0
 	if fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --cpus "${CPU_CAP:-1}" --user "$(id -u):$(id -g)" \
 		-v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" -w "${root}" \
 		-e "TMPDIR=${work}/tmp" -e "HOME=${work}/home" -e "CARGO_HOME=${ch}" \
-		"${ctr_tag}" bash "${root}/cicd/utility/include/ctr-fetch.bash" "${PIN_NIGHTLY}"; then
+		"${ctr_tag}" bash "${root}/cicd/utility/include/ctr-fetch.bash" "${nightly[@]}"; then
 		printf '%s\n' "${want}" > "${ch}/.fetched"
 	else
 		echo "note: could not fetch crates for the image (offline?); going on with what's cached"
@@ -164,6 +188,7 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 		"${rwMount[@]}" -w "${root}" \
 		-e TUKFS_IN_IMAGE=1 -e TINI_KILL_PROCESS_GROUP=1 -e "CPU_CAP=${CPU_CAP:-1}" -e "TMPDIR=${work}/tmp" \
 		-e "HOME=${work}/home" -e "CARGO_HOME=${ch}" -e CARGO_NET_OFFLINE=true -e "TUKFS_GATE_STRICT=${TUKFS_GATE_STRICT:-}" \
+		-e "${BUILD_ENV_NAME}" -e SOURCE_DATE_EPOCH -e CARGO_TERM_QUIET \
 		"${ctr_tag}" bash "$@" || rc=$?
 	return "${rc}"
 }
@@ -175,3 +200,4 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		  crates, and the old image and build cache cleared after a build.
 ##		- 2026-10-23: Every container through fCtrRun, with a cidfile in the
 ##		  run's cid dir, so a stop of the whole run finds it.
+##		- 2026-10-23: The release image too, through fCtrUseRelease.
