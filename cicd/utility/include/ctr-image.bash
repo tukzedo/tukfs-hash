@@ -28,8 +28,8 @@
 ##			                    TMPDIR and HOME are in WORK, so on the host's
 ##			                    filesystem, with its user xattrs.
 ##			                    TUKFS_IN_IMAGE=1 tells the script where it is.
-##			                    The build number and SOURCE_DATE_EPOCH go in
-##			                    when they're set.
+##			                    The build number, its release flag and
+##			                    SOURCE_DATE_EPOCH go in when they're set.
 ##			                    Returns the script's exit, or 2.
 ##		A build replaces the image of the old recipe, once the new one has
 ##		answered, and then prunes the build cache and any <none> image of ours.
@@ -188,7 +188,7 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 		"${rwMount[@]}" -w "${root}" \
 		-e TUKFS_IN_IMAGE=1 -e TINI_KILL_PROCESS_GROUP=1 -e "CPU_CAP=${CPU_CAP:-1}" -e "TMPDIR=${work}/tmp" \
 		-e "HOME=${work}/home" -e "CARGO_HOME=${ch}" -e CARGO_NET_OFFLINE=true -e "TUKFS_GATE_STRICT=${TUKFS_GATE_STRICT:-}" \
-		-e "${BUILD_ENV_NAME}" -e SOURCE_DATE_EPOCH -e CARGO_TERM_QUIET \
+		-e "${BUILD_ENV_NAME}" -e "${BUILD_RELEASE_ENV_NAME}" -e SOURCE_DATE_EPOCH -e CARGO_TERM_QUIET \
 		"${ctr_tag}" bash "$@" || rc=$?
 	return "${rc}"
 }
@@ -201,3 +201,4 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		- 2026-10-23: Every container through fCtrRun, with a cidfile in the
 ##		  run's cid dir, so a stop of the whole run finds it.
 ##		- 2026-10-23: The release image too, through fCtrUseRelease.
+##		- 2026-10-23: The release flag goes in with the build number.

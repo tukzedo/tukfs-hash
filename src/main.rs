@@ -41,6 +41,8 @@ const VERSION: &str = concat!(
 	env!("CARGO_PKG_VERSION"),
 	env!("TUKFS_HASH_BUILD_SUFFIX")
 );
+// Empty for a release, or with no build number.
+const BUILD_MINUTES: &str = env!("TUKFS_HASH_BUILD_MINUTES");
 const COPYRIGHT: &str = "Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)";
 
 const USAGE: &str = "\
@@ -121,6 +123,16 @@ kinds found. A resumed scan counts what its earlier parts found too. accept
 exits 1 if any file wasn't taken.
 ";
 
+fn version_line(minutes: &str) -> String {
+	match minutes.parse::<i64>() {
+		Ok(m) => format!(
+			"{VERSION} ({})",
+			&util::fmt_local((946_684_800 + m * 60) * 1_000_000)[..10]
+		),
+		Err(_) => VERSION.to_string(),
+	}
+}
+
 fn take_value<'a>(
 	args: &mut std::slice::Iter<'a, OsString>,
 	flag: &str,
@@ -162,7 +174,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		return Ok(0);
 	}
 	if cmd == "--version" {
-		out!("{VERSION}\n{COPYRIGHT}");
+		out!("{}\n{COPYRIGHT}", version_line(BUILD_MINUTES));
 		return Ok(0);
 	}
 
@@ -524,5 +536,20 @@ mod tests {
 			};
 			assert_eq!(damage_first(k), was, "{n}");
 		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call localtime_r")]
+	fn version_dates_only_between_releases() {
+		let _id = test_id("0vGG2b");
+		assert_eq!(version_line(""), VERSION);
+		// 2026-10-23 12:00 UTC, which is the 23rd or 24th in every time zone.
+		let noon = version_line("14101200");
+		let day = noon.strip_prefix(VERSION).unwrap();
+		assert!([" (2026-10-23)", " (2026-10-24)"].contains(&day), "{noon}");
+		assert_eq!(
+			day,
+			format!(" ({})", &util::fmt_local(1_792_756_800_000_000)[..10])
+		);
 	}
 }

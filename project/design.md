@@ -148,6 +148,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The build number is the commit time in minutes since 2000-01-01 UTC, rounded, in lower-case Crockford base32. `cicd/cicd.bash` passes it in at compile time through `build.rs`, and `--version` prints it after the version. It comes from the commit rather than the clock, so 2 builds of one commit match. A plain `cargo build` has none.
 
+- A build that isn't a release shows its date after the build number, such as `build debj2 (2026-10-23)`. The date is worked out from the build number when `--version` runs, in the local time zone of whoever runs it, so the same binary can show a different day in another zone. A release is a commit tagged `v<version>`, so the tag goes on before the release is built. A release build leaves the date off. The release check runs `--version` in the box's zone, UTC+14 and UTC-12, since the last 2 never share a date.
+
 - Feature branches merge into `dev` with `--no-ff`. A `dev` to `main` merge is a release, and gets tagged. Pulls are `--ff-only`.
 
 - The pipeline runs here, not on a hosted service. Its `--gate` is the pre-push hook, for pushes to `dev`. A push to `main` isn't gated, since `main` only gets what already passed on `dev`. Neither is a push that changes only `.md` files and `assets/`.
