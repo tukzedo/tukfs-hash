@@ -111,7 +111,7 @@
 - A stopped integration test can leave part of its work folder.
 	- ID: 2026102408015248
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261024-080152
 	- Opened by: testing 2026102407311809
@@ -122,6 +122,15 @@
 	- Expected behavior [Bug]: The whole work folder goes, as on a normal end.
 	- Reproduced [Bug]: 2026-10-24 on b23, 3 of 3.
 	- Possible cause [Bug]: A scan the test started is still writing in `tree`, or a step's read-only folder isn't put back before the `rm -rf`. Inside a cicd run the run dir around it goes anyway.
+	- Actual cause [Bug]:
+		- A TERM to the test's PID alone ends the shell and runs its EXIT trap at once, but what it started doesn't get the signal. At 4 s that was step 5's python3 still writing its 400 files into `tree/many`, so `rm -rf` failed with "Directory not empty".
+	- Actual fix [Bug]: `fCleanup` calls `fStopDescendants` from `cicd/utility/include/stop-descendants.bash` first, as the leak and release scripts do. It stops everything under the test, waits up to 30 s, then KILLs the rest, and ignores a second signal meanwhile. All 3 EXIT traps go through `fCleanup`.
+	- Progress log:
+		- 2026-10-24: Verified: before the fix, a TERM at 4 s left `tree/many` and its writer running. After, a TERM to the PID at 1, 2, 4, 7, 10, 13, 16 and 19 s, and to the whole group at 4 and 7 s, left no folder and nothing running. Those cover the hashing steps, the background scan stops, the read-only folders and the lock holder. Both full runs, ext4 and ZFS, pass and leave no folder. shellcheck passes on every tracked script.
+		- Swept: `cicd.bash` stops its descendants through `fRunTmpGone`, and the 4 leak and release scripts call `fStopDescendants`. `green-tree.bash` removes only single files. No other trap removes a folder.
+	- Branch: round-20261024
+	- Test case: `private/claude_simple/tools/it-stop-check.bash REPO [DELAY] [TMPDIR] [pid|group]`, since a stop test can't run inside the script it stops. It failed before the fix and passes after.
+	- Closed: 20261024-080901
 
 - The full run's debug build stage has no flag to turn it off.
 	- ID: 2026102407030600
