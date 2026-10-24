@@ -37,6 +37,10 @@ BUILD_RELEASE_ENV_NAME="TUKFS_HASH_RELEASE"
 ## Each run's temp dir and the integration test's dirs are named with this,
 ## under <root>/tukfs-hash/, and nothing else is ever removed by the guard.
 RUN_TMP_PREFIX="cicd_tukfs-hash_qx7j"
+## Where the run's temp dir goes when the caller sets no TMPDIR, or /tmp if
+## it isn't there. b23's /tmp is btrfs on LUKS, and slow to fsync under load
+## (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
+RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
 ## Tool pins. The engine warns, without failing, when a tool has drifted.
 ## "name|version|command": the version has to show up in the command's output.
@@ -284,3 +288,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  tests' status lines.
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
 ##		- 2026-10-23: The release flag for build.rs.
+##		- 2026-10-24: RUN_TMP_ROOT.

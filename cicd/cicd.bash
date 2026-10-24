@@ -79,8 +79,9 @@
 ##	  through without running the gate again. --quick, --no-fmt, --no-debug,
 ##	  --no-lint, --no-tests, a missing tool and a missing test root each keep
 ##	  a run from recording.
-##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, with
-##	  TMPDIR pointed into it, so what a failed test leaves goes with it. It and
+##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, or
+##	  under config.bash's RUN_TMP_ROOT when TMPDIR isn't set, with TMPDIR
+##	  pointed into it, so what a failed test leaves goes with it. It and
 ##	  the integration test's dirs are removed at the end, even when the run
 ##	  fails or is stopped, and only by fSafeRm. A stop kills the containers
 ##	  the run started first.
@@ -397,7 +398,7 @@ fFrozenGone(){
 	return 0
 }
 
-run_tmp_root="$(realpath -e -- "${TMPDIR:-/tmp}" 2>/dev/null || true)"
+run_tmp_root="$(realpath -e -- "${TMPDIR:-${RUN_TMP_ROOT:-/tmp}}" 2>/dev/null || true)"
 [[ "${run_tmp_root}" == /* ]] || run_tmp_root="$(realpath -e /tmp)"
 fRunDirMake "${run_tmp_root}" run
 run_tmp="${made_dir}"
@@ -437,6 +438,7 @@ fRunTmpGone(){
 	return 0
 }
 trap 'fRunTmpGone || true' EXIT
+fStopOnSignals
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -645,7 +647,7 @@ fStageBuild(){
 	fStep 2 "Build (debug)"
 	if ((debug_off)); then fStepSkip "debug build skipped"; return 0; fi
 	fEcho_Clean "${BUILD_CMD[*]}"
-	"${BUILD_CMD[@]}" || fDie "debug build failed"
+	fBg "${BUILD_CMD[@]}" || fDie "debug build failed"
 	fEcho "OK: debug build"
 	fStepPass
 }
@@ -748,7 +750,7 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	fRunDirMake "${real}" it "${label}"
 	d="${made_dir}"
 	fEcho_Clean "integration test on ${label}: TMPDIR=${d}"
-	TMPDIR="${d}" "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
+	TMPDIR="${d}" fBg "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
 	if fRunDirGone "${d}"; then freed_kb=$((freed_kb + gone_kb)); fi
 	fEcho "OK: integration test on ${label}"
@@ -760,18 +762,18 @@ fStageTests(){
 	fStep 4 "Tests"
 	if ((tests_off)); then fStepSkip "tests skipped"; return 0; fi
 	fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=${TMPDIR})"
-	"${TEST_CMD[@]}" || fDie "unit tests failed"
+	fBg "${TEST_CMD[@]}" || fDie "unit tests failed"
 	fEcho "OK: unit tests"
 	## The integration test runs the release build.
 	fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
-	"${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
+	fBg "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
 	[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
 	for r in "${IT_ROOTS[@]}"; do fRunIt "${r%%|*}" "${r#*|}"; done
 	## Last, since the slow ones take a long time and the rest should report first.
 	for step in "${LEAKCHECK_STEPS[@]}"; do
 		fEcho_Clean "leak check: ${step}"
 		t0="${SECONDS}"
-		eval "${step}" || fDie "leak check failed: ${step}"
+		fBg eval "${step}" || fDie "leak check failed: ${step}"
 		fEcho_Clean "leak check took $(fMinSec $((SECONDS - t0))): ${step}"
 	done
 	if ((${#LEAKCHECK_STEPS[@]})); then fEcho "OK: leak checks"; fi
@@ -877,7 +879,7 @@ fStageRelease(){
 	ver="$(fVersion)"
 	[[ -n "${ver}" ]] || fDie "no version in ${VERSION_MANIFEST}"
 	fEcho_Clean "${RELEASE_BUILD_CMD[*]}"
-	"${RELEASE_BUILD_CMD[@]}" || fDie "release build failed"
+	fBg "${RELEASE_BUILD_CMD[@]}" || fDie "release build failed"
 	[[ -x "${root}/${RELEASE_BUILD_BIN}" ]] || fDie "no release binary at ${RELEASE_BUILD_BIN}"
 	## Bytes, since du gives what a compressed filesystem stores.
 	fEcho "OK: ${RELEASE_NATIVE_OSARCH}: ${RELEASE_BUILD_BIN} ($(stat -c %s -- "${root}/${RELEASE_BUILD_BIN}") bytes)"
@@ -978,7 +980,7 @@ fStageDogfood(){
 fStageGif(){
 	fStep 8 "Demo gif"
 	if ((! GIF_ENABLE)) || [[ -z "${GIF_CMD}" ]]; then fStepSkip "demo gif off in config.bash, or skipped"; return 0; fi
-	eval "${GIF_CMD}" || fDie "demo gif failed"
+	fBg eval "${GIF_CMD}" || fDie "demo gif failed"
 	fStepPass
 }
 
@@ -1050,7 +1052,7 @@ fRunFrozen(){
 	local -a inner=("$( ((quiet)) && echo -q || echo -y )" --no-sync --no-dogfood --no-gif --no-publish "${inner_pass[@]}")
 	local rc=0 green=""
 	((record_green)) && green="${frozen_tree}"
-	TUKFS_RUN_PART=build TUKFS_GREEN_TREE="${green}" bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
+	TUKFS_RUN_PART=build TUKFS_GREEN_TREE="${green}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
 	_wasLastEchoBlank=1
 	## A stopped run stays a stopped run, and the EXIT trap says so.
@@ -1113,9 +1115,10 @@ fPruneCache(){   ## fPruneCache DIR
 }
 
 ## Run dirs left by runs that were killed outright, so their trap never ran:
-## a strict name, a mark whose PID matches the name and is gone, and a day old.
+## a strict name, and a mark whose PID matches the name and is gone. A frozen
+## copy in one goes through git first, so its locked record goes too.
 fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
-	local base="" d="" got="" pid="" kb=0 n=0 size=0
+	local base="" d="" got="" pid="" kb=0 n=0 size=0 repo=""
 	base="$(realpath -e -- "$1" 2>/dev/null || true)"
 	[[ -n "${base}" && -d "${base}/tukfs-hash" ]] || { echo "0 0"; return 0; }
 	for d in "${base}/tukfs-hash/${RUN_TMP_PREFIX}"_{run,it,prof}_*; do
@@ -1126,20 +1129,42 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		[[ "${pid}" != "$$" ]] || continue
 		got=""; { read -r got < "${d}/${run_mark}"; } 2>/dev/null || continue
 		[[ "${got}" == "${pid}-"* ]] || continue
-		kill -0 "${pid}" 2>/dev/null && continue
-		[[ -n "$(find "${d}" -maxdepth 0 -mmin +1440 2>/dev/null || true)" ]] || continue
+		## Not kill -0, which fails on another user's process too.
+		[[ -d "/proc/${pid}" ]] && continue
 		size="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 		[[ "${size}" =~ ^[0-9]{1,15}$ ]] || size=0
+		repo=""
+		## fSafeRm checks this too, but only after git has been in it.
+		[[ -O "${d}" ]] || continue
+		if [[ -d "${d}/tree" && ! -L "${d}/tree" ]]; then
+			## The checkout it came from, which may not be this one.
+			repo="$(git -C "${d}/tree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+			[[ "${repo}" == /* ]] || repo="${root}"
+			fFrozenRemove "${repo}" "${d}/tree" || true
+		fi
 		if fSafeRm "${d}" "${got}"; then n=$((n + 1)); kb=$((kb + size)); fi
+		if [[ -n "${repo}" ]]; then fFrozenRemove "${repo}" "${d}/tree" || true; fi
 	done
 	echo "${n} ${kb}"
+}
+
+## Every root a run makes dirs under, into swept, with their size in swept_kb.
+declare -a swept=(); swept_kb=0
+fSweepKilled(){
+	local r out n=0 kb=0
+	swept=(); swept_kb=0
+	for r in "${run_tmp_root}" "${IT_ROOTS[@]#*|}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do
+		out="$(fSweepStale "${r}")"; read -r n kb <<< "${out}"
+		if ((n)); then swept+=("${n} dir(s) of killed runs under ${r}"); swept_kb=$((swept_kb + kb)); fi
+	done
+	return 0
 }
 
 ## What's gone stale that the pipeline made, then this run's temp files, in one
 ## line. The run on the frozen copy only removes its own.
 fCleanup(){
 	local -a gone=()
-	local d kb=0 total=0 n=0 c r out
+	local d kb=0 total=0 n=0 c out
 	if ((inner_run)); then
 		fFrozenGone || true
 		for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
@@ -1157,10 +1182,8 @@ fCleanup(){
 			if ((n)); then gone+=("${n} stale build cache entries in ${c}"); total=$((total + kb)); fi
 		done
 	fi
-	for r in "${run_tmp_root}" "${IT_ROOTS[@]#*|}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do
-		out="$(fSweepStale "${r}")"; read -r n kb <<< "${out}"
-		if ((n)); then gone+=("${n} dir(s) of killed runs under ${r}"); total=$((total + kb)); fi
-	done
+	fSweepKilled
+	gone+=("${swept[@]}"); total=$((total + swept_kb))
 	for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
 	gone+=("this run's temp files")
 	fEcho_Clean "cleanup: removed $(printf '%s, ' "${gone[@]}" | sed 's/, $//'), about $(fSize "${total}")"
@@ -1172,7 +1195,13 @@ fCleanup(){
 ## Run
 
 fmt_done=0
-if ((! inner_run)); then fStageSync; fi
+## Here too, and not only at the end, so a run that's stopped as well still
+## takes down what the last one left.
+if ((! inner_run)); then
+	fSweepKilled
+	if ((${#swept[@]})); then fEcho_Clean "cleanup: removed $(printf '%s, ' "${swept[@]}" | sed 's/, $//'), about $(fSize "${swept_kb}")"; fi
+	fStageSync
+fi
 if ((freeze)); then
 	## Rewrites the checkout, before the copy is taken. A check runs in the copy.
 	if ((${#FMT_CMD[@]})); then fStageFormat; fmt_done=1; fi
@@ -1226,3 +1255,8 @@ exit 0
 ##		- 2026-10-24: --no-debug, and --no-codeql for CodeQL on its own.
 ##		- 2026-10-24: A stop's cleanup ignores further signals and a gone
 ##		  reader, and the run log outlives the reader.
+##		- 2026-10-24: INT, TERM and HUP trapped, and the long steps waited on
+##		  in the background, so a second TERM can't skip the cleanup. A killed
+##		  run's dirs and frozen copy go at the next run's start and end, as
+##		  soon as its PID is gone, rather than a day later.
+##		- 2026-10-24: With no TMPDIR, a run works under RUN_TMP_ROOT, not /tmp.

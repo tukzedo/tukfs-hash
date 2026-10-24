@@ -29,37 +29,6 @@
 
 ## Issues
 
-- A stopped cicd run can leave its temp dir and a locked frozen copy.
-	- ID: 2026102407311809
-	- Type: Bug
-	- Status: Waiting for answers
-		- Waits on the 2026102407311809 question in questions.md, on how to cover a run that dies before its EXIT trap starts.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261024-073118
-	- Opened by: testing 2026102407030600
-	- Steps to reproduce [Bug]:
-		- `timeout -s TERM 20 cicd/cicd.bash -y --no-sync --no-fmt --no-debug --no-lint --no-profile --no-release --no-publish | grep Leak`, stopped during the unit tests.
-	- Incorrect behavior [Bug]:
-		- The stop prints "stopped N process(es)", then the run ends without "removed this run's temp files". Its run dir stays, and `git worktree list` keeps its `tree` as locked.
-	- Expected behavior [Bug]:
-		- The dir and the worktree go, as in 2026102309501601's stop test.
-	- Reproduced [Bug]: 2026-10-24 on b23, in 5 of 6 stops: piped to grep, or under `bash -x` to a file. The one stop with plain output to a file cleaned up.
-	- Possible cause [Bug]: Something in the EXIT trap after `fStopDescendants` kills the run, or it writes to a pipe that has gone.
-	- Actual cause [Bug]:
-		- From a shell with job control, `timeout` leads the pipeline's process group, so its group TERM kills `grep` too. `tee` then dies of SIGPIPE at its next write, and so does the run at its next one, inside the EXIT trap. A Ctrl+C of `cicd.bash | tee` does the same.
-		- `timeout` sends TERM to the run and then to its group. bash 5.2 dies at once on a second TERM once it's handling the first, before the trap's first command or partway through the trap.
-	- Progress log:
-		- 2026-10-24: `fStopDescendants` and `fRunTmpGone` ignore INT, TERM, HUP and PIPE from their first line. The run log's `tee` has `-p`, so it keeps writing the log once the reader is gone.
-		- 2026-10-24: Verified: a second TERM once the stop has begun used to leave the run dir and a locked frozen copy, and now cleans up. shellcheck passes.
-		- 2026-10-24: A trap's write to a reader that's gone no longer ends it. That was checked on a stand-in script, not on a cicd run.
-		- 2026-10-24: Still open: `timeout | grep` from a shell with job control still fails on each of about 10 stops at 15 s. The second TERM comes before the trap's first command can ignore it, and the run dies with no trap at all. Starting the frozen copy's run in the background and waiting for it made no difference.
-		- Swept: the 4 leak and release scripts whose EXIT traps call `fStopDescendants` get the same ignore through it. The integration test's own stop has a separate bug, filed as 2026102408015248.
-	- Decisions:
-		- Once a stop has begun, a second Ctrl+C or TERM no longer cuts it short. The wait is still capped by `TUKFS_STOP_WAIT`, 30 s, and then KILL.
-		- A reader that quits early, such as `| head`, no longer stops the run, since the log's `tee` keeps going.
-	- Branch: round-20261024
-	- Test case: `private/claude_simple/tools/cicd-stop-check.bash REPO [DELAY] [pipe|twice]`. `twice` failed before the fix and passes after. `pipe` still fails at 15 s.
-
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -107,26 +76,6 @@
 	- Requirements  [Feature]:
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
-
-- Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
-	- ID: 2026102409041301
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261024-090413
-	- Opened by: round full run
-	- Note: In the full run's release stage, step 5's scan printed no `group` line within `wait_started`'s 60 s, so the test stopped it before it read a file. That gave exit 2 where 6 was wanted. The test took about 8 minutes there, against about 50 s at load 12. It passed 3 of 3 reruns on the same build at load 11 to 14. The `group` line is printed at planning, before any read, so the delay is somewhere before that, such as opening and locking the database on btrfs `/tmp`. Not measured yet.
-	- Output: `FAIL 0vCUrb integration scan never started`, then `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`, and `stopped before the end (0 of 400)`.
-
-- A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
-	- ID: 2026102409041302
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261024-090413
-	- Opened by: round full run
-	- Note: `cicd.bash` takes its run folder from `TMPDIR` and falls back to `/tmp`. The ext4 and ZFS test roots in `config.bash` already default to `/mnt/ext/wip2/wip/tmp` and `~/tmp/tukfs-hash-zfs-it`. b23's `/tmp` has given EIO under memory pressure, and the machine notes put temp files under the ext4 root. Look at a config default for the run folder too, or have the round's full-run line set `TMPDIR`.
-	- Related IDs: 2026102409041301
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -574,6 +523,43 @@
 	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
+
+- A stopped cicd run can leave its temp dir and a locked frozen copy.
+	- ID: 2026102407311809
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-073118
+	- Opened by: testing 2026102407030600
+	- Steps to reproduce [Bug]:
+		- `timeout -s TERM 20 cicd/cicd.bash -y --no-sync --no-fmt --no-debug --no-lint --no-profile --no-release --no-publish | grep Leak`, stopped during the unit tests.
+	- Incorrect behavior [Bug]:
+		- The stop prints "stopped N process(es)", then the run ends without "removed this run's temp files". Its run dir stays, and `git worktree list` keeps its `tree` as locked.
+	- Expected behavior [Bug]:
+		- The dir and the worktree go, as in 2026102309501601's stop test.
+	- Reproduced [Bug]: 2026-10-24 on b23, in 5 of 6 stops: piped to grep, or under `bash -x` to a file. The one stop with plain output to a file cleaned up.
+	- Possible cause [Bug]: Something in the EXIT trap after `fStopDescendants` kills the run, or it writes to a pipe that has gone.
+	- Actual cause [Bug]:
+		- From a shell with job control, `timeout` leads the pipeline's process group, so its group TERM kills `grep` too. `tee` then dies of SIGPIPE at its next write, and so does the run at its next one, inside the EXIT trap. A Ctrl+C of `cicd.bash | tee` does the same.
+		- `timeout` sends TERM to the run and then to its group. bash 5.2 dies at once on a second TERM once it's handling the first, before the trap's first command or partway through the trap.
+	- Progress log:
+		- 2026-10-24: `fStopDescendants` and `fRunTmpGone` ignore INT, TERM, HUP and PIPE from their first line. The run log's `tee` has `-p`, so it keeps writing the log once the reader is gone.
+		- 2026-10-24: Verified: a second TERM once the stop has begun used to leave the run dir and a locked frozen copy, and now cleans up. shellcheck passes.
+		- 2026-10-24: A trap's write to a reader that's gone no longer ends it. That was checked on a stand-in script, not on a cicd run.
+		- 2026-10-24: Still open: `timeout | grep` from a shell with job control still fails on each of about 10 stops at 15 s. The second TERM comes before the trap's first command can ignore it, and the run dies with no trap at all. Starting the frozen copy's run in the background and waiting for it made no difference.
+		- Swept: the 4 leak and release scripts whose EXIT traps call `fStopDescendants` get the same ignore through it. The integration test's own stop has a separate bug, filed as 2026102408015248.
+		- 2026-10-24: cicd.bash traps INT, TERM and HUP, and the trap exits 130, 143 or 129 into the EXIT trap. A trapped signal waits its turn, so a second one can't skip the cleanup. bash runs a trap only between commands, so the frozen copy's run and the long steps run in the background and are waited for, with INT put back for them.
+		- 2026-10-24: A run's start and end take down the dirs of runs whose PID is gone, with no day's wait. A frozen copy in one goes through git first, so its locked record goes too.
+		- 2026-10-24: Verified: `timeout | grep` from a shell with job control, a second TERM during the stop, a Ctrl+C to the group, and a KILLed run swept by the next run, at 10 and 15 s, all left no run dir or frozen copy, at load 15 to 30. `pipe` passed at 3, 8, 15, 15 and 22 s too. Before the fix, `pipe` and `killed` failed at 12 and 15 s. A TERM to the PID alone of a `--no-freeze` run stopped it in 0.35 s with nothing left. `--gate` and shellcheck pass.
+		- Swept: `tests/integration.bash` stopped by `timeout | grep` at 3, 6 and 9 s left nothing, so it keeps its EXIT trap alone. The 4 leak and release scripts are unchanged. In a cicd run their scratch dirs sit in the run dir and their containers are killed by ID, so the run's cleanup covers them. The unit tests' own sweep keeps its day's wait (2026102309501607).
+	- Decisions:
+		- 2026-10-24 answer: do both (a) and (b). Trap INT, TERM and HUP explicitly and run long steps in the background with `wait`, and have the next run take down a dead run's dir and frozen copy as soon as its PID is gone.
+		- Once a stop has begun, a second Ctrl+C or TERM no longer cuts it short. The wait is still capped by `TUKFS_STOP_WAIT`, 30 s, and then KILL.
+		- A reader that quits early, such as `| head`, no longer stops the run, since the log's `tee` keeps going.
+	- Actual fix [Bug]: `fStopOnSignals` and `fBg` in `cicd/utility/include/stop-descendants.bash`, used by cicd.bash. `fSweepStale` goes by the PID alone, takes a frozen copy down through git, and runs at a run's start too.
+	- Branch: round-20261024, then round-20261024b
+	- Test case: `private/claude_simple/tools/cicd-stop-check.bash REPO [DELAY] [all|pipe|twice|ctrlc|killed]`. `pipe` and `killed` failed before the fix and pass after. `twice` failed before the first part. `ctrlc` passed before and after.
+	- Closed: 20261024-093805
 
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
 	- ID: 2026101406340915
@@ -1103,6 +1089,31 @@
 	- Branch: cicd
 	- Closed: 20261023-104516
 
+- Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
+	- ID: 2026102409041301
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No. Ran 2026-10-24, in the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-090413
+	- Opened by: round full run
+	- Related IDs: 2026102409041302
+	- Note: In the full run's release stage, step 5's scan printed no `group` line within `wait_started`'s 60 s, so the test stopped it before it read a file. That gave exit 2 where 6 was wanted. The test took about 8 minutes there, against about 50 s at load 12. It passed 3 of 3 reruns on the same build at load 11 to 14. The `group` line is printed at planning, before any read, so the delay is somewhere before that, such as opening and locking the database on btrfs `/tmp`. Not measured yet.
+	- Output: `FAIL 0vCUrb integration scan never started`, then `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`, and `stopped before the end (0 of 400)`.
+	- Reproduced [Bug]: 2026-10-24 on b23, on btrfs `/tmp`. With the old test at load 42 to 85, step 5's scan took 24 and 45 s to start. With `wait_started` cut to 10 s it failed with the same 3 lines.
+	- Actual cause [Bug]:
+		- The scan's first write at open, the switch to WAL, makes a rollback journal and fsyncs it. On btrfs that fsync waits until step 5's 1.3 GB are written out. b23's `/tmp` is btrfs with zstd, on LUKS, so at load 40 that can take over a minute.
+		- At load 22, the same start took 35 s on btrfs `/tmp`, 0.2 s on ext4, and 0.1 s on btrfs with nothing waiting to be written.
+	- Actual fix [Bug]: Step 5 runs `sync -f` on its files before the scan, as the profiler workload already does. The release stage moved off `/tmp` too, in 2026102409041302.
+	- Progress log:
+		- 2026-10-24: Verified: with the fix, at load 71 to 75 on btrfs `/tmp`, the sync took 10 to 25 s and the scan started in under 0.1 s. `--gate` passes, the integration test on ext4 and ZFS included.
+		- 2026-10-24: Verified: the round full run at `26d49a5` passed every stage. 0vCUrb and 0vCUrc passed on ext4, on ZFS, and in the release stage on the x86_64 release build. The load during the run wasn't logged.
+	- Swept: step 7's `wait_started` comes after small writes, and by then step 5's files have been read. The lock holder's wait doesn't fail on a timeout. The profiler workload syncs already.
+	- Branch: round-20261024b
+	- Test case: `tests/integration.bash` 0vCUrb and 0vCUrc. With `wait_started` cut to 10 s, on btrfs `/tmp` at load 75 to 85, they failed before the fix and passed after. `private/claude_simple/tools/scan-start-delay.bash BINARY TMP_ROOT [ROUNDS] [nowrite|sync]` times the scan's start after the same write.
+	- Commit: `26d49a5`
+	- Closed: 20261024-103516
+
 - A stopped integration test can leave part of its work folder.
 	- ID: 2026102408015248
 	- Type: Bug
@@ -1411,6 +1422,27 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
+	- ID: 2026102409041302
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No. Ran 2026-10-24, in the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-090413
+	- Opened by: round full run
+	- Note: `cicd.bash` takes its run folder from `TMPDIR` and falls back to `/tmp`. The ext4 and ZFS test roots in `config.bash` already default to `/mnt/ext/wip2/wip/tmp` and `~/tmp/tukfs-hash-zfs-it`. b23's `/tmp` has given EIO under memory pressure, and the machine notes put temp files under the ext4 root. Look at a config default for the run folder too, or have the round's full-run line set `TMPDIR`.
+	- Related IDs: 2026102409041301
+	- Progress log:
+		- 2026-10-24: `config.bash` has `RUN_TMP_ROOT`, `/mnt/ext/wip2/wip/tmp` unless `TUKFS_CICD_RUN_TMP` is set. A run uses it when `TMPDIR` isn't set, and `/tmp` when it isn't there. The unit tests, the frozen copy and the release stage's integration test go with it.
+		- 2026-10-24: Verified: `--gate` with no `TMPDIR` ran under the ext4 root and left nothing there. With `TMPDIR=/mnt/tmpfs/tmp` it used that, and with `TUKFS_CICD_RUN_TMP` naming a missing folder it used `/tmp`. shellcheck passes.
+		- 2026-10-24: Verified: the round full run at `26d49a5`, with no `TMPDIR`, put its temp dir and the release stage's work under `/mnt/ext/wip2/wip/tmp/tukfs-hash/`. Its cleanup removed it, and nothing was left there or in `/tmp` after.
+	- Decisions:
+		- A config default rather than `TMPDIR` on the round's full-run line, so hand runs and the pre-push hook get it too. A caller's `TMPDIR` still wins.
+	- Branch: round-20261024b
+	- Test case: none in the suite, since it's where cicd.bash puts its own dir. Checked by hand in the 3 cases above.
+	- Commit: `26d49a5`
+	- Closed: 20261024-103516
 
 - The full run's debug build stage has no flag to turn it off.
 	- ID: 2026102407030600

@@ -178,6 +178,9 @@ check 0vCUra "edit updates the size attribute" "$(xget "${tree}/small.txt" user.
 # before the stop, and the stop and the resumed part both have to say so.
 mkdir -p "${tree}/many"
 python3 -I -c 'import os,sys; d=sys.argv[1]; [open(os.path.join(d, f"f{i}"), "wb").write(os.urandom(i * 16384)) for i in range(1, 401)]' "${tree}/many"
+# Or the scan's first fsync waits for these 1.3 GB to be written out, which
+# on btrfs at load 40 took longer than wait_started allows.
+sync -f "${tree}/many"
 runs_before="$(q 'SELECT count(*) FROM runs')"
 fFlipByte "${tree}/rm-stale.txt" 0 1
 "${bin}" scan --db "${db}" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
@@ -569,3 +572,4 @@ fi
 ##		  skip line for each check left out.
 ##		- 20261024: A stop takes down what the test started before the work
 ##		  folder goes.
+##		- 20261024: Step 5's files are synced before the scan.
