@@ -4,8 +4,10 @@
 ##		- Checks over the release builds in the stage dir, before any of them
 ##		  reach the artifact dir. Each mode fails on the first thing wrong.
 ##		- version: the binary's --version first line is
-##		  "NAME vVERSION build BUILD". An empty BUILD fails, since a release
-##		  with no build number can't be traced to its commit.
+##		  "NAME vVERSION build BUILD", and unless RELEASE is 1, then " (DATE)",
+##		  the build's day where the binary runs. That's checked in 2 zones a
+##		  day apart too. An empty BUILD fails, since a release with no build
+##		  number can't be traced to its commit.
 ##		- arch: `file` names the architecture each os-arch says.
 ##		- package: each .deb and .rpm holds /usr/bin/NAME and nothing else,
 ##		  with the same bytes as the binary beside it, and its name, version,
@@ -13,7 +15,7 @@
 ##		- glibc: no build needs a glibc newer than FLOOR, so a build that
 ##		  picked up the box's glibc can't go out as a release.
 ##	Syntax:
-##		check-release.bash version BIN NAME VERSION BUILD
+##		check-release.bash version BIN NAME VERSION BUILD [RELEASE]
 ##		check-release.bash arch STAGE_DIR PREFIX OS-ARCH...
 ##		check-release.bash package STAGE_DIR NAME VERSION WORK_DIR OS-ARCH...
 ##		check-release.bash glibc STAGE_DIR PREFIX FLOOR OS-ARCH...
@@ -31,15 +33,27 @@ set -Eeuo pipefail
 fDie(){ echo "check-release: $*" >&2; exit 1; }
 fOk(){ echo "[ OK: $* ]"; }
 
-fVersionCheck(){   ## fVersionCheck BIN NAME VERSION BUILD
-	local bin="$1" want="" got=""
+fVersionCheck(){   ## fVersionCheck BIN NAME VERSION BUILD [RELEASE]
+	local bin="$1" want="" got="" digits="0123456789abcdefghjkmnpqrstvwxyz" minutes=0 c i zone
+	local -a tzSet=()
 	[[ -x "${bin}" ]] || fDie "not an executable: ${bin}"
 	[[ -n "${4:-}" ]] || fDie "no build number to check ${bin##*/} against; is the commit time missing?"
-	want="$2 v$3 build $4"
-	got="$("${bin}" --version 2>&1 || true)"
-	got="${got%%$'\n'*}"
-	[[ "${got}" == "${want}" ]] || fDie "${bin##*/} says '${got}', not '${want}'"
-	fOk "${bin##*/}: ${got}"
+	[[ "${4}" =~ ^[0-9a-hjkmnp-tv-z]{1,10}$ ]] || fDie "not a build number: '${4}'"
+	for ((i = 0; i < ${#4}; i++)); do
+		c="${digits%%"${4:i:1}"*}"
+		minutes=$((minutes * 32 + ${#c}))
+	done
+	## The box's own zone first, then UTC+14 and UTC-12, which never share a
+	## date. An empty TZ would be UTC, so the first leaves it alone.
+	for zone in '' Pacific/Kiritimati Etc/GMT+12; do
+		tzSet=(); [[ -z "${zone}" ]] || tzSet=("TZ=${zone}")
+		want="$2 v$3 build $4"
+		[[ "${5:-}" == 1 ]] || want+=" ($(env "${tzSet[@]}" date -d "@$((946684800 + minutes * 60))" +%F))"
+		got="$(env "${tzSet[@]}" "${bin}" --version 2>&1 || true)"
+		got="${got%%$'\n'*}"
+		[[ "${got}" == "${want}" ]] || fDie "${bin##*/} says '${got}', not '${want}'${zone:+, with TZ=${zone}}"
+		fOk "${bin##*/}: ${got}${zone:+ (TZ=${zone})}"
+	done
 }
 
 fArchCheck(){   ## fArchCheck STAGE_DIR PREFIX OS-ARCH...
@@ -151,7 +165,7 @@ fGlibcCheck(){   ## fGlibcCheck STAGE_DIR PREFIX FLOOR OS-ARCH...
 mode="${1:-}"
 shift || true
 case "${mode}" in
-	version) (($# == 4)) || fDie "usage: version BIN NAME VERSION BUILD"; fVersionCheck "$@" ;;
+	version) (($# == 4 || $# == 5)) || fDie "usage: version BIN NAME VERSION BUILD [RELEASE]"; fVersionCheck "$@" ;;
 	arch)    (($# >= 3)) || fDie "usage: arch STAGE_DIR PREFIX OS-ARCH..."; fArchCheck "$@" ;;
 	package) (($# >= 5)) || fDie "usage: package STAGE_DIR NAME VERSION WORK_DIR OS-ARCH..."; fPackageCheck "$@" ;;
 	glibc)   (($# >= 4)) || fDie "usage: glibc STAGE_DIR PREFIX FLOOR OS-ARCH..."; fGlibcCheck "$@" ;;
@@ -162,3 +176,4 @@ esac
 ##	History:
 ##		- 2026-10-23: Created.
 ##		- 2026-10-23: glibc, for the release image's floor.
+##		- 2026-10-23: version checks the date a build between releases shows.

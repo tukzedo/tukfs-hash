@@ -455,11 +455,20 @@ fBuildNumber(){   ## fBuildNumber EPOCH_SECONDS
 ## From the commit, not the clock, so a rebuild of one commit gives the same
 ## bytes. Every cargo call in the run sees the same value, so none rebuilds
 ## over it.
-build_number=""
+## A release is a commit tagged v<version>, so tag before building one. Any
+## other build prints its date too.
+build_number=""; build_release=""; build_date=""
 commit_time="$(git -C "${root}" log -1 --format=%ct "${gate_rev:-HEAD}" 2>/dev/null || true)"
 if [[ -n "${commit_time}" ]]; then
 	build_number="$(fBuildNumber "${commit_time}")" || fDie "no build number from the commit time"
 	export "${BUILD_ENV_NAME}=${build_number}"
+	commit_tags="$(git -C "${root}" tag --points-at "${gate_rev:-HEAD}" 2>/dev/null || true)"
+	if [[ $'\n'"${commit_tags}"$'\n' == *$'\n'"v$(fVersion)"$'\n'* ]]; then
+		build_release=1
+	else
+		build_date=" ($(date -d "@$(( (10#${commit_time} - 946684800 + 30) / 60 * 60 + 946684800 ))" +%F))"
+	fi
+	export "${BUILD_RELEASE_ENV_NAME}=${build_release}"
 	## The packages' mtimes, and anything else that would read the clock.
 	export SOURCE_DATE_EPOCH="${commit_time}"
 fi
@@ -480,7 +489,7 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean "${APP_NAME} $( ((gate_mode)) && echo 'gate' || echo 'local CI/CD')$( ((quick)) && echo ', quick' )"
 	fEcho_Clean
 	fEcho_Clean "Repo root ......: ${root}"
-	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}}"
+	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_date}}"
 	fEcho_Clean "Jobs ...........: ${CPU_CAP} (of ${_cores} cores)"
 	fEcho_Clean "Temp dir .......: ${run_tmp}"
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
@@ -1198,3 +1207,4 @@ exit 0
 ##		- 2026-10-23: The demo gif's settings in the plan.
 ##		- 2026-10-23: LINT_EXTRA, for the test ID check. A cid dir in the run's
 ##		  temp dir, so a stop kills every container the run started.
+##		- 2026-10-23: A build that isn't a tagged release shows its date.

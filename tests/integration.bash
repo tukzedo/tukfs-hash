@@ -530,9 +530,10 @@ else
 fi
 
 # 21. --version gives the version, and the build number when the pipeline
-# stamped one, then the copyright line from the source.
+# stamped one, with its date unless it's a release, then the copyright line
+# from the source.
 ver="$("${bin}" --version)"
-st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+)?$ ]] || st=1
+st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+(\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
 expect 0vG6wF "version line" "version line is [${ver%%$'\n'*}]" "${st}"
 check 0vG6wG "copyright line" "${ver#*$'\n'}" "$(sed -n '1s|^// ||p' "${here}/src/main.rs")"
 
@@ -558,5 +559,6 @@ fi
 ##		- 20261023: fSafeRm guards the work folder's rm -rf, and the folder moved
 ##		  under <TMPDIR>/tukfs-hash/.
 ##		- 20261023: --version lines.
+##		- 20261023: The date after the build number.
 ##		- 20261023: A test ID on every check, shown on its status line, and a
 ##		  skip line for each check left out.

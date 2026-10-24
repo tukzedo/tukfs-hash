@@ -29,8 +29,10 @@ declare -i isSourced_k2vq9=0; [[ "${BASH_SOURCE[0]}" == "${0}" ]] || isSourced_k
 APP_NAME="tukfs-hash"
 EXE_NAME="tukfs-hash"
 VERSION_MANIFEST="Cargo.toml"
-## build.rs reads the build number from this at compile time.
+## build.rs reads the build number from this at compile time, and from the
+## second whether it's a release, which leaves the date off.
 BUILD_ENV_NAME="TUKFS_HASH_BUILD"
+BUILD_RELEASE_ENV_NAME="TUKFS_HASH_RELEASE"
 
 ## Each run's temp dir and the integration test's dirs are named with this,
 ## under <root>/tukfs-hash/, and nothing else is ever removed by the guard.
@@ -205,7 +207,7 @@ PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_wo
 ## Over the stage dir, once everything's built and packaged; "label|command",
 ## eval'd. A failure keeps the whole set out of RELEASE_ARTIFACT_DIR.
 RELEASE_CHECKS=(
-	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}"'
+	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}" "${build_release}"'
 	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
 	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
 	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash glibc "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
@@ -281,3 +283,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: Test IDs: the check in the lint stage, and the unit
 ##		  tests' status lines.
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
+##		- 2026-10-23: The release flag for build.rs.

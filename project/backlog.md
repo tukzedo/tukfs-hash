@@ -62,6 +62,23 @@
 	- Opened by: first profiler graph
 	- Note: On the 1.5 GB profiler workload, `posix_fadvise` was 16% of self time against 15% for blake3. `read_sums` drops the pages on ext4 and btrfs so a read can't come from a cached copy. Look at whether one call per file, or skipping it for files the page cache can't hold, keeps that promise for less.
 
+- Builds between releases show their date after the build number.
+	- ID: 2026102320093189
+	- Type: Enhancement
+	- Status: Done
+		- `--version` shows the date in parentheses after the build number, unless the build is a tagged release.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-200931
+	- Opened by: request
+	- Requirements  [Feature]:
+		- For non-release builds, include " (YYYY-mm-DD)" after the build number.
+		- Report the date as the local date of whoever views the version.
+	- Progress log:
+		- 2026-10-23: The pipeline marks a build as a release when its commit is tagged `v<version>`. Any other stamped build gets the date, from the build number, in the viewer's time zone.
+		- 2026-10-23: Verified: the release check passes a dated build and a release build, and fails each one checked as the other, and a dated build that ignores the time zone. `--gate` passes.
+	- Branch: build-date
+	- Closed: 20261023-201500
+
 - The x86_64 release needs glibc 2.39, since it's built against this box's.
 	- ID: 2026102318460622
 	- Type: Enhancement
