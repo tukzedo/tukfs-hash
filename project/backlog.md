@@ -62,6 +62,15 @@
 	- Opened by: first profiler graph
 	- Note: On the 1.5 GB profiler workload, `posix_fadvise` was 16% of self time against 15% for blake3. `read_sums` drops the pages on ext4 and btrfs so a read can't come from a cached copy. Look at whether one call per file, or skipping it for files the page cache can't hold, keeps that promise for less.
 
+- The full run's debug build stage has no flag to turn it off.
+	- ID: 2026102407030600
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-070306
+	- Opened by: round settings
+	- Note: Every other stage of `cicd/cicd.bash` has a `--no-*` flag. A failure in stage 2 stops the whole run, and nothing past it can run. Some single steps only go off with their whole stage, such as CodeQL with `--no-leakcheck` and the arm64 tests with `--no-release`. Add `--no-debug`, and look at whether CodeQL wants its own flag too, since it's 11 of the run's minutes.
+
 - Builds between releases show their date after the build number.
 	- ID: 2026102320093189
 	- Type: Enhancement
