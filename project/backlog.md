@@ -108,6 +108,26 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
+- Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
+	- ID: 2026102409041301
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-090413
+	- Opened by: round full run
+	- Note: In the full run's release stage, step 5's scan printed no `group ` line within `wait_started`'s 60 s, so the test stopped it before it read a file. That gave exit 2 where 6 was wanted. The test took about 8 minutes there, against about 50 s at load 12. It passed 3 of 3 reruns on the same build at load 11 to 14. The `group ` line is printed at planning, before any read, so the delay is somewhere before that, such as opening and locking the database on btrfs `/tmp`. Not measured yet.
+	- Output: `FAIL 0vCUrb integration scan never started`, then `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`, and `stopped before the end (0 of 400)`.
+
+- A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
+	- ID: 2026102409041302
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-090413
+	- Opened by: round full run
+	- Note: `cicd.bash` takes its run folder from `TMPDIR` and falls back to `/tmp`. The ext4 and ZFS test roots in `config.bash` already default to `/mnt/ext/wip2/wip/tmp` and `~/tmp/tukfs-hash-zfs-it`. b23's `/tmp` has given EIO under memory pressure, and the machine notes put temp files under the ext4 root. Look at a config default for the run folder too, or have the round's full-run line set `TMPDIR`.
+	- Related IDs: 2026102409041301
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
