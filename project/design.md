@@ -150,17 +150,17 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Feature branches merge into `dev` with `--no-ff`. A `dev` to `main` merge is a release, and gets tagged. Pulls are `--ff-only`.
 
-- The pipeline runs here, not on a hosted service. Its `--gate` is the pre-push hook, for pushes to `dev` and `main`.
+- The pipeline runs here, not on a hosted service. Its `--gate` is the pre-push hook, for pushes to `dev`. A push to `main` isn't gated, since `main` only gets what already passed on `dev`. Neither is a push that changes only `.md` files and `assets/`.
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
 
-- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. x86_64 is built natively, and arm64 through `cargo-zigbuild`, which also compiles the bundled SQLite. arm64 takes about as long as x86_64, so every run builds both.
+- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The tests stage still builds on the box, so `--gate` needs no docker.
 
 - The release set, in `cicd/artifacts/release/`, is named `tukfs-hash-<version>-linux-x86_64` and `tukfs-hash-<version>-linux-arm64`, the same names plus `.deb` and `.rpm`, and `tukfs-hash-<version>-sha256sums.txt`. Download links depend on these, so they stay. The x86_64 name is never amd64, though the `.deb` has to say amd64 inside.
 
-- The packages hold `/usr/bin/tukfs-hash` and nothing else. They depend on the glibc the binary was linked for, read off the binary: 2.39 for x86_64, since it's linked against this box's, and 2.30 for arm64. x86_64 also needs `libgcc_s`.
+- The packages hold `/usr/bin/tukfs-hash` and nothing else. They depend on the glibc the binary was linked for, read off the binary, which is 2.28 for both. Both also need `libgcc_s`.
 
-- 2 builds of one commit give the same bytes, packages included. The build number and the packages' mtimes come from the commit time. cargo's home is mapped to `/cargo` in panic messages, so whose home it is doesn't matter, and the checkout's own paths are already relative. Release checks run over the set before it replaces the old one: the stamped `--version`, each build's architecture, and each package's files and bytes.
+- 2 builds of one commit give the same bytes, packages included. The build number and the packages' mtimes come from the commit time. cargo's home is mapped to `/cargo` in panic messages, so whose home it is doesn't matter, and the checkout's own paths are already relative. Release checks run over the set before it replaces the old one: the stamped `--version`, each build's architecture, each package's files and bytes, and that no build needs a glibc newer than 2.28. The release builds aren't the ones the tests stage tested, so the integration test runs again on the x86_64 one, and the unit tests run on arm64 under qemu in the same image.
 
 - The dogfood copy goes to `~/synced/0-0/common/exec/util/linux/bin/tukfs-hash`, where the scan wrappers look, rather than the `app/linux/` dir. `utility/dogfood_tukfs-hash` keeps up to 10 dated versions in `~/.local/bin/tukfs-hash_versions/`, with a link to the newest at `~/.local/bin/tukfs-hash`.
 

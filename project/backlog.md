@@ -29,6 +29,29 @@
 
 ## Issues
 
+- The x86_64 release needs glibc 2.39, since it's built against this box's.
+	- ID: 2026102318460622
+	- Type: Enhancement
+	- Status: Started
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-184606
+	- Opened by: answer on the cicd decisions
+	- Requirements  [Feature]:
+		- Build both release targets in a pinned container with an old glibc, so the floor is low and doesn't move with the box.
+		- Run each release build in that container, arm64 included.
+		- A release check fails a build whose floor is above the set one.
+
+- The pre-push gate runs on every push, docs-only ones and pushes to `main` included.
+	- ID: 2026102318460623
+	- Type: Enhancement
+	- Status: Started
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261023-184606
+	- Opened by: answer on the cicd decisions
+	- Requirements  [Feature]:
+		- No gate on a push to `main`, since what goes there already passed it on `dev`.
+		- A push that changes only docs skips the gate, on `dev` too.
+
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task

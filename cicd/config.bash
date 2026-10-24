@@ -51,8 +51,6 @@ TOOL_PINS=(
 	"markdownlint|${PIN_MARKDOWNLINT}|markdownlint --version"
 	"nightly|${PIN_NIGHTLY}|rustup toolchain list"
 	"cargo-deny|${PIN_CARGO_DENY}|cargo deny --version"
-	"cargo-zigbuild|${PIN_CARGO_ZIGBUILD}|cargo-zigbuild --version"
-	"zig|${PIN_ZIG}|zig version"
 	"nfpm|${PIN_NFPM}|go version -m \"${NFPM}\""
 	"PSScriptAnalyzer|${PIN_PSSA}|pwsh -NoProfile -Command \"(Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1).Version.ToString()\""
 	"ruff|${PIN_RUFF}|ruff --version"
@@ -171,19 +169,33 @@ PROFILE_TIMED=(
 	'rescan --rmlint|TUKFS_PROFILE_LABEL=rescan "${PROFILE_BIN}" scan --db "${PROFILE_WORKLOAD}/db/profile.sqlite" --root "${PROFILE_WORKLOAD}/tree" --progress 3600 --rmlint --since "$(date -d tomorrow +%F)"; [[ $? -eq 4 ]]'
 )
 
-## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
-## mounts and snapshots. The native one is also what the integration test
-## runs, so it's usually already built by then. Cross targets are
-## "label|os-arch|binary|command", the command eval'd. arm64 goes through zig,
-## which also builds the bundled SQLite, and takes about as long as x86_64.
-## Each build is named <exe>-<version>-<os-arch> in RELEASE_ARTIFACT_DIR, with
-## <exe>-<version>-sha256sums.txt beside them. Download links depend on these
-## names, so they stay.
+## Stage 4's release build, on the host, which the integration test runs. It
+## needs the host's glibc, so it's never a release.
 RELEASE_NATIVE_CMD=(cargo build --release -j "${CPU_CAP}" --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
+
+## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
+## mounts and snapshots. Both targets build in the release image, from
+## REL_CTR_DIR, whose glibc is GLIBC_FLOOR, so that's all a build needs
+## and the floor doesn't move with the box. arm64 is cross-built with
+## Debian's cross gcc, which also builds the bundled SQLite, and takes about
+## as long as x86_64. Cross targets are "label|os-arch|binary|command", the
+## command eval'd. Each build is named <exe>-<version>-<os-arch> in
+## RELEASE_ARTIFACT_DIR, with <exe>-<version>-sha256sums.txt beside them.
+## Download links depend on these names, so they stay.
+GLIBC_FLOOR="2.28"
+REL_CTR_DIR="cicd/container-release"
+REL_CTR_IMAGE="${APP_NAME}-release"
+REL_CTR_CONTEXT_EXTRA=(rust-toolchain.toml)
+## Its build dir and cargo home, kept between runs so they start warm.
+REL_TARGET_DIR="${root}/target/release-ctr"
+REL_CTR_CARGO_HOME="${REL_TARGET_DIR}/cargo-home"
+REL_TARGETS=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
+RELEASE_BUILD_CMD=(cicd/utility/release-build.bash build x86_64-unknown-linux-gnu)
+RELEASE_BUILD_BIN="target/release-ctr/x86_64-unknown-linux-gnu/release/${EXE_NAME}"
 RELEASE_NATIVE_OSARCH="linux-x86_64"
 CROSS_TARGETS=(
-	"Linux arm64 (zig)|linux-arm64|target/aarch64-unknown-linux-gnu/release/${EXE_NAME}|cargo zigbuild --release -j \${CPU_CAP} --locked --target aarch64-unknown-linux-gnu"
+	"Linux arm64|linux-arm64|target/release-ctr/aarch64-unknown-linux-gnu/release/${EXE_NAME}|cicd/utility/release-build.bash build aarch64-unknown-linux-gnu"
 )
 RELEASE_ARTIFACT_DIR="cicd/artifacts/release"
 ## A .deb and an .rpm per build, from cicd/packaging/nfpm.yaml, into the stage
@@ -196,6 +208,11 @@ RELEASE_CHECKS=(
 	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}"'
 	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
 	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
+	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash glibc "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
+	## The release builds aren't the ones stage 4 tested, so the integration
+	## test runs again on the x86_64 one, and the unit tests on arm64.
+	'the integration test passes on the x86_64 release build|TMPDIR="${release_work}" "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
+	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 
 ## Stage 7: dogfood. The native release build goes into the first of these
@@ -258,6 +275,8 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  artifact names and dogfood. cargo's home is remapped in the builds.
 ##		- 2026-10-23: The leak checks, their image, and clippy over all features.
 ##		- 2026-10-23: The profiler, and ruff over the pipeline's Python.
+##		- 2026-10-23: Release builds in a glibc 2.28 image, not on the host
+##		  and through zig.
 ##		- 2026-10-23: The demo gif.
 ##		- 2026-10-23: Test IDs: the check in the lint stage, and the unit
 ##		  tests' status lines.

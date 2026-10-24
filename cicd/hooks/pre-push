@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 
-##	- Purpose: Run the merge gate before a push moves dev or main, so nothing
-##	  gets there unverified, even outside a full cicd run. Feature branches go
-##	  into dev, and dev into main is a release, so those are the two it waits
-##	  on. A push of any other branch goes straight through.
+##	- Purpose: Run the merge gate before a push moves dev, so nothing gets
+##	  there unverified, even outside a full cicd run. Feature branches go into
+##	  dev, and dev into main is a release, so main gets only what already
+##	  passed on dev and isn't gated again. A push of any other branch goes
+##	  straight through.
+##	- A push that changes only docs, *.md files and assets/, isn't gated
+##	  either. That's judged against what the remote's dev has, so a new or
+##	  unknown remote commit runs the gate.
 ##	- The gate runs on the commit being pushed, not on the working tree: an
 ##	  uncommitted fix mustn't pass a broken commit, and an uncommitted breakage
 ##	  mustn't block a good one. cicd.bash checks it out into its frozen copy,
@@ -37,14 +41,34 @@ for gitVar in $(git rev-parse --local-env-vars 2>/dev/null || true); do unset "$
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "${here}/../.." && pwd)"
 
+## True when every file that differs between the two commits is a doc. A
+## missing commit, or none at all, reads as code, and so does a failed diff,
+## which hands back a name that isn't a doc.
+fDocsOnly(){   ## fDocsOnly OLD_SHA NEW_SHA
+	local f="" any=0
+	[[ "$1" =~ ^0+$ ]] && return 1
+	git -C "${root}" cat-file -e "$1^{commit}" 2>/dev/null || return 1
+	while IFS= read -r -d '' f; do
+		any=1
+		[[ "${f}" == *.md || "${f}" == assets/* ]] || return 1
+	done < <(git -C "${root}" diff -z --no-renames --name-only "$1" "$2" || echo -n $'\x01\0')
+	((any))
+}
+
 ## stdin gives "<local ref> <local sha> <remote ref> <remote sha>" per ref. All
 ## zeros is a delete, with nothing to test. Collected inside the loop, since the
 ## read that ends it clears the vars.
 gatedShas=(); gatedRefs=()
-while read -r _localRef localSha remoteRef _remoteSha; do
+while read -r _localRef localSha remoteRef remoteSha; do
 	case "${remoteRef}" in
-		refs/heads/dev|refs/heads/main)
+		refs/heads/dev)
 			[[ "${localSha}" =~ ^0+$ ]] && continue
+			if fDocsOnly "${remoteSha}" "${localSha}"; then
+				echo
+				echo "[ pre-push: ${localSha:0:12} changes only docs, so the gate isn't run ]"
+				echo
+				continue
+			fi
 			refName="${remoteRef#refs/heads/}"; seen=0
 			for i in "${!gatedShas[@]}"; do
 				[[ "${gatedShas[i]}" == "${localSha}" ]] || continue
@@ -87,3 +111,4 @@ exit 0
 ##	History:
 ##		- 2026-10-23: Created from shcl's pre-push hook. It gates dev and main, and
 ##		  cicd.bash makes the worktree for the pushed commit.
+##		- 2026-10-23: main isn't gated, and neither is a docs-only push.

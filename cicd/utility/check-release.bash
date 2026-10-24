@@ -10,10 +10,13 @@
 ##		- package: each .deb and .rpm holds /usr/bin/NAME and nothing else,
 ##		  with the same bytes as the binary beside it, and its name, version,
 ##		  arch and glibc floor are right. WORK_DIR takes rpm's empty database.
+##		- glibc: no build needs a glibc newer than FLOOR, so a build that
+##		  picked up the box's glibc can't go out as a release.
 ##	Syntax:
 ##		check-release.bash version BIN NAME VERSION BUILD
 ##		check-release.bash arch STAGE_DIR PREFIX OS-ARCH...
 ##		check-release.bash package STAGE_DIR NAME VERSION WORK_DIR OS-ARCH...
+##		check-release.bash glibc STAGE_DIR PREFIX FLOOR OS-ARCH...
 ##		A binary is STAGE_DIR/PREFIX-OS-ARCH, and PREFIX is NAME-VERSION.
 ##	History: At bottom of script.
 
@@ -129,15 +132,33 @@ fPackageCheck(){   ## fPackageCheck STAGE_DIR NAME VERSION WORK_DIR OS-ARCH...
 	done
 }
 
+fGlibcCheck(){   ## fGlibcCheck STAGE_DIR PREFIX FLOOR OS-ARCH...
+	local dir="$1" prefix="$2" floor="$3" osarch bin glibc gcc newer
+	shift 3
+	(($#)) || fDie "glibc: no os-arch given"
+	[[ "${floor}" =~ ^[0-9]+\.[0-9]+$ ]] || fDie "glibc: '${floor}' isn't a version"
+	for osarch in "$@"; do
+		bin="${dir}/${prefix}-${osarch}"
+		[[ -f "${bin}" ]] || fDie "no build at ${bin}"
+		read -r glibc gcc <<<"$(fNeeds "${bin}")"
+		[[ -n "${glibc}" ]] || fDie "no GLIBC_ symbol version in ${bin}"
+		newer="$(printf '%s\n' "${floor}" "${glibc}" | sort -V | tail -n 1)"
+		[[ "${newer}" == "${floor}" ]] || fDie "${bin##*/} needs glibc ${glibc}, newer than ${floor}"
+		fOk "${bin##*/}: glibc ${glibc}"
+	done
+}
+
 mode="${1:-}"
 shift || true
 case "${mode}" in
 	version) (($# == 4)) || fDie "usage: version BIN NAME VERSION BUILD"; fVersionCheck "$@" ;;
 	arch)    (($# >= 3)) || fDie "usage: arch STAGE_DIR PREFIX OS-ARCH..."; fArchCheck "$@" ;;
 	package) (($# >= 5)) || fDie "usage: package STAGE_DIR NAME VERSION WORK_DIR OS-ARCH..."; fPackageCheck "$@" ;;
-	*) fDie "usage: check-release.bash version|arch|package ... (see the header)" ;;
+	glibc)   (($# >= 4)) || fDie "usage: glibc STAGE_DIR PREFIX FLOOR OS-ARCH..."; fGlibcCheck "$@" ;;
+	*) fDie "usage: check-release.bash version|arch|package|glibc ... (see the header)" ;;
 esac
 
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-10-23: glibc, for the release image's floor.

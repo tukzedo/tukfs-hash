@@ -20,8 +20,7 @@ license: GPL-2.0-only
 # The commit's time, so two builds of one commit give the same bytes.
 mtime: ${TUKFS_MTIME}
 # Read off the binary by package.bash: the glibc floor is its newest GLIBC_
-# version, and libgcc only when libgcc_s is in NEEDED. The arm64 build has
-# zig's own and doesn't need it.
+# version, and libgcc only when libgcc_s is in NEEDED.
 overrides:
   deb:
     depends:
