@@ -172,6 +172,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A full run, and `--quick --leakcheck`, ends the tests stage with the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, then Miri, and CodeQL. Any report fails the run. `--gate` never runs them, since it's the pre-push hook.
 
+- `--no-codeql` leaves out only CodeQL, which is about 11 of a full run's 17 minutes. It drops each leak check step whose command names codeql.
+
 - The sanitizers, Miri and CodeQL run in the image from `cicd/container/`, with the pinned nightly and CodeQL, no network, and only the run's own dirs and `target/leakcheck/` mounted. Its crates are fetched once per lock file into `target/leakcheck/cargo-home`. Without docker they run on the host with a note, and CodeQL skips.
 
 - The soak and the advisory scan run on the host. A scan finds its workers from the root's disks through `/dev`, which a container doesn't have, and cargo-deny fetches RustSec's database.

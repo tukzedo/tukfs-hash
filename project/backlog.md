@@ -77,14 +77,39 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
+- A stopped cicd run can leave its temp dir and a locked frozen copy.
+	- ID: 2026102407311809
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-073118
+	- Opened by: testing 2026102407030600
+	- Steps to reproduce [Bug]:
+		- `timeout -s TERM 20 cicd/cicd.bash -y --no-sync --no-fmt --no-debug --no-lint --no-profile --no-release --no-publish | grep Leak`, stopped during the unit tests.
+	- Incorrect behavior [Bug]:
+		- The stop prints "stopped N process(es)", then the run ends without "removed this run's temp files". Its run dir stays, and `git worktree list` keeps its `tree` as locked.
+	- Expected behavior [Bug]:
+		- The dir and the worktree go, as in 2026102309501601's stop test.
+	- Reproduced [Bug]: 2026-10-24 on b23, in 5 of 6 stops: piped to grep, or under `bash -x` to a file. The one stop with plain output to a file cleaned up.
+	- Possible cause [Bug]: Something in the EXIT trap after `fStopDescendants` kills the run, or it writes to a pipe that has gone.
+
 - The full run's debug build stage has no flag to turn it off.
 	- ID: 2026102407030600
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
+		- `--no-debug` skips stage 2, and `--no-codeql` leaves out only the CodeQL leak check.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261024-070306
 	- Opened by: round settings
 	- Note: Every other stage of `cicd/cicd.bash` has a `--no-*` flag. A failure in stage 2 stops the whole run, and nothing past it can run. Some single steps only go off with their whole stage, such as CodeQL with `--no-leakcheck` and the arm64 tests with `--no-release`. Add `--no-debug`, and look at whether CodeQL wants its own flag too, since it's 11 of the run's minutes.
+	- Decisions:
+		- `--no-debug` keeps a run from recording its tree for the pre-push hook, like `--no-lint`, since the gate includes the build.
+		- `--no-codeql` drops each leak check step whose command names codeql. The other per-step cases, such as the arm64 tests, keep going off with their stage.
+	- Progress log:
+		- 2026-10-24: Verified: with every stage off, the frozen copy's run skips stage 2 under `--no-debug` and builds without it. The plan shows 6 leak checks, and 5 with `--no-codeql`, which the frozen copy's run is given too. `--gate` passes. `--gate --no-debug` passes and records no tree.
+		- Swept: every stage function in `cicd.bash` now has its own off flag. The help, the plan block, the frozen copy's options, README.md and design.md's leak check section were checked for both flags.
+	- Test case: no cicd test suite. `private/claude_simple/tools/cicd-noflags-check.bash` checks both flags.
+	- Closed: 20261024-073118
 
 - Builds between releases show their date after the build number.
 	- ID: 2026102320093189
