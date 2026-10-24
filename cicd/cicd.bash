@@ -79,8 +79,9 @@
 ##	  through without running the gate again. --quick, --no-fmt, --no-debug,
 ##	  --no-lint, --no-tests, a missing tool and a missing test root each keep
 ##	  a run from recording.
-##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, with
-##	  TMPDIR pointed into it, so what a failed test leaves goes with it. It and
+##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, or
+##	  under config.bash's RUN_TMP_ROOT when TMPDIR isn't set, with TMPDIR
+##	  pointed into it, so what a failed test leaves goes with it. It and
 ##	  the integration test's dirs are removed at the end, even when the run
 ##	  fails or is stopped, and only by fSafeRm. A stop kills the containers
 ##	  the run started first.
@@ -397,7 +398,7 @@ fFrozenGone(){
 	return 0
 }
 
-run_tmp_root="$(realpath -e -- "${TMPDIR:-/tmp}" 2>/dev/null || true)"
+run_tmp_root="$(realpath -e -- "${TMPDIR:-${RUN_TMP_ROOT:-/tmp}}" 2>/dev/null || true)"
 [[ "${run_tmp_root}" == /* ]] || run_tmp_root="$(realpath -e /tmp)"
 fRunDirMake "${run_tmp_root}" run
 run_tmp="${made_dir}"
@@ -1258,3 +1259,4 @@ exit 0
 ##		  in the background, so a second TERM can't skip the cleanup. A killed
 ##		  run's dirs and frozen copy go at the next run's start and end, as
 ##		  soon as its PID is gone, rather than a day later.
+##		- 2026-10-24: With no TMPDIR, a run works under RUN_TMP_ROOT, not /tmp.

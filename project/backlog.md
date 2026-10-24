@@ -29,6 +29,46 @@
 
 ## Issues
 
+- Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
+	- ID: 2026102409041301
+	- Type: Bug
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: One full run, plain, from the round line. Its release stage integration test should pass.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-090413
+	- Opened by: round full run
+	- Related IDs: 2026102409041302
+	- Note: In the full run's release stage, step 5's scan printed no `group` line within `wait_started`'s 60 s, so the test stopped it before it read a file. That gave exit 2 where 6 was wanted. The test took about 8 minutes there, against about 50 s at load 12. It passed 3 of 3 reruns on the same build at load 11 to 14. The `group` line is printed at planning, before any read, so the delay is somewhere before that, such as opening and locking the database on btrfs `/tmp`. Not measured yet.
+	- Output: `FAIL 0vCUrb integration scan never started`, then `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`, and `stopped before the end (0 of 400)`.
+	- Reproduced [Bug]: 2026-10-24 on b23, on btrfs `/tmp`. With the old test at load 42 to 85, step 5's scan took 24 and 45 s to start. With `wait_started` cut to 10 s it failed with the same 3 lines.
+	- Actual cause [Bug]:
+		- The scan's first write at open, the switch to WAL, makes a rollback journal and fsyncs it. On btrfs that fsync waits until step 5's 1.3 GB are written out. b23's `/tmp` is btrfs with zstd, on LUKS, so at load 40 that can take over a minute.
+		- At load 22, the same start took 35 s on btrfs `/tmp`, 0.2 s on ext4, and 0.1 s on btrfs with nothing waiting to be written.
+	- Actual fix [Bug]: Step 5 runs `sync -f` on its files before the scan, as the profiler workload already does. The release stage moved off `/tmp` too, in 2026102409041302.
+	- Progress log:
+		- 2026-10-24: Verified: with the fix, at load 71 to 75 on btrfs `/tmp`, the sync took 10 to 25 s and the scan started in under 0.1 s. `--gate` passes, the integration test on ext4 and ZFS included.
+	- Swept: step 7's `wait_started` comes after small writes, and by then step 5's files have been read. The lock holder's wait doesn't fail on a timeout. The profiler workload syncs already.
+	- Branch: round-20261024b
+	- Test case: `tests/integration.bash` 0vCUrb and 0vCUrc. With `wait_started` cut to 10 s, on btrfs `/tmp` at load 75 to 85, they failed before the fix and passed after. `private/claude_simple/tools/scan-start-delay.bash BINARY TMP_ROOT [ROUNDS] [nowrite|sync]` times the scan's start after the same write.
+
+- A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
+	- ID: 2026102409041302
+	- Type: Enhancement
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The same full run as 2026102409041301. Its temp dir should be under `/mnt/ext/wip2/wip/tmp/tukfs-hash/`, and gone at the end.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261024-090413
+	- Opened by: round full run
+	- Note: `cicd.bash` takes its run folder from `TMPDIR` and falls back to `/tmp`. The ext4 and ZFS test roots in `config.bash` already default to `/mnt/ext/wip2/wip/tmp` and `~/tmp/tukfs-hash-zfs-it`. b23's `/tmp` has given EIO under memory pressure, and the machine notes put temp files under the ext4 root. Look at a config default for the run folder too, or have the round's full-run line set `TMPDIR`.
+	- Related IDs: 2026102409041301
+	- Progress log:
+		- 2026-10-24: `config.bash` has `RUN_TMP_ROOT`, `/mnt/ext/wip2/wip/tmp` unless `TUKFS_CICD_RUN_TMP` is set. A run uses it when `TMPDIR` isn't set, and `/tmp` when it isn't there. The unit tests, the frozen copy and the release stage's integration test go with it.
+		- 2026-10-24: Verified: `--gate` with no `TMPDIR` ran under the ext4 root and left nothing there. With `TMPDIR=/mnt/tmpfs/tmp` it used that, and with `TUKFS_CICD_RUN_TMP` naming a missing folder it used `/tmp`. shellcheck passes.
+	- Decisions:
+		- A config default rather than `TMPDIR` on the round's full-run line, so hand runs and the pre-push hook get it too. A caller's `TMPDIR` still wins.
+	- Branch: round-20261024b
+	- Test case: none in the suite, since it's where cicd.bash puts its own dir. Checked by hand in the 3 cases above.
+
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -76,26 +116,6 @@
 	- Requirements  [Feature]:
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
-
-- Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
-	- ID: 2026102409041301
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261024-090413
-	- Opened by: round full run
-	- Note: In the full run's release stage, step 5's scan printed no `group` line within `wait_started`'s 60 s, so the test stopped it before it read a file. That gave exit 2 where 6 was wanted. The test took about 8 minutes there, against about 50 s at load 12. It passed 3 of 3 reruns on the same build at load 11 to 14. The `group` line is printed at planning, before any read, so the delay is somewhere before that, such as opening and locking the database on btrfs `/tmp`. Not measured yet.
-	- Output: `FAIL 0vCUrb integration scan never started`, then `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`, and `stopped before the end (0 of 400)`.
-
-- A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
-	- ID: 2026102409041302
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261024-090413
-	- Opened by: round full run
-	- Note: `cicd.bash` takes its run folder from `TMPDIR` and falls back to `/tmp`. The ext4 and ZFS test roots in `config.bash` already default to `/mnt/ext/wip2/wip/tmp` and `~/tmp/tukfs-hash-zfs-it`. b23's `/tmp` has given EIO under memory pressure, and the machine notes put temp files under the ext4 root. Look at a config default for the run folder too, or have the round's full-run line set `TMPDIR`.
-	- Related IDs: 2026102409041301
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
