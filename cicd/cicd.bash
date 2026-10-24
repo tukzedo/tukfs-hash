@@ -417,6 +417,8 @@ gate_skips="${run_tmp}/gate-skips"
 ## takes for a finished run.
 fRunTmpGone(){
 	local d kb="" total=0 left_frozen=""
+	## Before the first write, for the same reason fStopDescendants does it.
+	trap '' INT TERM HUP PIPE
 	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
@@ -553,8 +555,9 @@ if ((! gate_mode && ! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "$
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
 	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C
 	## reaches the whole process group, so it ignores that too, and ends when
-	## the run closes its end.
-	exec > >(trap '' INT TERM; exec tee "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
+	## the run closes its end. -p keeps it writing the log after a reader such
+	## as grep is gone, since the same stop takes that down too.
+	exec > >(trap '' INT TERM; exec tee -p "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
 	stop_keep+=("$!")
 fi
 
@@ -1221,3 +1224,5 @@ exit 0
 ##		  temp dir, so a stop kills every container the run started.
 ##		- 2026-10-23: A build that isn't a tagged release shows its date.
 ##		- 2026-10-24: --no-debug, and --no-codeql for CodeQL on its own.
+##		- 2026-10-24: A stop's cleanup ignores further signals and a gone
+##		  reader, and the run log outlives the reader.

@@ -15,7 +15,8 @@
 ##		                   down is killed before the script that knew its ID
 ##		                   gets to it. A PID in stop_keep is passed over, with
 ##		                   what it started, such as the tee a script logs
-##		                   through.
+##		                   through. It ignores INT, TERM, HUP and PIPE from
+##		                   then on, since it runs from an EXIT trap.
 ##		fStopCidfile       a new, unused file name for a `docker run
 ##		                   --cidfile`, into stop_cidfile. It's in
 ##		                   TUKFS_CID_DIR when that's set, which cicd.bash sets
@@ -76,6 +77,9 @@ fStopDescendants(){
 	local -a todo=() found=()
 	## A subshell running a trap it took with it isn't the script.
 	[[ "${BASHPID}" == "$$" && -d /proc/self ]] || return 0
+	## A second signal, or a write to a reader that's gone, would end the trap
+	## part way. timeout signals the script, then its group.
+	trap '' INT TERM HUP PIPE
 	[[ "${wait}" =~ ^[0-9]{1,4}$ ]] || wait=30
 	## First, so a client that won't go doesn't hold the rest up.
 	fStopContainers
@@ -118,3 +122,5 @@ fStopDescendants(){
 ##		- 2026-10-23: The container part back, for the leak check image.
 ##		- 2026-10-23: Containers first and last, and every one in the run's
 ##		  cid dir, since a TERM during CodeQL left its container up.
+##		- 2026-10-24: Ignores INT, TERM, HUP and PIPE, so the cleanup after it
+##		  runs to the end.
