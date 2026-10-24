@@ -22,6 +22,18 @@
 ##		                   TUKFS_CID_DIR when that's set, which cicd.bash sets
 ##		                   to a dir in its run's temp dir, so a stop of the
 ##		                   whole run finds every container in it.
+##		fStopOnSignals     trap INT, TERM and HUP, so a stop goes to the EXIT
+##		                   trap by exit 130, 143 or 129. With no trap of its
+##		                   own, bash 5.2 dies at once on a second TERM that
+##		                   comes while it's still starting the EXIT trap, and
+##		                   timeout sends two. A trapped one waits its turn.
+##		                   bash runs a trap only between commands, so a long
+##		                   step goes through fBg.
+##		fBg CMD...         CMD in the background, waited for, so a trapped
+##		                   stop runs at once rather than when CMD ends. CMD
+##		                   gets /dev/null for stdin, as any background job of
+##		                   a script does. INT is put back, which such a job
+##		                   would otherwise ignore, and pass on as ignored.
 ##		The containers are the ones named in stop_cidfiles, and for cicd.bash
 ##		in stop_cid_dir. They're killed by ID, and only those.
 ##	History: At bottom of script.
@@ -116,6 +128,14 @@ fStopDescendants(){
 	return 0
 }
 
+fStopSignal(){ trap '' INT TERM HUP PIPE; exit "$1"; }
+fStopOnSignals(){
+	trap 'fStopSignal 130' INT
+	trap 'fStopSignal 143' TERM
+	trap 'fStopSignal 129' HUP
+}
+fBg(){ ( trap - INT; "$@" ) & wait "$!"; }
+
 
 ##	History:
 ##		- 2026-10-23: Copied into tukfs-hash from shcl's cicd, without the container parts.
@@ -124,3 +144,5 @@ fStopDescendants(){
 ##		  cid dir, since a TERM during CodeQL left its container up.
 ##		- 2026-10-24: Ignores INT, TERM, HUP and PIPE, so the cleanup after it
 ##		  runs to the end.
+##		- 2026-10-24: fStopOnSignals and fBg, since a second TERM could still
+##		  end a script before its EXIT trap began.

@@ -29,38 +29,6 @@
 
 ## Issues
 
-- A stopped cicd run can leave its temp dir and a locked frozen copy.
-	- ID: 2026102407311809
-	- Type: Bug
-	- Status: Queued
-		- Waits on the 2026102407311809 question in questions.md, on how to cover a run that dies before its EXIT trap starts.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261024-073118
-	- Opened by: testing 2026102407030600
-	- Steps to reproduce [Bug]:
-		- `timeout -s TERM 20 cicd/cicd.bash -y --no-sync --no-fmt --no-debug --no-lint --no-profile --no-release --no-publish | grep Leak`, stopped during the unit tests.
-	- Incorrect behavior [Bug]:
-		- The stop prints "stopped N process(es)", then the run ends without "removed this run's temp files". Its run dir stays, and `git worktree list` keeps its `tree` as locked.
-	- Expected behavior [Bug]:
-		- The dir and the worktree go, as in 2026102309501601's stop test.
-	- Reproduced [Bug]: 2026-10-24 on b23, in 5 of 6 stops: piped to grep, or under `bash -x` to a file. The one stop with plain output to a file cleaned up.
-	- Possible cause [Bug]: Something in the EXIT trap after `fStopDescendants` kills the run, or it writes to a pipe that has gone.
-	- Actual cause [Bug]:
-		- From a shell with job control, `timeout` leads the pipeline's process group, so its group TERM kills `grep` too. `tee` then dies of SIGPIPE at its next write, and so does the run at its next one, inside the EXIT trap. A Ctrl+C of `cicd.bash | tee` does the same.
-		- `timeout` sends TERM to the run and then to its group. bash 5.2 dies at once on a second TERM once it's handling the first, before the trap's first command or partway through the trap.
-	- Progress log:
-		- 2026-10-24: `fStopDescendants` and `fRunTmpGone` ignore INT, TERM, HUP and PIPE from their first line. The run log's `tee` has `-p`, so it keeps writing the log once the reader is gone.
-		- 2026-10-24: Verified: a second TERM once the stop has begun used to leave the run dir and a locked frozen copy, and now cleans up. shellcheck passes.
-		- 2026-10-24: A trap's write to a reader that's gone no longer ends it. That was checked on a stand-in script, not on a cicd run.
-		- 2026-10-24: Still open: `timeout | grep` from a shell with job control still fails on each of about 10 stops at 15 s. The second TERM comes before the trap's first command can ignore it, and the run dies with no trap at all. Starting the frozen copy's run in the background and waiting for it made no difference.
-		- Swept: the 4 leak and release scripts whose EXIT traps call `fStopDescendants` get the same ignore through it. The integration test's own stop has a separate bug, filed as 2026102408015248.
-	- Decisions:
-		- 2026-10-24 answer: do both (a) and (b). Trap INT, TERM and HUP explicitly and run long steps in the background with `wait`, and have the next run take down a dead run's dir and frozen copy as soon as its PID is gone.
-		- Once a stop has begun, a second Ctrl+C or TERM no longer cuts it short. The wait is still capped by `TUKFS_STOP_WAIT`, 30 s, and then KILL.
-		- A reader that quits early, such as `| head`, no longer stops the run, since the log's `tee` keeps going.
-	- Branch: round-20261024
-	- Test case: `private/claude_simple/tools/cicd-stop-check.bash REPO [DELAY] [pipe|twice]`. `twice` failed before the fix and passes after. `pipe` still fails at 15 s.
-
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -575,6 +543,43 @@
 	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
+
+- A stopped cicd run can leave its temp dir and a locked frozen copy.
+	- ID: 2026102407311809
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-073118
+	- Opened by: testing 2026102407030600
+	- Steps to reproduce [Bug]:
+		- `timeout -s TERM 20 cicd/cicd.bash -y --no-sync --no-fmt --no-debug --no-lint --no-profile --no-release --no-publish | grep Leak`, stopped during the unit tests.
+	- Incorrect behavior [Bug]:
+		- The stop prints "stopped N process(es)", then the run ends without "removed this run's temp files". Its run dir stays, and `git worktree list` keeps its `tree` as locked.
+	- Expected behavior [Bug]:
+		- The dir and the worktree go, as in 2026102309501601's stop test.
+	- Reproduced [Bug]: 2026-10-24 on b23, in 5 of 6 stops: piped to grep, or under `bash -x` to a file. The one stop with plain output to a file cleaned up.
+	- Possible cause [Bug]: Something in the EXIT trap after `fStopDescendants` kills the run, or it writes to a pipe that has gone.
+	- Actual cause [Bug]:
+		- From a shell with job control, `timeout` leads the pipeline's process group, so its group TERM kills `grep` too. `tee` then dies of SIGPIPE at its next write, and so does the run at its next one, inside the EXIT trap. A Ctrl+C of `cicd.bash | tee` does the same.
+		- `timeout` sends TERM to the run and then to its group. bash 5.2 dies at once on a second TERM once it's handling the first, before the trap's first command or partway through the trap.
+	- Progress log:
+		- 2026-10-24: `fStopDescendants` and `fRunTmpGone` ignore INT, TERM, HUP and PIPE from their first line. The run log's `tee` has `-p`, so it keeps writing the log once the reader is gone.
+		- 2026-10-24: Verified: a second TERM once the stop has begun used to leave the run dir and a locked frozen copy, and now cleans up. shellcheck passes.
+		- 2026-10-24: A trap's write to a reader that's gone no longer ends it. That was checked on a stand-in script, not on a cicd run.
+		- 2026-10-24: Still open: `timeout | grep` from a shell with job control still fails on each of about 10 stops at 15 s. The second TERM comes before the trap's first command can ignore it, and the run dies with no trap at all. Starting the frozen copy's run in the background and waiting for it made no difference.
+		- Swept: the 4 leak and release scripts whose EXIT traps call `fStopDescendants` get the same ignore through it. The integration test's own stop has a separate bug, filed as 2026102408015248.
+		- 2026-10-24: cicd.bash traps INT, TERM and HUP, and the trap exits 130, 143 or 129 into the EXIT trap. A trapped signal waits its turn, so a second one can't skip the cleanup. bash runs a trap only between commands, so the frozen copy's run and the long steps run in the background and are waited for, with INT put back for them.
+		- 2026-10-24: A run's start and end take down the dirs of runs whose PID is gone, with no day's wait. A frozen copy in one goes through git first, so its locked record goes too.
+		- 2026-10-24: Verified: `timeout | grep` from a shell with job control, a second TERM during the stop, a Ctrl+C to the group, and a KILLed run swept by the next run, at 10 and 15 s, all left no run dir or frozen copy, at load 15 to 30. `pipe` passed at 3, 8, 15, 15 and 22 s too. Before the fix, `pipe` and `killed` failed at 12 and 15 s. A TERM to the PID alone of a `--no-freeze` run stopped it in 0.35 s with nothing left. `--gate` and shellcheck pass.
+		- Swept: `tests/integration.bash` stopped by `timeout | grep` at 3, 6 and 9 s left nothing, so it keeps its EXIT trap alone. The 4 leak and release scripts are unchanged. In a cicd run their scratch dirs sit in the run dir and their containers are killed by ID, so the run's cleanup covers them. The unit tests' own sweep keeps its day's wait (2026102309501607).
+	- Decisions:
+		- 2026-10-24 answer: do both (a) and (b). Trap INT, TERM and HUP explicitly and run long steps in the background with `wait`, and have the next run take down a dead run's dir and frozen copy as soon as its PID is gone.
+		- Once a stop has begun, a second Ctrl+C or TERM no longer cuts it short. The wait is still capped by `TUKFS_STOP_WAIT`, 30 s, and then KILL.
+		- A reader that quits early, such as `| head`, no longer stops the run, since the log's `tee` keeps going.
+	- Actual fix [Bug]: `fStopOnSignals` and `fBg` in `cicd/utility/include/stop-descendants.bash`, used by cicd.bash. `fSweepStale` goes by the PID alone, takes a frozen copy down through git, and runs at a run's start too.
+	- Branch: round-20261024, then round-20261024b
+	- Test case: `private/claude_simple/tools/cicd-stop-check.bash REPO [DELAY] [all|pipe|twice|ctrlc|killed]`. `pipe` and `killed` failed before the fix and pass after. `twice` failed before the first part. `ctrlc` passed before and after.
+	- Closed: 20261024-093805
 
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
 	- ID: 2026101406340915
