@@ -74,7 +74,8 @@ scan() { local rc=0; "${bin}" scan --db "${db}" --root "${tree}" --progress 3600
 xget() { getfattr --only-values -n "${2}" "${1}" 2>/dev/null || true; }
 tomorrow="$(date -d tomorrow +%Y-%m-%d)"
 # Waits up to 10 s for a scan to say it has started, rather than guessing.
-wait_started() { for _ in $(seq 1 200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
+# Up to 60 s, since a loaded box has taken more than 10 to get going.
+wait_started() { for _ in $(seq 1 1200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
 
 # Varied names, sizes and dates.
 : > "${tree}/empty"
@@ -559,6 +560,6 @@ fi
 ##		- 20261023: fSafeRm guards the work folder's rm -rf, and the folder moved
 ##		  under <TMPDIR>/tukfs-hash/.
 ##		- 20261023: --version lines.
-##		- 20261023: The date after the build number.
+##		- 20261023: The date after the build number. wait_started waits 60 s.
 ##		- 20261023: A test ID on every check, shown on its status line, and a
 ##		  skip line for each check left out.
