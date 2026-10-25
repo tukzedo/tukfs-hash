@@ -79,6 +79,33 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
+- The default run's backup rar grew from 1.7 MB to 130 MB, since it now takes the cargo homes under `target/`.
+	- ID: 2026102516000001
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-160000
+	- Opened by: round-20261025b startup lint check
+	- Steps to reproduce [Bug]:
+		- Run `cicd/cicd.bash` with no flags, after a run that built the leak check or release images.
+		- Result: the `Backup + publish` step adds `target/leakcheck/cargo-home` and `target/release-ctr/cargo-home` to `../versions/tukfs-hash_<stamp>_latest.rar`. The 2026-10-25 11:37 rar is 131 MB, against 1.7 MB on 2026-10-23.
+	- Incorrect behavior [Bug]:
+		- `target` is a plain folder now, not a link to the no-snapshots dataset, so the backup's skip of linked folders no longer leaves it out. The image steps put about 490 MB of crate sources there.
+	- Expected behavior [Bug]: Nothing under `target/` goes in the backup, linked or not.
+
+- `lint-report.bash --check` counts archived file names with "warning" in them as warnings.
+	- ID: 2026102516000002
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-160000
+	- Opened by: round-20261025b startup lint check
+	- Steps to reproduce [Bug]:
+		- Run `cicd/utility/lint-report.bash --check` after a default run whose backup step listed its files.
+		- Result: `NEW FLAG run_20261025-112314.log (10 warning line(s))`, every one an `Adding ...` line for a file such as `zerocopy-derive-0.8.62/tests/ui/absence_of_deprecated_warning.rs`.
+	- Expected behavior [Bug]: The archiver's file list isn't read as lint output. A real warning in the same log still flags.
+	- Related IDs: 2026102516000001
+
 - CICD reset: release builds without docker
 	- ID: 2026102509342993
 	- Type: Task
