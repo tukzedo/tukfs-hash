@@ -57,6 +57,41 @@
 	- Test case: `cpu-cap-check.bash REPO [ctr]`, in the private tools folder. Not in CI, since its container case needs docker.
 	- Swept: every `nproc`, `--cpus` and `docker run` in `cicd/` and `tests/`. The `-j "${CPU_CAP}"` left in soak, sanitize-rust and release-build reads the count when it runs. The integration test and the pre-push hook start nothing parallel of their own.
 
+- CICD reset: standard flags
+	- ID: 2026102416215930
+	- Type: Task
+	- Status: Waiting on automated testing
+		- It departs from the wording in one way. `--list` prints the plan but not the test IDs, which went to child 2026102507210235.
+	- Needs local test suite run?: The round's full run as `cicd/cicd.bash --backlog-run-full`, with nothing turned off. It should take about as long as the old full-run line, and record its tree for the hook.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102318460623, 2026102309501601, 2026102507222620
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
+		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
+		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
+		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
+		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
+		- The default run stays under about an hour, and `--quick` about 10 minutes.
+	- Progress log:
+		- 2026-10-25: `--backlog-run-quick` is the old gate: format check, debug build, lint, unit and integration tests. Areas from `BACKLOG_AREAS` in config.bash pick parts of it, or single leak checks, the profiler or the release builds. `--help` lists them.
+		- 2026-10-25: `--backlog-run-full` and `--merge-gate` run every check of a run with no options, and the format stage only checks. `--long` is `--slow`, since no step takes hours yet. The default run and `--quick` keep their steps.
+		- 2026-10-25: The hook runs `--merge-gate` on pushes to `main` only, and reads the docs globs from `cicd/docs-paths`.
+		- 2026-10-25: A run records its tree for the hook only when it's at least as thorough as the merge gate, after the release checks. `--backlog-run-quick`, and any `--no-` flag that drops a check, don't record.
+		- 2026-10-25: `--no-container` sends the leak checks to the host. The release builds still stop without their image, until 2026102416215926. `--no-remote` has nothing to skip yet. `--keep-temp` keeps the run's dirs, frozen copy and containers, and marks the dirs so the next run's sweep leaves them for 2 days.
+		- 2026-10-25: Verified: the flags check passes 27 cases, and fails 20 on the code from before. `--backlog-run-quick` passes in 1m 45s at load 40 and records nothing. `--backlog-run-quick fmt advisories --keep-temp` ran only those 2 and kept its dir. The next run left it, and a run after its mark was aged 3 days removed it and its worktree.
+		- 2026-10-25: Verified: `--backlog-run-full` with the leak checks, profiler, arm64 build and packages off passed in 2m 15s, the gif included. The tree, `assets/demo.gif` and the private gif folder were the same after. `--merge-gate` on `69bd3ee`, with the same steps off, passed in 4m 07s at load 48, and again with no release build in the checkout, so its gif came from the commit gated.
+	- Decisions:
+		- The 2 long modes draw the gif but don't copy it to `assets/demo.gif` or rotate it, since both are writes they may not make. Drawing it still checks the scenario. Under the hook it's drawn from the commit being pushed.
+		- The 3 modes stay strict, as `--gate` was, so a missing tool fails them. `--backlog-run-quick` writes no logs. The other 2 write the run and lint logs that `lint-report.bash` reads.
+		- The docs globs are `*.md` and `assets/*`, as before.
+	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. memory.md and CLAUDE.md say `--gate` too.
+	- Branch: round-20261025
+	- Commit: `69bd3ee`
+	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
+
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -156,23 +191,6 @@
 		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
 		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
 
-- CICD reset: standard flags
-	- ID: 2026102416215930
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Related IDs: 2026102318460623, 2026102309501601
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
-		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
-		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
-		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
-		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
-		- The default run stays under about an hour, and `--quick` about 10 minutes.
-
 - CICD reset: step output
 	- ID: 2026102416215931
 	- Type: Task
@@ -247,6 +265,31 @@
 		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
 		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+
+- `cicd.bash --list` prints the plan, but not the test IDs the run would print.
+	- ID: 2026102507210235
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-072102
+	- Opened by: round-20261025
+	- Parent ID: 2026102416215930
+	- Prereq IDs: 2026102416215933
+		- The IDs change to base 32 there, and `test-ids.py` has no command that lists them yet.
+	- Requirements  [Feature]:
+		- `--list` prints the steps and test IDs that the other flags given would run, and runs nothing. It prints the steps now.
+
+- Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
+	- ID: 2026102507222620
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-072226
+	- Opened by: round-20261025
+	- Related IDs: 2026102409041301
+	- Note: Seen once in a `--backlog-run-full` run on 2026-10-25, in the tests stage's ZFS pass. It passed on ext4 in the same run, and on both in a `--backlog-run-quick` run minutes before.
+	- Output: `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`. 0vCUrb passed, so the scan had started, unlike 2026102409041301.
+	- Possible cause [Bug]: Step 5 sends INT 0.1 s after the `group` line. Under load that can come before the one worker reaches `rm-stale.txt`, so nothing was found before the stop.
 
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407
