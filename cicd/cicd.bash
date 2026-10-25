@@ -177,6 +177,7 @@ if [[ -n "${run_part}" ]]; then inner_run=1; fi
 source "${here}/utility/include/frozen-tree.bash"
 source "${here}/utility/include/stop-descendants.bash"
 source "${here}/utility/include/gfs-rotate.bash"
+source "${here}/utility/include/ctr-image.bash"
 cd "${root}"
 stamp="$(date +%Y%m%d-%H%M%S)"
 started=${SECONDS}
@@ -713,7 +714,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 		fEcho_Clean "Publish (last) .: (skipped)"
 	fi
 	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-6 run from a copy taken after the format stage' || echo '(off)')"
-	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host')"
+	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host; the build and tests in the release image')"
 	fEcho_Clean "Other hosts ....: (none in this pipeline)"
 	fEcho_Clean "Temp files .....: $( ((keep_temp)) && echo 'kept, --keep-temp' || echo 'removed at the end')"
 	_on="$(printf '%s, ' "${steps_on[@]}")"
@@ -864,11 +865,43 @@ fStageFormat(){
 	fStepPass
 }
 
+## Where stages 2-4 build and test, worked out once, at the first step that
+## needs it. The image, or the host with one line saying why.
+tests_ctr=""; tests_ctr_work=""
+fTestsWhere(){
+	local why=""
+	[[ -z "${tests_ctr}" ]] || return 0
+	fCtrUseRelease
+	why="$(fCtrWhyNot)"
+	if [[ -z "${why}" ]]; then
+		tests_ctr_work="${run_tmp}/ctr"
+		if fCtrReady "${tests_ctr_work}"; then
+			fCtrFetch "${tests_ctr_work}"
+			tests_ctr=1
+			RELEASE_NATIVE_BIN="${TESTS_CTR_NATIVE_BIN}"
+			fEcho_Clean "build and tests: in ${ctr_tag}"
+			return 0
+		fi
+		why="its image couldn't be set up"
+	fi
+	tests_ctr=0
+	fEcho "NOTE: build and tests on the host, since ${why}"
+}
+## A cargo step, where fTestsWhere said. Run fTestsWhere first, in this shell.
+fInTests(){   ## fInTests COMMAND [ARG...]
+	if [[ "${tests_ctr}" == 1 ]]; then
+		fCtrRunSelf "${tests_ctr_work}" "${TESTS_CTR_TARGET_DIR}" "${here}/utility/in-image.bash" "$@"
+	else
+		"$@"
+	fi
+}
+
 ## Stage 2: debug build.
 fStageBuild(){
 	fStep build || return 0
+	fTestsWhere
 	fEcho_Clean "${BUILD_CMD[*]}"
-	fBg "${BUILD_CMD[@]}" || fDie "debug build failed"
+	fBg fInTests "${BUILD_CMD[@]}" || fDie "debug build failed"
 	fEcho "OK: debug build"
 	fStepPass
 }
@@ -913,8 +946,9 @@ fStageLint(){
 	done
 	for f in "${SHELLCHECK_EXTRA[@]}"; do [[ -f "${root}/${f}" ]] && shFiles+=("${f}"); done
 
+	fTestsWhere
 	fEcho_Clean "clippy: ${LINT_CMD[*]}"
-	if fLintRun "${LINT_CMD[@]}"; then fEcho "OK: clippy clean"; else failed+=(clippy); fi
+	if fLintRun fInTests "${LINT_CMD[@]}"; then fEcho "OK: clippy clean"; else failed+=(clippy); fi
 	if ((! ${#shFiles[@]})); then
 		fEcho_Clean "shellcheck: no bash files"
 	elif fLintTool shellcheck; then
@@ -969,7 +1003,7 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; fi
 	fRunDirMake "${real}" it "${label}"
 	d="${made_dir}"
-	fEcho_Clean "integration test on ${label}: TMPDIR=${d}"
+	fEcho_Clean "integration test on ${label}: TMPDIR=${d} ${RELEASE_NATIVE_BIN}"
 	TMPDIR="${d}" fBg "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
 	if fRunDirGone "${d}"; then freed_kb=$((freed_kb + gone_kb)); fi
@@ -980,15 +1014,16 @@ fRunIt(){   ## fRunIt LABEL ROOT
 fStageTests(){
 	local r step t0
 	fStep tests || return 0
+	if ((! unit_off || ! it_off)); then fTestsWhere; fi
 	if ((! unit_off)); then
-		fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=${TMPDIR})"
-		fBg "${TEST_CMD[@]}" || fDie "unit tests failed"
+		fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=$( [[ "${tests_ctr}" == 1 ]] && echo "${tests_ctr_work}/tmp" || echo "${TMPDIR}"))"
+		fBg fInTests "${TEST_CMD[@]}" || fDie "unit tests failed"
 		fEcho "OK: unit tests"
 	fi
 	if ((! it_off)); then
 		## The integration test runs the release build.
 		fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
-		fBg "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
+		fBg fInTests "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
 		[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
 		for r in "${IT_ROOTS[@]}"; do fRunIt "${r%%|*}" "${r#*|}"; done
 	fi
@@ -1506,3 +1541,5 @@ exit 0
 ##		  frozen copy's included, and the plan lists the rest with the reason.
 ##		  A 79 character rule.
 ##		- 2026-10-25: --list prints the test IDs too, from TEST_ID_LIST_CMD.
+##		- 2026-10-25: The debug build, clippy, unit tests and the integration
+##		  test's release build in the release image, or on the host with a note.

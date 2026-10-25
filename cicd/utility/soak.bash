@@ -11,7 +11,7 @@
 ##		of its own, and only that test, since dhat counts every thread's
 ##		heap. Its table of both heaps by round goes in cicd/artifacts/soak/,
 ##		and when the heap grew, dhat's profile of it too, for dh_view.html.
-##		On the host, like the other tests, with the toolchain
+##		On the host, like the integration test, with the toolchain
 ##		rust-toolchain.toml pins and dhat from Cargo.lock. A scan plans its
 ##		workers from the root's disks, which it finds through /dev, and a
 ##		container has none of the host's.

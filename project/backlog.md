@@ -29,6 +29,21 @@
 
 ## Issues
 
+- CICD reset: release builds without docker
+	- ID: 2026102509342993
+	- Type: Task
+	- Status: Waiting for answers
+		- Waits on its question in questions.md.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261025-093429
+	- Opened by: 2026102416215926
+	- Parent ID: 2026102416215926
+	- Related IDs: 2026102318460622
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- From the parent: a missing docker falls back to the host with one line, and never fails a run. `release-build.bash` exits 2 without the release image now, so the run fails.
+		- A host build needs the box's glibc, 2.39 on b23, so the release check `no build needs a glibc newer than GLIBC_FLOOR` would fail it. b23 has the arm64 Rust target, but no arm64 cross gcc or qemu-user.
+
 - Should the private cicd and dogfood checks run in the pipeline, with test IDs?
 	- ID: 2026102508462883
 	- Type: Task
@@ -95,6 +110,7 @@
 	- ID: 2026102416215926
 	- Type: Task
 	- Status: Queued
+		- Its own part is in. It closes with child 2026102509342993, the release builds without docker, which waits on a question.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -107,6 +123,18 @@
 		- Build and run the tests in the pinned image by default, the merge gate included. Steps that need the real disks, such as the soak, stay on the host.
 		- A missing docker falls back to the host with one line, and never fails a run. The release builds stop without it now.
 		- `--no-container` runs on the host on purpose.
+	- Progress log:
+		- 2026-10-25: The debug build, clippy, the unit tests and the release build the integration test runs go in the release image, through `cicd/utility/in-image.bash`, into `target/ctr`. That build needs only glibc 2.28, so the integration test runs it on the host. The format check, the other linters, the integration test, the soak and the profiler stay on the host.
+		- 2026-10-25: The run works out once, at the first step that needs it, whether the image can be used. With no docker, a docker that doesn't answer, an image that can't be built, or `--no-container`, those steps run on the host after one NOTE line.
+		- 2026-10-25: Verified: `tests-ctr-check.bash` passes its 4 cases, and fails all 4 on the code from before. `--backlog-run-quick build unit it` passed in 2m 53s at load 45, with the integration test on the image's glibc 2.28 build, on ext4 and ZFS. `--backlog-run-quick` passed in 3m 15s at load 55 to 61. The flags check still passes.
+		- 2026-10-25: Split: the release builds without docker went to child 2026102509342993.
+	- Decisions:
+		- The release image, not the leak check one. Its builds run on any box, so the integration test can take them, it's half the size, and the release builds already use it.
+		- The integration test stays on the host, like the soak. It scans real ext4 and ZFS roots, and a scan plans its workers from the disks in `/dev`.
+		- The format check stays on the host, since the default run formats in place and the image mounts the tree read only. The profiler build stays too, since it isn't a test.
+	- Branch: round-20261025
+	- Test case: `tests-ctr-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline and needs docker. 2026102508462883 asks whether such checks move into the pipeline.
+	- Swept: every use of `BUILD_CMD`, `LINT_CMD`, `TEST_CMD`, `RELEASE_NATIVE_CMD` and `RELEASE_NATIVE_BIN` in `cicd/`, the plan's Containers line, the private checks that match plan text, design.md, and the soak's header. `release-build.bash` still has no host path, which is the child's.
 
 - CICD reset: other hosts and VMs
 	- ID: 2026102416215927

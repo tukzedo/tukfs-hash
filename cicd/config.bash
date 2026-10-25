@@ -181,10 +181,20 @@ PROFILE_TIMED=(
 	'rescan --rmlint|TUKFS_PROFILE_LABEL=rescan "${PROFILE_BIN}" scan --db "${PROFILE_WORKLOAD}/db/profile.sqlite" --root "${PROFILE_WORKLOAD}/tree" --progress 3600 --rmlint --since "$(date -d tomorrow +%F)"; [[ $? -eq 4 ]]'
 )
 
-## Stage 4's release build, on the host, which the integration test runs. It
-## needs the host's glibc, so it's never a release.
+## Stage 4's release build, which the integration test runs. It's never a
+## release, since it isn't from stage 6.
 RELEASE_NATIVE_CMD=(cargo build --release --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
+
+## Stages 2 to 4 run BUILD_CMD, clippy, TEST_CMD and RELEASE_NATIVE_CMD in the
+## release image below where docker answers, so they build with its pinned
+## toolchain and glibc 2.28, and the integration test can run their build
+## on any host. Into a target dir of their own, so a host build isn't
+## replaced. With no docker, or --no-container, they run on the host, with
+## a note. The integration test and the soak stay on the host, since they
+## scan the real disks.
+TESTS_CTR_TARGET_DIR="${root}/target/ctr"
+TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 
 ## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
 ## mounts and snapshots. Both targets build in the release image, from
@@ -320,3 +330,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: BACKLOG_AREAS.
 ##		- 2026-10-25: A stage off here is listed in the plan, not skipped in a line.
 ##		- 2026-10-25: TEST_ID_LIST_CMD.
+##		- 2026-10-25: The build and tests in the release image.
