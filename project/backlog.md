@@ -300,6 +300,7 @@
 		- 2026-10-25: Verified: with step 5's scan held back, on ZFS at load 65 to 74, the old test failed 0vCUrc with `got [2], want [6]` and the new one passed. 12 reruns of the new wait on ZFS at load 45 all exited 6, with the INT 0 to 0.2 s after `group`. The integration test passes on ext4 and ZFS at load 70, and `--backlog-run-quick` passes.
 	- Swept: Step 7's stop needs only the lock held, so it has nothing to wait for. The test's other waits are bounded polls. No other test or cicd script stops a scan after a fixed sleep.
 	- Branch: round-20261025
+	- Commit: fd5637a
 	- Test case: `tests/integration.bash` 0vCUrc, and new 0vGnUm. `it-starve-check.bash TEST BINARY TMPDIR [CPU]`, in the private tools folder, runs a test with step 5's scan held back. `stop-window.bash BINARY TMP_ROOT [ROUNDS] [old|fd|db|full]`, there too, reruns just the stop.
 	- Acceptance signoff: Self-closed: a test-only fix, failing before and passing after.
 	- Closed: 20261025-075434
