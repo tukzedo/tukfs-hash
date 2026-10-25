@@ -42,95 +42,6 @@
 		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
 		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
 
-- CICD reset: CPU and priority
-	- ID: 2026102416215929
-	- Type: Task
-	- Status: Waiting on automated testing
-		- It departs from the wording in 2 small ways. The version probes run in an image get `--cpus` and the low share, but no `nice` inside, and `docker build` gets neither.
-	- Needs local test suite run?: The round's full run, for the profiler build, the sanitizers, Miri, CodeQL, and the arm64 tests in their image at the new counts.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
-		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
-		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
-		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
-	- Progress log:
-		- 2026-10-25: `cicd/utility/include/cpu-cap.bash` works out the count. cicd.bash checks it again at each of its 9 steps and before each leak check, and prints it when it changes.
-		- 2026-10-25: The leak scripts take a quarter through `leak-common.bash`. The release builds and the profiler workload take half, or a quarter when busy.
-		- 2026-10-25: cicd.bash and the leak scripts renice themselves to 19 and the idle I/O class at the start, so all they start inherits it. Every container gets `--cpus` and `--cpu-shares 256` in `fCtrRun`, and the crate fetch and each script run in an image go through `nice -n 19 ionice -c 3`.
-		- 2026-10-25: config.bash's command arrays lost their `-j` and `--test-threads`, since the file is read once. cargo and libtest take the count from `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS`.
-		- 2026-10-25: Verified: the check passes, and fails 5 cases with the busy rule, the check at each step, the low share, `nice` in the image, and the renice each taken out. `--gate` passes, and its cargo and rustc ran at nice 19 in the idle class. soak, advisories, and the x86_64 release build in its image pass. shellcheck passes.
-	- Decisions:
-		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself carries `TUKFS_CPU_AUTO=1`, so the run on the frozen copy and the leak scripts work theirs out again.
-		- With runc 1.2 or later on cgroup v2, 256 shares comes out as cpu.weight 35, against 100 for the default.
-	- Branch: round-20261025
-	- Test case: `cpu-cap-check.bash REPO [ctr]`, in the private tools folder. Not in CI, since its container case needs docker.
-	- Swept: every `nproc`, `--cpus` and `docker run` in `cicd/` and `tests/`. The `-j "${CPU_CAP}"` left in soak, sanitize-rust and release-build reads the count when it runs. The integration test and the pre-push hook start nothing parallel of their own.
-
-- CICD reset: standard flags
-	- ID: 2026102416215930
-	- Type: Task
-	- Status: Waiting on automated testing
-		- It departs from the wording in one way. `--list` prints the plan but not the test IDs, which went to child 2026102507210235.
-	- Needs local test suite run?: The round's full run as `cicd/cicd.bash --backlog-run-full`, with nothing turned off. It should take about as long as the old full-run line, and record its tree for the hook.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Related IDs: 2026102318460623, 2026102309501601, 2026102507222620
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
-		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
-		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
-		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
-		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
-		- The default run stays under about an hour, and `--quick` about 10 minutes.
-	- Progress log:
-		- 2026-10-25: `--backlog-run-quick` is the old gate: format check, debug build, lint, unit and integration tests. Areas from `BACKLOG_AREAS` in config.bash pick parts of it, or single leak checks, the profiler or the release builds. `--help` lists them.
-		- 2026-10-25: `--backlog-run-full` and `--merge-gate` run every check of a run with no options, and the format stage only checks. `--long` is `--slow`, since no step takes hours yet. The default run and `--quick` keep their steps.
-		- 2026-10-25: The hook runs `--merge-gate` on pushes to `main` only, and reads the docs globs from `cicd/docs-paths`.
-		- 2026-10-25: A run records its tree for the hook only when it's at least as thorough as the merge gate, after the release checks. `--backlog-run-quick`, and any `--no-` flag that drops a check, don't record.
-		- 2026-10-25: `--no-container` sends the leak checks to the host. The release builds still stop without their image, until 2026102416215926. `--no-remote` has nothing to skip yet. `--keep-temp` keeps the run's dirs, frozen copy and containers, and marks the dirs so the next run's sweep leaves them for 2 days.
-		- 2026-10-25: Verified: the flags check passes 27 cases, and fails 20 on the code from before. `--backlog-run-quick` passes in 1m 45s at load 40 and records nothing. `--backlog-run-quick fmt advisories --keep-temp` ran only those 2 and kept its dir. The next run left it, and a run after its mark was aged 3 days removed it and its worktree.
-		- 2026-10-25: Verified: `--backlog-run-full` with the leak checks, profiler, arm64 build and packages off passed in 2m 15s, the gif included. The tree, `assets/demo.gif` and the private gif folder were the same after. `--merge-gate` on `69bd3ee`, with the same steps off, passed in 4m 07s at load 48, and again with no release build in the checkout, so its gif came from the commit gated.
-	- Decisions:
-		- The 2 long modes draw the gif but don't copy it to `assets/demo.gif` or rotate it, since both are writes they may not make. Drawing it still checks the scenario. Under the hook it's drawn from the commit being pushed.
-		- The 3 modes stay strict, as `--gate` was, so a missing tool fails them. `--backlog-run-quick` writes no logs. The other 2 write the run and lint logs that `lint-report.bash` reads.
-		- The docs globs are `*.md` and `assets/*`, as before.
-	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. memory.md and CLAUDE.md say `--gate` too.
-	- Branch: round-20261025
-	- Commit: `69bd3ee`
-	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
-
-- CICD reset: step output
-	- ID: 2026102416215931
-	- Type: Task
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: The round's full run, `cicd/cicd.bash --backlog-run-full`. Its 7 steps should read `Step N of 7`, the profiler, release and gif steps included, each closed by `PASS`.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
-		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
-		- The rule above each step is 79 characters. It's 74 now.
-	- Progress log:
-		- 2026-10-25: Each step opens with `[ <time to the hundredth>: Step N of M; Starting <name> ]` under a 79 character rule, and closes with `PASS <name>`, or `FAIL <name>` after the `FAILED:` line. The cleanup line has the hundredths too.
-		- 2026-10-25: Only the steps that run are numbered and counted. A step that's off prints nothing. The plan lists them under `Steps off`, each with its flag, mode, "not in the areas named", or "off in config.bash". Under `-q`, which has no plan, that list is one `steps off:` line.
-		- 2026-10-25: The run on the frozen copy takes the outer run's numbers through `TUKFS_STEP_PLAN`, so its steps count on from the format step.
-		- 2026-10-25: Verified: the step check passes 25 cases and fails 18 on the code from before. A format failure prints one `FAIL Format`, in the checkout and in the frozen copy. `--backlog-run-quick` passes, as steps 1 to 4 of 4. The flags, CPU cap and `--no-debug` checks pass. shellcheck passes.
-	- Decisions:
-		- One table of step names and one on/off test per step, `fStepOn`, which both the plan and the steps read, so the two can't disagree.
-		- A stopped run prints no `FAIL` line. The stop already says `CICD ABORTED (stopped)`.
-	- Swept: all 10 `fStep` calls. No `fStepSkip`, `of 9` or old `PASS:` form is left in `cicd/`, `tests/`, the docs or the private tools. `lint-report.bash` reads `FAIL` at a line start as an error line, which a failed step is. The leak, release and integration scripts print their own lines, not steps.
-	- Branch: round-20261025
-	- Commit: `a17da2f`
-	- Test case: `cicd-steps-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline itself, in a clone with a format failure put in.
-
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -147,6 +58,7 @@
 		- 2026-10-24: An `O_DIRECT` read took 0.07 to 0.15 s of sys CPU per GB, against 0.5 to 1.0 s for a cached read plus its drop. With it, the drops find nothing to evict.
 		- 2026-10-24: Verified: a scan of the same tree went from 0.66 to 1.65 s of sys CPU to 0.06 to 0.11 s, plain or `--rmlint`, over 5 rounds each. User CPU rose about 0.1 s. Wall time came out even, at load 20 to 37.
 		- 2026-10-24: Verified: on ZFS with `direct=standard` it reads direct too, with the same wall and CPU as before and no rise in ARC misses.
+		- 2026-10-25: The hard drive timing wasn't reached in the test batch. A scan of bf7 writes attributes and database rows on data outside the project, and no `debkt` build is on hand to compare. bf7 is btrfs with `compress=zstd:4`, so how its compressed files take a direct read is part of what to look at.
 	- Decisions:
 		- Read with `O_DIRECT` where the filesystem takes it, and keep both drops for the plain-read fallback.
 		- It falls back to a plain read if `O_DIRECT` is refused, or if a read gets EINVAL or EOPNOTSUPP partway through. The fd's flags are put back after.
@@ -262,6 +174,102 @@
 		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
 		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+
+- CICD reset: CPU and priority
+	- ID: 2026102416215929
+	- Type: Task
+	- Status: Done
+		- It departs from the wording in 2 small ways. The version probes run in an image get `--cpus` and the low share, but no `nice` inside, and `docker build` gets neither.
+	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
+		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
+		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
+		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
+	- Progress log:
+		- 2026-10-25: `cicd/utility/include/cpu-cap.bash` works out the count. cicd.bash checks it again at each of its 9 steps and before each leak check, and prints it when it changes.
+		- 2026-10-25: The leak scripts take a quarter through `leak-common.bash`. The release builds and the profiler workload take half, or a quarter when busy.
+		- 2026-10-25: cicd.bash and the leak scripts renice themselves to 19 and the idle I/O class at the start, so all they start inherits it. Every container gets `--cpus` and `--cpu-shares 256` in `fCtrRun`, and the crate fetch and each script run in an image go through `nice -n 19 ionice -c 3`.
+		- 2026-10-25: config.bash's command arrays lost their `-j` and `--test-threads`, since the file is read once. cargo and libtest take the count from `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS`.
+		- 2026-10-25: Verified: the check passes, and fails 5 cases with the busy rule, the check at each step, the low share, `nice` in the image, and the renice each taken out. `--gate` passes, and its cargo and rustc ran at nice 19 in the idle class. soak, advisories, and the x86_64 release build in its image pass. shellcheck passes.
+		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. It ran at 8 of 32 jobs, a quarter, since the box was busy, with asan, tsan, Miri, CodeQL, the profiler build, both release builds and the arm64 unit tests under qemu each passing.
+	- Decisions:
+		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself carries `TUKFS_CPU_AUTO=1`, so the run on the frozen copy and the leak scripts work theirs out again.
+		- With runc 1.2 or later on cgroup v2, 256 shares comes out as cpu.weight 35, against 100 for the default.
+	- Branch: round-20261025
+	- Commit: `38fd802`
+	- Test case: `cpu-cap-check.bash REPO [ctr]`, in the private tools folder. Not in CI, since its container case needs docker.
+	- Swept: every `nproc`, `--cpus` and `docker run` in `cicd/` and `tests/`. The `-j "${CPU_CAP}"` left in soak, sanitize-rust and release-build reads the count when it runs. The integration test and the pre-push hook start nothing parallel of their own.
+	- Closed: 20261025-091651
+
+- CICD reset: standard flags
+	- ID: 2026102416215930
+	- Type: Task
+	- Status: Done
+		- It departs from the wording in one way. `--list` prints the plan but not the test IDs, which went to child 2026102507210235.
+	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102318460623, 2026102309501601, 2026102507222620
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
+		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
+		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
+		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
+		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
+		- The default run stays under about an hour, and `--quick` about 10 minutes.
+	- Progress log:
+		- 2026-10-25: `--backlog-run-quick` is the old gate: format check, debug build, lint, unit and integration tests. Areas from `BACKLOG_AREAS` in config.bash pick parts of it, or single leak checks, the profiler or the release builds. `--help` lists them.
+		- 2026-10-25: `--backlog-run-full` and `--merge-gate` run every check of a run with no options, and the format stage only checks. `--long` is `--slow`, since no step takes hours yet. The default run and `--quick` keep their steps.
+		- 2026-10-25: The hook runs `--merge-gate` on pushes to `main` only, and reads the docs globs from `cicd/docs-paths`.
+		- 2026-10-25: A run records its tree for the hook only when it's at least as thorough as the merge gate, after the release checks. `--backlog-run-quick`, and any `--no-` flag that drops a check, don't record.
+		- 2026-10-25: `--no-container` sends the leak checks to the host. The release builds still stop without their image, until 2026102416215926. `--no-remote` has nothing to skip yet. `--keep-temp` keeps the run's dirs, frozen copy and containers, and marks the dirs so the next run's sweep leaves them for 2 days.
+		- 2026-10-25: Verified: the flags check passes 27 cases, and fails 20 on the code from before. `--backlog-run-quick` passes in 1m 45s at load 40 and records nothing. `--backlog-run-quick fmt advisories --keep-temp` ran only those 2 and kept its dir. The next run left it, and a run after its mark was aged 3 days removed it and its worktree.
+		- 2026-10-25: Verified: `--backlog-run-full` with the leak checks, profiler, arm64 build and packages off passed in 2m 15s, the gif included. The tree, `assets/demo.gif` and the private gif folder were the same after. `--merge-gate` on `69bd3ee`, with the same steps off, passed in 4m 07s at load 48, and again with no release build in the checkout, so its gif came from the commit gated.
+		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50, with no `--no-` flags. It listed remote sync, dogfood and publish as off for the mode, drew the gif into its temp dir only, and recorded its tree for the hook after the release checks. The old full-run line took about 45 minutes.
+	- Decisions:
+		- The 2 long modes draw the gif but don't copy it to `assets/demo.gif` or rotate it, since both are writes they may not make. Drawing it still checks the scenario. Under the hook it's drawn from the commit being pushed.
+		- The 3 modes stay strict, as `--gate` was, so a missing tool fails them. `--backlog-run-quick` writes no logs. The other 2 write the run and lint logs that `lint-report.bash` reads.
+		- The docs globs are `*.md` and `assets/*`, as before.
+	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. memory.md and CLAUDE.md say `--gate` too.
+	- Branch: round-20261025
+	- Commit: `69bd3ee`
+	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
+	- Closed: 20261025-091651
+
+- CICD reset: step output
+	- ID: 2026102416215931
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
+		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
+		- The rule above each step is 79 characters. It's 74 now.
+	- Progress log:
+		- 2026-10-25: Each step opens with `[ <time to the hundredth>: Step N of M; Starting <name> ]` under a 79 character rule, and closes with `PASS <name>`, or `FAIL <name>` after the `FAILED:` line. The cleanup line has the hundredths too.
+		- 2026-10-25: Only the steps that run are numbered and counted. A step that's off prints nothing. The plan lists them under `Steps off`, each with its flag, mode, "not in the areas named", or "off in config.bash". Under `-q`, which has no plan, that list is one `steps off:` line.
+		- 2026-10-25: The run on the frozen copy takes the outer run's numbers through `TUKFS_STEP_PLAN`, so its steps count on from the format step.
+		- 2026-10-25: Verified: the step check passes 25 cases and fails 18 on the code from before. A format failure prints one `FAIL Format`, in the checkout and in the frozen copy. `--backlog-run-quick` passes, as steps 1 to 4 of 4. The flags, CPU cap and `--no-debug` checks pass. shellcheck passes.
+		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. Each step opened with `[ <time to the hundredth>: Step N of 7; Starting <name> ]` under a 79 character rule and closed with `PASS <name>`, the profiler, release and gif steps included. The plan listed the 3 steps off with their mode.
+	- Decisions:
+		- One table of step names and one on/off test per step, `fStepOn`, which both the plan and the steps read, so the two can't disagree.
+		- A stopped run prints no `FAIL` line. The stop already says `CICD ABORTED (stopped)`.
+	- Swept: all 10 `fStep` calls. No `fStepSkip`, `of 9` or old `PASS:` form is left in `cicd/`, `tests/`, the docs or the private tools. `lint-report.bash` reads `FAIL` at a line start as an error line, which a failed step is. The leak, release and integration scripts print their own lines, not steps.
+	- Branch: round-20261025
+	- Commit: `a17da2f`
+	- Test case: `cicd-steps-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline itself, in a clone with a format failure put in.
+	- Closed: 20261025-091651
 
 - `cicd.bash --list` prints the plan, but not the test IDs the run would print.
 	- ID: 2026102507210235
