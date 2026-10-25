@@ -282,7 +282,8 @@
 - Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
 	- ID: 2026102507222620
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No. `--backlog-run-quick` ran the changed test on ext4 and ZFS on 2026-10-25. The round's full run runs it again.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-072226
 	- Opened by: round-20261025
@@ -290,6 +291,18 @@
 	- Note: Seen once in a `--backlog-run-full` run on 2026-10-25, in the tests stage's ZFS pass. It passed on ext4 in the same run, and on both in a `--backlog-run-quick` run minutes before.
 	- Output: `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`. 0vCUrb passed, so the scan had started, unlike 2026102409041301.
 	- Possible cause [Bug]: Step 5 sends INT 0.1 s after the `group` line. Under load that can come before the one worker reaches `rm-stale.txt`, so nothing was found before the stop.
+	- Reproduced [Bug]: 2026-10-25 on b23, on ZFS at load 42 to 50. 1 of 10 reruns of step 5's stop gave exit 2 with none of `many/` read, though the INT came 0.22 s after `group`. With step 5's scan held to a small share of 1 CPU, the old test failed with the same line and 0 of 400 read.
+	- Actual cause [Bug]: The fixed 0.1 s. Under load the one worker sometimes hadn't got to `rm-stale.txt` by then. The scan was fine, and recorded what it read before the stop.
+	- Actual fix [Bug]: Step 5 waits, up to 60 s, until the worker has a file in `many/` open, then sends INT. Files go before folders, so by then `rm-stale.txt` has been judged. New check 0vGnUm fails if it never gets there.
+	- Decisions:
+		- Not waiting for the mismatch to show in the database. The writer commits about once a second, and the whole scan takes about 1.3 s of CPU, so on a quiet box the stop could come after the end.
+	- Progress log:
+		- 2026-10-25: Verified: with step 5's scan held back, on ZFS at load 65 to 74, the old test failed 0vCUrc with `got [2], want [6]` and the new one passed. 12 reruns of the new wait on ZFS at load 45 all exited 6, with the INT 0 to 0.2 s after `group`. The integration test passes on ext4 and ZFS at load 70, and `--backlog-run-quick` passes.
+	- Swept: Step 7's stop needs only the lock held, so it has nothing to wait for. The test's other waits are bounded polls. No other test or cicd script stops a scan after a fixed sleep.
+	- Branch: round-20261025
+	- Test case: `tests/integration.bash` 0vCUrc, and new 0vGnUm. `it-starve-check.bash TEST BINARY TMPDIR [CPU]`, in the private tools folder, runs a test with step 5's scan held back. `stop-window.bash BINARY TMP_ROOT [ROUNDS] [old|fd|db|full]`, there too, reruns just the stop.
+	- Acceptance signoff: Self-closed: a test-only fix, failing before and passing after.
+	- Closed: 20261025-075434
 
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407

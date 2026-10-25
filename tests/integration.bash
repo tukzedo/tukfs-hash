@@ -80,6 +80,9 @@ tomorrow="$(date -d tomorrow +%Y-%m-%d)"
 # Waits up to 10 s for a scan to say it has started, rather than guessing.
 # Up to 60 s, since a loaded box has taken more than 10 to get going.
 wait_started() { for _ in $(seq 1 1200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
+# wait_reached PID DIR: up to 60 s for a scan to have a file under DIR open.
+# Fails at once if it has ended, since a zombie has no fds.
+wait_reached() { for _ in $(seq 1 1200); do [[ -e "/proc/${1}/fd/1" ]] || return 1; [[ -n "$(find "/proc/${1}/fd" -lname "${2}/*" -print -quit 2> /dev/null)" ]] && return 0; sleep 0.05; done; return 1; }
 
 # Varied names, sizes and dates.
 : > "${tree}/empty"
@@ -186,7 +189,9 @@ fFlipByte "${tree}/rm-stale.txt" 0 1
 "${bin}" scan --db "${db}" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
 pid=$!
 expect 0vCUrb "scan started" "scan never started" wait_started "${work}/stop.txt"
-sleep 0.1
+# A fixed 0.1 s was sometimes too soon at load 30. The one worker takes files
+# before folders, so once it's in many/ it has judged rm-stale.txt.
+expect 0vGnUm "scan got past the top folder" "scan never opened a file in many/" wait_reached "${pid}" "${tree}/many"
 kill -INT "${pid}"
 rc=0; wait "${pid}" || rc=$?
 # A stop adds 2 to what was found before it.
@@ -573,3 +578,5 @@ fi
 ##		- 20261024: A stop takes down what the test started before the work
 ##		  folder goes.
 ##		- 20261024: Step 5's files are synced before the scan.
+##		- 20261025: Step 5 stops the scan once it's past the top folder, not
+##		  after a fixed 0.1 s.
