@@ -26,7 +26,7 @@
 ##		From shcl's cicd/utility/sanitize-rust.bash.
 ##	Syntax:
 ##		sanitize-rust.bash --asan|--tsan|--miri
-##		CPU_CAP sets the jobs and test threads (default half the cores).
+##		CPU_CAP sets the jobs and test threads (default a quarter of the cores).
 ##		TUKFS_MIRI_TEST_SECS stops a Miri test that runs longer (default 1800).
 ##	Exit: 0 = clean, 1 = a test failed or a sanitizer or Miri reported, 2 = can't run.
 ##	History: At bottom of script.
@@ -158,3 +158,4 @@ esac
 ##	History:
 ##		- 2026-10-23: Copied from shcl's, with TSan, clang's SQLite build, and
 ##		  the leak check image.
+##		- 2026-10-25: A quarter of the cores by default.

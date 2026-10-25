@@ -71,9 +71,14 @@
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
 ##	  stops the whole run.
-##	- The job count is half of nproc, at least 1, worked out once and given to
-##	  every tool that runs in parallel, cargo's test threads included. A
-##	  CPU_CAP set by the caller wins.
+##	- The job count is half the logical CPUs, or a quarter when the 1-minute
+##	  load is over half the CPU count, checked at the start and at each step.
+##	  The leak checks get a quarter, busy or not. Never under 1. It goes to
+##	  every tool that runs in parallel as CPU_CAP, CARGO_BUILD_JOBS and
+##	  RUST_TEST_THREADS, and to containers as --cpus. A CPU_CAP set by the
+##	  caller wins. utility/include/cpu-cap.bash works it out.
+##	- Everything runs at nice 19 in the idle I/O class, containers too, which
+##	  also get --cpu-shares 256.
 ##	- A run that passes the tests records the tree it tested
 ##	  (utility/green-tree.bash), and the pre-push hook lets a push of that tree
 ##	  through without running the gate again. --quick, --no-fmt, --no-debug,
@@ -115,15 +120,11 @@ root="$(cd "${here}/.." && pwd)"
 ## rust-toolchain.toml.
 export PATH="${HOME}/.cargo/bin:${PATH}"
 
-## Half the cores, since the box usually has something else running. Anything
-## but a plain count is ignored, since it goes into arithmetic.
-_cores="$(nproc 2>/dev/null || echo 2)"
-if [[ ! "${CPU_CAP:-}" =~ ^[1-9][0-9]{0,3}$ ]]; then
-	CPU_CAP=$(( _cores / 2 ))
-	if (( CPU_CAP < 1 )); then CPU_CAP=1; fi
-fi
-## cargo and libtest take these where a command has no -j or --test-threads.
-export CPU_CAP CARGO_BUILD_JOBS="${CPU_CAP}" RUST_TEST_THREADS="${CPU_CAP}"
+## The box usually has something else running. Before config.bash, which
+## reads CPU_CAP.
+source "${here}/utility/include/cpu-cap.bash"
+fCpuLow
+fCpuCap
 
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
@@ -272,7 +273,10 @@ fDie(){ run_said=1; { fEcho_Force "FAILED: $*"; echo; } >&2; exit 1; }
 fNow(){ printf '%(%Y%m%d-%H%M%S)T' -1; }
 ## A stage opens with its start line and closes with a PASS or SKIP line.
 step_n=0; step_name=""
-fStep(){     step_n="$1"; step_name="$2"; fSection "$(fNow); Step ${step_n} of 9; ${step_name} ..."; }
+## The job count, when it's not what was last shown.
+cpu_shown=""
+fCpuShow(){ if [[ "${CPU_CAP}" != "${cpu_shown}" ]]; then fEcho_Clean "jobs: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}"; cpu_shown="${CPU_CAP}"; fi; }
+fStep(){     step_n="$1"; step_name="$2"; fSection "$(fNow); Step ${step_n} of 9; ${step_name} ..."; fCpuCap; fCpuShow; }
 fStepPass(){ fEcho "$(fNow); PASS: Step ${step_n} of 9; ${step_name}."; fEcho_Clean; }
 fStepSkip(){ fEcho_Clean "${1:-skipped}"; fEcho "$(fNow); SKIP: Step ${step_n} of 9; ${step_name}."; fEcho_Clean; }
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
@@ -505,7 +509,8 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean
 	fEcho_Clean "Repo root ......: ${root}"
 	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_date}}"
-	fEcho_Clean "Jobs ...........: ${CPU_CAP} (of ${_cores} cores)"
+	fEcho_Clean "Jobs ...........: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}; checked again at each step"
+	cpu_shown="${CPU_CAP}"
 	fEcho_Clean "Temp dir .......: ${run_tmp}"
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
@@ -772,6 +777,7 @@ fStageTests(){
 	## Last, since the slow ones take a long time and the rest should report first.
 	for step in "${LEAKCHECK_STEPS[@]}"; do
 		fEcho_Clean "leak check: ${step}"
+		fCpuCap heavy; fCpuShow
 		t0="${SECONDS}"
 		fBg eval "${step}" || fDie "leak check failed: ${step}"
 		fEcho_Clean "leak check took $(fMinSec $((SECONDS - t0))): ${step}"
@@ -1260,3 +1266,5 @@ exit 0
 ##		  run's dirs and frozen copy go at the next run's start and end, as
 ##		  soon as its PID is gone, rather than a day later.
 ##		- 2026-10-24: With no TMPDIR, a run works under RUN_TMP_ROOT, not /tmp.
+##		- 2026-10-25: A quarter of the cores when busy or for a leak check,
+##		  rechecked at each step, and nice 19 with idle I/O.

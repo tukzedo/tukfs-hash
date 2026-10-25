@@ -76,8 +76,10 @@ FMT_CMD=(cargo fmt)
 FMT_CHECK_CMD=(cargo fmt --check)
 
 ## Stage 2: debug build. --locked everywhere, so a build never rewrites
-## Cargo.lock behind the run's back.
-BUILD_CMD=(cargo build -j "${CPU_CAP}" --locked)
+## Cargo.lock behind the run's back. No -j or --test-threads in the arrays,
+## since the job count can change between steps after this is read. cargo
+## and libtest take it from CARGO_BUILD_JOBS and RUST_TEST_THREADS.
+BUILD_CMD=(cargo build --locked)
 
 ## Stage 3: lint. The clippy lints are in Cargo.toml's [lints.clippy], so an
 ## editor's clippy sees the same ones: pedantic, mem_forget and
@@ -85,7 +87,7 @@ BUILD_CMD=(cargo build -j "${CPU_CAP}" --locked)
 ## markdownlint takes every tracked .md but license.md, which is the GPL's own
 ## text and stays as published. MD013 is line length, and the docs never wrap.
 ## All features, or the soak test behind its feature goes unlinted.
-LINT_CMD=(cargo clippy -j "${CPU_CAP}" --locked --all-targets --all-features -- -D warnings)
+LINT_CMD=(cargo clippy --locked --all-targets --all-features -- -D warnings)
 SHELLCHECK_EXTRA=(cicd/hooks/pre-push cicd/utility/n8git_backup-and-publish cicd/tool-pins.env utility/dogfood_tukfs-hash)
 MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
@@ -108,7 +110,7 @@ LINT_EXTRA=(
 ## skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
 ## libtest-quiet.bash drops libtest's per-test lines, since each test prints
 ## its own with its test ID.
-TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release -j "${CPU_CAP}" --locked -- --test-threads "${CPU_CAP}")
+TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release --locked)
 IT_CMD=(tests/integration.bash)
 IT_ROOTS=(
 	"ext4|${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}"
@@ -160,7 +162,7 @@ CTR_CARGO_HOME="${LEAK_DIR}/cargo-home"
 ## overrides it, and a root that isn't there falls back to the run's temp dir.
 ## --quick and --gate leave the stage out.
 PROFILE_ENABLE=1
-PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling -j "${CPU_CAP}" --locked)
+PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling --locked)
 PROFILE_BIN="target/profiling/${EXE_NAME}"
 PROFILE_OUT_DIR="cicd/artifacts/profiling"
 PROFILE_ROOT="${TUKFS_CICD_PROFILE_ROOT:-${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}}"
@@ -177,7 +179,7 @@ PROFILE_TIMED=(
 
 ## Stage 4's release build, on the host, which the integration test runs. It
 ## needs the host's glibc, so it's never a release.
-RELEASE_NATIVE_CMD=(cargo build --release -j "${CPU_CAP}" --locked)
+RELEASE_NATIVE_CMD=(cargo build --release --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
 
 ## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
@@ -289,3 +291,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
 ##		- 2026-10-23: The release flag for build.rs.
 ##		- 2026-10-24: RUN_TMP_ROOT.
+##		- 2026-10-25: The job count from the environment, not -j.

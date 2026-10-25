@@ -29,6 +29,34 @@
 
 ## Issues
 
+- CICD reset: CPU and priority
+	- ID: 2026102416215929
+	- Type: Task
+	- Status: Waiting on automated testing
+		- It departs from the wording in 2 small ways. The version probes run in an image get `--cpus` and the low share, but no `nice` inside, and `docker build` gets neither.
+	- Needs local test suite run?: The round's full run, for the profiler build, the sanitizers, Miri, CodeQL, and the arm64 tests in their image at the new counts.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
+		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
+		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
+		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
+	- Progress log:
+		- 2026-10-25: `cicd/utility/include/cpu-cap.bash` works out the count. cicd.bash checks it again at each of its 9 steps and before each leak check, and prints it when it changes.
+		- 2026-10-25: The leak scripts take a quarter through `leak-common.bash`. The release builds and the profiler workload take half, or a quarter when busy.
+		- 2026-10-25: cicd.bash and the leak scripts renice themselves to 19 and the idle I/O class at the start, so all they start inherits it. Every container gets `--cpus` and `--cpu-shares 256` in `fCtrRun`, and the crate fetch and each script run in an image go through `nice -n 19 ionice -c 3`.
+		- 2026-10-25: config.bash's command arrays lost their `-j` and `--test-threads`, since the file is read once. cargo and libtest take the count from `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS`.
+		- 2026-10-25: Verified: the check passes, and fails 5 cases with the busy rule, the check at each step, the low share, `nice` in the image, and the renice each taken out. `--gate` passes, and its cargo and rustc ran at nice 19 in the idle class. soak, advisories, and the x86_64 release build in its image pass. shellcheck passes.
+	- Decisions:
+		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself carries `TUKFS_CPU_AUTO=1`, so the run on the frozen copy and the leak scripts work theirs out again.
+		- With runc 1.2 or later on cgroup v2, 256 shares comes out as cpu.weight 35, against 100 for the default.
+	- Branch: round-20261025
+	- Test case: `cpu-cap-check.bash REPO [ctr]`, in the private tools folder. Not in CI, since its container case needs docker.
+	- Swept: every `nproc`, `--cpus` and `docker run` in `cicd/` and `tests/`. The `-j "${CPU_CAP}"` left in soak, sanitize-rust and release-build reads the count when it runs. The integration test and the pre-push hook start nothing parallel of their own.
+
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -127,20 +155,6 @@
 		- The current image tag and the one before it are kept. Now the old one goes as soon as the new one answers.
 		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
 		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
-
-- CICD reset: CPU and priority
-	- ID: 2026102416215929
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
-		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
-		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
-		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
 
 - CICD reset: standard flags
 	- ID: 2026102416215930

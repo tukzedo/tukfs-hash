@@ -21,8 +21,9 @@
 ##			                    what's cached.
 ##			fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##			                    run SCRIPT in the image, with no network, as
-##			                    the caller's uid, on CPU_CAP cores. The repo
-##			                    goes in read only at its own path. WORK,
+##			                    the caller's uid, on CPU_CAP cores, at nice 19
+##			                    and idle I/O. The repo goes in read only at
+##			                    its own path. WORK,
 ##			                    CTR_CARGO_HOME and RW, dirs joined by ':', are
 ##			                    all it writes, each at its own real path.
 ##			                    TMPDIR and HOME are in WORK, so on the host's
@@ -80,7 +81,9 @@ fCtrTag(){   ## fCtrTag DIR
 fCtrSize(){ "${TUKFS_DOCKER:-docker}" image inspect --format '{{.Size}}' "$1" 2>/dev/null || echo 0; }
 
 ## docker run, with a cidfile a stop finds, for every container here. The
-## cidfile goes in TUKFS_CID_DIR, else in DIR.
+## cidfile goes in TUKFS_CID_DIR, else in DIR. nice on the client doesn't
+## reach a container, so each gets CPU_CAP cores at a low share, and the ones
+## that do real work run nice inside too.
 fCtrRun(){   ## fCtrRun DIR RUN_ARG...
 	local engine="${TUKFS_DOCKER:-docker}" rc=0 cidfile="" f
 	local -a kept=()
@@ -88,7 +91,7 @@ fCtrRun(){   ## fCtrRun DIR RUN_ARG...
 	cidfile="${stop_cidfile}"
 	shift
 	stop_cidfiles+=("${cidfile}")
-	"${engine}" run --cidfile "${cidfile}" "$@" || rc=$?
+	"${engine}" run --cidfile "${cidfile}" --cpus "${CPU_CAP:-1}" --cpu-shares 256 "$@" || rc=$?
 	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
 	stop_cidfiles=("${kept[@]}")
 	rm -f -- "${cidfile}"
@@ -157,10 +160,10 @@ fCtrFetch(){   ## fCtrFetch WORK
 	want="$(sha256sum < "${root}/Cargo.lock" | cut -c1-16) ${ctr_tag}"
 	{ read -r got < "${ch}/.fetched"; } 2>/dev/null || true
 	[[ "${got}" != "${want}" ]] || return 0
-	if fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --cpus "${CPU_CAP:-1}" --user "$(id -u):$(id -g)" \
+	if fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --user "$(id -u):$(id -g)" \
 		-v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" -w "${root}" \
 		-e "TMPDIR=${work}/tmp" -e "HOME=${work}/home" -e "CARGO_HOME=${ch}" \
-		"${ctr_tag}" bash "${root}/cicd/utility/include/ctr-fetch.bash" "${nightly[@]}"; then
+		"${ctr_tag}" nice -n 19 ionice -c 3 bash "${root}/cicd/utility/include/ctr-fetch.bash" "${nightly[@]}"; then
 		printf '%s\n' "${want}" > "${ch}/.fetched"
 	else
 		echo "note: could not fetch crates for the image (offline?); going on with what's cached"
@@ -183,13 +186,13 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 		rwMount+=(-v "${d}:${d}")
 	done
 	## A stop takes the container down too, even when its client won't go.
-	fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --network none --cpus "${CPU_CAP:-1}" \
+	fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --network none \
 		--user "$(id -u):$(id -g)" -v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" \
 		"${rwMount[@]}" -w "${root}" \
 		-e TUKFS_IN_IMAGE=1 -e TINI_KILL_PROCESS_GROUP=1 -e "CPU_CAP=${CPU_CAP:-1}" -e "TMPDIR=${work}/tmp" \
 		-e "HOME=${work}/home" -e "CARGO_HOME=${ch}" -e CARGO_NET_OFFLINE=true -e "TUKFS_GATE_STRICT=${TUKFS_GATE_STRICT:-}" \
 		-e "${BUILD_ENV_NAME}" -e "${BUILD_RELEASE_ENV_NAME}" -e SOURCE_DATE_EPOCH -e CARGO_TERM_QUIET \
-		"${ctr_tag}" bash "$@" || rc=$?
+		"${ctr_tag}" nice -n 19 ionice -c 3 bash "$@" || rc=$?
 	return "${rc}"
 }
 
@@ -202,3 +205,5 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		  run's cid dir, so a stop of the whole run finds it.
 ##		- 2026-10-23: The release image too, through fCtrUseRelease.
 ##		- 2026-10-23: The release flag goes in with the build number.
+##		- 2026-10-25: --cpus and --cpu-shares 256 on every container, and nice
+##		  and idle I/O inside the ones that build or test.

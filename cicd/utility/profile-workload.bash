@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+#  shellcheck disable=1091  ## 'Not following.' The include is checked on its own.
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes.' On purpose: the writer's script expands in its own bash.
 
 ##	Purpose:
@@ -16,7 +17,8 @@
 ##		didn't make in this run.
 ##	Syntax:
 ##		profile-workload.bash gen|change DIR
-##		CPU_CAP caps the parallel writers (default half the cores).
+##		CPU_CAP caps the parallel writers (default half the cores, or a
+##		quarter when the box is busy).
 ##	Exit: 0 = done, 1 = failed, 2 = bad arguments.
 ##	History: At bottom of script.
 
@@ -33,10 +35,8 @@ fDie(){ echo "profile-workload: $*" >&2; exit 1; }
 cmd="$1"; dir="$2"
 [[ "${dir}" == /* && -d "${dir}" ]] || { echo "profile-workload: ${dir} isn't a dir" >&2; exit 2; }
 tree="${dir}/tree"
-if [[ ! "${CPU_CAP:-}" =~ ^[1-9][0-9]{0,3}$ ]]; then
-	CPU_CAP=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
-	if ((CPU_CAP < 1)); then CPU_CAP=1; fi
-fi
+source "$(dirname -- "${BASH_SOURCE[0]}")/include/cpu-cap.bash"
+fCpuCap
 
 ## Same tree every run, so 2 graphs compare.
 seed=20261023
@@ -159,3 +159,4 @@ esac
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-10-25: The writer count from cpu-cap.bash.
