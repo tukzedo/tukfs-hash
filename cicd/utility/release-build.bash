@@ -10,10 +10,11 @@
 ##		cross-built, and its tests run under qemu-user in the same image.
 ##		- build: the release binary for each target.
 ##		- test: the unit tests for each target.
-##		There's no host fallback, since a build on the host would need the
-##		host's glibc. --no-release leaves the whole stage out instead.
+##		--host builds on the box instead, into REL_HOST_TARGET_DIR, for when
+##		there's no image. Then it needs the box's glibc, and only the box's
+##		own target builds, since there's no cross gcc. cicd.bash picks it.
 ##	Syntax:
-##		release-build.bash build|test TARGET...
+##		release-build.bash [--host] build|test TARGET...
 ##		CPU_CAP sets the jobs and test threads (default half the cores, or a
 ##		quarter when the box is busy).
 ##	Exit: 0 = done, 1 = a build or test failed, 2 = can't run.
@@ -33,20 +34,28 @@ source "${me}/include/leak-common.bash"
 fCpuCap
 trap 'fStopDescendants; fScratchGone || true' EXIT
 
-fUsage(){ echo "usage: release-build.bash build|test TARGET..." >&2; exit 2; }
+fUsage(){ echo "usage: release-build.bash [--host] build|test TARGET..." >&2; exit 2; }
+onHost=0
+if [[ "${1:-}" == --host ]]; then onHost=1; shift; fi
 mode="${1:-}"
 [[ "${mode}" == build || "${mode}" == test ]] || fUsage
 shift
 (($#)) || fUsage
 for t in "$@"; do
 	[[ " ${REL_TARGETS[*]} " == *" ${t} "* ]] || { echo "release-build: ${t} isn't one of ${REL_TARGETS[*]}" >&2; exit 2; }
+	if ((onHost)) && [[ "${t}" != "$(uname -m)-unknown-linux-gnu" ]]; then
+		echo "release-build: ${t} cross-builds only in the release image" >&2; exit 2
+	fi
 done
 
-if ((! in_image)); then
+targetDir="${REL_TARGET_DIR}"
+if ((onHost)); then
+	targetDir="${REL_HOST_TARGET_DIR}"
+elif ((! in_image)); then
 	source "${here}/utility/include/ctr-image.bash"
 	fCtrUseRelease
 	why="$(fCtrWhyNot)"
-	[[ -z "${why}" ]] || { echo "release-build: ${why}, and the release builds need the release image" >&2; exit 2; }
+	[[ -z "${why}" ]] || { echo "release-build: ${why}; --host builds on the box, with its glibc" >&2; exit 2; }
 	fScratchMake rel || exit 2
 	fCtrReady "${scratch}" || exit 2
 	fCtrFetch "${scratch}"
@@ -58,14 +67,14 @@ fi
 
 for t in "$@"; do
 	if [[ "${mode}" == build ]]; then
-		cargo build --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${REL_TARGET_DIR}" || exit 1
+		cargo build --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" || exit 1
 		continue
 	fi
 	## The pass lines were shown by the tests stage, so only what failed and
 	## the counts.
 	fScratchMake test || exit 2
 	log="${scratch}/test.log"; rc=0
-	TMPDIR="${scratch}" cargo test --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${REL_TARGET_DIR}" \
+	TMPDIR="${scratch}" cargo test --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" \
 		-- --test-threads "${CPU_CAP}" >"${log}" 2>&1 || rc=$?
 	grep -E '^test result:|FAILED|panicked|^failures:|^---- |^error' "${log}" || true
 	fScratchGone || true
@@ -76,3 +85,4 @@ done
 ##	History:
 ##		- 2026-10-23: Created, for the glibc floor.
 ##		- 2026-10-25: Half the cores, or a quarter when busy.
+##		- 2026-10-25: --host, for a box with no docker.

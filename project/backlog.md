@@ -55,6 +55,32 @@
 	- Verified: release build, clippy, rustfmt, `cargo test --release` (67 passed), and the integration test on ext4 and ZFS.
 	- Swept: `read_sums` is the only content read in scan and accept, the second read after a mismatch included. snapdiff still reads plain, as 2026101406340901 left it.
 
+- CICD reset: release builds without docker
+	- ID: 2026102509342993
+	- Type: Task
+	- Status: Waiting on automated testing
+		- Answered 2026-10-25: don't fail if there's no docker. That's option (a), build x86_64 on the host with a note from the floor check and arm64 skipped, and the merge gate doesn't fail on it either.
+		- Done but for the tree record, which only a run as thorough as the merge gate shows.
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full --no-container`. It passes, its release step has the host NOTE and the floor NOTE and no arm64, and the end says the tree wasn't recorded, skipped `release-image`.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261025-093429
+	- Opened by: 2026102416215926
+	- Parent ID: 2026102416215926
+	- Related IDs: 2026102318460622
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- From the parent: a missing docker falls back to the host with one line, and never fails a run. `release-build.bash` exits 2 without the release image now, so the run fails.
+		- A host build needs the box's glibc, 2.39 on b23, so the release check `no build needs a glibc newer than GLIBC_FLOOR` would fail it. b23 has the arm64 Rust target, but no arm64 cross gcc or qemu-user.
+	- Progress log:
+		- 2026-10-25: Where stages 2 to 4 can't use the release image, the release stage can't either. It then builds x86_64 on the host with `release-build.bash --host`, into `target/release-host`, after one NOTE line saying why. arm64 and its qemu tests are left out, and the floor check runs as `glibc-note`, which notes a build over the floor rather than failing. The plan says so under `--no-container`.
+		- 2026-10-25: Verified: `--backlog-run-quick release` passes with `--no-container` and with no docker, and both fail on the code from before. With docker it still builds both in the image. `--backlog-run-quick`, the flags check and the container check pass. shellcheck and the markdown checks are clean.
+	- Decisions:
+		- Such a run doesn't record its tree for the pre-push hook, like one with a missing tool, since its set has no arm64 and needs the box's glibc. Filed as a Check in questions.md.
+		- The host build gets its own target dir, so it can't stand in for an image build in `target/release-ctr`.
+	- Branch: round-20261025b
+	- Test case: none with an ID. `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every use of `RELEASE_BUILD_CMD`, `RELEASE_BUILD_BIN`, `release-build.bash`, `check-release.bash glibc` and `tests_ctr` in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md and README.md. On an arm64 box the host build still stops, since the native target there isn't x86_64.
+
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
@@ -105,21 +131,6 @@
 		- Result: `NEW FLAG run_20261025-112314.log (10 warning line(s))`, every one an `Adding ...` line for a file such as `zerocopy-derive-0.8.62/tests/ui/absence_of_deprecated_warning.rs`.
 	- Expected behavior [Bug]: The archiver's file list isn't read as lint output. A real warning in the same log still flags.
 	- Related IDs: 2026102516000001
-
-- CICD reset: release builds without docker
-	- ID: 2026102509342993
-	- Type: Task
-	- Status: Queued
-		- Answered 2026-10-25: don't fail if there's no docker. That's option (a), build x86_64 on the host with a note from the floor check and arm64 skipped, and the merge gate doesn't fail on it either.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261025-093429
-	- Opened by: 2026102416215926
-	- Parent ID: 2026102416215926
-	- Related IDs: 2026102318460622
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- From the parent: a missing docker falls back to the host with one line, and never fails a run. `release-build.bash` exits 2 without the release image now, so the run fails.
-		- A host build needs the box's glibc, 2.39 on b23, so the release check `no build needs a glibc newer than GLIBC_FLOOR` would fail it. b23 has the arm64 Rust target, but no arm64 cross gcc or qemu-user.
 
 - CICD reset: containers
 	- ID: 2026102416215926

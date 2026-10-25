@@ -23,7 +23,8 @@
 ##	   5. profiler (a flamegraph of a scan, from an in-process sampler, into
 ##	      PROFILE_OUT_DIR, and flame-report.py's summary of it)
 ##	   6. release builds (native, cross targets, packages, release checks),
-##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file
+##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file. Without the
+##	      image, the native one alone, on the host, with the box's glibc
 ##	   7. dogfood (the native release build, and the dogfood runner)
 ##	   8. demo gif (a scenario run against the release build, drawn as a
 ##	      fake terminal, GFS-rotated, and copied to GIF_OUT when it changed)
@@ -696,6 +697,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 		fEcho_Clean "Release ........: (skipped)"
 	else
 		_rel="${RELEASE_NATIVE_OSARCH}"; for _t in "${CROSS_TARGETS[@]}"; do _t="${_t#*|}"; _rel+=", ${_t%%|*}"; done
+		if ((no_container)); then _rel="${RELEASE_NATIVE_OSARCH} on the host, with its glibc"; fi
 		fEcho_Clean "Release ........: ${_rel}, into ${RELEASE_ARTIFACT_DIR:-(nowhere)}"
 		fEcho_Clean "Release checks .: ${#RELEASE_CHECKS[@]}"
 	fi
@@ -867,7 +869,7 @@ fStageFormat(){
 
 ## Where stages 2-4 build and test, worked out once, at the first step that
 ## needs it. The image, or the host with one line saying why.
-tests_ctr=""; tests_ctr_work=""
+tests_ctr=""; tests_ctr_work=""; tests_ctr_why=""
 fTestsWhere(){
 	local why=""
 	[[ -z "${tests_ctr}" ]] || return 0
@@ -884,7 +886,7 @@ fTestsWhere(){
 		fi
 		why="its image couldn't be set up"
 	fi
-	tests_ctr=0
+	tests_ctr=0; tests_ctr_why="${why}"
 	fEcho "NOTE: build and tests on the host, since ${why}"
 }
 ## A cargo step, where fTestsWhere said. Run fTestsWhere first, in this shell.
@@ -1125,22 +1127,32 @@ fReleaseName(){ [[ "$1" =~ ^${EXE_NAME}-[0-9][0-9A-Za-z.+~-]*-(linux-[a-z0-9_]+(
 ## release names into a stage dir in the run's temp dir. Then the packages and
 ## the release checks over that, and only when all of them pass does the set
 ## replace the one in RELEASE_ARTIFACT_DIR, with its sums file.
-## For the eval'd config strings: release_stage, release_work, ver and
-## staged_osarchs, the os-arch of each build, native first.
-release_stage=""; release_work=""; ver=""
+## For the eval'd config strings: release_stage, release_work, ver,
+## staged_osarchs, the os-arch of each build, native first, and
+## release_glibc, the floor check's mode.
+release_stage=""; release_work=""; ver=""; release_glibc="glibc"
 declare -a staged_osarchs=()
 fStageRelease(){
-	local t label osarch art cmd c f n artDir sums
-	local -a built=() names=()
+	local t label osarch art cmd c f n artDir sums relBin="${RELEASE_BUILD_BIN}"
+	local -a built=() names=() relCmd=("${RELEASE_BUILD_CMD[@]}")
 	fStep release || return 0
 	ver="$(fVersion)"
 	[[ -n "${ver}" ]] || fDie "no version in ${VERSION_MANIFEST}"
-	fEcho_Clean "${RELEASE_BUILD_CMD[*]}"
-	fBg "${RELEASE_BUILD_CMD[@]}" || fDie "release build failed"
-	[[ -x "${root}/${RELEASE_BUILD_BIN}" ]] || fDie "no release binary at ${RELEASE_BUILD_BIN}"
+	## Without the image it still builds, but not a set that can go out, so
+	## the tree isn't recorded either (2026102509342993).
+	fTestsWhere
+	if [[ "${tests_ctr}" != 1 ]]; then
+		relCmd=("${RELEASE_HOST_BUILD_CMD[@]}"); relBin="${RELEASE_HOST_BUILD_BIN}"
+		release_glibc="glibc-note"; CROSS_TARGETS=()
+		echo "release-image" >> "${gate_skips}"
+		fEcho "NOTE: release build on the host, ${RELEASE_NATIVE_OSARCH} only and with its glibc, since ${tests_ctr_why}"
+	fi
+	fEcho_Clean "${relCmd[*]}"
+	fBg "${relCmd[@]}" || fDie "release build failed"
+	[[ -x "${root}/${relBin}" ]] || fDie "no release binary at ${relBin}"
 	## Bytes, since du gives what a compressed filesystem stores.
-	fEcho "OK: ${RELEASE_NATIVE_OSARCH}: ${RELEASE_BUILD_BIN} ($(stat -c %s -- "${root}/${RELEASE_BUILD_BIN}") bytes)"
-	built=("${RELEASE_NATIVE_OSARCH}|${RELEASE_BUILD_BIN}")
+	fEcho "OK: ${RELEASE_NATIVE_OSARCH}: ${relBin} ($(stat -c %s -- "${root}/${relBin}") bytes)"
+	built=("${RELEASE_NATIVE_OSARCH}|${relBin}")
 	for t in "${CROSS_TARGETS[@]}"; do
 		label="${t%%|*}"; t="${t#*|}"; osarch="${t%%|*}"; t="${t#*|}"; art="${t%%|*}"; cmd="${t#*|}"
 		fEcho_Clean "cross: ${label}: ${cmd}"
@@ -1543,3 +1555,5 @@ exit 0
 ##		- 2026-10-25: --list prints the test IDs too, from TEST_ID_LIST_CMD.
 ##		- 2026-10-25: The debug build, clippy, unit tests and the integration
 ##		  test's release build in the release image, or on the host with a note.
+##		- 2026-10-25: Without the image, the x86_64 release build on the host,
+##		  with a note, and no arm64.

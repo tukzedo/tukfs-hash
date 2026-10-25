@@ -205,6 +205,10 @@ TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 ## command eval'd. Each build is named <exe>-<version>-<os-arch> in
 ## RELEASE_ARTIFACT_DIR, with <exe>-<version>-sha256sums.txt beside them.
 ## Download links depend on these names, so they stay.
+## Where the image can't be used, as for stages 2 to 4, RELEASE_HOST_BUILD_CMD
+## builds x86_64 on the box with one note, into a dir of its own. It needs the
+## box's glibc, so the floor check notes it rather than failing, and arm64 is
+## left out, since the box has no cross gcc (2026102509342993).
 GLIBC_FLOOR="2.28"
 REL_CTR_DIR="cicd/container-release"
 REL_CTR_IMAGE="${APP_NAME}-release"
@@ -215,6 +219,9 @@ REL_CTR_CARGO_HOME="${REL_TARGET_DIR}/cargo-home"
 REL_TARGETS=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
 RELEASE_BUILD_CMD=(cicd/utility/release-build.bash build x86_64-unknown-linux-gnu)
 RELEASE_BUILD_BIN="target/release-ctr/x86_64-unknown-linux-gnu/release/${EXE_NAME}"
+REL_HOST_TARGET_DIR="${root}/target/release-host"
+RELEASE_HOST_BUILD_CMD=(cicd/utility/release-build.bash --host build x86_64-unknown-linux-gnu)
+RELEASE_HOST_BUILD_BIN="target/release-host/x86_64-unknown-linux-gnu/release/${EXE_NAME}"
 RELEASE_NATIVE_OSARCH="linux-x86_64"
 CROSS_TARGETS=(
 	"Linux arm64|linux-arm64|target/release-ctr/aarch64-unknown-linux-gnu/release/${EXE_NAME}|cicd/utility/release-build.bash build aarch64-unknown-linux-gnu"
@@ -226,11 +233,12 @@ PACKAGE_ENABLE=1
 PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_work}"'
 ## Over the stage dir, once everything's built and packaged; "label|command",
 ## eval'd. A failure keeps the whole set out of RELEASE_ARTIFACT_DIR.
+## release_glibc is glibc, or glibc-note for a host build.
 RELEASE_CHECKS=(
 	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}" "${build_release}"'
 	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
 	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
-	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash glibc "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
+	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash "${release_glibc}" "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
 	## The release builds aren't the ones stage 4 tested, so the integration
 	## test runs again on the x86_64 one, and the unit tests on arm64.
 	'the integration test passes on the x86_64 release build|TMPDIR="${release_work}" "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
@@ -331,3 +339,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: A stage off here is listed in the plan, not skipped in a line.
 ##		- 2026-10-25: TEST_ID_LIST_CMD.
 ##		- 2026-10-25: The build and tests in the release image.
+##		- 2026-10-25: The x86_64 release build on the host without docker.
