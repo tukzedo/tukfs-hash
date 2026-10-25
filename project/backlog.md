@@ -78,6 +78,7 @@
 		- Such a run doesn't record its tree for the pre-push hook, like one with a missing tool, since its set has no arm64 and needs the box's glibc. Filed as a Check in questions.md.
 		- The host build gets its own target dir, so it can't stand in for an image build in `target/release-ctr`.
 	- Branch: round-20261025b
+	- Commit: `feb7806`
 	- Test case: none with an ID. `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every use of `RELEASE_BUILD_CMD`, `RELEASE_BUILD_BIN`, `release-build.bash`, `check-release.bash glibc` and `tests_ctr` in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md and README.md. On an arm64 box the host build still stops, since the native target there isn't x86_64.
 
