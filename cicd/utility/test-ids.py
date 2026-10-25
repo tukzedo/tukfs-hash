@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 ##	Purpose: Test IDs. Every test the pipeline runs has one, and prints it on
-##		its status line. An ID is the test's creation time in seconds since
-##		2000-01-01 00:00 UTC, in base 62 (0-9, A-Z, a-z), padded to 6
-##		characters, so IDs sort by age. Tests from the same second got the
-##		next free second, in file order.
+##		its status line. An ID is the test's creation time in whole minutes
+##		since 2000-01-01 00:00 UTC, in lower-case Crockford base 32, padded to
+##		5 characters, so IDs sort by age. Of 2 from the same minute, the newer
+##		took the next free one. An ID never changes once given.
 ##		From shcl's cicd/utility/test-ids.py.
 ##	Syntax:
 ##		test-ids.py new [COUNT]   print COUNT fresh IDs (default 1)
@@ -30,31 +30,31 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+DIGITS = "0123456789abcdefghjkmnpqrstvwxyz"
 EPOCH_2000 = 946684800
-WIDTH = 6
-ID = r"[0-9A-Za-z]{6}"
+WIDTH = 5
+ID = r"[0-9a-hjkmnp-tv-z]{5}"
 repo = Path(__file__).resolve().parents[2]
 
 
-def encode(secs: int) -> str:
+def encode(mins: int) -> str:
     out = ""
-    while secs:
-        secs, digit = divmod(secs, 62)
+    while mins:
+        mins, digit = divmod(mins, 32)
         out = DIGITS[digit] + out
     return out.rjust(WIDTH, "0")
 
 
 def decode(tid: str) -> int:
-    secs = 0
+    mins = 0
     for ch in tid:
-        secs = secs * 62 + DIGITS.index(ch)
-    return secs
+        mins = mins * 32 + DIGITS.index(ch)
+    return mins
 
 
 def fWhen(tid: str) -> str:
-    stamp = datetime.fromtimestamp(EPOCH_2000 + decode(tid), tz=UTC)
-    return stamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+    stamp = datetime.fromtimestamp(EPOCH_2000 + decode(tid) * 60, tz=UTC)
+    return stamp.strftime("%Y-%m-%d %H:%M UTC")
 
 
 ##	A Rust test's ID is the first line of its body, the line after its fn
@@ -132,7 +132,7 @@ def fScan() -> tuple[list[tuple[str, str, int]], list[str]]:
 
 def fCheck() -> int:
     found, bad = fScan()
-    now = time.time() - EPOCH_2000 + 86400
+    now = (time.time() - EPOCH_2000 + 86400) // 60
     first: dict[str, str] = {}
     for tid, file, line in found:
         at = f"{file}:{line}"
@@ -141,7 +141,7 @@ def fCheck() -> int:
             continue
         first[tid] = at
         ## Nothing here is older than the repo, and nothing is from the future.
-        if not 26 * 365 * 86400 < decode(tid) < now:
+        if not 26 * 365 * 1440 < decode(tid) < now:
             bad.append(f"{at}: ID {tid} stands for {fWhen(tid)}")
     for problem in bad:
         print(f"test-ids: {problem}", file=sys.stderr)
@@ -157,10 +157,10 @@ def fCheck() -> int:
 
 def fNew(count: int) -> int:
     used = {tid for tid, _, _ in fScan()[0]}
-    secs = int(time.time() - EPOCH_2000)
+    mins = int(time.time() - EPOCH_2000) // 60
     while count:
-        tid = encode(secs)
-        secs += 1
+        tid = encode(mins)
+        mins += 1
         if tid in used:
             continue
         print(tid)
@@ -208,3 +208,5 @@ if __name__ == "__main__":
 ##	History:
 ##		2026-10-23  Created from shcl's, in seconds, for the Rust tests and the
 ##		            integration test's checks.
+##		2026-10-25  Whole minutes in Crockford base 32, converted once from the
+##		            same times.

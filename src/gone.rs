@@ -175,7 +175,7 @@ mod tests {
 
 	#[test]
 	fn only_names_the_run_would_reach() {
-		let _id = test_id("0vCpfF");
+		let _id = test_id("ddy9f");
 		let p = Path::new;
 		let now = [p("/a"), p("/z")];
 		// Seen last from the same root, or from a shallower one.

@@ -283,7 +283,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_symlink_on_the_way_is_not_followed() {
-		let _id = test_id("0vCpSK");
+		let _id = test_id("ddy91");
 		let d = scratch("beneath_symlink");
 		let (root, outside) = (d.join("root"), d.join("outside"));
 		fs::create_dir_all(root.join("real")).unwrap();
@@ -318,7 +318,7 @@ mod tests {
 	// /dev/shm is its own mount on most Linux boxes; skipped where it isn't.
 	#[test]
 	fn another_filesystem_is_not_entered() {
-		let _id = test_id("0vCpSL");
+		let _id = test_id("ddy92");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
 		};
@@ -341,7 +341,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_listing_has_names_kinds_and_inodes() {
-		let _id = test_id("0vCpSM");
+		let _id = test_id("ddy93");
 		let d = scratch("beneath_list");
 		fs::create_dir(d.join("sub")).unwrap();
 		fs::write(d.join("f"), "x").unwrap();

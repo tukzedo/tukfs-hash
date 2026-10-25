@@ -526,7 +526,7 @@ mod tests {
 	// Same order as the old `LIKE '%mismatch'`, then `read-error`.
 	#[test]
 	fn damage_sorts_first() {
-		let _id = test_id("0vG4fc");
+		let _id = test_id("deavz");
 		for k in db::Kind::ALL {
 			let n = k.name();
 			let was = if n.ends_with("mismatch") {
@@ -541,7 +541,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't call localtime_r")]
 	fn version_dates_only_between_releases() {
-		let _id = test_id("0vGG2b");
+		let _id = test_id("debjn");
 		assert_eq!(version_line(""), VERSION);
 		// 2026-10-23 12:00 UTC, which is the 23rd or 24th in every time zone.
 		let noon = version_line("14101200");
