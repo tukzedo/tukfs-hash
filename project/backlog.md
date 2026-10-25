@@ -77,6 +77,151 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
+- CICD reset: containers
+	- ID: 2026102416215926
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102318460622
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides design.md "Build and release", where the tests stage and the gate build on the box so the gate needs no docker.
+		- Build and run the tests in the pinned image by default, the merge gate included. Steps that need the real disks, such as the soak, stay on the host.
+		- A missing docker falls back to the host with one line, and never fails a run. The release builds stop without it now.
+		- `--no-container` runs on the host on purpose.
+
+- CICD reset: other hosts and VMs
+	- ID: 2026102416215927
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- The arm64 unit tests and the integration test also run on the arm64 Linux test VM in the default run. The qemu run in the release image stays as the quick check.
+		- The VM is held through the shared host lock for as long as it's used, and put back the way it was found through the VM state helper.
+		- A VM that isn't there is a `SKIP` in its step line and the summary, and the run goes on. `--no-remote` skips it.
+		- The project's work folder there goes under that box's temp root.
+
+- CICD reset: container cleanup
+	- ID: 2026102416215928
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102416215926
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Every container, image, and volume gets `dev.project=tukfs-hash` and `dev.run=<run folder name>`, and containers are named `tukfs-hash-<run folder name>-<step>`. Now the only label is the image name.
+		- At the end of a run, on failure and Ctrl+C too, the run's containers are removed by their `dev.run` label. The kill by container ID on a stop stays.
+		- The current image tag and the one before it are kept. Now the old one goes as soon as the new one answers.
+		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
+		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
+
+- CICD reset: CPU and priority
+	- ID: 2026102416215929
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
+		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
+		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
+		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
+
+- CICD reset: standard flags
+	- ID: 2026102416215930
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102318460623, 2026102309501601
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
+		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
+		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
+		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
+		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
+		- The default run stays under about an hour, and `--quick` about 10 minutes.
+
+- CICD reset: step output
+	- ID: 2026102416215931
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
+		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
+		- The rule above each step is 79 characters. It's 74 now.
+
+- CICD reset: a test for every Done item
+	- ID: 2026102416215932
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
+		- Add the missing tests where one could exist and would make sense.
+
+- CICD reset: test IDs
+	- ID: 2026102416215933
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102309501606
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102309501606, which gave every test a base 62 ID in seconds.
+		- Convert every ID once, from the same times, to whole minutes since 2000-01-01 UTC in lower-case Crockford base 32. 2 that come out the same take the next free minute. `test-ids.py` and its check follow.
+		- `Test case` rows in the backlog that name an old ID get the new one.
+		- Each test prints one line in the shared form, `PASS <id> <name>`, `FAIL`, or `SKIP`. The integration test prints `ok` and `skip` now, plus the word integration.
+
+- CICD reset: temp files and safe removal
+	- ID: 2026102416215934
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- The guarded removal is already in every script. What's left is the folder scheme.
+		- Each run's folder is `<HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>/`, made with a plain `mkdir` and a counter, with `HOST_TEMP` from the environment. `RUN_TMP_ROOT` can stay as its default here.
+		- `TEMP` and `TMP` point there too, beside `TMPDIR`.
+		- `--keep-temp` keeps the folder and prints its path.
+		- Each run writes `run.pid` in its folder, and removes the project's folders older than 2 days whose process is gone. Now the PID is in the folder's name.
+		- The integration test, run on its own, uses the same scheme.
+
+- CICD reset: CICD process gaps
+	- ID: 2026102416215935
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
+		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
+		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
