@@ -82,6 +82,40 @@
 	- Test case: none with an ID. `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every use of `RELEASE_BUILD_CMD`, `RELEASE_BUILD_BIN`, `release-build.bash`, `check-release.bash glibc` and `tests_ctr` in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md and README.md. On an arm64 box the host build still stops, since the native target there isn't x86_64.
 
+- CICD reset: other hosts and VMs
+	- ID: 2026102416215927
+	- Type: Task
+	- Status: Waiting on automated testing
+		- It departs from the wording in one way. Where the box's temp root is in memory, as vmDebARM64's tmpfs `/tmp` is, the work folder goes under `/var/tmp`, since the scan refuses tmpfs.
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`. Step 7, Other hosts, passes on vmDebARM64 in about 3 to 4 minutes, the VM is back as it was found, and the end has no `Skipped:` list.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--no-remote` from the flags item.
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- The arm64 unit tests and the integration test also run on the arm64 Linux test VM in the default run. The qemu run in the release image stays as the quick check.
+		- The VM is held through the shared host lock for as long as it's used, and put back the way it was found through the VM state helper.
+		- A VM that isn't there is a `SKIP` in its step line and the summary, and the run goes on. `--no-remote` skips it.
+		- The project's work folder there goes under that box's temp root.
+	- Progress log:
+		- 2026-10-25: A new step, Other hosts, comes after the release builds and runs in the frozen copy. `cicd/utility/remote-tests.bash` takes the arm64 release build and the arm64 unit test binary, from `release-build.bash bins`, and runs both suites on vmDebARM64 under the VM state helper's `wrap`. `cicd/utility/box-side.bash` makes and removes the work folder there.
+		- 2026-10-25: A box that isn't there, one held elsewhere past 15 minutes, one missing a tool the integration test needs, or a run with no arm64 build, is a `SKIP` line in the step, a `SKIP Other hosts` close, and a line in a `Skipped:` list at the end. It keeps the tree from being recorded, as a missing test root does. `--no-remote` and `--quick` leave the step out, and `--backlog-run-quick remote` runs it with the release builds.
+		- 2026-10-25: vmDebARM64 got `sqlite3` and `attr`, which the integration test needs. It has no rmlint, so the test's 2 rmlint checks skip there.
+		- 2026-10-25: Verified: `--backlog-run-quick remote` passed in 4m 42s. On vmDebARM64 all 67 unit tests passed in 6 s, and the integration test passed with its 2 rmlint skips. The VM was off before and after. With no helper, and with `--no-container`, which gives no arm64 build, the step was a SKIP with its reason, the summary listed it, and the run passed. `--backlog-run-quick` passes. shellcheck and the markdown checks are clean.
+		- 2026-10-25: Verified: `remote-check.bash` passes 19 cases. Its 7 plan cases fail on the code from before. The flags check and the steps check pass.
+		- 2026-10-25: The flags check's `--no-tests` and default ID asserts, and the steps check's counts, went from 10 steps to 11 and from 9 off to 10 under quick lint, since the step lists the IDs it runs.
+	- Decisions:
+		- The helper is found by a glob in the synced bash dir, or `TUKFS_CICD_VM_WRAP`, so its name stays out of the tree. With none, the step is a SKIP. Filed as a Check in questions.md.
+		- A box held elsewhere is waited for up to 15 minutes (`REMOTE_LOCK_WAIT`), then skipped, so a run doesn't hang on another session. Filed as a Check.
+		- `--quick` leaves it out, since the VM is emulated and the step takes about 3 minutes against `--quick`'s 10. Filed as a Check.
+		- A box missing a tool is a SKIP for the whole box, not just its integration test.
+	- Branch: round-20261025b
+	- Commit: `234b09f`
+	- Test case: none with an ID. `remote-check.bash REPO [plan|nohelper|busy|box|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883). The pass case needs the VM, so it's the full run's.
+	- Swept: every `no_remote`, `step_keys`, `fStepOn`, `stages 2-6` and stage number in `cicd/`, the plan's Other hosts line, `--list`'s test ID lines, the private checks that match plan text or step counts, design.md and README.md. tests/integration.bash reads `src/main.rs` and the stop include from the tree beside it, and both go to the box.
+
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
@@ -163,22 +197,6 @@
 	- Commit: `e628037`
 	- Test case: `tests-ctr-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline and needs docker. 2026102508462883 asks whether such checks move into the pipeline.
 	- Swept: every use of `BUILD_CMD`, `LINT_CMD`, `TEST_CMD`, `RELEASE_NATIVE_CMD` and `RELEASE_NATIVE_BIN` in `cicd/`, the plan's Containers line, the private checks that match plan text, design.md, and the soak's header. `release-build.bash` still has no host path, which is the child's.
-
-- CICD reset: other hosts and VMs
-	- ID: 2026102416215927
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Prereq IDs: 2026102416215930
-		- It needs `--no-remote` from the flags item.
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- The arm64 unit tests and the integration test also run on the arm64 Linux test VM in the default run. The qemu run in the release image stays as the quick check.
-		- The VM is held through the shared host lock for as long as it's used, and put back the way it was found through the VM state helper.
-		- A VM that isn't there is a `SKIP` in its step line and the summary, and the run goes on. `--no-remote` skips it.
-		- The project's work folder there goes under that box's temp root.
 
 - CICD reset: container cleanup
 	- ID: 2026102416215928
