@@ -204,220 +204,6 @@
 		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
 
-- CICD reset: CPU and priority
-	- ID: 2026102416215929
-	- Type: Task
-	- Status: Done
-		- It departs from the wording in 2 small ways. The version probes run in an image get `--cpus` and the low share, but no `nice` inside, and `docker build` gets neither.
-	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
-		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
-		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
-		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
-	- Progress log:
-		- 2026-10-25: `cicd/utility/include/cpu-cap.bash` works out the count. cicd.bash checks it again at each of its 9 steps and before each leak check, and prints it when it changes.
-		- 2026-10-25: The leak scripts take a quarter through `leak-common.bash`. The release builds and the profiler workload take half, or a quarter when busy.
-		- 2026-10-25: cicd.bash and the leak scripts renice themselves to 19 and the idle I/O class at the start, so all they start inherits it. Every container gets `--cpus` and `--cpu-shares 256` in `fCtrRun`, and the crate fetch and each script run in an image go through `nice -n 19 ionice -c 3`.
-		- 2026-10-25: config.bash's command arrays lost their `-j` and `--test-threads`, since the file is read once. cargo and libtest take the count from `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS`.
-		- 2026-10-25: Verified: the check passes, and fails 5 cases with the busy rule, the check at each step, the low share, `nice` in the image, and the renice each taken out. `--gate` passes, and its cargo and rustc ran at nice 19 in the idle class. soak, advisories, and the x86_64 release build in its image pass. shellcheck passes.
-		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. It ran at 8 of 32 jobs, a quarter, since the box was busy, with asan, tsan, Miri, CodeQL, the profiler build, both release builds and the arm64 unit tests under qemu each passing.
-	- Decisions:
-		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself carries `TUKFS_CPU_AUTO=1`, so the run on the frozen copy and the leak scripts work theirs out again.
-		- With runc 1.2 or later on cgroup v2, 256 shares comes out as cpu.weight 35, against 100 for the default.
-	- Branch: round-20261025
-	- Commit: `38fd802`
-	- Test case: `cpu-cap-check.bash REPO [ctr]`, in the private tools folder. Not in CI, since its container case needs docker.
-	- Swept: every `nproc`, `--cpus` and `docker run` in `cicd/` and `tests/`. The `-j "${CPU_CAP}"` left in soak, sanitize-rust and release-build reads the count when it runs. The integration test and the pre-push hook start nothing parallel of their own.
-	- Closed: 20261025-091651
-
-- CICD reset: standard flags
-	- ID: 2026102416215930
-	- Type: Task
-	- Status: Done
-		- It departs from the wording in one way. `--list` prints the plan but not the test IDs, which went to child 2026102507210235.
-	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Related IDs: 2026102318460623, 2026102309501601, 2026102507222620
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
-		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
-		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
-		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
-		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
-		- The default run stays under about an hour, and `--quick` about 10 minutes.
-	- Progress log:
-		- 2026-10-25: `--backlog-run-quick` is the old gate: format check, debug build, lint, unit and integration tests. Areas from `BACKLOG_AREAS` in config.bash pick parts of it, or single leak checks, the profiler or the release builds. `--help` lists them.
-		- 2026-10-25: `--backlog-run-full` and `--merge-gate` run every check of a run with no options, and the format stage only checks. `--long` is `--slow`, since no step takes hours yet. The default run and `--quick` keep their steps.
-		- 2026-10-25: The hook runs `--merge-gate` on pushes to `main` only, and reads the docs globs from `cicd/docs-paths`.
-		- 2026-10-25: A run records its tree for the hook only when it's at least as thorough as the merge gate, after the release checks. `--backlog-run-quick`, and any `--no-` flag that drops a check, don't record.
-		- 2026-10-25: `--no-container` sends the leak checks to the host. The release builds still stop without their image, until 2026102416215926. `--no-remote` has nothing to skip yet. `--keep-temp` keeps the run's dirs, frozen copy and containers, and marks the dirs so the next run's sweep leaves them for 2 days.
-		- 2026-10-25: Verified: the flags check passes 27 cases, and fails 20 on the code from before. `--backlog-run-quick` passes in 1m 45s at load 40 and records nothing. `--backlog-run-quick fmt advisories --keep-temp` ran only those 2 and kept its dir. The next run left it, and a run after its mark was aged 3 days removed it and its worktree.
-		- 2026-10-25: Verified: `--backlog-run-full` with the leak checks, profiler, arm64 build and packages off passed in 2m 15s, the gif included. The tree, `assets/demo.gif` and the private gif folder were the same after. `--merge-gate` on `69bd3ee`, with the same steps off, passed in 4m 07s at load 48, and again with no release build in the checkout, so its gif came from the commit gated.
-		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50, with no `--no-` flags. It listed remote sync, dogfood and publish as off for the mode, drew the gif into its temp dir only, and recorded its tree for the hook after the release checks. The old full-run line took about 45 minutes.
-	- Decisions:
-		- The 2 long modes draw the gif but don't copy it to `assets/demo.gif` or rotate it, since both are writes they may not make. Drawing it still checks the scenario. Under the hook it's drawn from the commit being pushed.
-		- The 3 modes stay strict, as `--gate` was, so a missing tool fails them. `--backlog-run-quick` writes no logs. The other 2 write the run and lint logs that `lint-report.bash` reads.
-		- The docs globs are `*.md` and `assets/*`, as before.
-	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. memory.md and CLAUDE.md say `--gate` too.
-	- Branch: round-20261025
-	- Commit: `69bd3ee`
-	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
-	- Closed: 20261025-091651
-
-- CICD reset: step output
-	- ID: 2026102416215931
-	- Type: Task
-	- Status: Done
-	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
-		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
-		- The rule above each step is 79 characters. It's 74 now.
-	- Progress log:
-		- 2026-10-25: Each step opens with `[ <time to the hundredth>: Step N of M; Starting <name> ]` under a 79 character rule, and closes with `PASS <name>`, or `FAIL <name>` after the `FAILED:` line. The cleanup line has the hundredths too.
-		- 2026-10-25: Only the steps that run are numbered and counted. A step that's off prints nothing. The plan lists them under `Steps off`, each with its flag, mode, "not in the areas named", or "off in config.bash". Under `-q`, which has no plan, that list is one `steps off:` line.
-		- 2026-10-25: The run on the frozen copy takes the outer run's numbers through `TUKFS_STEP_PLAN`, so its steps count on from the format step.
-		- 2026-10-25: Verified: the step check passes 25 cases and fails 18 on the code from before. A format failure prints one `FAIL Format`, in the checkout and in the frozen copy. `--backlog-run-quick` passes, as steps 1 to 4 of 4. The flags, CPU cap and `--no-debug` checks pass. shellcheck passes.
-		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. Each step opened with `[ <time to the hundredth>: Step N of 7; Starting <name> ]` under a 79 character rule and closed with `PASS <name>`, the profiler, release and gif steps included. The plan listed the 3 steps off with their mode.
-	- Decisions:
-		- One table of step names and one on/off test per step, `fStepOn`, which both the plan and the steps read, so the two can't disagree.
-		- A stopped run prints no `FAIL` line. The stop already says `CICD ABORTED (stopped)`.
-	- Swept: all 10 `fStep` calls. No `fStepSkip`, `of 9` or old `PASS:` form is left in `cicd/`, `tests/`, the docs or the private tools. `lint-report.bash` reads `FAIL` at a line start as an error line, which a failed step is. The leak, release and integration scripts print their own lines, not steps.
-	- Branch: round-20261025
-	- Commit: `a17da2f`
-	- Test case: `cicd-steps-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline itself, in a clone with a format failure put in.
-	- Closed: 20261025-091651
-
-- `cicd.bash --list` prints the plan, but not the test IDs the run would print.
-	- ID: 2026102507210235
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261025-072102
-	- Opened by: round-20261025
-	- Parent ID: 2026102416215930
-	- Prereq IDs: 2026102416215933
-		- The IDs change to base 32 there, and `test-ids.py` has no command that lists them yet.
-	- Requirements  [Feature]:
-		- `--list` prints the steps and test IDs that the other flags given would run, and runs nothing. It prints the steps now.
-	- Progress log:
-		- 2026-10-25: `test-ids.py list [unit|it]` prints each test's ID and name as its status line has them. A unit test's name is libtest's path for it, the same 67 libtest lists. The soak test is behind its feature, so it's in neither.
-		- 2026-10-25: After the plan, `--list` prints the unit and integration IDs, each with the steps that run it: the tests step, once per test root, and the release check that runs the integration test again. A missing root says it skips. A run with neither prints `(none in this run)`. The command is `TEST_ID_LIST_CMD` in config.bash.
-		- 2026-10-25: Verified: the flags check passes with 13 new cases, and fails 8 of them on the engine from before, with the new `list` in place. `--backlog-run-quick fmt lint` passes.
-	- Decisions:
-		- The leak checks, the soak test and the arm64 unit tests print no status lines on a pass, only what failed, so they add no IDs to the list.
-		- An integration name built from a variable shows as written, such as `${part}`.
-	- Swept: every `fScan` caller in `test-ids.py`, and the `--list` plans in the private flags and steps checks, which both still pass.
-	- Branch: round-20261025
-	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder, its test ID cases. Not in CI, like the round's other cicd checks.
-	- Acceptance signoff: Self-closed: the list matches what each mode runs, and its check fails on the code from before.
-	- Closed: 20261025-085946
-
-- CICD reset: a test for every Done item
-	- ID: 2026102416215932
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Prereq IDs: 2026102416215933
-		- New tests should get the new IDs.
-	- Related IDs: 2026102508462883
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
-		- Add the missing tests where one could exist and would make sense.
-	- Progress log:
-		- 2026-10-25: All 12 have a `Test case` row. 2 name unit tests by ID and 1 the test ID check. The rest name the pipeline's own checks or the private checks that cover them, and say why none has an ID.
-		- 2026-10-25: New in the private tools folder: `dogfood-check.bash REPO`, for the dogfood runner's keep rules, a running version, a new build, the fixed name and the pass-through, and `report-check.bash REPO`, for `flame-report.py --check` and `lint-report.bash --check`.
-		- 2026-10-25: Verified: both pass, with 24 and 28 cases. With a fault put in a copy, the runner's check caught all 10 tried, and the reports' check 6 of 7. The one it missed, picking the newest graph by name, is the same as by stamp, since every name starts with it.
-	- Decisions:
-		- The 2 new checks aren't in CI and have no test IDs, like the round's other cicd checks. Whether they should move into the pipeline is asked on 2026102508462883.
-	- Swept: every Done item in the backlog for a missing `Test case` row. The 12 in the notes were all there were.
-	- Branch: round-20261025
-	- Test case: `dogfood-check.bash REPO` and `report-check.bash REPO`, in the private tools folder. The rest is backlog rows.
-	- Acceptance signoff: Self-closed: each row names what covers the item, and both new checks pass and fail on faults put in.
-	- Closed: 20261025-084735
-
-- CICD reset: test IDs
-	- ID: 2026102416215933
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Related IDs: 2026102309501606
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- It overrides 2026102309501606, which gave every test a base 62 ID in seconds.
-		- Convert every ID once, from the same times, to whole minutes since 2000-01-01 UTC in lower-case Crockford base 32. 2 that come out the same take the next free minute. `test-ids.py` and its check follow.
-		- `Test case` rows in the backlog that name an old ID get the new one.
-		- Each test prints one line in the shared form, `PASS <id> <name>`, `FAIL`, or `SKIP`. The integration test prints `ok` and `skip` now, plus the word integration.
-	- Progress log:
-		- 2026-10-25: All 216 IDs are 5 characters of lower-case Crockford base 32, in whole minutes since 2000-01-01 UTC, from the same times as before. 194 of them took a later free minute, 59 at most. `test-ids.py` reads, checks and hands out the new form, and `when` gives the minute.
-		- 2026-10-25: The Rust tests and the integration test print `PASS <id> <name>`, `FAIL` or `SKIP`, with no `rust` or `integration` word. The 2 rmlint skips keep their checks' IDs.
-		- 2026-10-25: The `Test case` rows of 2026102507222620 and 2026102409041301 name the new IDs. Their titles and output quotes keep the old ones, as written then.
-		- 2026-10-25: Verified: `--backlog-run-quick` passed in 3m 39s at load 40, with 363 `PASS` lines, 67 unit tests and 148 checks each on ext4 and ZFS. `test-ids.py check` failed on an old base 62 ID, on `i` and `u`, which Crockford leaves out, on a future ID, on one older than the repo, on a shared ID, and on a skip with no check's ID.
-	- Swept: every `test_id(` in `src/`, every check, expect and skip in `tests/integration.bash`, and the line readers in `cicd/`. Nothing parsed the old `ok` form. `lint-report.bash` still reads `FAIL` at a line start. The private check scripts print their own lines and aren't CI tests.
-	- Branch: round-20261025
-	- Commit: `9f8e465`
-	- Test case: `test-ids.py check`, in the lint stage. Each test's status line is in every run's output.
-	- Acceptance signoff: Self-closed: a mechanical change, with the check and both test suites passing.
-	- Closed: 20261025-082551
-
-- Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
-	- ID: 2026102507222620
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No. `--backlog-run-quick` ran the changed test on ext4 and ZFS on 2026-10-25. The round's full run runs it again.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-072226
-	- Opened by: round-20261025
-	- Related IDs: 2026102409041301
-	- Note: Seen once in a `--backlog-run-full` run on 2026-10-25, in the tests stage's ZFS pass. It passed on ext4 in the same run, and on both in a `--backlog-run-quick` run minutes before.
-	- Output: `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`. 0vCUrb passed, so the scan had started, unlike 2026102409041301.
-	- Possible cause [Bug]: Step 5 sends INT 0.1 s after the `group` line. Under load that can come before the one worker reaches `rm-stale.txt`, so nothing was found before the stop.
-	- Reproduced [Bug]: 2026-10-25 on b23, on ZFS at load 42 to 50. 1 of 10 reruns of step 5's stop gave exit 2 with none of `many/` read, though the INT came 0.22 s after `group`. With step 5's scan held to a small share of 1 CPU, the old test failed with the same line and 0 of 400 read.
-	- Actual cause [Bug]: The fixed 0.1 s. Under load the one worker sometimes hadn't got to `rm-stale.txt` by then. The scan was fine, and recorded what it read before the stop.
-	- Actual fix [Bug]: Step 5 waits, up to 60 s, until the worker has a file in `many/` open, then sends INT. Files go before folders, so by then `rm-stale.txt` has been judged. New check 0vGnUm fails if it never gets there.
-	- Decisions:
-		- Not waiting for the mismatch to show in the database. The writer commits about once a second, and the whole scan takes about 1.3 s of CPU, so on a quiet box the stop could come after the end.
-	- Progress log:
-		- 2026-10-25: Verified: with step 5's scan held back, on ZFS at load 65 to 74, the old test failed 0vCUrc with `got [2], want [6]` and the new one passed. 12 reruns of the new wait on ZFS at load 45 all exited 6, with the INT 0 to 0.2 s after `group`. The integration test passes on ext4 and ZFS at load 70, and `--backlog-run-quick` passes.
-	- Swept: Step 7's stop needs only the lock held, so it has nothing to wait for. The test's other waits are bounded polls. No other test or cicd script stops a scan after a fixed sleep.
-	- Branch: round-20261025
-	- Commit: fd5637a
-	- Test case: `tests/integration.bash` ddx16, and new dednm. `it-starve-check.bash TEST BINARY TMPDIR [CPU]`, in the private tools folder, runs a test with step 5's scan held back. `stop-window.bash BINARY TMP_ROOT [ROUNDS] [old|fd|db|full]`, there too, reruns just the stop.
-	- Acceptance signoff: Self-closed: a test-only fix, failing before and passing after.
-	- Closed: 20261025-075434
-
-- Test case rows name a private folder by its full path.
-	- ID: 2026102507092407
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-070924
-	- Opened by: round-20261025
-	- Requirements  [Feature]:
-		- Several `Test case` rows give a check script's path under the private notes folder, by name. Say "in the private tools folder" instead, the way 2026102416215929 does.
-	- Estimated effort: Low
-	- Progress log:
-		- 2026-10-25: The 4 rows now give the script name, in the private tools folder.
-	- Test case: not applicable, a docs edit. `grep -c` finds no private path left in the backlog.
-	- Closed: 20261025
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -817,6 +603,154 @@
 		- 2026-10-15 06:49, second root run. All 3 guests shut down together, the snapshots were taken, and all 3 were started again within a minute. The scan ran 4 h 52 m and ended with exit 4, keeping the mounts and snapshots.
 	- Acceptance signoff: Self-closed after the 2026-10-15 root run.
 
+- CICD reset: CPU and priority
+	- ID: 2026102416215929
+	- Type: Task
+	- Status: Done
+		- It departs from the wording in 2 small ways. The version probes run in an image get `--cpus` and the low share, but no `nice` inside, and `docker build` gets neither.
+	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
+		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
+		- Everything runs under `nice -n 19`, plus `ionice -c 3`.
+		- Containers get `--cpu-shares 256` beside `--cpus`, and `nice` inside.
+	- Progress log:
+		- 2026-10-25: `cicd/utility/include/cpu-cap.bash` works out the count. cicd.bash checks it again at each of its 9 steps and before each leak check, and prints it when it changes.
+		- 2026-10-25: The leak scripts take a quarter through `leak-common.bash`. The release builds and the profiler workload take half, or a quarter when busy.
+		- 2026-10-25: cicd.bash and the leak scripts renice themselves to 19 and the idle I/O class at the start, so all they start inherits it. Every container gets `--cpus` and `--cpu-shares 256` in `fCtrRun`, and the crate fetch and each script run in an image go through `nice -n 19 ionice -c 3`.
+		- 2026-10-25: config.bash's command arrays lost their `-j` and `--test-threads`, since the file is read once. cargo and libtest take the count from `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS`.
+		- 2026-10-25: Verified: the check passes, and fails 5 cases with the busy rule, the check at each step, the low share, `nice` in the image, and the renice each taken out. `--gate` passes, and its cargo and rustc ran at nice 19 in the idle class. soak, advisories, and the x86_64 release build in its image pass. shellcheck passes.
+		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. It ran at 8 of 32 jobs, a quarter, since the box was busy, with asan, tsan, Miri, CodeQL, the profiler build, both release builds and the arm64 unit tests under qemu each passing.
+	- Decisions:
+		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself carries `TUKFS_CPU_AUTO=1`, so the run on the frozen copy and the leak scripts work theirs out again.
+		- With runc 1.2 or later on cgroup v2, 256 shares comes out as cpu.weight 35, against 100 for the default.
+	- Branch: round-20261025
+	- Commit: `38fd802`
+	- Test case: `cpu-cap-check.bash REPO [ctr]`, in the private tools folder. Not in CI, since its container case needs docker.
+	- Swept: every `nproc`, `--cpus` and `docker run` in `cicd/` and `tests/`. The `-j "${CPU_CAP}"` left in soak, sanitize-rust and release-build reads the count when it runs. The integration test and the pre-push hook start nothing parallel of their own.
+	- Closed: 20261025-091651
+
+- CICD reset: standard flags
+	- ID: 2026102416215930
+	- Type: Task
+	- Status: Done
+		- It departs from the wording in one way. `--list` prints the plan but not the test IDs, which went to child 2026102507210235.
+	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102318460623, 2026102309501601, 2026102507222620
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
+		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
+		- `--gate` turns into another name for `--backlog-run-quick`, and `--ci` for `--merge-gate`, each saying so in one line.
+		- Those 3 never dogfood, publish, commit, push, install, sync, rewrite a tracked file, or prompt.
+		- The pre-push hook runs `--merge-gate` on a push to `main` only. A push to `dev` or a feature branch isn't gated. A docs-only push to `main` skips it, with the docs paths listed in one place the hook reads.
+		- The default run stays under about an hour, and `--quick` about 10 minutes.
+	- Progress log:
+		- 2026-10-25: `--backlog-run-quick` is the old gate: format check, debug build, lint, unit and integration tests. Areas from `BACKLOG_AREAS` in config.bash pick parts of it, or single leak checks, the profiler or the release builds. `--help` lists them.
+		- 2026-10-25: `--backlog-run-full` and `--merge-gate` run every check of a run with no options, and the format stage only checks. `--long` is `--slow`, since no step takes hours yet. The default run and `--quick` keep their steps.
+		- 2026-10-25: The hook runs `--merge-gate` on pushes to `main` only, and reads the docs globs from `cicd/docs-paths`.
+		- 2026-10-25: A run records its tree for the hook only when it's at least as thorough as the merge gate, after the release checks. `--backlog-run-quick`, and any `--no-` flag that drops a check, don't record.
+		- 2026-10-25: `--no-container` sends the leak checks to the host. The release builds still stop without their image, until 2026102416215926. `--no-remote` has nothing to skip yet. `--keep-temp` keeps the run's dirs, frozen copy and containers, and marks the dirs so the next run's sweep leaves them for 2 days.
+		- 2026-10-25: Verified: the flags check passes 27 cases, and fails 20 on the code from before. `--backlog-run-quick` passes in 1m 45s at load 40 and records nothing. `--backlog-run-quick fmt advisories --keep-temp` ran only those 2 and kept its dir. The next run left it, and a run after its mark was aged 3 days removed it and its worktree.
+		- 2026-10-25: Verified: `--backlog-run-full` with the leak checks, profiler, arm64 build and packages off passed in 2m 15s, the gif included. The tree, `assets/demo.gif` and the private gif folder were the same after. `--merge-gate` on `69bd3ee`, with the same steps off, passed in 4m 07s at load 48, and again with no release build in the checkout, so its gif came from the commit gated.
+		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50, with no `--no-` flags. It listed remote sync, dogfood and publish as off for the mode, drew the gif into its temp dir only, and recorded its tree for the hook after the release checks. The old full-run line took about 45 minutes.
+	- Decisions:
+		- The 2 long modes draw the gif but don't copy it to `assets/demo.gif` or rotate it, since both are writes they may not make. Drawing it still checks the scenario. Under the hook it's drawn from the commit being pushed.
+		- The 3 modes stay strict, as `--gate` was, so a missing tool fails them. `--backlog-run-quick` writes no logs. The other 2 write the run and lint logs that `lint-report.bash` reads.
+		- The docs globs are `*.md` and `assets/*`, as before.
+	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. memory.md and CLAUDE.md say `--gate` too.
+	- Branch: round-20261025
+	- Commit: `69bd3ee`
+	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
+	- Closed: 20261025-091651
+
+- CICD reset: step output
+	- ID: 2026102416215931
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
+		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
+		- The rule above each step is 79 characters. It's 74 now.
+	- Progress log:
+		- 2026-10-25: Each step opens with `[ <time to the hundredth>: Step N of M; Starting <name> ]` under a 79 character rule, and closes with `PASS <name>`, or `FAIL <name>` after the `FAILED:` line. The cleanup line has the hundredths too.
+		- 2026-10-25: Only the steps that run are numbered and counted. A step that's off prints nothing. The plan lists them under `Steps off`, each with its flag, mode, "not in the areas named", or "off in config.bash". Under `-q`, which has no plan, that list is one `steps off:` line.
+		- 2026-10-25: The run on the frozen copy takes the outer run's numbers through `TUKFS_STEP_PLAN`, so its steps count on from the format step.
+		- 2026-10-25: Verified: the step check passes 25 cases and fails 18 on the code from before. A format failure prints one `FAIL Format`, in the checkout and in the frozen copy. `--backlog-run-quick` passes, as steps 1 to 4 of 4. The flags, CPU cap and `--no-debug` checks pass. shellcheck passes.
+		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. Each step opened with `[ <time to the hundredth>: Step N of 7; Starting <name> ]` under a 79 character rule and closed with `PASS <name>`, the profiler, release and gif steps included. The plan listed the 3 steps off with their mode.
+	- Decisions:
+		- One table of step names and one on/off test per step, `fStepOn`, which both the plan and the steps read, so the two can't disagree.
+		- A stopped run prints no `FAIL` line. The stop already says `CICD ABORTED (stopped)`.
+	- Swept: all 10 `fStep` calls. No `fStepSkip`, `of 9` or old `PASS:` form is left in `cicd/`, `tests/`, the docs or the private tools. `lint-report.bash` reads `FAIL` at a line start as an error line, which a failed step is. The leak, release and integration scripts print their own lines, not steps.
+	- Branch: round-20261025
+	- Commit: `a17da2f`
+	- Test case: `cicd-steps-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline itself, in a clone with a format failure put in.
+	- Closed: 20261025-091651
+
+- CICD reset: a test for every Done item
+	- ID: 2026102416215932
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215933
+		- New tests should get the new IDs.
+	- Related IDs: 2026102508462883
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
+		- Add the missing tests where one could exist and would make sense.
+	- Progress log:
+		- 2026-10-25: All 12 have a `Test case` row. 2 name unit tests by ID and 1 the test ID check. The rest name the pipeline's own checks or the private checks that cover them, and say why none has an ID.
+		- 2026-10-25: New in the private tools folder: `dogfood-check.bash REPO`, for the dogfood runner's keep rules, a running version, a new build, the fixed name and the pass-through, and `report-check.bash REPO`, for `flame-report.py --check` and `lint-report.bash --check`.
+		- 2026-10-25: Verified: both pass, with 24 and 28 cases. With a fault put in a copy, the runner's check caught all 10 tried, and the reports' check 6 of 7. The one it missed, picking the newest graph by name, is the same as by stamp, since every name starts with it.
+	- Decisions:
+		- The 2 new checks aren't in CI and have no test IDs, like the round's other cicd checks. Whether they should move into the pipeline is asked on 2026102508462883.
+	- Swept: every Done item in the backlog for a missing `Test case` row. The 12 in the notes were all there were.
+	- Branch: round-20261025
+	- Test case: `dogfood-check.bash REPO` and `report-check.bash REPO`, in the private tools folder. The rest is backlog rows.
+	- Acceptance signoff: Self-closed: each row names what covers the item, and both new checks pass and fail on faults put in.
+	- Closed: 20261025-084735
+
+- CICD reset: test IDs
+	- ID: 2026102416215933
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102309501606
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102309501606, which gave every test a base 62 ID in seconds.
+		- Convert every ID once, from the same times, to whole minutes since 2000-01-01 UTC in lower-case Crockford base 32. 2 that come out the same take the next free minute. `test-ids.py` and its check follow.
+		- `Test case` rows in the backlog that name an old ID get the new one.
+		- Each test prints one line in the shared form, `PASS <id> <name>`, `FAIL`, or `SKIP`. The integration test prints `ok` and `skip` now, plus the word integration.
+	- Progress log:
+		- 2026-10-25: All 216 IDs are 5 characters of lower-case Crockford base 32, in whole minutes since 2000-01-01 UTC, from the same times as before. 194 of them took a later free minute, 59 at most. `test-ids.py` reads, checks and hands out the new form, and `when` gives the minute.
+		- 2026-10-25: The Rust tests and the integration test print `PASS <id> <name>`, `FAIL` or `SKIP`, with no `rust` or `integration` word. The 2 rmlint skips keep their checks' IDs.
+		- 2026-10-25: The `Test case` rows of 2026102507222620 and 2026102409041301 name the new IDs. Their titles and output quotes keep the old ones, as written then.
+		- 2026-10-25: Verified: `--backlog-run-quick` passed in 3m 39s at load 40, with 363 `PASS` lines, 67 unit tests and 148 checks each on ext4 and ZFS. `test-ids.py check` failed on an old base 62 ID, on `i` and `u`, which Crockford leaves out, on a future ID, on one older than the repo, on a shared ID, and on a skip with no check's ID.
+	- Swept: every `test_id(` in `src/`, every check, expect and skip in `tests/integration.bash`, and the line readers in `cicd/`. Nothing parsed the old `ok` form. `lint-report.bash` still reads `FAIL` at a line start. The private check scripts print their own lines and aren't CI tests.
+	- Branch: round-20261025
+	- Commit: `9f8e465`
+	- Test case: `test-ids.py check`, in the lint stage. Each test's status line is in every run's output.
+	- Acceptance signoff: Self-closed: a mechanical change, with the check and both test suites passing.
+	- Closed: 20261025-082551
+
 - Nothing is written to NTFS, APFS or HFS+ from Linux.
 	- ID: 2026101409545200
 	- Type: Enhancement
@@ -1060,6 +994,31 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+
+- `cicd.bash --list` prints the plan, but not the test IDs the run would print.
+	- ID: 2026102507210235
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-072102
+	- Opened by: round-20261025
+	- Parent ID: 2026102416215930
+	- Prereq IDs: 2026102416215933
+		- The IDs change to base 32 there, and `test-ids.py` has no command that lists them yet.
+	- Requirements  [Feature]:
+		- `--list` prints the steps and test IDs that the other flags given would run, and runs nothing. It prints the steps now.
+	- Progress log:
+		- 2026-10-25: `test-ids.py list [unit|it]` prints each test's ID and name as its status line has them. A unit test's name is libtest's path for it, the same 67 libtest lists. The soak test is behind its feature, so it's in neither.
+		- 2026-10-25: After the plan, `--list` prints the unit and integration IDs, each with the steps that run it: the tests step, once per test root, and the release check that runs the integration test again. A missing root says it skips. A run with neither prints `(none in this run)`. The command is `TEST_ID_LIST_CMD` in config.bash.
+		- 2026-10-25: Verified: the flags check passes with 13 new cases, and fails 8 of them on the engine from before, with the new `list` in place. `--backlog-run-quick fmt lint` passes.
+	- Decisions:
+		- The leak checks, the soak test and the arm64 unit tests print no status lines on a pass, only what failed, so they add no IDs to the list.
+		- An integration name built from a variable shows as written, such as `${part}`.
+	- Swept: every `fScan` caller in `test-ids.py`, and the `--list` plans in the private flags and steps checks, which both still pass.
+	- Branch: round-20261025
+	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder, its test ID cases. Not in CI, like the round's other cicd checks.
+	- Acceptance signoff: Self-closed: the list matches what each mode runs, and its check fails on the code from before.
+	- Closed: 20261025-085946
 
 - Builds between releases show their date after the build number.
 	- ID: 2026102320093189
@@ -1441,6 +1400,32 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
+	- ID: 2026102507222620
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No. `--backlog-run-quick` ran the changed test on ext4 and ZFS on 2026-10-25. The round's full run runs it again.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-072226
+	- Opened by: round-20261025
+	- Related IDs: 2026102409041301
+	- Note: Seen once in a `--backlog-run-full` run on 2026-10-25, in the tests stage's ZFS pass. It passed on ext4 in the same run, and on both in a `--backlog-run-quick` run minutes before.
+	- Output: `FAIL 0vCUrc integration stopped exit code, with the damage found: got [2], want [6]`. 0vCUrb passed, so the scan had started, unlike 2026102409041301.
+	- Possible cause [Bug]: Step 5 sends INT 0.1 s after the `group` line. Under load that can come before the one worker reaches `rm-stale.txt`, so nothing was found before the stop.
+	- Reproduced [Bug]: 2026-10-25 on b23, on ZFS at load 42 to 50. 1 of 10 reruns of step 5's stop gave exit 2 with none of `many/` read, though the INT came 0.22 s after `group`. With step 5's scan held to a small share of 1 CPU, the old test failed with the same line and 0 of 400 read.
+	- Actual cause [Bug]: The fixed 0.1 s. Under load the one worker sometimes hadn't got to `rm-stale.txt` by then. The scan was fine, and recorded what it read before the stop.
+	- Actual fix [Bug]: Step 5 waits, up to 60 s, until the worker has a file in `many/` open, then sends INT. Files go before folders, so by then `rm-stale.txt` has been judged. New check 0vGnUm fails if it never gets there.
+	- Decisions:
+		- Not waiting for the mismatch to show in the database. The writer commits about once a second, and the whole scan takes about 1.3 s of CPU, so on a quiet box the stop could come after the end.
+	- Progress log:
+		- 2026-10-25: Verified: with step 5's scan held back, on ZFS at load 65 to 74, the old test failed 0vCUrc with `got [2], want [6]` and the new one passed. 12 reruns of the new wait on ZFS at load 45 all exited 6, with the INT 0 to 0.2 s after `group`. The integration test passes on ext4 and ZFS at load 70, and `--backlog-run-quick` passes.
+	- Swept: Step 7's stop needs only the lock held, so it has nothing to wait for. The test's other waits are bounded polls. No other test or cicd script stops a scan after a fixed sleep.
+	- Branch: round-20261025
+	- Commit: fd5637a
+	- Test case: `tests/integration.bash` ddx16, and new dednm. `it-starve-check.bash TEST BINARY TMPDIR [CPU]`, in the private tools folder, runs a test with step 5's scan held back. `stop-window.bash BINARY TMP_ROOT [ROUNDS] [old|fd|db|full]`, there too, reruns just the stop.
+	- Acceptance signoff: Self-closed: a test-only fix, failing before and passing after.
+	- Closed: 20261025-075434
+
 - Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
 	- ID: 2026102409041301
 	- Type: Bug
@@ -1774,6 +1759,21 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- Test case rows name a private folder by its full path.
+	- ID: 2026102507092407
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-070924
+	- Opened by: round-20261025
+	- Requirements  [Feature]:
+		- Several `Test case` rows give a check script's path under the private notes folder, by name. Say "in the private tools folder" instead, the way 2026102416215929 does.
+	- Estimated effort: Low
+	- Progress log:
+		- 2026-10-25: The 4 rows now give the script name, in the private tools folder.
+	- Test case: not applicable, a docs edit. `grep -c` finds no private path left in the backlog.
+	- Closed: 20261025
 
 - A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
 	- ID: 2026102409041302
