@@ -25,10 +25,13 @@
 ##	   6. release builds (native, cross targets, packages, release checks),
 ##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file. Without the
 ##	      image, the native one alone, on the host, with the box's glibc
-##	   7. dogfood (the native release build, and the dogfood runner)
-##	   8. demo gif (a scenario run against the release build, drawn as a
+##	   7. other hosts (the unit tests and the integration test on a box of
+##	      each other arch, on stage 6's build of it, held through the host
+##	      lock and put back as it was found. A box that isn't there is a SKIP)
+##	   8. dogfood (the native release build, and the dogfood runner)
+##	   9. demo gif (a scenario run against the release build, drawn as a
 ##	      fake terminal, GFS-rotated, and copied to GIF_OUT when it changed)
-##	   9. backup + publish to git
+##	  10. backup + publish to git
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
 ##	   is the second of 5 in this run. The plan at the start lists the ones
 ##	   off, with the flag or reason. Each step opens with a timed "Starting"
@@ -57,7 +60,8 @@
 ##	   --list              print the plan the other options make, and the
 ##	                       test IDs its steps would print, and run nothing
 ##	   --no-container      run the steps that use an image on the host
-##	   --no-remote         skip the other hosts. This pipeline has none
+##	   --no-remote         skip the other hosts, the arm64 tests on
+##	                       vmDebARM64
 ##	   --keep-temp         keep the run's temp dirs and containers, and print
 ##	                       where they are. The next run's sweep leaves them
 ##	                       for 2 days
@@ -87,7 +91,7 @@
 ##	   --no-dogfood        skip the dogfood install
 ##	   --no-gif            skip the demo gif
 ##	   --no-publish        skip the backup + publish
-##	   --no-freeze         run stages 2-6 in the checkout, not in a copy
+##	   --no-freeze         run stages 2-7 in the checkout, not in a copy
 ##	   -h, --help          show this help
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
@@ -111,7 +115,7 @@
 ##	  the integration test's dirs are removed at the end, even when the run
 ##	  fails or is stopped, and only by fSafeRm. A stop kills the containers
 ##	  the run started first.
-##	- Stages 2-6 run from a copy of the tree taken after the format stage,
+##	- Stages 2-7 run from a copy of the tree taken after the format stage,
 ##	  uncommitted work included, so a merge, checkout or edit during a run
 ##	  can't reach them. The copy sits in the run's temp dir.
 ##	- Reuse: copy the cicd/ directory into another project and edit config.bash.
@@ -150,7 +154,7 @@ fCpuCap
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
 RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); LINT_EXTRA=()
-TEST_ID_LIST_CMD=()
+TEST_ID_LIST_CMD=(); REMOTE_HOSTS=(); REMOTE_VM_WRAP=''; REMOTE_LOCK_WAIT=900
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
 PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
@@ -162,7 +166,7 @@ source "${here}/config.bash"
 [[ "${RUN_TMP_PREFIX:-}" =~ ^[a-z0-9_-]{8,}$ ]] || { echo "config.bash: RUN_TMP_PREFIX has to be 8 or more of a-z, 0-9, _ and -" >&2; exit 2; }
 
 ## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs
-## stages 2-6 only, and TUKFS_GREEN_TREE is the tree the copy holds. The
+## stages 2-7 only, and TUKFS_GREEN_TREE is the tree the copy holds. The
 ## pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then
 ## what gets copied, with nothing uncommitted.
 ## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count
@@ -189,7 +193,7 @@ started=${SECONDS}
 
 assume_yes=0; quiet=0; gate_mode=0; quick=0; slow=0; cli_message=""; sync_enable=1; gate_partial=0
 leakcheck_flag=0; no_leakcheck=0; no_codeql=0; no_freeze=0; fmt_off=0; debug_off=0; lint_off=0; tests_off=0; release_off=0
-unit_off=0; it_off=0; keep_temp=0; list_only=0; no_container=0; no_remote=0
+unit_off=0; it_off=0; keep_temp=0; list_only=0; no_container=0; remote_off=0
 ## bq, bf or mg for --backlog-run-quick, --backlog-run-full and --merge-gate.
 ## gate_mode is set for all 3: check only, strict, and nothing written back.
 mode=""; mode_flag=""
@@ -213,7 +217,7 @@ while (($#)); do case "$1" in
 	--quick)                  quick=1; inner_pass+=("$1"); shift ;;
 	--slow|--long)            slow=1; shift ;;
 	--no-container)           no_container=1; inner_pass+=("$1"); shift ;;
-	--no-remote)              no_remote=1; shift ;;
+	--no-remote)              remote_off=1; fOffWhy "$1" remote; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--keep-temp)              keep_temp=1; inner_pass+=("$1"); shift ;;
 	--list)                   list_only=1; shift ;;
 	--leakcheck)              leakcheck_flag=1; inner_pass+=("$1"); shift ;;
@@ -230,7 +234,7 @@ while (($#)); do case "$1" in
 	--no-package)             PACKAGE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-profile)             PROFILE_ENABLE=0; fOffWhy "$1" profile; gate_partial=1; inner_pass+=("$1"); shift ;;
 	## Dogfood and the gif take the release binary, so a stale one would go out.
-	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; fOffWhy "$1" release dogfood gif; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; fOffWhy "$1" release remote dogfood gif; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-dogfood)             DOGFOOD_ENABLE=0; fOffWhy "$1" dogfood; shift ;;
 	--no-gif)                 GIF_ENABLE=0; fOffWhy "$1" gif; shift ;;
 	--no-publish)             GIT_PUBLISH=(); fOffWhy "$1" publish; shift ;;
@@ -303,7 +307,9 @@ if ((gate_mode)); then
 		elif ((! leakcheck_flag)); then
 			LEAKCHECK_STEPS=()
 		fi
-		[[ "${_named}" == *" release "* ]] || { release_off=1; CROSS_TARGETS=(); PACKAGE_ENABLE=0; fOffWhy "${_unnamed}" release; }
+		## remote tests the release builds, so it brings them along.
+		[[ "${_named}" == *" release "* || "${_named}" == *" remote "* ]] || { release_off=1; CROSS_TARGETS=(); PACKAGE_ENABLE=0; fOffWhy "${_unnamed}" release; }
+		[[ "${_named}" == *" remote "* ]] || { remote_off=1; fOffWhy "${_unnamed}" remote; }
 		[[ "${_named}" == *" profile "* ]] || { PROFILE_ENABLE=0; fOffWhy "${_unnamed}" profile; }
 	fi
 else
@@ -337,7 +343,8 @@ fQuickDrop(){   ## fQuickDrop ARRAY_NAME
 }
 ## Packages stay in, since nfpm takes about a second for all of them.
 if ((quick)); then
-	PROFILE_ENABLE=0; GIF_ENABLE=0; fOffWhy --quick profile gif
+	## The other hosts too, since an emulated box takes several minutes.
+	PROFILE_ENABLE=0; GIF_ENABLE=0; remote_off=1; fOffWhy --quick profile remote gif
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
 ## A run with no options does everything, the leak checks included, and so do
@@ -379,9 +386,9 @@ declare -A step_no=()
 cpu_shown=""
 fCpuShow(){ if [[ "${CPU_CAP}" != "${cpu_shown}" ]]; then fEcho_Clean "jobs: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}"; cpu_shown="${CPU_CAP}"; fi; }
 ## In the order they run.
-step_keys=(sync format build lint tests profile release dogfood gif publish)
+step_keys=(sync format build lint tests profile release remote dogfood gif publish)
 declare -A step_title=([sync]="Remote sync" [format]="Format" [build]="Build (debug)" [lint]="Lint" [tests]="Tests"
-	[profile]="Profiler" [release]="Release builds" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish")
+	[profile]="Profiler" [release]="Release builds" [remote]="Other hosts" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish")
 ## fStep KEY -> 1 when the plan has the step off, which then prints nothing.
 fStep(){
 	[[ -n "${step_no["$1"]:-}" ]] || return 1
@@ -391,6 +398,8 @@ fStep(){
 }
 fStepPass(){ step_open=0; fEcho_Clean "PASS ${step_name}"; fEcho_Clean; }
 fStepFail(){ if ((step_open)); then step_open=0; echo "FAIL ${step_name}"; fi; }
+## A step with nothing it could run. The summary at the end lists why.
+fStepSkip(){ step_open=0; fEcho_Clean "SKIP ${step_name}"; fEcho_Clean; }
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 ## KB to a size a person reads.
 fSize(){ if (($1 >= 1048576)); then printf '%d.%d GB' $(($1 / 1048576)) $(($1 % 1048576 * 10 / 1048576)); else printf '%d MB' $((($1 + 512) / 1024)); fi; }
@@ -535,6 +544,11 @@ if ((! inner_run)); then
 fi
 gate_skips="${run_tmp}/gate-skips"
 : > "${gate_skips}"
+## "STEP: why" for each SKIP, for the summary at the end. The run on the frozen
+## copy writes into its starter's.
+skip_log="${run_tmp}/skips"
+if ((inner_run)) && [[ "${TUKFS_SKIP_LOG:-}" == /* ]]; then skip_log="${TUKFS_SKIP_LOG}"; else : > "${skip_log}"; fi
+export TUKFS_SKIP_LOG="${skip_log}"
 
 ## A run that stops early: whatever it started, then its dirs. fCleanup has
 ## done this already on a whole run. A stop says so in the form lint-report.bash
@@ -640,6 +654,7 @@ fStepOn(){   ## fStepOn KEY -> 0 when the step runs
 		tests)   ((! tests_off)) && ((! unit_off || ! it_off || ${#LEAKCHECK_STEPS[@]})) ;;
 		profile) ((PROFILE_ENABLE && ${#PROFILE_BUILD_CMD[@]})) ;;
 		release) ((! release_off)) ;;
+		remote)  ((! release_off && ! remote_off && ${#REMOTE_HOSTS[@]})) ;;
 		dogfood) ((DOGFOOD_ENABLE && ${#DOGFOOD_DESTS[@]})) ;;
 		gif)     ((GIF_ENABLE)) && [[ -n "${GIF_CMD}" ]] ;;
 		publish) ((${#GIT_PUBLISH[@]})) ;;
@@ -715,9 +730,13 @@ if ((list_only || (! quiet && ! inner_run))); then
 	else
 		fEcho_Clean "Publish (last) .: (skipped)"
 	fi
-	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-6 run from a copy taken after the format stage' || echo '(off)')"
+	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-7 run from a copy taken after the format stage' || echo '(off)')"
 	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host; the build and tests in the release image')"
-	fEcho_Clean "Other hosts ....: (none in this pipeline)"
+	_rh=""; for _h in "${REMOTE_HOSTS[@]}"; do _t="${_h#*|}"; _rh+="${_h%%|*} (${_t%%|*}), "; done
+	if [[ -n "${step_no[remote]:-}" ]]; then _rh="${_rh%, }: the unit and integration tests, under the host lock"
+	elif ((${#REMOTE_HOSTS[@]} == 0)); then _rh="(none in config.bash)"
+	else _rh="(off, ${off_why[remote]:-the release builds are off})"; fi
+	fEcho_Clean "Other hosts ....: ${_rh}"
 	fEcho_Clean "Temp files .....: $( ((keep_temp)) && echo 'kept, --keep-temp' || echo 'removed at the end')"
 	_on="$(printf '%s, ' "${steps_on[@]}")"
 	fEcho_Clean "Steps ..........: ${step_total}$( ((step_total)) && echo ": ${_on%, }")"
@@ -753,6 +772,12 @@ if ((list_only)) && ((${#TEST_ID_LIST_CMD[@]})); then
 		## A release check that runs IT_CMD prints the same lines again.
 		for _c in "${RELEASE_CHECKS[@]}"; do
 			if [[ "${_c#*|}" == *'${IT_CMD[@]}'* ]]; then _itIn+=("step ${step_no[release]}, ${step_title[release]}: ${_c%%|*}"); fi
+		done
+	fi
+	if [[ -n "${step_no[remote]:-}" ]]; then
+		for _h in "${REMOTE_HOSTS[@]}"; do
+			_unitIn+=("step ${step_no[remote]}, ${step_title[remote]}, on ${_h%%|*}")
+			_itIn+=("step ${step_no[remote]}, ${step_title[remote]}, on ${_h%%|*}")
 		done
 	fi
 	if ((${#_unitIn[@]} || ${#_itIn[@]})); then
@@ -1210,7 +1235,43 @@ fStageRelease(){
 	fStepPass
 }
 
-## Stage 7: the native release build into the first writable dest, unless
+## Stage 7: the unit tests and the integration test on a box of each arch in
+## REMOTE_HOSTS, on stage 6's build of it, through remote-tests.bash. A box
+## that isn't there, or no build of its arch in this run, is a SKIP, and the
+## run goes on. It keeps the tree from being recorded, as a missing test root
+## does.
+fStageRemote(){
+	local h host osarch target bin rc why ran=0
+	local whyFile="${run_tmp}/remote-why"
+	fStep remote || return 0
+	for h in "${REMOTE_HOSTS[@]}"; do
+		host="${h%%|*}"; h="${h#*|}"; osarch="${h%%|*}"; target="${h#*|}"
+		bin="${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-${ver}-${osarch}"
+		why=""
+		if [[ " ${staged_osarchs[*]} " != *" ${osarch} "* || -z "${RELEASE_ARTIFACT_DIR}" || ! -f "${bin}" ]]; then
+			why="no ${osarch} build in this run"
+		else
+			fEcho_Clean "${host}: cicd/utility/remote-tests.bash ${host} ${target} ${bin#"${root}/"}"
+			rc=0; rm -f -- "${whyFile}"
+			TUKFS_SKIP_WHY="${whyFile}" fBg "${here}/utility/remote-tests.bash" "${host}" "${target}" "${bin}" || rc=$?
+			if ((rc > 128)); then exit "${rc}"; fi
+			if ((rc == 3)); then
+				why="$(cat -- "${whyFile}" 2>/dev/null || true)"; why="${why#"${host}: "}"; why="${why:-no reason given}"
+			else
+				((rc == 0)) || fDie "the tests failed on ${host} (exit ${rc})"
+				fEcho "OK: unit and integration tests on ${host}"
+				ran=$((ran + 1))
+				continue
+			fi
+		fi
+		fEcho "SKIP ${host}: ${why}"
+		echo "${step_title[remote]}: ${host}, ${why}" >> "${skip_log}"
+		echo "remote-${host}" >> "${gate_skips}"
+	done
+	if ((ran)); then fStepPass; else fStepSkip; fi
+}
+
+## Stage 8: the native release build into the first writable dest, unless
 ## that copy is running or already has these bytes. Then the dogfood runner and
 ## its launcher, where they changed.
 fStageDogfood(){
@@ -1244,7 +1305,7 @@ fStageDogfood(){
 	fStepPass
 }
 
-## Stage 8: demo gif. A check-only run draws it from the tree it tested, into
+## Stage 9: demo gif. A check-only run draws it from the tree it tested, into
 ## its temp dir.
 fGifIn(){ cd "$1" && root="$1" && eval "${GIF_CMD}"; }
 fStageGif(){
@@ -1258,7 +1319,7 @@ fStageGif(){
 	fStepPass
 }
 
-## Stage 9: backup + publish through the copied publisher.
+## Stage 10: backup + publish through the copied publisher.
 fStagePublish(){
 	local flag="--no-prompt"
 	fStep publish || return 0
@@ -1276,7 +1337,7 @@ fStagePublish(){
 }
 
 ## A detached, locked worktree of what the format stage left, HEAD plus what
-## isn't committed, for stages 2-6. Any trouble making it runs them in the
+## isn't committed, for stages 2-7. Any trouble making it runs them in the
 ## checkout, with a warning.
 fFreeze(){
 	local head="" tree="" link="" i=0
@@ -1290,17 +1351,17 @@ fFreeze(){
 		fFrozenLink "${root}" "${frozen_root}" target "${root}/${GATE_TARGET_DIR:-target-gate}" || fDie "could not link the gate's target dir"
 		frozen_tree="${tree}"
 		fSection "Frozen copy"
-		fEcho_Clean "stages 2-6 run from ${frozen_root}, holding ${gate_rev:0:12}, the commit being pushed"
+		fEcho_Clean "stages 2-7 run from ${frozen_root}, holding ${gate_rev:0:12}, the commit being pushed"
 		return 0
 	fi
 	if ! head="$(git -C "${root}" rev-parse -q --verify HEAD 2>/dev/null)" || ! tree="$("${here}/utility/green-tree.bash" tree "${root}" 2>/dev/null)"; then
-		fEcho "WARNING: no commit to copy; stages 2-6 run in the checkout"
+		fEcho "WARNING: no commit to copy; stages 2-7 run in the checkout"
 		return 0
 	fi
 	frozen_root="${run_tmp}/tree"
 	if ! fFrozenAdd "${root}" "${frozen_root}" "${head}" "${tree}"; then
 		frozen_root=""
-		fEcho "WARNING: could not make a frozen copy; stages 2-6 run in the checkout"
+		fEcho "WARNING: could not make a frozen copy; stages 2-7 run in the checkout"
 		return 0
 	fi
 	for link in "${FROZEN_LINKS[@]}"; do
@@ -1309,7 +1370,7 @@ fFreeze(){
 	frozen_tree="${tree}"
 	mapfile -t changed < <(git -C "${root}" diff --name-status --no-renames "${head}" "${tree}")
 	fSection "Frozen copy"
-	fEcho_Clean "stages 2-6 run from ${frozen_root}"
+	fEcho_Clean "stages 2-7 run from ${frozen_root}"
 	if ((${#changed[@]} == 0)); then
 		fEcho_Clean "copied ${head:0:12}, with nothing uncommitted"
 	else
@@ -1320,7 +1381,7 @@ fFreeze(){
 	return 0
 }
 
-## Stages 2-6 in the frozen copy, by the copy's own engine.
+## Stages 2-7 in the frozen copy, by the copy's own engine.
 fRunFrozen(){
 	local -a inner=("$( ((quiet)) && echo -q || echo -y )" --no-sync --no-dogfood --no-gif --no-publish "${inner_pass[@]}")
 	local rc=0 green=""
@@ -1500,6 +1561,7 @@ else
 	fStageTests
 	fStageProfile
 	fStageRelease
+	fStageRemote
 	fRecordGreen
 fi
 if ((! inner_run)); then
@@ -1507,10 +1569,18 @@ if ((! inner_run)); then
 	fStageGif
 	fStagePublish
 fi
+## Before the cleanup takes the file away.
+declare -a skipped=()
+if ((! inner_run)) && [[ -s "${skip_log}" ]]; then mapfile -t skipped < "${skip_log}"; fi
 fCleanup
 if ((inner_run)); then run_said=1; exit 0; fi
 
 run_said=1
+if ((${#skipped[@]})); then
+	fEcho_Clean
+	fEcho_Clean "Skipped:"
+	for _s in "${skipped[@]}"; do fEcho_Clean "   SKIP ${_s}"; done
+fi
 fSection "${APP_NAME} CI/CD: done. ($(fMinSec $((SECONDS - started))))"
 fEcho_Clean
 exit 0
@@ -1557,3 +1627,6 @@ exit 0
 ##		  test's release build in the release image, or on the host with a note.
 ##		- 2026-10-25: Without the image, the x86_64 release build on the host,
 ##		  with a note, and no arm64.
+##		- 2026-10-25: Stage 7, other hosts: the arm64 unit and integration
+##		  tests on vmDebARM64. A box that isn't there is a SKIP, listed again
+##		  at the end. --no-remote skips it.

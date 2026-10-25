@@ -245,7 +245,22 @@ RELEASE_CHECKS=(
 	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 
-## Stage 7: dogfood. The native release build goes into the first of these
+## Stage 7: other hosts. The unit tests and the integration test on a box of
+## each other arch, "host|os-arch|target", on stage 6's build of that os-arch,
+## through cicd/utility/remote-tests.bash. The qemu run in the release image
+## stays as the quick check. The box is held through the host lock for as
+## long as it's used, and put back as it was found, by the VM state helper's
+## wrap, which TUKFS_CICD_VM_WRAP overrides. A box that's held elsewhere is
+## waited for up to REMOTE_LOCK_WAIT seconds, or TUKFS_CICD_LOCK_WAIT. A box
+## that isn't there, no helper, or no build of its arch in the run, is a
+## SKIP, and the run goes on. vmDebARM64 is emulated, so it takes about 3
+## minutes, and --quick leaves the stage out.
+REMOTE_HOSTS=("vmDebARM64|linux-arm64|aarch64-unknown-linux-gnu")
+_vmWrap="$(compgen -G "${HOME}/synced/0-0/common/exec/util/linux/bash/*_vm-state.bash" || true)"
+REMOTE_VM_WRAP="${TUKFS_CICD_VM_WRAP:-${_vmWrap%%$'\n'*}}"
+REMOTE_LOCK_WAIT="${TUKFS_CICD_LOCK_WAIT:-900}"
+
+## Stage 8: dogfood. The native release build goes into the first of these
 ## that's there and writable, under EXE_NAME, since the scan wrappers and root
 ## steps run it from there. Not when that copy is running. No arm64 dest,
 ## since the synced tree has no dir for one. TUKFS_CICD_DOGFOOD_UTIL moves
@@ -260,7 +275,7 @@ DOGFOOD_RUNNERS=(
 	"utility/dogfood_tukfs-hash|${_dfUtil}/linux/bash"
 )
 
-## Stage 8: demo gif, eval'd. cicd/demo/scenario.toml runs against the
+## Stage 9: demo gif, eval'd. cicd/demo/scenario.toml runs against the
 ## native release build from stage 6, in a home in the run's temp dir, and
 ## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
 ## the private dir beside the checkout, unless it's the same as the newest
@@ -291,6 +306,7 @@ BACKLOG_AREAS=(
 	"codeql|codeql|CodeQL, about 11 minutes"
 	"profile||the profiler"
 	"release||the release builds, packages and release checks"
+	"remote||the arm64 tests on vmDebARM64, with the release builds they need"
 )
 
 ## What --quick leaves out, each matched as plain text against one step of
@@ -299,7 +315,7 @@ BACKLOG_AREAS=(
 ## the native build they come after.
 QUICK_SKIP=()
 
-## Stages 2-6 run from a frozen copy of the tree. These link back to the
+## Stages 2-7 run from a frozen copy of the tree. These link back to the
 ## checkout's own, so builds start warm and the logs land where they're read.
 FROZEN_LINKS=(target cicd/artifacts)
 ## The pre-push gate's builds go here instead of target, since the commit it
@@ -314,7 +330,7 @@ CACHE_DIRS=(target target-gate)
 ## Run and lint logs, gitignored and GFS-rotated. lint-report.bash reads them.
 LINT_LOG_DIR="cicd/artifacts/lint"
 
-## Stage 9: backup and publish, through the copied publisher: a versioned rar of
+## Stage 10: backup and publish, through the copied publisher: a versioned rar of
 ## the project folder, then stash, pull --ff-only, pop, add, commit and push.
 GIT_PUBLISH=(cicd/utility/n8git_backup-and-publish)
 PUBLISH_AUTO_MESSAGE=""
@@ -340,3 +356,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: TEST_ID_LIST_CMD.
 ##		- 2026-10-25: The build and tests in the release image.
 ##		- 2026-10-25: The x86_64 release build on the host without docker.
+##		- 2026-10-25: REMOTE_HOSTS, the arm64 tests on vmDebARM64.

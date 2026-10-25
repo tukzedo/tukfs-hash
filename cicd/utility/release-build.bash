@@ -10,11 +10,13 @@
 ##		cross-built, and its tests run under qemu-user in the same image.
 ##		- build: the release binary for each target.
 ##		- test: the unit tests for each target.
+##		- bins: the path of each target's unit test binary, one a line, for
+##		  a run on a box of that arch. Builds them first where needed.
 ##		--host builds on the box instead, into REL_HOST_TARGET_DIR, for when
 ##		there's no image. Then it needs the box's glibc, and only the box's
 ##		own target builds, since there's no cross gcc. cicd.bash picks it.
 ##	Syntax:
-##		release-build.bash [--host] build|test TARGET...
+##		release-build.bash [--host] build|test|bins TARGET...
 ##		CPU_CAP sets the jobs and test threads (default half the cores, or a
 ##		quarter when the box is busy).
 ##	Exit: 0 = done, 1 = a build or test failed, 2 = can't run.
@@ -34,11 +36,11 @@ source "${me}/include/leak-common.bash"
 fCpuCap
 trap 'fStopDescendants; fScratchGone || true' EXIT
 
-fUsage(){ echo "usage: release-build.bash [--host] build|test TARGET..." >&2; exit 2; }
+fUsage(){ echo "usage: release-build.bash [--host] build|test|bins TARGET..." >&2; exit 2; }
 onHost=0
 if [[ "${1:-}" == --host ]]; then onHost=1; shift; fi
 mode="${1:-}"
-[[ "${mode}" == build || "${mode}" == test ]] || fUsage
+[[ "${mode}" == build || "${mode}" == test || "${mode}" == bins ]] || fUsage
 shift
 (($#)) || fUsage
 for t in "$@"; do
@@ -70,6 +72,12 @@ for t in "$@"; do
 		cargo build --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" || exit 1
 		continue
 	fi
+	## The image mounts the target dir at the same path, so these hold outside.
+	if [[ "${mode}" == bins ]]; then
+		cargo test --release --locked --no-run -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" --message-format json \
+			| sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' || exit 1
+		continue
+	fi
 	## The pass lines were shown by the tests stage, so only what failed and
 	## the counts.
 	fScratchMake test || exit 2
@@ -86,3 +94,4 @@ done
 ##		- 2026-10-23: Created, for the glibc floor.
 ##		- 2026-10-25: Half the cores, or a quarter when busy.
 ##		- 2026-10-25: --host, for a box with no docker.
+##		- 2026-10-25: bins, for the arm64 tests on vmDebARM64.
