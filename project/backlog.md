@@ -29,40 +29,13 @@
 
 ## Issues
 
-- CICD reset: release builds without docker
-	- ID: 2026102509342993
-	- Type: Task
-	- Status: Waiting for answers
-		- Waits on its question in questions.md.
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261025-093429
-	- Opened by: 2026102416215926
-	- Parent ID: 2026102416215926
-	- Related IDs: 2026102318460622
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- From the parent: a missing docker falls back to the host with one line, and never fails a run. `release-build.bash` exits 2 without the release image now, so the run fails.
-		- A host build needs the box's glibc, 2.39 on b23, so the release check `no build needs a glibc newer than GLIBC_FLOOR` would fail it. b23 has the arm64 Rust target, but no arm64 cross gcc or qemu-user.
-
-- Should the private cicd and dogfood checks run in the pipeline, with test IDs?
-	- ID: 2026102508462883
-	- Type: Task
-	- Status: Waiting for answers
-		- Waits on its question in questions.md.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261025-084628
-	- Opened by: 2026102416215932
-	- Related IDs: 2026102416215932
-	- Requirements  [Feature]:
-		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
-		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
-
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
-	- Status: Waiting on automated testing
+	- Status: Waiting on UAT
+		- Answered 2026-10-25: the hard drive timing is run by hand, not by a round, since the scan writes to real data outside the project.
 		- It departs from the wording. Neither idea in the note was taken. The read is `O_DIRECT` now, and the drops stay.
-	- Needs external testing: Wall time of a `--rmlint` scan of a cold hard drive group on b23, such as bf7, against `debkt`. Direct reads have no readahead, so hashing no longer overlaps the next read. That didn't slow a SATA SSD, but a hard drive wasn't timed.
+	- Needs hand testing: Wall time of a `--rmlint` scan of a cold hard drive group on b23, such as bf7, against `debkt`. Direct reads have no readahead, so hashing no longer overlaps the next read. That didn't slow a SATA SSD, but a hard drive wasn't timed.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-164217
 	- Opened by: first profiler graph
@@ -105,6 +78,21 @@
 	- Requirements  [Feature]:
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
+
+- CICD reset: release builds without docker
+	- ID: 2026102509342993
+	- Type: Task
+	- Status: Queued
+		- Answered 2026-10-25: don't fail if there's no docker. That's option (a), build x86_64 on the host with a note from the floor check and arm64 skipped, and the merge gate doesn't fail on it either.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261025-093429
+	- Opened by: 2026102416215926
+	- Parent ID: 2026102416215926
+	- Related IDs: 2026102318460622
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- From the parent: a missing docker falls back to the host with one line, and never fails a run. `release-build.bash` exits 2 without the release image now, so the run fails.
+		- A host build needs the box's glibc, 2.39 on b23, so the release check `no build needs a glibc newer than GLIBC_FLOOR` would fail it. b23 has the arm64 Rust target, but no arm64 cross gcc or qemu-user.
 
 - CICD reset: containers
 	- ID: 2026102416215926
@@ -2265,6 +2253,20 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Note: Path text was about 2/3 of a 48 MB test database of 200k paths. A table of folders would roughly halve it, but it needs a schema change. Worth it only if database size or cache pressure shows up.
+
+- Should the private cicd and dogfood checks run in the pipeline, with test IDs?
+	- ID: 2026102508462883
+	- Type: Task
+	- Status: Canceled
+		- Answered 2026-10-25: no private tests in the public pipeline. The checks stay in the private tools folder.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-084628
+	- Opened by: 2026102416215932
+	- Related IDs: 2026102416215932
+	- Requirements  [Feature]:
+		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
+		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
+	- Closed: 20261025
 
 - `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
 	- ID: 2026101916404117
