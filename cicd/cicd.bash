@@ -13,7 +13,7 @@
 ##	  are in config.bash.
 ##	- Stages, fail-fast (an error stops the run before the next stage):
 ##	   0. remote sync (fast-forward from upstream before anything is built)
-##	   1. format (in place; check-only under --gate)
+##	   1. format (in place; check-only in the backlog runs and merge gate)
 ##	   2. build (debug)
 ##	   3. lint (clippy, shellcheck over every tracked *.bash, markdownlint over
 ##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1, ruff
@@ -33,15 +33,32 @@
 ##	  cicd/cicd.bash [options]
 ##	  Options:
 ##	   With no options a run does every stage config.bash has on.
-##	   --gate              the merge gate the pre-push hook runs: format check
-##	                       (no rewrite), build, lint and tests. Strict: a
-##	                       missing tool fails it. Unattended, and no release,
-##	                       dogfood, gif or publish
 ##	   --quick             leave out the steps config.bash lists in QUICK_SKIP,
 ##	                       the leak checks, profiler and demo gif
-##	   --slow              everything, the same as no options. Not with --quick
-##	   --leakcheck         add the slow leak checks to --quick. --gate never
-##	                       runs them
+##	   --long              everything, the same as no options, since no step
+##	                       takes hours. Also --slow. Not with --quick
+##	   The next 3 never sync, dogfood, publish, commit, push, install, rewrite
+##	   a tracked file, or prompt. The format stage only checks, and a missing
+##	   tool fails the run.
+##	   --backlog-run-quick [AREA...]
+##	                       what a backlog worker runs before it commits:
+##	                       format check, build, lint, unit and integration
+##	                       tests. Or only the areas named, listed at the end.
+##	                       --gate is another name for it
+##	   --backlog-run-full  what a backlog round runs at its end: every check
+##	                       of a run with no options. The gif is drawn into the
+##	                       temp dir and goes nowhere
+##	   --merge-gate        the same checks, which the pre-push hook runs on a
+##	                       push to main. --ci is another name for it
+##	   --list              print the plan the other options make, and run
+##	                       nothing
+##	   --no-container      run the steps that use an image on the host
+##	   --no-remote         skip the other hosts. This pipeline has none
+##	   --keep-temp         keep the run's temp dirs and containers, and print
+##	                       where they are. The next run's sweep leaves them
+##	                       for 2 days
+##	   --leakcheck         add the slow leak checks to --quick or
+##	                       --backlog-run-quick
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
 ##	                       --leakcheck
 ##	   --no-codeql         leave out the leak check steps that name codeql,
@@ -79,11 +96,11 @@
 ##	  caller wins. utility/include/cpu-cap.bash works it out.
 ##	- Everything runs at nice 19 in the idle I/O class, containers too, which
 ##	  also get --cpu-shares 256.
-##	- A run that passes the tests records the tree it tested
-##	  (utility/green-tree.bash), and the pre-push hook lets a push of that tree
-##	  through without running the gate again. --quick, --no-fmt, --no-debug,
-##	  --no-lint, --no-tests, a missing tool and a missing test root each keep
-##	  a run from recording.
+##	- A run at least as thorough as the merge gate records the tree it tested
+##	  once the release checks pass (utility/green-tree.bash), and the pre-push
+##	  hook lets a push of that tree through without running the gate again.
+##	  --quick, --backlog-run-quick, any --no- option that drops a check, a
+##	  missing tool and a missing test root each keep a run from recording.
 ##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, or
 ##	  under config.bash's RUN_TMP_ROOT when TMPDIR isn't set, with TMPDIR
 ##	  pointed into it, so what a failed test leaves goes with it. It and
@@ -163,15 +180,33 @@ started=${SECONDS}
 
 assume_yes=0; quiet=0; gate_mode=0; quick=0; slow=0; cli_message=""; sync_enable=1; gate_partial=0
 leakcheck_flag=0; no_leakcheck=0; no_codeql=0; no_freeze=0; fmt_off=0; debug_off=0; lint_off=0; tests_off=0; release_off=0
+unit_off=0; it_off=0; keep_temp=0; list_only=0; no_container=0; no_remote=0
+## bq, bf or mg for --backlog-run-quick, --backlog-run-full and --merge-gate.
+## gate_mode is set for all 3: check only, strict, and nothing written back.
+mode=""; mode_flag=""
+declare -a areas=()
+fMode(){   ## fMode MODE FLAG
+	if [[ -n "${mode}" && "${mode}" != "$1" ]]; then echo "${mode_flag} and $2 can't go together (try --help)" >&2; exit 2; fi
+	mode="$1"; mode_flag="$2"; gate_mode=1; assume_yes=1
+}
 ## The options the run on the frozen copy takes over.
 inner_pass=()
 while (($#)); do case "$1" in
-	--gate)                   gate_mode=1; assume_yes=1; inner_pass+=("$1"); shift ;;
+	--gate)                   echo "[ --gate is another name for --backlog-run-quick ]"; set -- --backlog-run-quick "${@:2}" ;;
+	--ci)                     echo "[ --ci is another name for --merge-gate ]"; set -- --merge-gate "${@:2}" ;;
+	--backlog-run-quick)      fMode bq "$1"; shift
+	                          while (($#)) && [[ "$1" != -* ]]; do areas+=("$1"); shift; done ;;
+	--backlog-run-full)       fMode bf "$1"; shift ;;
+	--merge-gate)             fMode mg "$1"; shift ;;
 	--quick)                  quick=1; inner_pass+=("$1"); shift ;;
-	--slow)                   slow=1; shift ;;
+	--slow|--long)            slow=1; shift ;;
+	--no-container)           no_container=1; inner_pass+=("$1"); shift ;;
+	--no-remote)              no_remote=1; shift ;;
+	--keep-temp)              keep_temp=1; inner_pass+=("$1"); shift ;;
+	--list)                   list_only=1; shift ;;
 	--leakcheck)              leakcheck_flag=1; inner_pass+=("$1"); shift ;;
-	--no-leakcheck)           no_leakcheck=1; inner_pass+=("$1"); shift ;;
-	--no-codeql)              no_codeql=1; inner_pass+=("$1"); shift ;;
+	--no-leakcheck)           no_leakcheck=1; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-codeql)              no_codeql=1; gate_partial=1; inner_pass+=("$1"); shift ;;
 	-q|--quiet)               quiet=1; assume_yes=1; QUIET_FLAG="-q"; export CARGO_TERM_QUIET=true; shift ;;
 	-y|--yes)                 assume_yes=1; shift ;;
 	--no-sync)                sync_enable=0; shift ;;
@@ -179,26 +214,40 @@ while (($#)); do case "$1" in
 	--no-debug)               debug_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-lint)                lint_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-tests)               tests_off=1; LEAKCHECK_STEPS=(); gate_partial=1; inner_pass+=("$1"); shift ;;
-	--no-cross)               CROSS_TARGETS=(); inner_pass+=("$1"); shift ;;
-	--no-package)             PACKAGE_ENABLE=0; inner_pass+=("$1"); shift ;;
-	--no-profile)             PROFILE_ENABLE=0; inner_pass+=("$1"); shift ;;
+	--no-cross)               CROSS_TARGETS=(); gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-package)             PACKAGE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-profile)             PROFILE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
 	## Dogfood and the gif take the release binary, so a stale one would go out.
-	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; inner_pass+=("$1"); shift ;;
+	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-dogfood)             DOGFOOD_ENABLE=0; shift ;;
 	--no-gif)                 GIF_ENABLE=0; shift ;;
 	--no-publish)             GIT_PUBLISH=(); shift ;;
 	--no-freeze)              no_freeze=1; shift ;;
 	--message=*|--msg=*|-m=*) cli_message="${1#*=}"; shift ;;
 	-m|--message|--msg)       (($# >= 2)) || { echo "$1 needs a message (try --help)" >&2; exit 2; }; cli_message="$2"; shift 2 ;;
-	-h|--help)                sed -n '/^##	- Purpose:/,/^##	History:/p' "${BASH_SOURCE[0]}" | sed '$d; s/^##	\{0,1\}//'; exit 0 ;;
+	-h|--help)
+		sed -n '/^##	- Purpose:/,/^##	History:/p' "${BASH_SOURCE[0]}" | sed '$d; s/^##	\{0,1\}//'
+		echo "- Areas for --backlog-run-quick, from config.bash:"
+		for _a in "${BACKLOG_AREAS[@]}"; do printf '   %-12s %s\n' "${_a%%|*}" "${_a##*|}"; done
+		exit 0 ;;
 	*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
 esac; done
 ## Two options that say opposite things are refused, rather than the last winning.
 if ((leakcheck_flag && no_leakcheck)); then echo "--leakcheck and --no-leakcheck can't go together (try --help)" >&2; exit 2; fi
-if ((quick && slow)); then echo "--quick and --slow can't go together (try --help)" >&2; exit 2; fi
-if [[ -n "${gate_rev}" ]] && ((! gate_mode)); then echo "TUKFS_GATE_REV is only for --gate" >&2; exit 2; fi
+if ((quick && slow)); then echo "--quick and --long can't go together (try --help)" >&2; exit 2; fi
+if [[ -n "${mode}" ]] && ((quick || slow)); then echo "${mode_flag} has its own steps; drop --quick and --long" >&2; exit 2; fi
+if [[ -n "${gate_rev}" ]] && ((! gate_mode)); then echo "TUKFS_GATE_REV is only for --merge-gate and the backlog runs" >&2; exit 2; fi
+## The release builds and the leak checks fall back to the host on this, as
+## they do when docker doesn't answer.
+if ((no_container)); then export TUKFS_NO_CONTAINER=1; fi
+if ((keep_temp)); then export TUKFS_KEEP_TEMP=1; fi
+if [[ -n "${mode}" ]]; then
+	inner_pass+=("${mode_flag}")
+	if [[ "${mode}" == bq ]]; then inner_pass+=("${areas[@]}"); fi
+fi
 
-## --gate: correctness only, unattended and side-effect free.
+## The backlog runs and the merge gate: unattended, and nothing goes out or
+## back into the tree.
 if ((gate_mode)); then
 	## A gate that skips what it can't run stops checking the day a box loses
 	## a tool, so here a missing tool fails. A test root that isn't there is
@@ -206,10 +255,45 @@ if ((gate_mode)); then
 	gate_strict=1
 	sync_enable=0
 	FMT_CMD=()
-	release_off=1; CROSS_TARGETS=(); PACKAGE_ENABLE=0; PROFILE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
-	GIT_PUBLISH=()
+	DOGFOOD_ENABLE=0; GIT_PUBLISH=()
+	## The gif is drawn, as a check, but goes nowhere the tree or the private
+	## dir would see it. A rotate dir under a parent that isn't there is a note.
+	gif_to_tmp=1
+	if [[ "${mode}" == bq ]]; then
+		GIF_ENABLE=0
+		## Only what's named, when anything is. Each name is an area in
+		## config.bash, and a leak area keeps the leak checks its text is in.
+		_known=" "; _leakKept=()
+		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
+		for _name in "${areas[@]}"; do
+			[[ "${_known}" == *" ${_name} "* ]] || { echo "--backlog-run-quick: no area named ${_name} (try --help)" >&2; exit 2; }
+			for _a in "${BACKLOG_AREAS[@]}"; do
+				[[ "${_a%%|*}" == "${_name}" ]] || continue
+				_pat="${_a#*|}"; _pat="${_pat%%|*}"
+				[[ -n "${_pat}" ]] || continue
+				for _step in "${LEAKCHECK_STEPS[@]}"; do
+					if [[ "${_step}" == *"${_pat}"* && " ${_leakKept[*]} " != *" ${_step} "* ]]; then _leakKept+=("${_step}"); fi
+				done
+			done
+		done
+		_named=" ${areas[*]} "
+		if ((${#areas[@]})); then
+			gate_partial=1
+			[[ "${_named}" == *" fmt "* ]]   || fmt_off=1
+			[[ "${_named}" == *" build "* ]] || debug_off=1
+			[[ "${_named}" == *" lint "* ]]  || lint_off=1
+			[[ "${_named}" == *" unit "* ]]  || unit_off=1
+			[[ "${_named}" == *" it "* ]]    || it_off=1
+			((leakcheck_flag)) || LEAKCHECK_STEPS=("${_leakKept[@]}")
+		elif ((! leakcheck_flag)); then
+			LEAKCHECK_STEPS=()
+		fi
+		[[ "${_named}" == *" release "* ]] || { release_off=1; CROSS_TARGETS=(); PACKAGE_ENABLE=0; }
+		[[ "${_named}" == *" profile "* ]] || PROFILE_ENABLE=0
+	fi
 else
 	gate_strict=0
+	gif_to_tmp=0
 	FMT_CHECK_CMD=()
 fi
 ## The run that froze the tree formatted the checkout first.
@@ -241,9 +325,9 @@ if ((quick)); then
 	PROFILE_ENABLE=0; GIF_ENABLE=0
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
-## A run with no options does everything, the leak checks included. The gate
-## is the pre-push hook, and stays fast.
-if ((no_leakcheck || gate_mode)) || { ((quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
+## A run with no options does everything, the leak checks included, and so do
+## the merge gate and --backlog-run-full. --backlog-run-quick picked its own.
+if ((no_leakcheck)) || { ((quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
 ## CodeQL is most of a full run's time, so it goes off alone.
 if ((no_codeql)); then
 	_kept=()
@@ -251,9 +335,9 @@ if ((no_codeql)); then
 	LEAKCHECK_STEPS=("${_kept[@]}")
 fi
 
-## A run at least as thorough as the gate records the tree it tested.
+## A run at least as thorough as the merge gate records the tree it tested.
 record_green=1
-if ((quick || gate_partial)); then record_green=0; fi
+if ((quick || gate_partial)) || [[ "${mode}" == bq ]]; then record_green=0; fi
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -379,9 +463,15 @@ fRunDirMake(){   ## fRunDirMake BASE KIND [LABEL]
 ## Remove one of this run's dirs, drop it from the list, and set gone_kb to its
 ## size. Not through $( ), or the list would change in a subshell only.
 gone_kb=0; freed_kb=0
+declare -a kept_dirs=(); kept_shown=0
 fRunDirGone(){   ## fRunDirGone DIR
 	local d="$1" kb="" i
 	gone_kb=0
+	## --keep-temp. The mark keeps the next run's sweep off it for 2 days.
+	if ((keep_temp)); then
+		[[ " ${kept_dirs[*]} " == *" ${d} "* ]] || { kept_dirs+=("${d}"); : > "${d}/.cicd-kept"; }
+		return 0
+	fi
 	kb="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 	fSafeRm "${d}" "${run_token}" || return 1
 	for i in "${!run_dirs[@]}"; do if [[ "${run_dirs[i]}" == "${d}" ]]; then unset 'run_dirs[i]'; fi; done
@@ -395,6 +485,7 @@ fRunDirGone(){   ## fRunDirGone DIR
 frozen_root=""; frozen_tree=""
 fFrozenGone(){
 	local d="${frozen_root}"
+	((! keep_temp)) || return 0
 	frozen_root=""
 	[[ -n "${d}" ]] || return 0
 	fFrozenRemove "${root}" "${d}" && return 0
@@ -436,6 +527,10 @@ fRunTmpGone(){
 	left_frozen="${frozen_root}"
 	fFrozenGone || true
 	for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
+	if ((keep_temp)); then
+		if ((! inner_run && ! kept_shown)); then for d in "${kept_dirs[@]}"; do printf '[ kept (--keep-temp): %s ]\n' "${d}" >&2; done; fi
+		return 0
+	fi
 	## git's record of a copy it couldn't take down, now that the dir is gone.
 	if [[ -n "${left_frozen}" ]]; then fFrozenRemove "${root}" "${left_frozen}" || true; fi
 	if ((! inner_run)); then printf '[ cleanup: removed this run'\''s temp files, about %s ]\n' "$(fSize "${total}")" >&2; fi
@@ -503,9 +598,15 @@ elif ((assume_yes));                       then publish_msg="${APP_NAME} CI/CD $
 fi
 
 fOnOff(){ if (($1)); then echo "${2}"; else echo "(off${3:+, $3})"; fi; }
-if ((! quiet && ! inner_run)); then
+case "${mode}" in
+	bq) run_kind="backlog run, quick${areas[*]:+: ${areas[*]}}" ;;
+	bf) run_kind="backlog run, full" ;;
+	mg) run_kind="merge gate" ;;
+	*)  run_kind="local CI/CD"; ((! quick)) || run_kind+=", quick" ;;
+esac
+if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean
-	fEcho_Clean "${APP_NAME} $( ((gate_mode)) && echo 'gate' || echo 'local CI/CD')$( ((quick)) && echo ', quick' )"
+	fEcho_Clean "${APP_NAME} ${run_kind}"
 	fEcho_Clean
 	fEcho_Clean "Repo root ......: ${root}"
 	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_date}}"
@@ -516,13 +617,9 @@ if ((! quiet && ! inner_run)); then
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
 	fEcho_Clean "Build (debug) ..: $( ((debug_off)) && echo '(skipped)' || echo "${BUILD_CMD[*]}")"
 	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
-	if ((tests_off)); then
-		fEcho_Clean "Tests ..........: (skipped)"
-	else
-		_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*} (${_r#*|}), "; done
-		fEcho_Clean "Tests ..........: ${TEST_CMD[*]}"
-		fEcho_Clean "Integration ....: ${_its%, }"
-	fi
+	_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*} (${_r#*|}), "; done
+	fEcho_Clean "Tests ..........: $( ((tests_off || unit_off)) && echo '(skipped)' || echo "${TEST_CMD[*]}")"
+	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }")"
 	fEcho_Clean "Leak checks ....: $( ((${#LEAKCHECK_STEPS[@]})) && echo "${#LEAKCHECK_STEPS[@]}, at the end of the tests" || echo '(none in this run)')"
 	fEcho_Clean "Profiler .......: $(fOnOff "${PROFILE_ENABLE}" "${#PROFILE_TIMED[@]} step(s) on a tree under ${PROFILE_ROOT:-the temp dir} -> ${PROFILE_OUT_DIR:-(nowhere)}/")"
 	if ((release_off)); then
@@ -540,14 +637,23 @@ if ((! quiet && ! inner_run)); then
 	else
 		fEcho_Clean "Dogfood ........: (off)"
 	fi
-	fEcho_Clean "Demo gif .......: $(fOnOff "${GIF_ENABLE}" "${GIF_OUT:-on}")"
+	fEcho_Clean "Demo gif .......: $(fOnOff "${GIF_ENABLE}" "$( ((gif_to_tmp)) && echo 'drawn into the temp dir only' || echo "${GIF_OUT:-on}")")"
 	if ((${#GIT_PUBLISH[@]})); then
 		fEcho_Clean "Publish (last) .: ${GIT_PUBLISH[*]}$( [[ -n "${publish_msg}" ]] && echo " (\"${publish_msg}\")" || echo ' (asks for the message now)')"
 	else
 		fEcho_Clean "Publish (last) .: (skipped)"
 	fi
 	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-6 run from a copy taken after the format stage' || echo '(off)')"
+	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host')"
+	fEcho_Clean "Other hosts ....: (none in this pipeline)"
+	fEcho_Clean "Temp files .....: $( ((keep_temp)) && echo 'kept, --keep-temp' || echo 'removed at the end')"
 	fEcho_Clean
+fi
+if ((list_only)); then
+	fEcho_Clean "--list: nothing was run"
+	## Nothing in it to keep.
+	keep_temp=0
+	run_said=1; exit 0
 fi
 if ((! assume_yes && ! inner_run)) && ((${#GIT_PUBLISH[@]})) && [[ -z "${publish_msg}" ]]; then
 	read -r -p "Publish commit message (blank = git's editor; Ctrl+C stops the run): " m || true
@@ -555,10 +661,10 @@ if ((! assume_yes && ! inner_run)) && ((${#GIT_PUBLISH[@]})) && [[ -z "${publish
 	if [[ -n "${m:-}" ]]; then publish_msg="${m}"; fi
 fi
 
-## The whole run into a rotated log, for lint-report.bash. Not under --gate,
-## which writes nothing, and not in the run on the frozen copy, whose output
+## The whole run into a rotated log, for lint-report.bash. Not under
+## --backlog-run-quick, which writes nothing, and not in the run on the frozen copy, whose output
 ## already goes through this one.
-if ((! gate_mode && ! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
+if [[ "${mode}" != bq ]] && ((! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
 	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C
 	## reaches the whole process group, so it ignores that too, and ends when
@@ -630,7 +736,7 @@ fStageSync(){
 	fStepPass
 }
 
-## Stage 1: format. In place; check-only under --gate.
+## Stage 1: format. In place; check-only in the check-only modes.
 fStageFormat(){
 	fStep 1 "Format"
 	if ((gate_mode)) && ((${#FMT_CHECK_CMD[@]})); then
@@ -663,10 +769,10 @@ fLintRun(){ local rc=0; "$@" 2>&1 | tee -a "${lint_log}" || rc=$?; return "${rc}
 ## An eval'd one. Without its own ERR trap, since a finding isn't the run
 ## aborting.
 fLintEval(){ trap - ERR; eval "$1"; }
-## A missing tool fails under --gate and is a noted skip otherwise.
+## A missing tool fails in the check-only modes and is a noted skip otherwise.
 fLintTool(){   ## fLintTool NAME -> 0 when it's here
 	command -v "$1" >/dev/null 2>&1 && return 0
-	((gate_strict)) && fDie "$1 is needed under --gate but isn't installed"
+	((gate_strict)) && fDie "$1 is needed in a check-only run but isn't installed"
 	fEcho "WARNING: $1 isn't installed; skipped"
 	echo "$1" >> "${gate_skips}"
 	return 1
@@ -679,7 +785,7 @@ fStageLint(){
 	local f skip s c
 	fStep 3 "Lint"
 	if ((lint_off)); then fStepSkip "lint skipped"; return 0; fi
-	if ((! gate_mode)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
+	if [[ "${mode}" != bq ]] && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 		lint_log="${root}/${LINT_LOG_DIR}/lint_${stamp}.log"
 	fi
 	## Untracked files too, since they go out with the next publish.
@@ -716,7 +822,7 @@ fStageLint(){
 		fEcho_Clean "PSScriptAnalyzer: ${#psFiles[@]} file(s)"
 		if fLintRun "${PS_LINT_CMD[@]}" "${psFiles[@]}"; then fEcho "OK: PSScriptAnalyzer clean"; else failed+=(PSScriptAnalyzer); fi
 	fi
-	## Not through fLintTool: a box without ruff skips it even under --gate.
+	## Not through fLintTool: a box without ruff skips it even in the merge gate.
 	if ((${#pyFiles[@]})) && ((${#PY_LINT_CMD[@]})); then
 		if ! command -v "${PY_LINT_CMD[0]}" >/dev/null 2>&1; then
 			fEcho "NOTE: ${PY_LINT_CMD[0]} isn't installed; ${#pyFiles[@]} Python file(s) not linted"
@@ -765,15 +871,19 @@ fRunIt(){   ## fRunIt LABEL ROOT
 fStageTests(){
 	local r step t0
 	fStep 4 "Tests"
-	if ((tests_off)); then fStepSkip "tests skipped"; return 0; fi
-	fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=${TMPDIR})"
-	fBg "${TEST_CMD[@]}" || fDie "unit tests failed"
-	fEcho "OK: unit tests"
-	## The integration test runs the release build.
-	fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
-	fBg "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
-	[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
-	for r in "${IT_ROOTS[@]}"; do fRunIt "${r%%|*}" "${r#*|}"; done
+	if ((tests_off)) || ((unit_off && it_off && ! ${#LEAKCHECK_STEPS[@]})); then fStepSkip "tests skipped"; return 0; fi
+	if ((! unit_off)); then
+		fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=${TMPDIR})"
+		fBg "${TEST_CMD[@]}" || fDie "unit tests failed"
+		fEcho "OK: unit tests"
+	fi
+	if ((! it_off)); then
+		## The integration test runs the release build.
+		fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
+		fBg "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
+		[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
+		for r in "${IT_ROOTS[@]}"; do fRunIt "${r%%|*}" "${r#*|}"; done
+	fi
 	## Last, since the slow ones take a long time and the rest should report first.
 	for step in "${LEAKCHECK_STEPS[@]}"; do
 		fEcho_Clean "leak check: ${step}"
@@ -783,11 +893,11 @@ fStageTests(){
 		fEcho_Clean "leak check took $(fMinSec $((SECONDS - t0))): ${step}"
 	done
 	if ((${#LEAKCHECK_STEPS[@]})); then fEcho "OK: leak checks"; fi
-	fRecordGreen
 	fStepPass
 }
 
-## The tree this run tested, for the pre-push hook. Taken after the format
+## The tree this run tested, for the pre-push hook, once the release checks
+## are through too, since the merge gate has them. Taken after the format
 ## stage, since that rewrites what gets tested.
 green_tree=""
 fRecordGreen(){
@@ -982,11 +1092,18 @@ fStageDogfood(){
 	fStepPass
 }
 
-## Stage 8: demo gif.
+## Stage 8: demo gif. A check-only run draws it from the tree it tested, into
+## its temp dir.
+fGifIn(){ cd "$1" && root="$1" && eval "${GIF_CMD}"; }
 fStageGif(){
+	local gifRoot="${root}"
 	fStep 8 "Demo gif"
 	if ((! GIF_ENABLE)) || [[ -z "${GIF_CMD}" ]]; then fStepSkip "demo gif off in config.bash, or skipped"; return 0; fi
-	fBg eval "${GIF_CMD}" || fDie "demo gif failed"
+	if ((gif_to_tmp)); then
+		GIF_OUT="${run_tmp}/demo.gif"; GIF_ROTATE_DIR="${run_tmp}/no-private/demo/gif"
+		if [[ -n "${gate_rev}" && -n "${frozen_root}" ]]; then gifRoot="${frozen_root}"; fi
+	fi
+	fBg fGifIn "${gifRoot}" || fDie "demo gif failed"
 	fStepPass
 }
 
@@ -1137,6 +1254,7 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		[[ "${got}" == "${pid}-"* ]] || continue
 		## Not kill -0, which fails on another user's process too.
 		[[ -d "/proc/${pid}" ]] && continue
+		if [[ -f "${d}/.cicd-kept" ]] && [[ -n "$(find "${d}/.cicd-kept" -maxdepth 0 -mmin -2880 2>/dev/null)" ]]; then continue; fi
 		size="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 		[[ "${size}" =~ ^[0-9]{1,15}$ ]] || size=0
 		repo=""
@@ -1191,6 +1309,13 @@ fCleanup(){
 	fSweepKilled
 	gone+=("${swept[@]}"); total=$((total + swept_kb))
 	for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
+	if ((keep_temp)); then
+		kept_shown=1
+		for d in "${kept_dirs[@]}"; do fEcho_Clean "kept (--keep-temp): ${d}"; done
+		total=$((total - kb))
+		if ((${#gone[@]})); then fEcho_Clean "cleanup: removed $(printf '%s, ' "${gone[@]}" | sed 's/, $//'), about $(fSize "${total}")"; fi
+		return 0
+	fi
 	gone+=("this run's temp files")
 	fEcho_Clean "cleanup: removed $(printf '%s, ' "${gone[@]}" | sed 's/, $//'), about $(fSize "${total}")"
 	return 0
@@ -1216,7 +1341,7 @@ fi
 if [[ -n "${frozen_root}" ]]; then
 	fRunFrozen
 else
-	## The run on the frozen copy only checks, and only under --gate.
+	## The run on the frozen copy only checks, and only in the check-only modes.
 	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fi
 	if [[ -n "${green_given}" ]]; then green_tree="${green_given}"
 	elif ((record_green && ! inner_run)); then green_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
@@ -1225,6 +1350,7 @@ else
 	fStageTests
 	fStageProfile
 	fStageRelease
+	fRecordGreen
 fi
 if ((! inner_run)); then
 	fStageDogfood
@@ -1268,3 +1394,7 @@ exit 0
 ##		- 2026-10-24: With no TMPDIR, a run works under RUN_TMP_ROOT, not /tmp.
 ##		- 2026-10-25: A quarter of the cores when busy or for a leak check,
 ##		  rechecked at each step, and nice 19 with idle I/O.
+##		- 2026-10-25: The shared flags: --long, --backlog-run-quick with its
+##		  areas, --backlog-run-full, --merge-gate, --no-container, --no-remote,
+##		  --keep-temp and --list. --gate and --ci are other names. The tree is
+##		  recorded after the release checks.

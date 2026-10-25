@@ -154,11 +154,14 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Feature branches merge into `dev` with `--no-ff`. A `dev` to `main` merge is a release, and gets tagged. Pulls are `--ff-only`.
 
-- The pipeline runs here, not on a hosted service. Its `--gate` is the pre-push hook, for pushes to `dev`. A push to `main` isn't gated, since `main` only gets what already passed on `dev`. Neither is a push that changes only `.md` files and `assets/`.
+- The pipeline runs here, not on a hosted service. The pre-push hook runs `--merge-gate` on a push to `main`, and a push to `dev` or a feature branch isn't gated. The merge gate runs every check of a run with no options, so it takes most of an hour. A push to `main` that changes only the paths in `cicd/docs-paths`, which are `.md` files and `assets/`, skips it.
+	- A backlog worker runs `--backlog-run-quick`, alone or with the areas `--help` lists, and a round runs `--backlog-run-full` at its end. `--gate` and `--ci` are other names for `--backlog-run-quick` and `--merge-gate`.
+	- None of the 3 syncs, dogfoods, publishes, installs, rewrites a tracked file, or prompts. The demo gif they draw stays in the run's temp dir.
+	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again.
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
 
-- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The tests stage still builds on the box, so `--gate` needs no docker.
+- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The tests stage still builds on the box, so `--backlog-run-quick` needs no docker.
 
 - The release set, in `cicd/artifacts/release/`, is named `tukfs-hash-<version>-linux-x86_64` and `tukfs-hash-<version>-linux-arm64`, the same names plus `.deb` and `.rpm`, and `tukfs-hash-<version>-sha256sums.txt`. Download links depend on these, so they stay. The x86_64 name is never amd64, though the `.deb` has to say amd64 inside.
 

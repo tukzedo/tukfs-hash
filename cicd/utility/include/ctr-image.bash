@@ -57,6 +57,7 @@ fCtrUseRelease(){
 fCtrWhyNot(){
 	local engine="${TUKFS_DOCKER:-docker}"
 	local -a limit=()
+	if [[ -n "${TUKFS_NO_CONTAINER:-}" ]]; then echo "--no-container was given"; return 0; fi
 	if [[ "$(uname -m)" != x86_64 ]]; then echo "the image is x86_64 only"; return 0; fi
 	if ! command -v "${engine}" >/dev/null 2>&1; then echo "there's no ${engine} here"; return 0; fi
 	if command -v timeout >/dev/null 2>&1; then limit=(timeout 30); fi
@@ -86,14 +87,20 @@ fCtrSize(){ "${TUKFS_DOCKER:-docker}" image inspect --format '{{.Size}}' "$1" 2>
 ## that do real work run nice inside too.
 fCtrRun(){   ## fCtrRun DIR RUN_ARG...
 	local engine="${TUKFS_DOCKER:-docker}" rc=0 cidfile="" f
-	local -a kept=()
+	local -a kept=() args=()
 	fStopCidfile "$1" || { echo "ctr-image: no dir for a cidfile" >&2; return 2; }
 	cidfile="${stop_cidfile}"
 	shift
+	## --keep-temp keeps the container, stopped, for a look after.
+	if [[ -n "${TUKFS_KEEP_TEMP:-}" ]]; then
+		for f in "$@"; do [[ "${f}" == --rm ]] || args+=("${f}"); done
+		set -- "${args[@]}"
+	fi
 	stop_cidfiles+=("${cidfile}")
 	"${engine}" run --cidfile "${cidfile}" --cpus "${CPU_CAP:-1}" --cpu-shares 256 "$@" || rc=$?
 	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
 	stop_cidfiles=("${kept[@]}")
+	if [[ -n "${TUKFS_KEEP_TEMP:-}" && -s "${cidfile}" ]]; then echo "[ kept (--keep-temp): container $(head -c 12 -- "${cidfile}") ]" >&2; fi
 	rm -f -- "${cidfile}"
 	return "${rc}"
 }

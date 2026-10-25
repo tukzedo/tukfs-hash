@@ -71,7 +71,7 @@ _remap="--remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}=/cargo"
 if [[ " ${RUSTFLAGS:-} " != *" ${_remap} "* ]]; then export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${_remap}"; fi
 
 ## Stage 1: format. FMT_CMD rewrites in place; FMT_CHECK_CMD fails on a diff
-## and is what --gate runs. rustfmt.toml has the style. Bash is never formatted.
+## and is what the merge gate and backlog runs run. rustfmt.toml has the style. Bash is never formatted.
 FMT_CMD=(cargo fmt)
 FMT_CHECK_CMD=(cargo fmt --check)
 
@@ -94,7 +94,7 @@ MARKDOWN_SKIP=(license.md)
 ## Every tracked .ps1, with PSScriptAnalyzerSettings.psd1 at the repo root.
 PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
 ## Every tracked .py, by cicd/ruff.toml's rules, then its format. A box
-## without ruff skips them with a note, even under --gate.
+## without ruff skips them with a note, even under the merge gate.
 PY_LINT_CMD=(ruff check --config cicd/ruff.toml --)
 PY_FMT_CHECK_CMD=(ruff format --check --config cicd/ruff.toml --)
 ## "label|command", eval'd after the rest. Every test prints its status line
@@ -119,7 +119,7 @@ IT_ROOTS=(
 
 ## Stage 4, last: the slow leak and memory checks, eval'd in order, quick ones
 ## first. A run with no flags runs them, and --quick only with --leakcheck.
-## --gate never does. Any report fails. The sanitizers, Miri and CodeQL run in
+## --backlog-run-quick only for a leak area. Any report fails. The sanitizers, Miri and CodeQL run in
 ## the image below when docker answers, else on the host with a note.
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it
@@ -160,7 +160,7 @@ CTR_CARGO_HOME="${LEAK_DIR}/cargo-home"
 ## The workload is a tree on ext4, with its database beside it, in a dir of
 ## this run's under PROFILE_ROOT, removed after. TUKFS_CICD_PROFILE_ROOT
 ## overrides it, and a root that isn't there falls back to the run's temp dir.
-## --quick and --gate leave the stage out.
+## --quick and --backlog-run-quick leave the stage out.
 PROFILE_ENABLE=1
 PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling --locked)
 PROFILE_BIN="target/profiling/${EXE_NAME}"
@@ -243,12 +243,33 @@ DOGFOOD_RUNNERS=(
 ## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
 ## the private dir beside the checkout, unless it's the same as the newest
 ## there, and copied to GIF_OUT when it differs.
-## No Pillow or font warns and passes. --quick and --gate leave it out.
+## No Pillow or font warns and passes. --quick and --backlog-run-quick leave
+## it out, and the merge gate and --backlog-run-full draw it into the temp dir.
 GIF_ENABLE=1
 GIF_SCENARIO="cicd/demo/scenario.toml"
 GIF_OUT="assets/demo.gif"
 GIF_ROTATE_DIR="${root}/../private/demo/gif"
 GIF_CMD='cicd/utility/demo-gif.bash "${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
+
+## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
+## A leak area keeps each leak check its text is in. With no area named it's
+## fmt, build, lint, unit and it.
+BACKLOG_AREAS=(
+	"fmt||the format check"
+	"build||the debug build"
+	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff and the test IDs"
+	"unit||the unit tests"
+	"it||the integration test, on a release build, once per test root"
+	"leak|cicd/utility/|every leak check"
+	"advisories|advisories.bash|known advisories in Cargo.lock"
+	"soak|soak.bash|the soak test"
+	"asan|--asan|the unit tests under ASan and LSan"
+	"tsan|--tsan|the unit tests under TSan"
+	"miri|--miri|the unit tests under Miri"
+	"codeql|codeql|CodeQL, about 11 minutes"
+	"profile||the profiler"
+	"release||the release builds, packages and release checks"
+)
 
 ## What --quick leaves out, each matched as plain text against one step of
 ## LEAKCHECK_STEPS, CROSS_TARGETS, RELEASE_CHECKS or IT_ROOTS. Nothing yet
@@ -292,3 +313,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: The release flag for build.rs.
 ##		- 2026-10-24: RUN_TMP_ROOT.
 ##		- 2026-10-25: The job count from the environment, not -j.
+##		- 2026-10-25: BACKLOG_AREAS.
