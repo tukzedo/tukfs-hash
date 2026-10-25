@@ -29,6 +29,19 @@
 
 ## Issues
 
+- Should the private cicd and dogfood checks run in the pipeline, with test IDs?
+	- ID: 2026102508462883
+	- Type: Task
+	- Status: Waiting for answers
+		- Waits on its question in questions.md.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-084628
+	- Opened by: 2026102416215932
+	- Related IDs: 2026102416215932
+	- Requirements  [Feature]:
+		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
+		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
+
 - CICD reset: CPU and priority
 	- ID: 2026102416215929
 	- Type: Task
@@ -217,20 +230,6 @@
 		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
 		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
 
-- CICD reset: a test for every Done item
-	- ID: 2026102416215932
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Prereq IDs: 2026102416215933
-		- New tests should get the new IDs.
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
-		- Add the missing tests where one could exist and would make sense.
-
 - CICD reset: temp files and safe removal
 	- ID: 2026102416215934
 	- Type: Task
@@ -276,6 +275,32 @@
 		- The IDs change to base 32 there, and `test-ids.py` has no command that lists them yet.
 	- Requirements  [Feature]:
 		- `--list` prints the steps and test IDs that the other flags given would run, and runs nothing. It prints the steps now.
+
+- CICD reset: a test for every Done item
+	- ID: 2026102416215932
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215933
+		- New tests should get the new IDs.
+	- Related IDs: 2026102508462883
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
+		- Add the missing tests where one could exist and would make sense.
+	- Progress log:
+		- 2026-10-25: All 12 have a `Test case` row. 2 name unit tests by ID and 1 the test ID check. The rest name the pipeline's own checks or the private checks that cover them, and say why none has an ID.
+		- 2026-10-25: New in the private tools folder: `dogfood-check.bash REPO`, for the dogfood runner's keep rules, a running version, a new build, the fixed name and the pass-through, and `report-check.bash REPO`, for `flame-report.py --check` and `lint-report.bash --check`.
+		- 2026-10-25: Verified: both pass, with 24 and 28 cases. With a fault put in a copy, the runner's check caught all 10 tried, and the reports' check 6 of 7. The one it missed, picking the newest graph by name, is the same as by stamp, since every name starts with it.
+	- Decisions:
+		- The 2 new checks aren't in CI and have no test IDs, like the round's other cicd checks. Whether they should move into the pipeline is asked on 2026102508462883.
+	- Swept: every Done item in the backlog for a missing `Test case` row. The 12 in the notes were all there were.
+	- Branch: round-20261025
+	- Test case: `dogfood-check.bash REPO` and `report-check.bash REPO`, in the private tools folder. The rest is backlog rows.
+	- Acceptance signoff: Self-closed: each row names what covers the item, and both new checks pass and fail on faults put in.
+	- Closed: 20261025-084735
 
 - CICD reset: test IDs
 	- ID: 2026102416215933
@@ -1002,6 +1027,7 @@
 		- 2026-10-23: The pipeline marks a build as a release when its commit is tagged `v<version>`. Any other stamped build gets the date, from the build number, in the viewer's time zone.
 		- 2026-10-23: Verified: the release check passes a dated build and a release build, and fails each one checked as the other, and a dated build that ignores the time zone. `--gate` passes.
 	- Branch: build-date
+	- Test case: `tests::version_dates_only_between_releases` (debjn). The release stage's `native --version shows the stamped build` check also fails a release that shows a date, or a build between releases that doesn't.
 	- Closed: 20261023-201500
 
 - The x86_64 release needs glibc 2.39, since it's built against this box's.
@@ -1020,6 +1046,7 @@
 		- 2026-10-23: Both targets build in a Debian 10 image, `cicd/container-release/`, through `cicd/utility/release-build.bash`. arm64 is cross-built there, so zig is no longer used.
 		- 2026-10-23: Verified: a full run passed. Both builds need glibc 2.28. A clean rebuild from another path gave the same bytes for both. The integration test passed on the x86_64 release build, and the arm64 unit tests passed under qemu. The glibc check failed on a host build that needs 2.39, and the arm64 test check failed on a planted failing test.
 	- Branch: glibc-gate
+	- Test case: none with an ID, since it's a check on each build rather than a test. The release stage's `no build needs a glibc newer than GLIBC_FLOOR` fails any build over 2.28, on every run that builds a release.
 	- Closed: 20261023-194500
 
 - The pre-push gate runs on every push, docs-only ones and pushes to `main` included.
@@ -1037,6 +1064,7 @@
 		- 2026-10-23: Docs are `.md` files and anything under `assets/`. A new remote branch, or a remote commit this clone doesn't have, still runs the gate.
 		- 2026-10-23: Verified: a docs-only push to `dev` and a push to `main` skipped it, and a code push to `dev` started it.
 	- Branch: glibc-gate
+	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder, checks the docs-only skip and the gate on `main`, as the hook has worked since 2026102416215930 changed which branch it gates. Not in CI, since it clones the repo and stubs the engine.
 	- Closed: 20261023-194500
 
 - A full cicd pipeline, per the directives' "CICD process" section.
@@ -1059,6 +1087,7 @@
 		- 2026-10-23: A demo gif with the same bytes as the newest one in `../private/demo/gif/` isn't rotated in. Verified: a second render of the same bytes was left out, and a changed one went in. The 2 extra copies already there were removed.
 		- 2026-10-23: A full run with no flags passed in 17 minutes: lint, unit tests, both integration roots (ext4 and ZFS), every leak check, the profiler, release builds and packages, dogfood and the gif. CodeQL is 11 of those minutes.
 	- Branch: cicd
+	- Test case: its 7 children's, and the full run itself, which runs every stage. `dogfood-check.bash REPO`, new in the private tools folder, covers the dogfood runner's keep rules above: the counts and sizes, a running version through a linked home, and the oldest and newest always kept.
 	- Closed: 20261023-164000
 
 - cicd release builds, packages and dogfood.
@@ -1083,6 +1112,7 @@
 		- 2026-10-23: Verified: a full run without publish passes in under 2 minutes, a run stopped during the arm64 build leaves no temp dir, copy or process, and `--gate` passes.
 	- Note: The ZFS integration test root was left out of these runs.
 	- Branch: cicd
+	- Test case: none with an ID. The release stage's 4 checks run on every release build: the stamped `--version`, each build's architecture, each package's files and bytes, and the glibc floor. `dogfood-check.bash REPO`, new in the private tools folder, covers the runner, a new build, the fixed name, and the arguments and exit code passed through. The same bytes from 2 checkouts was checked by hand, since checking it every run would build twice.
 	- Closed: 20261023-113500
 
 - cicd profiler stage and flamegraph report.
@@ -1107,6 +1137,7 @@
 		- 2026-10-23: Verified: `flame-report.py --check` printed NEW, then SEEN, and exits 2 on a missing dir, a file that isn't a graph, and one cut off.
 	- Note: Not done here: the session-start check in per-project memory, which lives outside the repo.
 	- Branch: cicd
+	- Test case: none with an ID. The profile stage's attribution check runs before every graph and fails the run on a wrong one. `report-check.bash REPO`, new in the private tools folder, covers `flame-report.py --check`: NEW, then SEEN, the marker, and exit 2 on a missing dir, a file that isn't a graph and one cut off.
 	- Closed: 20261023-151600
 
 - cicd demo gif.
@@ -1127,6 +1158,7 @@
 		- 2026-10-23: The scan's disk name is shown as sda. It was the real one, which changed between runs and redrew the gif each time.
 	- Note: Dogfood and the ZFS integration test root were left out of these runs.
 	- Branch: cicd
+	- Test case: none with an ID. `gen-demo-gif.py` fails the stage on every render that shows a temp path, or has a step with the wrong exit code.
 	- Closed: 20261023-153243
 
 - Test IDs for every test.
@@ -1144,6 +1176,7 @@
 		- 2026-10-23: Each time is from the first commit of the test's lines, or of its fn name when that's older. Tests from the same commit got the next free second, in file order. `cicd/utility/test-ids.py new` gives the next one.
 		- 2026-10-23: `test-ids.py check` is in the lint stage. Verified: the gate failed on a test with no ID and on 2 checks sharing one, and passed with both put back.
 	- Branch: cicd
+	- Test case: `test-ids.py check`, in the lint stage, as on 2026102416215933, which replaced this one's base 62 IDs.
 	- Closed: 20261023-155700
 
 - With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
@@ -1305,6 +1338,7 @@
 	- Note: About 21.7k files under `~/.synced/Dropbox` would get `user.blake3.*` xattrs. They already have `user.com.dropbox.attrs`. Whether Dropbox syncs other `user.*` xattrs, and so uploads every file again, wasn't checked. `--no-xattr ~/.synced` avoids it. The rmlint xattrs on about 122k Dropbox files suggest it's been fine before.
 	- Answer: Yes
 	- Actual fix: Nothing to change, since the scan already writes them there. A test checks a file with Dropbox's attribute gets ours and keeps its own, and design.md says why.
+	- Test case: `scan::tests::dropbox_files_get_attributes` (ddye5).
 	- Acceptance signoff: Self-closed: per the answer. The test fails when the scan skips such files.
 	- Closed: 20261014-104500
 
@@ -1330,6 +1364,7 @@
 		- 2026-10-23: Verified: with no docker, the sanitizers and Miri run on the host with a note, and CodeQL skips with one.
 	- Note: The ZFS integration test root was left out of these runs.
 	- Branch: cicd
+	- Test case: none with an ID, since each check is the test itself. CodeQL fails the run unless it reports the null read planted in its copy, every time. The others were each watched to fail once, in the progress log.
 	- Closed: 20261023-132127
 
 - cicd core: the engine, config, gate and pre-push hook.
@@ -1354,6 +1389,7 @@
 		- 2026-10-23: Verified: a run stopped part way, by TERM or Ctrl+C, leaves no temp dir, frozen copy or process behind. The stale build cache entries go, and the warm ones stay.
 		- 2026-10-23: Verified: `--gate`, `--quick --no-publish` and a full run without publish all pass, in under 2 minutes each, and a drifted pin warns.
 	- Branch: cicd
+	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
 - Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
@@ -2169,6 +2205,7 @@
 	- Progress log:
 		- 2026-10-23: Both files have an MD033 disable comment now, and design.md's table lines up. license.md is left out of the lint, since it's the GPL's own text.
 	- Branch: cicd
+	- Test case: none with an ID. The lint stage's markdownlint over every tracked `.md` but `license.md` fails on a recurrence.
 	- Closed: 20261023-103907
 
 - Each path is stored twice, once in `paths` and once in its unique index.
