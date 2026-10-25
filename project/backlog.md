@@ -294,13 +294,17 @@
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-070924
 	- Opened by: round-20261025
 	- Requirements  [Feature]:
 		- Several `Test case` rows give a check script's path under the private notes folder, by name. Say "in the private tools folder" instead, the way 2026102416215929 does.
 	- Estimated effort: Low
+	- Progress log:
+		- 2026-10-25: The 4 rows now give the script name, in the private tools folder.
+	- Test case: not applicable, a docs edit. `grep -c` finds no private path left in the backlog.
+	- Closed: 20261025
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -783,7 +787,7 @@
 		- A reader that quits early, such as `| head`, no longer stops the run, since the log's `tee` keeps going.
 	- Actual fix [Bug]: `fStopOnSignals` and `fBg` in `cicd/utility/include/stop-descendants.bash`, used by cicd.bash. `fSweepStale` goes by the PID alone, takes a frozen copy down through git, and runs at a run's start too.
 	- Branch: round-20261024, then round-20261024b
-	- Test case: `private/claude_simple/tools/cicd-stop-check.bash REPO [DELAY] [all|pipe|twice|ctrlc|killed]`. `pipe` and `killed` failed before the fix and pass after. `twice` failed before the first part. `ctrlc` passed before and after.
+	- Test case: `cicd-stop-check.bash REPO [DELAY] [all|pipe|twice|ctrlc|killed]`, in the private tools folder. `pipe` and `killed` failed before the fix and pass after. `twice` failed before the first part. `ctrlc` passed before and after.
 	- Closed: 20261024-093805
 
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
@@ -1335,7 +1339,7 @@
 		- 2026-10-24: Verified: the round full run at `26d49a5` passed every stage. 0vCUrb and 0vCUrc passed on ext4, on ZFS, and in the release stage on the x86_64 release build. The load during the run wasn't logged.
 	- Swept: step 7's `wait_started` comes after small writes, and by then step 5's files have been read. The lock holder's wait doesn't fail on a timeout. The profiler workload syncs already.
 	- Branch: round-20261024b
-	- Test case: `tests/integration.bash` 0vCUrb and 0vCUrc. With `wait_started` cut to 10 s, on btrfs `/tmp` at load 75 to 85, they failed before the fix and passed after. `private/claude_simple/tools/scan-start-delay.bash BINARY TMP_ROOT [ROUNDS] [nowrite|sync]` times the scan's start after the same write.
+	- Test case: `tests/integration.bash` 0vCUrb and 0vCUrc. With `wait_started` cut to 10 s, on btrfs `/tmp` at load 75 to 85, they failed before the fix and passed after. `scan-start-delay.bash BINARY TMP_ROOT [ROUNDS] [nowrite|sync]`, in the private tools folder, times the scan's start after the same write.
 	- Commit: `26d49a5`
 	- Closed: 20261024-103516
 
@@ -1360,7 +1364,7 @@
 		- 2026-10-24: Verified: before the fix, a TERM at 4 s left `tree/many` and its writer running. After, a TERM to the PID at 1, 2, 4, 7, 10, 13, 16 and 19 s, and to the whole group at 4 and 7 s, left no folder and nothing running. Those cover the hashing steps, the background scan stops, the read-only folders and the lock holder. Both full runs, ext4 and ZFS, pass and leave no folder. shellcheck passes on every tracked script.
 		- Swept: `cicd.bash` stops its descendants through `fRunTmpGone`, and the 4 leak and release scripts call `fStopDescendants`. `green-tree.bash` removes only single files. No other trap removes a folder.
 	- Branch: round-20261024
-	- Test case: `private/claude_simple/tools/it-stop-check.bash REPO [DELAY] [TMPDIR] [pid|group]`, since a stop test can't run inside the script it stops. It failed before the fix and passes after.
+	- Test case: `it-stop-check.bash REPO [DELAY] [TMPDIR] [pid|group]`, in the private tools folder, since a stop test can't run inside the script it stops. It failed before the fix and passes after.
 	- Closed: 20261024-080901
 
 - Rust unit tests leave `test_tukfs-hash_*` folders in TMPDIR when they fail or are stopped.
@@ -1684,7 +1688,7 @@
 	- Progress log:
 		- 2026-10-24: Verified: with every stage off, the frozen copy's run skips stage 2 under `--no-debug` and builds without it. The plan shows 6 leak checks, and 5 with `--no-codeql`, which the frozen copy's run is given too. `--gate` passes. `--gate --no-debug` passes and records no tree.
 		- Swept: every stage function in `cicd.bash` now has its own off flag. The help, the plan block, the frozen copy's options, README.md and design.md's leak check section were checked for both flags.
-	- Test case: no cicd test suite. `private/claude_simple/tools/cicd-noflags-check.bash` checks both flags.
+	- Test case: no cicd test suite. `cicd-noflags-check.bash`, in the private tools folder, checks both flags.
 	- Closed: 20261024-073118
 
 - The integration test has 3 copies of the byte-flip Python.
