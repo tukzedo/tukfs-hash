@@ -53,8 +53,8 @@
 ##	                       temp dir and goes nowhere
 ##	   --merge-gate        the same checks, which the pre-push hook runs on a
 ##	                       push to main. --ci is another name for it
-##	   --list              print the plan the other options make, and run
-##	                       nothing
+##	   --list              print the plan the other options make, and the
+##	                       test IDs its steps would print, and run nothing
 ##	   --no-container      run the steps that use an image on the host
 ##	   --no-remote         skip the other hosts. This pipeline has none
 ##	   --keep-temp         keep the run's temp dirs and containers, and print
@@ -149,6 +149,7 @@ fCpuCap
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
 RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); LINT_EXTRA=()
+TEST_ID_LIST_CMD=()
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
 PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
@@ -726,6 +727,39 @@ elif ((! inner_run)) && ((${#steps_off[@]})); then
 	## -q has no plan, so the count in the step lines would go unexplained.
 	_off="$(printf '%s; ' "${steps_off[@]}")"
 	fEcho_Clean "steps off: ${_off%; }"
+fi
+## fListIds SUITE WHAT WHERE...: the IDs a suite prints its status lines with,
+## and the steps that run it.
+fListIds(){
+	local ids where
+	local -a lines=()
+	ids="$("${TEST_ID_LIST_CMD[@]}" "$1")" || fDie "could not list the test IDs: ${TEST_ID_LIST_CMD[*]} $1"
+	[[ -z "${ids}" ]] || mapfile -t lines <<< "${ids}"
+	where="$(printf '%s; ' "${@:3}")"
+	fEcho_Clean "   ${2}, ${#lines[@]} IDs, in ${where%; }:"
+	((${#lines[@]} == 0)) || printf '      %s\n' "${lines[@]}"
+}
+if ((list_only)) && ((${#TEST_ID_LIST_CMD[@]})); then
+	declare -a _unitIn=() _itIn=()
+	if [[ -n "${step_no[tests]:-}" ]] && ((! unit_off)); then _unitIn+=("step ${step_no[tests]}, ${step_title[tests]}"); fi
+	if [[ -n "${step_no[tests]:-}" ]] && ((! it_off)) && ((${#IT_ROOTS[@]})); then
+		_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*}$([[ -d "${_r#*|}" ]] || echo ' (not there, so it skips)'), "; done
+		_itIn+=("step ${step_no[tests]}, ${step_title[tests]}, once on each of ${_its%, }")
+	fi
+	if [[ -n "${step_no[release]:-}" ]]; then
+		## A release check that runs IT_CMD prints the same lines again.
+		for _c in "${RELEASE_CHECKS[@]}"; do
+			if [[ "${_c#*|}" == *'${IT_CMD[@]}'* ]]; then _itIn+=("step ${step_no[release]}, ${step_title[release]}: ${_c%%|*}"); fi
+		done
+	fi
+	if ((${#_unitIn[@]} || ${#_itIn[@]})); then
+		fEcho_Clean "Test IDs, as each status line shows them:"
+		if ((${#_unitIn[@]})); then fListIds unit "unit tests" "${_unitIn[@]}"; fi
+		if ((${#_itIn[@]})); then fListIds it "integration test" "${_itIn[@]}"; fi
+	else
+		fEcho_Clean "Test IDs .......: (none in this run)"
+	fi
+	fEcho_Clean
 fi
 if ((list_only)); then
 	fEcho_Clean "--list: nothing was run"
@@ -1471,3 +1505,4 @@ exit 0
 ##		  closed by PASS or FAIL. Only the steps that run are counted, the
 ##		  frozen copy's included, and the plan lists the rest with the reason.
 ##		  A 79 character rule.
+##		- 2026-10-25: --list prints the test IDs too, from TEST_ID_LIST_CMD.

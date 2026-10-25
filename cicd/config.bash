@@ -113,6 +113,9 @@ LINT_EXTRA=(
 ## its own with its test ID.
 TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release --locked)
 IT_CMD=(tests/integration.bash)
+## For --list: the IDs and names TEST_CMD's tests print, given unit, and
+## IT_CMD's, given it.
+TEST_ID_LIST_CMD=(python3 cicd/utility/test-ids.py list)
 IT_ROOTS=(
 	"ext4|${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}"
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
@@ -316,3 +319,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: The job count from the environment, not -j.
 ##		- 2026-10-25: BACKLOG_AREAS.
 ##		- 2026-10-25: A stage off here is listed in the plan, not skipped in a line.
+##		- 2026-10-25: TEST_ID_LIST_CMD.

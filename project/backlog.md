@@ -266,7 +266,7 @@
 - `cicd.bash --list` prints the plan, but not the test IDs the run would print.
 	- ID: 2026102507210235
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-072102
 	- Opened by: round-20261025
@@ -275,6 +275,18 @@
 		- The IDs change to base 32 there, and `test-ids.py` has no command that lists them yet.
 	- Requirements  [Feature]:
 		- `--list` prints the steps and test IDs that the other flags given would run, and runs nothing. It prints the steps now.
+	- Progress log:
+		- 2026-10-25: `test-ids.py list [unit|it]` prints each test's ID and name as its status line has them. A unit test's name is libtest's path for it, the same 67 libtest lists. The soak test is behind its feature, so it's in neither.
+		- 2026-10-25: After the plan, `--list` prints the unit and integration IDs, each with the steps that run it: the tests step, once per test root, and the release check that runs the integration test again. A missing root says it skips. A run with neither prints `(none in this run)`. The command is `TEST_ID_LIST_CMD` in config.bash.
+		- 2026-10-25: Verified: the flags check passes with 13 new cases, and fails 8 of them on the engine from before, with the new `list` in place. `--backlog-run-quick fmt lint` passes.
+	- Decisions:
+		- The leak checks, the soak test and the arm64 unit tests print no status lines on a pass, only what failed, so they add no IDs to the list.
+		- An integration name built from a variable shows as written, such as `${part}`.
+	- Swept: every `fScan` caller in `test-ids.py`, and the `--list` plans in the private flags and steps checks, which both still pass.
+	- Branch: round-20261025
+	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder, its test ID cases. Not in CI, like the round's other cicd checks.
+	- Acceptance signoff: Self-closed: the list matches what each mode runs, and its check fails on the code from before.
+	- Closed: 20261025-085946
 
 - CICD reset: a test for every Done item
 	- ID: 2026102416215932
