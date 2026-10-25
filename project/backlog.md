@@ -231,21 +231,6 @@
 		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
 		- Add the missing tests where one could exist and would make sense.
 
-- CICD reset: test IDs
-	- ID: 2026102416215933
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Related IDs: 2026102309501606
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- It overrides 2026102309501606, which gave every test a base 62 ID in seconds.
-		- Convert every ID once, from the same times, to whole minutes since 2000-01-01 UTC in lower-case Crockford base 32. 2 that come out the same take the next free minute. `test-ids.py` and its check follow.
-		- `Test case` rows in the backlog that name an old ID get the new one.
-		- Each test prints one line in the shared form, `PASS <id> <name>`, `FAIL`, or `SKIP`. The integration test prints `ok` and `skip` now, plus the word integration.
-
 - CICD reset: temp files and safe removal
 	- ID: 2026102416215934
 	- Type: Task
@@ -292,6 +277,32 @@
 	- Requirements  [Feature]:
 		- `--list` prints the steps and test IDs that the other flags given would run, and runs nothing. It prints the steps now.
 
+- CICD reset: test IDs
+	- ID: 2026102416215933
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Related IDs: 2026102309501606
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides 2026102309501606, which gave every test a base 62 ID in seconds.
+		- Convert every ID once, from the same times, to whole minutes since 2000-01-01 UTC in lower-case Crockford base 32. 2 that come out the same take the next free minute. `test-ids.py` and its check follow.
+		- `Test case` rows in the backlog that name an old ID get the new one.
+		- Each test prints one line in the shared form, `PASS <id> <name>`, `FAIL`, or `SKIP`. The integration test prints `ok` and `skip` now, plus the word integration.
+	- Progress log:
+		- 2026-10-25: All 216 IDs are 5 characters of lower-case Crockford base 32, in whole minutes since 2000-01-01 UTC, from the same times as before. 194 of them took a later free minute, 59 at most. `test-ids.py` reads, checks and hands out the new form, and `when` gives the minute.
+		- 2026-10-25: The Rust tests and the integration test print `PASS <id> <name>`, `FAIL` or `SKIP`, with no `rust` or `integration` word. The 2 rmlint skips keep their checks' IDs.
+		- 2026-10-25: The `Test case` rows of 2026102507222620 and 2026102409041301 name the new IDs. Their titles and output quotes keep the old ones, as written then.
+		- 2026-10-25: Verified: `--backlog-run-quick` passed in 3m 39s at load 40, with 363 `PASS` lines, 67 unit tests and 148 checks each on ext4 and ZFS. `test-ids.py check` failed on an old base 62 ID, on `i` and `u`, which Crockford leaves out, on a future ID, on one older than the repo, on a shared ID, and on a skip with no check's ID.
+	- Swept: every `test_id(` in `src/`, every check, expect and skip in `tests/integration.bash`, and the line readers in `cicd/`. Nothing parsed the old `ok` form. `lint-report.bash` still reads `FAIL` at a line start. The private check scripts print their own lines and aren't CI tests.
+	- Branch: round-20261025
+	- Commit: `9f8e465`
+	- Test case: `test-ids.py check`, in the lint stage. Each test's status line is in every run's output.
+	- Acceptance signoff: Self-closed: a mechanical change, with the check and both test suites passing.
+	- Closed: 20261025-082551
+
 - Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
 	- ID: 2026102507222620
 	- Type: Bug
@@ -314,7 +325,7 @@
 	- Swept: Step 7's stop needs only the lock held, so it has nothing to wait for. The test's other waits are bounded polls. No other test or cicd script stops a scan after a fixed sleep.
 	- Branch: round-20261025
 	- Commit: fd5637a
-	- Test case: `tests/integration.bash` 0vCUrc, and new 0vGnUm. `it-starve-check.bash TEST BINARY TMPDIR [CPU]`, in the private tools folder, runs a test with step 5's scan held back. `stop-window.bash BINARY TMP_ROOT [ROUNDS] [old|fd|db|full]`, there too, reruns just the stop.
+	- Test case: `tests/integration.bash` ddx16, and new dednm. `it-starve-check.bash TEST BINARY TMPDIR [CPU]`, in the private tools folder, runs a test with step 5's scan held back. `stop-window.bash BINARY TMP_ROOT [ROUNDS] [old|fd|db|full]`, there too, reruns just the stop.
 	- Acceptance signoff: Self-closed: a test-only fix, failing before and passing after.
 	- Closed: 20261025-075434
 
@@ -1366,7 +1377,7 @@
 		- 2026-10-24: Verified: the round full run at `26d49a5` passed every stage. 0vCUrb and 0vCUrc passed on ext4, on ZFS, and in the release stage on the x86_64 release build. The load during the run wasn't logged.
 	- Swept: step 7's `wait_started` comes after small writes, and by then step 5's files have been read. The lock holder's wait doesn't fail on a timeout. The profiler workload syncs already.
 	- Branch: round-20261024b
-	- Test case: `tests/integration.bash` 0vCUrb and 0vCUrc. With `wait_started` cut to 10 s, on btrfs `/tmp` at load 75 to 85, they failed before the fix and passed after. `scan-start-delay.bash BINARY TMP_ROOT [ROUNDS] [nowrite|sync]`, in the private tools folder, times the scan's start after the same write.
+	- Test case: `tests/integration.bash` ddx15 and ddx16. With `wait_started` cut to 10 s, on btrfs `/tmp` at load 75 to 85, they failed before the fix and passed after. `scan-start-delay.bash BINARY TMP_ROOT [ROUNDS] [nowrite|sync]`, in the private tools folder, times the scan's start after the same write.
 	- Commit: `26d49a5`
 	- Closed: 20261024-103516
 
