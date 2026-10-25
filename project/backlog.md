@@ -248,6 +248,17 @@
 		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
 
+- Test case rows name a private folder by its full path.
+	- ID: 2026102507092407
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-070924
+	- Opened by: round-20261025
+	- Requirements  [Feature]:
+		- Several `Test case` rows give a check script's path under the private notes folder, by name. Say "in the private tools folder" instead, the way 2026102416215929 does.
+	- Estimated effort: Low
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
