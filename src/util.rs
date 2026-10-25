@@ -216,7 +216,7 @@ mod tests {
 
 	#[test]
 	fn b64u_round_trip() {
-		let _id = test_id("0vCUr2");
+		let _id = test_id("ddx02");
 		for len in 0..70 {
 			let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
 			let text = b64u_encode(&data);
@@ -227,7 +227,7 @@ mod tests {
 
 	#[test]
 	fn b64u_matches_nemo_sample() {
-		let _id = test_id("0vCUr3");
+		let _id = test_id("ddx03");
 		// A 32-byte digest is 43 characters, as nemo-anywhere stores it.
 		let text = b"QCVLFYZQYGbOC-KOfkdZGj3e65bov-K1c1EWf3JLim0";
 		let raw = b64u_decode(text).unwrap();
@@ -237,7 +237,7 @@ mod tests {
 
 	#[test]
 	fn b64u_rejects_junk() {
-		let _id = test_id("0vCUr4");
+		let _id = test_id("ddx04");
 		assert!(b64u_decode(b"abc=").is_none());
 		assert!(b64u_decode(b"a").is_none());
 		assert!(b64u_decode(b"ab+/").is_none());
@@ -247,7 +247,7 @@ mod tests {
 
 	#[test]
 	fn hex_round_trip() {
-		let _id = test_id("0vCUr5");
+		let _id = test_id("ddx05");
 		let data = [0u8, 1, 0xab, 0xff];
 		assert_eq!(hex(&data), "0001abff");
 		assert_eq!(unhex(b"0001abff").unwrap(), data);
@@ -258,7 +258,7 @@ mod tests {
 
 	#[test]
 	fn trims_values() {
-		let _id = test_id("0vCUr6");
+		let _id = test_id("ddx06");
 		assert_eq!(trim_value(b"abc\0"), b"abc");
 		assert_eq!(trim_value(b"12\n"), b"12");
 		assert_eq!(trim_value(b"\0"), b"");
@@ -267,7 +267,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
 	fn dates() {
-		let _id = test_id("0vCUr7");
+		let _id = test_id("ddx07");
 		let d = parse_date("2026-10-13").unwrap();
 		assert_eq!(local_midnight_us(d + 5 * 3600 * 1_000_000), d);
 		assert!(fmt_local(d).starts_with("2026-10-13 00:00:00"));
@@ -282,7 +282,7 @@ mod tests {
 
 	#[test]
 	fn escapes_names() {
-		let _id = test_id("0vCnrk");
+		let _id = test_id("ddy60");
 		assert_eq!(escape_name(b"plain name.txt"), "plain name.txt");
 		assert_eq!(escape_name("caf\u{e9}".as_bytes()), "caf\u{e9}");
 		assert_eq!(escape_name(b"caf\xe9"), "caf\\xe9");
@@ -294,7 +294,7 @@ mod tests {
 	// Pinned, since rmlint's xattr bytes and the listed names depend on them.
 	#[test]
 	fn hex_and_escape_pinned() {
-		let _id = test_id("0vG4Vc");
+		let _id = test_id("deavj");
 		let all: Vec<u8> = (0..=255).collect();
 		let want = all
 			.iter()

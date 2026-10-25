@@ -1716,7 +1716,7 @@ mod tests {
 
 	#[test]
 	fn a_match_is_not_read_again() {
-		let _id = test_id("0vCo6m");
+		let _id = test_id("ddy6h");
 		let p = prior(1);
 		let v = judge(&refs(Some(1), Some(&p)), sums(1), || panic!("read again")).unwrap();
 		assert!(matches!(v, Verdict::Clean(s) if s == sums(1)));
@@ -1727,7 +1727,7 @@ mod tests {
 
 	#[test]
 	fn a_second_read_tells_cache_from_disk() {
-		let _id = test_id("0vCo6n");
+		let _id = test_id("ddy6j");
 		let p = prior(1);
 		let r = refs(Some(1), Some(&p));
 		// Right the second time: only the first read was bad.
@@ -1763,7 +1763,7 @@ mod tests {
 
 	#[test]
 	fn each_record_is_checked() {
-		let _id = test_id("0vCo6o");
+		let _id = test_id("ddy6k");
 		let p = prior(1);
 		// The database agrees, the attribute doesn't.
 		let r = refs(Some(2), Some(&p));
@@ -1782,7 +1782,7 @@ mod tests {
 
 	#[test]
 	fn exit_bits_add_up() {
-		let _id = test_id("0vCo6p");
+		let _id = test_id("ddy6m");
 		let c =
 			|k: &[&str]| -> Vec<(String, i64)> { k.iter().map(|k| (k.to_string(), 1)).collect() };
 		assert_eq!(exit_bits(&c(&[])), 0);
@@ -1823,7 +1823,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_group_with_no_workers_ends() {
-		let _id = test_id("0vCp8h");
+		let _id = test_id("ddy8f");
 		let dir = scratch("scan_noworkers");
 		for i in 0..1500 {
 			File::create(dir.join(format!("f{i}"))).unwrap();
@@ -1853,7 +1853,7 @@ mod tests {
 	// ntfs3 answers EOPNOTSUPP for compressed and EFS files. That's not damage.
 	#[test]
 	fn unsupported_read_is_not_damage() {
-		let _id = test_id("0vDFgV");
+		let _id = test_id("ddzxh");
 		let (sh, rx) = test_shared(PathBuf::from("/nowhere"));
 		let st = Stats::default();
 		let p = Path::new("/x/vss_ps.dll");
@@ -1876,7 +1876,7 @@ mod tests {
 
 	#[test]
 	fn a_panic_is_a_fault() {
-		let _id = test_id("0vCp8i");
+		let _id = test_id("ddy8g");
 		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
 		let done = AtomicBool::new(false);
 		std::thread::scope(|s| {
@@ -1900,7 +1900,7 @@ mod tests {
 	// through, or the run aborts, hangs, or isn't marked failed.
 	#[test]
 	fn a_poisoned_lock_is_still_a_fault() {
-		let _id = test_id("0vG4ss");
+		let _id = test_id("deawa");
 		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
 		let (dtx, drx) = std::sync::mpsc::channel();
 		std::thread::spawn(move || {
@@ -1936,7 +1936,7 @@ mod tests {
 
 	#[test]
 	fn roots_key_ignores_order() {
-		let _id = test_id("0vCo6q");
+		let _id = test_id("ddy6n");
 		let g = |rs: &[&str]| vec![("g".to_string(), rs.iter().map(PathBuf::from).collect(), 1)];
 		let a = roots_key(&[g(&["/b", "/a"]), g(&["/c"])].concat());
 		let b = roots_key(&[g(&["/c"]), g(&["/a", "/b"])].concat());
@@ -1982,7 +1982,7 @@ mod tests {
 	// after the scan started. /dev/shm is its own mount on most boxes.
 	#[test]
 	fn the_walk_stays_on_the_root_device() {
-		let _id = test_id("0vCpSN");
+		let _id = test_id("ddy94");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
 		};
@@ -2010,7 +2010,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_swapped_folder_is_not_followed() {
-		let _id = test_id("0vCpSO");
+		let _id = test_id("ddy95");
 		let d = scratch("scan_swap");
 		let (root, outside) = (d.join("root"), d.join("outside"));
 		fs::create_dir_all(&root).unwrap();
@@ -2030,7 +2030,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn skipped_links_count_down() {
-		let _id = test_id("0vCpSP");
+		let _id = test_id("ddy96");
 		let d = scratch("scan_links");
 		fs::write(d.join("a"), "linked").unwrap();
 		fs::hard_link(d.join("a"), d.join("b")).unwrap();
@@ -2070,7 +2070,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn nothing_written_on_a_hands_off_device() {
-		let _id = test_id("0vCqJU");
+		let _id = test_id("ddyas");
 		let d = scratch("scan_handsoff");
 		fs::write(d.join("a"), "win").unwrap();
 		fs::write(d.join("b"), "mac").unwrap();
@@ -2099,7 +2099,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn dropbox_files_get_attributes() {
-		let _id = test_id("0vCs19");
+		let _id = test_id("ddye5");
 		let d = scratch("scan_dropbox");
 		fs::write(d.join("a"), "synced").unwrap();
 		let dbx = c"user.com.dropbox.attrs";
@@ -2131,7 +2131,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_only_with_the_flag() {
-		let _id = test_id("0vEgnh");
+		let _id = test_id("de5fz");
 		let d = scratch("scan_rmlint");
 		for f in ["plain", "flagged", "stale", "git"] {
 			fs::write(d.join(f), f).unwrap();
@@ -2178,7 +2178,7 @@ mod tests {
 	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
 	#[test]
 	fn b2b_matches_known_digests() {
-		let _id = test_id("0vG4LU");
+		let _id = test_id("deav7");
 		let d = scratch("scan_b2b_vectors");
 		let long: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
 		let cases: [(&[u8], &str); 3] = [
@@ -2220,7 +2220,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "O_DIRECT isn't modelled, and 1 MB reads")]
 	fn direct_reads_hash_every_byte() {
-		let _id = test_id("0vGJvz");
+		let _id = test_id("debte");
 		let d = scratch("scan_direct_reads");
 		let stop = AtomicBool::new(false);
 		let counted = AtomicU64::new(0);
@@ -2256,7 +2256,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "2^18 entries; over 15 min under Miri, and safe code")]
 	fn the_link_map_is_capped() {
-		let _id = test_id("0vCpSQ");
+		let _id = test_id("ddy97");
 		let mut m = LinkMap::default();
 		let v = (1, 1, sums(1));
 		for i in 0..LINKS_KEPT as u64 + 10 {
@@ -2296,7 +2296,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn resume_takes_only_the_statuses_it_knows() {
-		let _id = test_id("0vG4fd");
+		let _id = test_id("deaw0");
 		for s in ["stopped", "failed", "running", "killed"] {
 			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);
 			assert!(r.is_ok(), "{s}: {:?}", r.err());

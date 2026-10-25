@@ -7,7 +7,9 @@
 ##	Purpose:
 ##		What the leak checks share. Set me to the calling script's dir, then
 ##		source this. It sets root, here (cicd/), CPU_CAP and in_image, and
-##		sources config.bash, stop-descendants.bash and scratch.bash.
+##		sources config.bash, stop-descendants.bash, scratch.bash and
+##		cpu-cap.bash. CPU_CAP is a quarter of the cores, since the leak checks
+##		are heavy, and the script runs at nice 19 with idle I/O.
 ##			fLeakInImage NAME SCRIPT RW [ARG...]
 ##			                    run SCRIPT ARG... in the leak check image and
 ##			                    exit with its exit, when docker answers and
@@ -28,11 +30,10 @@
 root="$(cd -- "${me:?}/../.." && pwd)"
 here="${root}/cicd"
 cd "${root}" || exit 2
-if [[ ! "${CPU_CAP:-}" =~ ^[1-9][0-9]{0,3}$ ]]; then
-	CPU_CAP=$(( $(nproc 2>/dev/null || echo 2) / 2 ))
-	if ((CPU_CAP < 1)); then CPU_CAP=1; fi
-fi
-export CPU_CAP PATH="${HOME}/.cargo/bin:${PATH}"
+source "${here}/utility/include/cpu-cap.bash"
+fCpuLow
+fCpuCap heavy
+export PATH="${HOME}/.cargo/bin:${PATH}"
 in_image=0
 if [[ -n "${TUKFS_IN_IMAGE:-}" ]]; then in_image=1; fi
 source "${here}/utility/include/stop-descendants.bash"
@@ -71,3 +72,5 @@ fLeakInImage(){
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-10-25: A quarter of the cores, through cpu-cap.bash, at low
+##		  priority.

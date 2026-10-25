@@ -31,7 +31,7 @@
 ##		From shcl's cicd/utility/codeql-scan.bash.
 ##	Syntax:
 ##		codeql-scan.bash
-##		CPU_CAP caps the threads (default half the cores).
+##		CPU_CAP caps the threads (default a quarter of the cores).
 ##	Exit: 0 = clean, 1 = a finding, a missed bait, a dropped file or a bad
 ##	      suppression, 2 = could not run.
 ##	History: At bottom of script.
@@ -222,3 +222,4 @@ echo "codeql-scan: OK: nothing found in our code or the crates, the bait was cau
 ##	History:
 ##		- 2026-10-23: Copied from shcl's, for Rust alone, over the vendored tree.
 ##		- 2026-10-23: The profiling build's crates are left out of the copy.
+##		- 2026-10-25: A quarter of the cores by default.

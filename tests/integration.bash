@@ -58,10 +58,10 @@ mkdir -p "${tree}" "${work}/db"
 # Every check starts with its test ID, and its status line shows it. A new
 # one takes its ID from `cicd/utility/test-ids.py new`.
 fails=0
-fLine() { printf '%-4s %s integration %s\n' "${1}" "${2}" "${3}"; }
-ok()   { fLine ok "${1}" "${2}"; }
+fLine() { printf '%s %s %s\n' "${1}" "${2}" "${3}"; }
+ok()   { fLine PASS "${1}" "${2}"; }
 bad()  { fLine FAIL "${1}" "${2}"; fails=$((fails + 1)); }
-skip() { fLine skip "${1}" "${2}"; }
+skip() { fLine SKIP "${1}" "${2}"; }
 # expect ID OK FAIL STATUS, or expect ID OK FAIL COMMAND... A bare false [[ ]]
 # trips set -e, so its status is caught first: st=0; [[ ... ]] || st=1
 expect() {
@@ -80,6 +80,9 @@ tomorrow="$(date -d tomorrow +%Y-%m-%d)"
 # Waits up to 10 s for a scan to say it has started, rather than guessing.
 # Up to 60 s, since a loaded box has taken more than 10 to get going.
 wait_started() { for _ in $(seq 1 1200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
+# wait_reached PID DIR: up to 60 s for a scan to have a file under DIR open.
+# Fails at once if it has ended, since a zombie has no fds.
+wait_reached() { for _ in $(seq 1 1200); do [[ -e "/proc/${1}/fd/1" ]] || return 1; [[ -n "$(find "/proc/${1}/fd" -lname "${2}/*" -print -quit 2> /dev/null)" ]] && return 0; sleep 0.05; done; return 1; }
 
 # Varied names, sizes and dates.
 : > "${tree}/empty"
@@ -109,29 +112,29 @@ setfattr -n user.rmlint.blake2b.mtime -v "1000.5" "${tree}/rm-stale.txt"
 
 # 1. First pass hashes everything and leaves attributes.
 rc="$(scan)"
-check 0vCUrA "first scan exit" "${rc}" 0
-check 0vCUrB "paths recorded" "$(q 'SELECT count(*) FROM paths')" $((9 + odd))
+check ddx0a "first scan exit" "${rc}" 0
+check ddx0b "paths recorded" "$(q 'SELECT count(*) FROM paths')" $((9 + odd))
 # Counts reads, since a second name can skip through the first's fresh attribute.
-check 0vCUrC "hard link read once" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed $((8 + odd))"
-check 0vCUrD "empty file digest" "$(xget "${tree}/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
-check 0vCUrE "size attribute" "$(xget "${tree}/small.txt" user.blake3.bytes)" 6
-check 0vCUrF "mtime attribute in microseconds" "$(xget "${tree}/small.txt" user.blake3.mtime)" "$(date -d '2020-02-03 04:05:06.123456' +%s)123456"
-st=0; [[ -n "$(xget "${tree}/small.txt" user.blake3.date)" ]] || st=1; expect 0vCUrG "date attribute" "date attribute missing" "${st}"
-check 0vCUrH "no attributes in a git work tree" "$(xget "${tree}/repo/src/main.c" user.blake3.b64u)" ""
-check 0vCUrI "no attributes inside .git" "$(xget "${tree}/repo/.git/objects/ab" user.blake3.b64u)" ""
-check 0vCUrJ "git files still recorded" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/repo/%'")" 2
-check 0vCUrK "non-UTF-8 name stored as blob" "$(q "SELECT count(*) FROM paths WHERE typeof(path) = 'blob'")" "${odd}"
-check 0vCUrL "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "${work}/out.txt" | head -1)" "b2b 1"
-check 0vCUrM "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
-check 0vCUrN "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
-check 0vCUrO "no events" "$(q 'SELECT count(*) FROM events')" 0
-check 0vCUrP "file handed back readable" "$(stat -c %U "${db}")" "$(id -un)"
-st=0; [[ ! -e "${db}-wal" ]] || st=1; expect 0vCUrQ "database left in rollback mode" "WAL file left behind" "${st}"
+check ddx0c "hard link read once" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed $((8 + odd))"
+check ddx0d "empty file digest" "$(xget "${tree}/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
+check ddx0e "size attribute" "$(xget "${tree}/small.txt" user.blake3.bytes)" 6
+check ddx0f "mtime attribute in microseconds" "$(xget "${tree}/small.txt" user.blake3.mtime)" "$(date -d '2020-02-03 04:05:06.123456' +%s)123456"
+st=0; [[ -n "$(xget "${tree}/small.txt" user.blake3.date)" ]] || st=1; expect ddx0g "date attribute" "date attribute missing" "${st}"
+check ddx0h "no attributes in a git work tree" "$(xget "${tree}/repo/src/main.c" user.blake3.b64u)" ""
+check ddx0j "no attributes inside .git" "$(xget "${tree}/repo/.git/objects/ab" user.blake3.b64u)" ""
+check ddx0k "git files still recorded" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/repo/%'")" 2
+check ddx0m "non-UTF-8 name stored as blob" "$(q "SELECT count(*) FROM paths WHERE typeof(path) = 'blob'")" "${odd}"
+check ddx0n "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "${work}/out.txt" | head -1)" "b2b 1"
+check ddx0p "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
+check ddx0q "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
+check ddx0r "no events" "$(q 'SELECT count(*) FROM events')" 0
+check ddx0s "file handed back readable" "$(stat -c %U "${db}")" "$(id -un)"
+st=0; [[ ! -e "${db}-wal" ]] || st=1; expect ddx0t "database left in rollback mode" "WAL file left behind" "${st}"
 
 # 2. Same day: nothing read again.
 rc="$(scan)"
-check 0vCUrR "second scan exit" "${rc}" 0
-check 0vCUrS "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed 0"
+check ddx0v "second scan exit" "${rc}" 0
+check ddx0w "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed 0"
 
 # 3. Change bytes, put the time back. All three references must notice.
 digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${1}'"; }
@@ -140,39 +143,39 @@ db_before="$(digest_of "${tree}/big.bin")"
 # rm.txt is 16 bytes, so its flip starts half way and runs off the end.
 fFlipByte "${tree}/big.bin" 1048592 0x5A 16; fFlipByte "${tree}/rm.txt" 8 0x5A 16
 rc="$(scan --since "${tomorrow}")"
-check 0vCUrT "corruption exit code" "${rc}" 4
+check ddx0x "corruption exit code" "${rc}" 4
 # big.bin's hard link is held to its own records too.
-check 0vCUrU "xattr mismatch found" "$(q "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${tree}/big.bin ${tree}/rm.txt ${tree}/sub dir/big-link.bin"
-check 0vCUrV "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 3
-check 0vCUrW "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2b-rmlint-mismatch'")" "${tree}/rm.txt"
+check ddx0y "xattr mismatch found" "$(q "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${tree}/big.bin ${tree}/rm.txt ${tree}/sub dir/big-link.bin"
+check ddx0z "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 3
+check ddx10 "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2b-rmlint-mismatch'")" "${tree}/rm.txt"
 "${bin}" report --db "${db}" > "${work}/report.txt"
-expect 0vCUrX "report lists it" "report misses big.bin" grep -q $'^b3-xattr-mismatch\t'"${tree}/big.bin" "${work}/report.txt"
-check 0vCUrY "unchanged attributes keep their digest" "$(xget "${tree}/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
+expect ddx11 "report lists it" "report misses big.bin" grep -q $'^b3-xattr-mismatch\t'"${tree}/big.bin" "${work}/report.txt"
+check ddx12 "unchanged attributes keep their digest" "$(xget "${tree}/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
 # The stored checksums stay, so the next run reports the same again, until
 # the files are accepted.
-check 0vCo6r "damaged attribute kept" "$(xget "${tree}/big.bin" user.blake3.b64u)" "${x_before}"
-check 0vCo6s "damaged database row kept" "$(digest_of "${tree}/big.bin")" "${db_before}"
+check ddy6p "damaged attribute kept" "$(xget "${tree}/big.bin" user.blake3.b64u)" "${x_before}"
+check ddy6q "damaged database row kept" "$(digest_of "${tree}/big.bin")" "${db_before}"
 last_run() { q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) ${1}"; }
 rc="$(scan --since "${tomorrow}")"
-check 0vCo6t "reported again on the next run" "${rc} $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
-check 0vCo6u "attribute still kept" "$(xget "${tree}/big.bin" user.blake3.b64u)" "${x_before}"
+check ddy6r "reported again on the next run" "${rc} $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
+check ddy6s "attribute still kept" "$(xget "${tree}/big.bin" user.blake3.b64u)" "${x_before}"
 rc=0; (cd "${tree}" && "${bin}" accept --db "${db}" ./big.bin "sub dir/big-link.bin" rm.txt) > "${work}/accept.txt" 2>&1 || rc=$?
-check 0vCo6v "accept exit" "${rc}" 0
-check 0vCo6w "accept logged" "$(last_run "AND kind = 'accepted'")" 3
-expect 0vCo6x "accept names the other link" "accept output: $(cat "${work}/accept.txt")" grep -q '1 other name' "${work}/accept.txt"
-st=0; [[ "$(xget "${tree}/big.bin" user.blake3.b64u)" != "${x_before}" ]] || st=1; expect 0vCo6y "accept replaced the attribute" "attribute unchanged" "${st}"
-check 0vCo6z "accept dropped rmlint's old checksum" "$(xget "${tree}/rm.txt" user.rmlint.blake2b.cksum)" ""
+check ddy6t "accept exit" "${rc}" 0
+check ddy6v "accept logged" "$(last_run "AND kind = 'accepted'")" 3
+expect ddy6w "accept names the other link" "accept output: $(cat "${work}/accept.txt")" grep -q '1 other name' "${work}/accept.txt"
+st=0; [[ "$(xget "${tree}/big.bin" user.blake3.b64u)" != "${x_before}" ]] || st=1; expect ddy6x "accept replaced the attribute" "attribute unchanged" "${st}"
+check ddy6y "accept dropped rmlint's old checksum" "$(xget "${tree}/rm.txt" user.rmlint.blake2b.cksum)" ""
 rc=0; "${bin}" accept --db "${db}" "${tree}/sub dir" "${tree}/small.txt" > /dev/null 2>&1 || rc=$?
-check 0vCo70 "accept of a folder fails" "${rc}" 1
+check ddy6z "accept of a folder fails" "${rc}" 1
 rc="$(scan --since "${tomorrow}")"
-check 0vCo71 "clean after accept" "${rc} $(last_run "")" "0 0"
+check ddy70 "clean after accept" "${rc} $(last_run "")" "0 0"
 
 # 4. A real edit moves the time and is not a mismatch.
 sleep 0.01
 printf 'edited\n' >> "${tree}/small.txt"
 rc="$(scan --since "${tomorrow}")"
-check 0vCUrZ "edit is not corruption" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '${tree}/small.txt'")" 0
-check 0vCUra "edit updates the size attribute" "$(xget "${tree}/small.txt" user.blake3.bytes)" 13
+check ddx13 "edit is not corruption" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '${tree}/small.txt'")" 0
+check ddx14 "edit updates the size attribute" "$(xget "${tree}/small.txt" user.blake3.bytes)" 13
 
 # 5. Stop part way, then resume. A damaged file in the top folder is read
 # before the stop, and the stop and the resumed part both have to say so.
@@ -185,25 +188,27 @@ runs_before="$(q 'SELECT count(*) FROM runs')"
 fFlipByte "${tree}/rm-stale.txt" 0 1
 "${bin}" scan --db "${db}" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
 pid=$!
-expect 0vCUrb "scan started" "scan never started" wait_started "${work}/stop.txt"
-sleep 0.1
+expect ddx15 "scan started" "scan never started" wait_started "${work}/stop.txt"
+# A fixed 0.1 s was sometimes too soon at load 30. The one worker takes files
+# before folders, so once it's in many/ it has judged rm-stale.txt.
+expect dednm "scan got past the top folder" "scan never opened a file in many/" wait_reached "${pid}" "${tree}/many"
 kill -INT "${pid}"
 rc=0; wait "${pid}" || rc=$?
 # A stop adds 2 to what was found before it.
-check 0vCUrc "stopped exit code, with the damage found" "${rc}" 6
-check 0vCUrd "run marked stopped" "$(q 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" stopped
+check ddx16 "stopped exit code, with the damage found" "${rc}" 6
+check ddx17 "run marked stopped" "$(q 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" stopped
 part="$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")"
-st=0; [[ "${part}" =~ ^[0-9]+$ && "${part}" -lt 400 ]] || st=1; expect 0vCUre "stopped before the end (${part} of 400)" "did not stop early (${part})" "${st}"
+st=0; [[ "${part}" =~ ^[0-9]+$ && "${part}" -lt 400 ]] || st=1; expect ddx18 "stopped before the end (${part} of 400)" "did not stop early (${part})" "${st}"
 rc="$(scan --resume)"
 # The damage found before the stop still counts.
-check 0vCUrf "resume exit" "${rc}" 4
-check 0vCUrg "resume didn't report it twice" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '${tree}/rm-stale.txt'")" 2
-expect 0vCUrh "summary counts the whole run" "summary: $(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1, b3-xattr-mismatch 1$' <<< "$(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
-check 0vCUri "resume finished the rest" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")" 400
-check 0vCUrj "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_before + 1))"
+check ddx19 "resume exit" "${rc}" 4
+check ddx1a "resume didn't report it twice" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '${tree}/rm-stale.txt'")" 2
+expect ddx1b "summary counts the whole run" "summary: $(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1, b3-xattr-mismatch 1$' <<< "$(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
+check ddx1c "resume finished the rest" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")" 400
+check ddx1d "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_before + 1))"
 skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2)"
-st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect 0vCUrk "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
-check 0vCUrl "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
+st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect ddx1e "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
+check ddx1f "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
 
 # 6. snapdiff: same size and time, different bytes.
 mkdir -p "${work}/old" "${work}/new"
@@ -215,19 +220,19 @@ touch -d '2001-01-01' "${work}/old/c"
 fFlipByte "${work}/new/a" 4096 255 16
 printf 'a\nb\nc\nmissing\n' > "${work}/list"
 rc=0; "${bin}" snapdiff --old "${work}/old" --new "${work}/new" --list "${work}/list" > "${work}/sd.txt" 2> /dev/null || rc=$?
-check 0vCUrm "snapdiff exit" "${rc}" 4
-check 0vCUrn "snapdiff flags only a" "$(cut -f1,2 "${work}/sd.txt")" $'content-changed-same-mtime\ta'
-expect 0vCUro "snapdiff run detail" "snapdiff detail: $(cat "${work}/sd.txt")" grep -q '16 bytes differ in 1 run(s), 1 starting on a 16-byte boundary: 4096+16' "${work}/sd.txt"
+check ddx1g "snapdiff exit" "${rc}" 4
+check ddx1h "snapdiff flags only a" "$(cut -f1,2 "${work}/sd.txt")" $'content-changed-same-mtime\ta'
+expect ddx1j "snapdiff run detail" "snapdiff detail: $(cat "${work}/sd.txt")" grep -q '16 bytes differ in 1 run(s), 1 starting on a 16-byte boundary: 4096+16' "${work}/sd.txt"
 
 # 7. A second scan of the same database is refused while one runs.
 "${bin}" scan --db "${db}" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/first.txt" 2>&1 &
 pid=$!
-expect 0vCUrp "scan started" "scan never started" wait_started "${work}/first.txt"
+expect ddx1k "scan started" "scan never started" wait_started "${work}/first.txt"
 rc=0; "${bin}" scan --db "${db}" --root "${tree}" > "${work}/lock.txt" 2>&1 || rc=$?
 kill -INT "${pid}" 2> /dev/null || true
 wait "${pid}" || true
-check 0vCUrq "second scan refused" "${rc}" 1
-expect 0vCUrr "says why" "lock message: $(cat "${work}/lock.txt")" grep -q 'locked' "${work}/lock.txt"
+check ddx1m "second scan refused" "${rc}" 1
+expect ddx1n "says why" "lock message: $(cat "${work}/lock.txt")" grep -q 'locked' "${work}/lock.txt"
 
 # 8. Attributes vouch only for the inode that was read. A fresh database each
 # time, so only the attributes can skip a file.
@@ -236,17 +241,17 @@ mkdir -p "${xt}"
 for f in a b c d; do head -c $((20000 + ${#f} * 777)) /dev/urandom > "${xt}/${f}"; done
 touch -d '2015-05-05 05:05:05.5' "${xt}/a"; touch -d '2019-09-09' "${xt}/c"
 xscan() { local rc=0; "${bin}" scan --db "${work}/db/${1}.sqlite" --root "${xt}" --progress 3600 > "${work}/x.txt" 2>&1 || rc=$?; echo "${rc}"; }
-check 0vCnah "attribute scan exit" "$(xscan x1)" 0
-check 0vCnai "inode attribute" "$(xget "${xt}/a" user.blake3.inode)" "$(stat -c '%d:%i' "${xt}/a"):$(xget "${xt}/a" user.blake3.b64u)"
-check 0vCnaj "fresh attributes skip" "$(xscan x2) $(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "0 hashed 0"
+check ddy5b "attribute scan exit" "$(xscan x1)" 0
+check ddy5c "inode attribute" "$(xget "${xt}/a" user.blake3.inode)" "$(stat -c '%d:%i' "${xt}/a"):$(xget "${xt}/a" user.blake3.b64u)"
+check ddy5d "fresh attributes skip" "$(xscan x2) $(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "0 hashed 0"
 # A copy with a flipped byte, a set from before the inode attribute, and a
 # date in the future.
 cp -a "${xt}/a" "${xt}/a-copy"; fFlipByte "${xt}/a-copy" 100 1
 setfattr -x user.blake3.inode "${xt}/b" 2> /dev/null || true; fFlipByte "${xt}/b" 100 1
 setfattr -n user.blake3.date -v "$(( ($(date +%s) + 86400 * 365) * 1000000 ))" "${xt}/c"; fFlipByte "${xt}/c" 100 1
-check 0vCnak "untrusted attributes read again" "$(xscan x3)" 4
-check 0vCnal "each one is a mismatch" "$(sqlite3 "${work}/db/x3.sqlite" "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${xt}/a-copy ${xt}/b ${xt}/c"
-check 0vCnam "the rest still skip" "$(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "hashed 3"
+check ddy5e "untrusted attributes read again" "$(xscan x3)" 4
+check ddy5f "each one is a mismatch" "$(sqlite3 "${work}/db/x3.sqlite" "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${xt}/a-copy ${xt}/b ${xt}/c"
+check ddy5g "the rest still skip" "$(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "hashed 3"
 
 # 9. snapdiff refuses or reports input it can't use, rather than checking
 # nothing and exiting 0. Each case has a damaged file it should reach.
@@ -257,40 +262,40 @@ live="$(realpath "${sd}/live")"
 head -c 5000 /dev/urandom > "${sd}/old/d"; cp -p "${sd}/old/d" "${sd}/new/d"; fFlipByte "${sd}/new/d" 100 1
 sdiff() { local rc=0; "${bin}" snapdiff --old "${sd}/old" --new "${sd}/new" "${@}" > "${sd}/out.txt" 2> "${sd}/err.txt" || rc=$?; echo "${rc}"; }
 printf 'M\tF\t%s/d\n' "${live}" > "${sd}/typed"
-check 0vCnrl "zfs diff -F read" "$(sdiff --zfs-diff "${sd}/typed" --mount "${live}") $(cut -f1,2 "${sd}/out.txt")" $'4 content-changed-same-mtime\td'
+check ddy61 "zfs diff -F read" "$(sdiff --zfs-diff "${sd}/typed" --mount "${live}") $(cut -f1,2 "${sd}/out.txt")" $'4 content-changed-same-mtime\td'
 printf 'M\t%s/d\n' "${live}" > "${sd}/plain"
-check 0vCnrm "--mount through a symlink" "$(sdiff --zfs-diff "${sd}/plain" --mount "${sd}/live-link") $(cut -f2 "${sd}/out.txt")" "4 d"
-check 0vCnrn "lines outside --mount refused" "$(sdiff --zfs-diff "${sd}/plain" --mount "${sd}/old")" 1
-expect 0vCnro "says which line" "outside message: $(cat "${sd}/err.txt")" grep -q "1 line(s) aren't under --mount.* the first at line 1" "${sd}/err.txt"
+check ddy62 "--mount through a symlink" "$(sdiff --zfs-diff "${sd}/plain" --mount "${sd}/live-link") $(cut -f2 "${sd}/out.txt")" "4 d"
+check ddy63 "lines outside --mount refused" "$(sdiff --zfs-diff "${sd}/plain" --mount "${sd}/old")" 1
+expect ddy64 "says which line" "outside message: $(cat "${sd}/err.txt")" grep -q "1 line(s) aren't under --mount.* the first at line 1" "${sd}/err.txt"
 printf -- '-\t%s/d\n+\t%s/d\n' "${live}" "${live}" > "${sd}/replaced"
-check 0vCnrp "a replaced file is compared" "$(sdiff --zfs-diff "${sd}/replaced" --mount "${live}") $(cut -f2 "${sd}/out.txt")" "4 d"
+check ddy65 "a replaced file is compared" "$(sdiff --zfs-diff "${sd}/replaced" --mount "${live}") $(cut -f2 "${sd}/out.txt")" "4 d"
 printf 'M\t%s/d\nM\t%s/not-there\n' "${live}" "${live}" > "${sd}/gone"
-check 0vCnrq "a file zfs diff names but the snapshot lacks" "$(sdiff --zfs-diff "${sd}/gone" --mount "${live}") $(grep -c '^missing' "${sd}/out.txt")" "12 1"
+check ddy66 "a file zfs diff names but the snapshot lacks" "$(sdiff --zfs-diff "${sd}/gone" --mount "${live}") $(grep -c '^missing' "${sd}/out.txt")" "12 1"
 printf 'what\nM\t%s/d\n' "${live}" > "${sd}/junk"
-check 0vCnrr "a line not understood" "$(sdiff --zfs-diff "${sd}/junk" --mount "${live}")" 12
-expect 0vCnrs "says which line" "junk message: $(cat "${sd}/err.txt")" grep -q '^line 1 not understood: what$' "${sd}/err.txt"
+check ddy67 "a line not understood" "$(sdiff --zfs-diff "${sd}/junk" --mount "${live}")" 12
+expect ddy68 "says which line" "junk message: $(cat "${sd}/err.txt")" grep -q '^line 1 not understood: what$' "${sd}/err.txt"
 printf '%s/d\n' "${sd}/new" > "${sd}/abs"
-check 0vCnrt "absolute list names refused" "$(sdiff --list "${sd}/abs")" 1
+check ddy69 "absolute list names refused" "$(sdiff --list "${sd}/abs")" 1
 printf 'd\r\n' > "${sd}/crlf"
-check 0vCnru "nothing compared" "$(sdiff --list "${sd}/crlf")" 8
+check ddy6a "nothing compared" "$(sdiff --list "${sd}/crlf")" 8
 mkdir -p "${sd}/old/locked" "${sd}/new/locked"
 printf 'x\n' > "${sd}/old/locked/f"; cp -p "${sd}/old/locked/f" "${sd}/new/locked/f"
 chmod 000 "${sd}/old/locked"
 printf 'locked/f\nd\n' > "${sd}/locked"
-check 0vCnrv "a stat error is counted" "$(sdiff --list "${sd}/locked") $(cut -f1,2 "${sd}/out.txt" | sort | tr '\n' ' ')" $'12 content-changed-same-mtime\td stat-error\tlocked/f '
+check ddy6b "a stat error is counted" "$(sdiff --list "${sd}/locked") $(cut -f1,2 "${sd}/out.txt" | sort | tr '\n' ' ')" $'12 content-changed-same-mtime\td stat-error\tlocked/f '
 chmod 755 "${sd}/old/locked"
 # btrfs find-new names a renamed file by its new name only. The same inode
 # under 2 names stands in for 2 snapshots.
 ln "${sd}/old/d" "${sd}/old/before"
 ln "${sd}/old/d" "${sd}/new/after"
 printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "${sd}/new/after")" > "${sd}/renamed"
-check 0vCnrw "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
+check ddy6c "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
 
 # 10. Names that aren't plain text: arguments are taken, and output escapes
 # them so 2 names never print the same.
 rc=0; "${bin}" snapdiff --old "${sd}/$(printf 'x\xff')" --new "${sd}/new" --list "${sd}/abs" > /dev/null 2> "${sd}/err.txt" || rc=$?
 # ZFS with utf8only says EILSEQ rather than ENOENT.
-check 0vCnrx "non-UTF-8 argument" "${rc} $(sed 's/: [^:]*$//' "${sd}/err.txt")" "1 tukfs-hash: ${sd}/x\\xff"
+check ddy6d "non-UTF-8 argument" "${rc} $(sed 's/: [^:]*$//' "${sd}/err.txt")" "1 tukfs-hash: ${sd}/x\\xff"
 tab="$(printf 't\tab')"
 head -c 3000 /dev/urandom > "${sd}/old/${tab}"; cp -p "${sd}/old/${tab}" "${sd}/new/${tab}"; fFlipByte "${sd}/new/${tab}" 100 1
 names="${tab}"
@@ -300,14 +305,14 @@ if [[ "${odd}" == 1 ]]; then
 fi
 printf '%s\n' "${names}" > "${sd}/names"
 want='t\x09ab'; [[ "${odd}" == 1 ]] && want+=$'\ncaf\\xe9'
-check 0vCnry "snapdiff escapes names" "$(sdiff --list "${sd}/names") $(cut -f2 "${sd}/out.txt")" "4 ${want}"
+check ddy6e "snapdiff escapes names" "$(sdiff --list "${sd}/names") $(cut -f2 "${sd}/out.txt")" "4 ${want}"
 rt="${work}/rt"; mkdir -p "${rt}"
 head -c 3000 /dev/urandom > "${rt}/${tab}"
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
 fFlipByte "${rt}/${tab}" 100 1
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || true
 "${bin}" report --db "${work}/db/rt.sqlite" > "${work}/report2.txt"
-check 0vCnrz "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"${rt}/t\\\\x09ab"$'\t' "${work}/report2.txt")" 1
+check ddy6f "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"${rt}/t\\\\x09ab"$'\t' "${work}/report2.txt")" 1
 
 # 11. Each name of a hard-linked file is held to its own row, with no
 # attributes to fall back on.
@@ -315,16 +320,16 @@ hl="${work}/hl"; mkdir -p "${hl}"
 head -c 50000 /dev/urandom > "${hl}/b_old"
 hscan() { local rc=0; "${bin}" scan --db "${work}/db/${1}.sqlite" --root "${hl}" --threads "${hl}=1" --progress 3600 "${@:2}" > "${work}/hl.txt" 2>&1 || rc=$?; echo "${rc}"; }
 hq() { sqlite3 "${work}/db/${1}.sqlite" "${2}"; }
-check 0vCo72 "linked file first scan" "$(hscan hl --no-xattrs)" 0
+check ddy71 "linked file first scan" "$(hscan hl --no-xattrs)" 0
 ln "${hl}/b_old" "${hl}/a_new"
 fFlipByte "${hl}/b_old" 100 1
-check 0vCo73 "other name compared with its own row" "$(hscan hl --no-xattrs --since "${tomorrow}") $(hq hl "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch ${hl}/b_old"
+check ddy72 "other name compared with its own row" "$(hscan hl --no-xattrs --since "${tomorrow}") $(hq hl "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch ${hl}/b_old"
 # A fresh set left through one name doesn't vouch for the other. The set's
 # digest is the damaged one, as nemo-anywhere would write after the damage,
 # and the row is from an earlier day.
 rm -f "${hl}/a_new"
 head -c 50000 /dev/urandom > "${hl}/b_old"
-check 0vCo74 "linked file first scan, again" "$(hscan hl2 --no-xattrs)" 0
+check ddy73 "linked file first scan, again" "$(hscan hl2 --no-xattrs)" 0
 hq hl2 "UPDATE paths SET hashed_us = hashed_us - 172800000000"
 fFlipByte "${hl}/b_old" 100 1
 mkdir -p "${work}/hlc"; cp -p "${hl}/b_old" "${work}/hlc/x"
@@ -334,7 +339,7 @@ setfattr -n user.blake3.b64u -v "\"$(xget "${work}/hlc/x" user.blake3.b64u)\"" "
 setfattr -n user.blake3.bytes -v 50000 "${hl}/b_old"
 setfattr -n user.blake3.mtime -v "$(stat -c %.6Y "${hl}/b_old" | tr -d .)" "${hl}/b_old"
 ln "${hl}/b_old" "${hl}/a_new"
-check 0vCo75 "a fresh set from the other name" "$(hscan hl2) $(hq hl2 "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch ${hl}/b_old"
+check ddy74 "a fresh set from the other name" "$(hscan hl2) $(hq hl2 "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch ${hl}/b_old"
 
 # 12. A row the database can't read is an error, not "no record", and is
 # left as it was.
@@ -343,10 +348,10 @@ printf 'one\n' > "${lk}/f"; printf 'two two\n' > "${lk}/g"
 "${bin}" scan --db "${work}/db/lk.sqlite" --root "${lk}" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
 sqlite3 "${work}/db/lk.sqlite" "UPDATE paths SET bytes = 'junk' WHERE path = '${lk}/f'"
 "${bin}" scan --db "${work}/db/lk.sqlite" --root "${lk}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || true
-check 0vCo76 "unreadable row reported" "$(sqlite3 "${work}/db/lk.sqlite" "SELECT group_concat(kind || ' ' || path) FROM events")" "db-error ${lk}/f"
-check 0vCo77 "unreadable row left alone" "$(sqlite3 "${work}/db/lk.sqlite" "SELECT bytes FROM paths WHERE path = '${lk}/f'")" junk
+check ddy75 "unreadable row reported" "$(sqlite3 "${work}/db/lk.sqlite" "SELECT group_concat(kind || ' ' || path) FROM events")" "db-error ${lk}/f"
+check ddy76 "unreadable row left alone" "$(sqlite3 "${work}/db/lk.sqlite" "SELECT bytes FROM paths WHERE path = '${lk}/f'")" junk
 rc=0; "${bin}" scan --db "${work}/db/lk.sqlite" --root "${lk}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || rc=$?
-check 0vCo78 "unreadable row exits 8" "${rc}" 8
+check ddy77 "unreadable row exits 8" "${rc}" 8
 
 # 13. A folder or file that can't be read is reported and exits 8, or 12
 # with a mismatch too.
@@ -354,15 +359,15 @@ ud="${work}/ud"; mkdir -p "${ud}/locked" "${ud}/open"
 printf 'a\n' > "${ud}/open/a"; printf 'b\n' > "${ud}/locked/b"; printf 'c\n' > "${ud}/open/c"
 uscan() { local rc=0; "${bin}" scan --db "${work}/db/ud.sqlite" --root "${ud}" --no-xattrs --progress 3600 "${@}" > "${work}/ud.txt" 2>&1 || rc=$?; echo "${rc}"; }
 uq() { sqlite3 "${work}/db/ud.sqlite" "${1}"; }
-check 0vCoNc "readable tree" "$(uscan)" 0
+check ddy7a "readable tree" "$(uscan)" 0
 chmod 000 "${ud}/locked" "${ud}/open/c"
 # Put back on any exit, or the cleanup can't remove them.
 trap 'chmod 755 "${ud}/locked" 2> /dev/null || true; chmod 644 "${ud}/open/c" 2> /dev/null || true; fCleanup' EXIT
-check 0vCoNd "unreadable folder and file" "$(uscan --since "${tomorrow}") $(uq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY path)")" "8 dir-error ${ud}/locked, open-error ${ud}/open/c"
+check ddy7b "unreadable folder and file" "$(uscan --since "${tomorrow}") $(uq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY path)")" "8 dir-error ${ud}/locked, open-error ${ud}/open/c"
 fFlipByte "${ud}/open/a" 0 1
 rc="$(uscan --since "${tomorrow}")"
 chmod 755 "${ud}/locked"; chmod 644 "${ud}/open/c"
-check 0vCoNe "and a mismatch" "${rc}" 12
+check ddy7c "and a mismatch" "${rc}" 12
 
 # 14. --resume takes only the newest scan, only if it didn't finish, and only
 # over the same roots.
@@ -374,25 +379,25 @@ newest="(SELECT max(id) FROM runs WHERE status != 'accept')"
 rscan --root "${rs}/x" > /dev/null
 rq "UPDATE runs SET status = 'stopped'"
 rscan --root "${rs}/x" > /dev/null
-check 0vCoNf "an older stopped run isn't resumed" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT count(*) FROM runs WHERE status = 'stopped'")" "1 1"
-expect 0vCoNg "says why" "message: $(cat "${work}/rs.txt")" grep -q 'finished' "${work}/rs.txt"
+check ddy7d "an older stopped run isn't resumed" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT count(*) FROM runs WHERE status = 'stopped'")" "1 1"
+expect ddy7e "says why" "message: $(cat "${work}/rs.txt")" grep -q 'finished' "${work}/rs.txt"
 rq "UPDATE runs SET status = 'stopped' WHERE id = ${newest}"
-check 0vCoNh "other roots refused" "$(rscan --root "${rs}/y" --resume)" 1
-expect 0vCoNi "says which" "message: $(cat "${work}/rs.txt")" grep -q "other roots (not given now: ${rs}/x; not in that run: ${rs}/y)" "${work}/rs.txt"
+check ddy7f "other roots refused" "$(rscan --root "${rs}/y" --resume)" 1
+expect ddy7g "says which" "message: $(cat "${work}/rs.txt")" grep -q "other roots (not given now: ${rs}/x; not in that run: ${rs}/y)" "${work}/rs.txt"
 n="$(rq 'SELECT count(*) FROM runs')"
-check 0vCoNj "same roots resumed" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}") $(rq 'SELECT count(*) FROM runs')" "0 done ${n}"
+check ddy7h "same roots resumed" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}") $(rq 'SELECT count(*) FROM runs')" "0 done ${n}"
 # A run killed hard is still marked running. Resume takes it; a new run
 # marks it killed.
 rq "UPDATE runs SET status = 'running' WHERE id = ${newest}"
-check 0vCoNk "a killed run resumed" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}")" "0 done"
+check ddy7j "a killed run resumed" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}")" "0 done"
 rq "UPDATE runs SET status = 'running' WHERE id = ${newest}"
 killed="$(rq "SELECT max(id) FROM runs")"
-check 0vCoNl "a new run marks it killed" "$(rscan --root "${rs}/x") $(rq "SELECT status FROM runs WHERE id = ${killed}")" "0 killed"
+check ddy7k "a new run marks it killed" "$(rscan --root "${rs}/x") $(rq "SELECT status FROM runs WHERE id = ${killed}")" "0 killed"
 # accept's own runs don't hide a stopped scan.
 rq "UPDATE runs SET status = 'stopped' WHERE id = ${newest}"
 rc=0; "${bin}" accept --db "${work}/db/rs.sqlite" "${rs}/x/f" > /dev/null 2>&1 || rc=$?
-expect 0vCoNm "accept after a stopped scan" "accept failed" "${rc}"
-check 0vCoNn "resumed past an accept" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}")" "0 done"
+expect ddy7m "accept after a stopped scan" "accept failed" "${rc}"
+check ddy7n "resumed past an accept" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}")" "0 done"
 
 # 15. Something else with the database open doesn't cost the result. It stays
 # in WAL mode until a run finds it free.
@@ -407,11 +412,11 @@ for _ in $(seq 1 200); do grep -q open "${work}/holder.txt" && break; sleep 0.05
 fFlipByte "${wl}/f" 0 1
 rc="$(wscan --since "${tomorrow}")"
 kill "${holder}"; wait "${holder}" 2> /dev/null || true
-check 0vCp8j "held open: exit" "${rc}" 4
-expect 0vCp8k "held open: summary" "output: $(cat "${work}/wl.txt")" grep -q '^events in the whole run: b3-db-mismatch 1$' "${work}/wl.txt"
-expect 0vCp8l "held open: warns" "output: $(cat "${work}/wl.txt")" grep -q 'left in WAL mode' "${work}/wl.txt"
-check 0vCp8m "held open: run recorded" "$(sqlite3 "${wdb}" 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "done"
-check 0vCp8n "free again: back in rollback mode" "$(wscan --since "${tomorrow}") $(sqlite3 "${wdb}" 'PRAGMA journal_mode')" "4 delete"
+check ddy8h "held open: exit" "${rc}" 4
+expect ddy8j "held open: summary" "output: $(cat "${work}/wl.txt")" grep -q '^events in the whole run: b3-db-mismatch 1$' "${work}/wl.txt"
+expect ddy8k "held open: warns" "output: $(cat "${work}/wl.txt")" grep -q 'left in WAL mode' "${work}/wl.txt"
+check ddy8m "held open: run recorded" "$(sqlite3 "${wdb}" 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "done"
+check ddy8n "free again: back in rollback mode" "$(wscan --since "${tomorrow}") $(sqlite3 "${wdb}" 'PRAGMA journal_mode')" "4 delete"
 
 # 16. A row the database refuses doesn't take the events with it. The run
 # stops, is marked failed, and can be resumed.
@@ -424,14 +429,14 @@ fscan > /dev/null
 fFlipByte "${wf}/a" 0 1
 sleep 0.01; printf 'two, edited\n' > "${wf}/b"
 fq "CREATE TRIGGER refuse BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;"
-check 0vCp8o "a refused row fails the run" "$(fscan --since "${tomorrow}") $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "1 failed"
-check 0vCp8p "its events kept" "$(fq "SELECT group_concat(kind || ' ' || path) FROM events WHERE run_id = (SELECT max(id) FROM runs)")" "b3-db-mismatch ${wf}/a"
-expect 0vCp8q "summary kept" "summary: $(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1$' <<< "$(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
-expect 0vCp8r "says why" "output: $(cat "${work}/wf.txt")" grep -q 'refused by the test' "${work}/wf.txt"
-check 0vCp8s "failed run left in rollback mode" "$(fq 'PRAGMA journal_mode')" delete
+check ddy8p "a refused row fails the run" "$(fscan --since "${tomorrow}") $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "1 failed"
+check ddy8q "its events kept" "$(fq "SELECT group_concat(kind || ' ' || path) FROM events WHERE run_id = (SELECT max(id) FROM runs)")" "b3-db-mismatch ${wf}/a"
+expect ddy8r "summary kept" "summary: $(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1$' <<< "$(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
+expect ddy8s "says why" "output: $(cat "${work}/wf.txt")" grep -q 'refused by the test' "${work}/wf.txt"
+check ddy8t "failed run left in rollback mode" "$(fq 'PRAGMA journal_mode')" delete
 fq "DROP TRIGGER refuse"
-check 0vCp8t "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
-check 0vCp8u "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${wf}/b' AND f.bytes = 12")" 1
+check ddy8v "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
+check ddy8w "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${wf}/b' AND f.bytes = 12")" 1
 
 # 17. --verify reads every file with a stored checksum again, even the same
 # day, and nothing else. It leaves no attributes and records no new files.
@@ -441,29 +446,29 @@ touch -d '2018-08-08 08:08:08.25' "${vt}/k1"
 vdb="${work}/db/vt.sqlite"
 vscan() { local rc=0; "${bin}" scan --db "${vdb}" --root "${vt}" --progress 3600 "${@}" > "${work}/vt.txt" 2>&1 || rc=$?; echo "${rc}"; }
 vq() { sqlite3 "${vdb}" "${1}"; }
-check 0vCpfG "verify: first scan" "$(vscan)" 0
-check 0vCpfH "verify: known files read the same day" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "0 hashed 3"
+check ddy9g "verify: first scan" "$(vscan)" 0
+check ddy9h "verify: known files read the same day" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "0 hashed 3"
 printf 'new\n' > "${vt}/n1"
 sleep 0.01; printf 'edited\n' >> "${vt}/k3"
 fFlipByte "${vt}/k2" 0 1
 k1c="$(stat -c %z "${vt}/k1")"
-check 0vCpfI "verify: exit and reads" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "4 hashed 2"
-check 0vCpfJ "verify: only the damaged file flagged" "$(vq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY kind)")" "b3-db-mismatch ${vt}/k2, b3-xattr-mismatch ${vt}/k2"
-check 0vCpfK "verify: new file not recorded" "$(vq "SELECT count(*) FROM paths WHERE path = '${vt}/n1'")" 0
-check 0vCpfL "verify: no attribute written" "$(stat -c %z "${vt}/k1")" "${k1c}"
-check 0vCpfM "verify: edited file's row left for the next scan" "$(vq "SELECT bytes FROM paths WHERE path = '${vt}/k3'")" 8
-check 0vCpfN "verify: every known name seen" "$(vq 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
-check 0vCpfO "verify: --since refused" "$(vscan --verify --since "${tomorrow}")" 1
+check ddy9j "verify: exit and reads" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "4 hashed 2"
+check ddy9k "verify: only the damaged file flagged" "$(vq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY kind)")" "b3-db-mismatch ${vt}/k2, b3-xattr-mismatch ${vt}/k2"
+check ddy9m "verify: new file not recorded" "$(vq "SELECT count(*) FROM paths WHERE path = '${vt}/n1'")" 0
+check ddy9n "verify: no attribute written" "$(stat -c %z "${vt}/k1")" "${k1c}"
+check ddy9p "verify: edited file's row left for the next scan" "$(vq "SELECT bytes FROM paths WHERE path = '${vt}/k3'")" 8
+check ddy9q "verify: every known name seen" "$(vq 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
+check ddy9r "verify: --since refused" "$(vscan --verify --since "${tomorrow}")" 1
 # --resume keeps the run's mode.
 vq "UPDATE runs SET status = 'stopped' WHERE id = (SELECT max(id) FROM runs)"
-check 0vCpfP "verify: resumed as a full scan refused" "$(vscan --resume)" 1
-expect 0vCpfQ "says why" "message: $(cat "${work}/vt.txt")" grep -q 'was a --verify run' "${work}/vt.txt"
-check 0vCpfR "verify: resumed" "$(vscan --verify --resume) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1) $(vq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "4 hashed 0 done"
-check 0vCpfS "verify: then a full scan" "$(vscan --since "${tomorrow}") $(vq "SELECT count(*) FROM paths WHERE path = '${vt}/n1'")" "4 1"
+check ddy9s "verify: resumed as a full scan refused" "$(vscan --resume)" 1
+expect ddy9t "says why" "message: $(cat "${work}/vt.txt")" grep -q 'was a --verify run' "${work}/vt.txt"
+check ddy9v "verify: resumed" "$(vscan --verify --resume) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1) $(vq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "4 hashed 0 done"
+check ddy9w "verify: then a full scan" "$(vscan --since "${tomorrow}") $(vq "SELECT count(*) FROM paths WHERE path = '${vt}/n1'")" "4 1"
 vq "UPDATE runs SET status = 'stopped' WHERE id = (SELECT max(id) FROM runs)"
-check 0vCpfT "verify: a full scan resumed as a verify refused" "$(vscan --verify --resume)" 1
-expect 0vCpfU "says why" "message: $(cat "${work}/vt.txt")" grep -q 'was a full scan' "${work}/vt.txt"
-check 0vCpfV "verify: runs says which" "$("${bin}" runs --db "${vdb}" | grep -c ', verify$')" 2
+check ddy9x "verify: a full scan resumed as a verify refused" "$(vscan --verify --resume)" 1
+expect ddy9y "says why" "message: $(cat "${work}/vt.txt")" grep -q 'was a full scan' "${work}/vt.txt"
+check ddy9z "verify: runs says which" "$("${bin}" runs --db "${vdb}" | grep -c ', verify$')" 2
 
 # 18. gone lists names a finished scan didn't see, and only those it would
 # have reached.
@@ -480,23 +485,23 @@ gscan --root "${gd}/a/sub" > /dev/null
 rm -f -- "${gd}/a/del"
 chmod 000 "${gd}/a/locked" "${gd}/a/dlock"
 trap 'chmod 755 "${gd}/a/dlock" 2> /dev/null || true; chmod 644 "${gd}/a/locked" 2> /dev/null || true; fCleanup' EXIT
-check 0vCpfW "gone: scan with an unreadable file and folder" "$(gscan --root "${gd}/a" --exclude "${gd}/a/sub" --since "${tomorrow}")" 8
+check ddya0 "gone: scan with an unreadable file and folder" "$(gscan --root "${gd}/a" --exclude "${gd}/a/sub" --since "${tomorrow}")" 8
 chmod 755 "${gd}/a/dlock"; chmod 644 "${gd}/a/locked"
-check 0vCpfX "gone: exit" "$(gone)" 0
-check 0vCpfY "gone: only the deleted name" "$(grep -c '^gone' "${work}/gone.txt") $(grep '^gone' "${work}/gone.txt" | cut -f2)" "1 ${gd}/a/del"
-expect 0vCpfZ "gone: says what it didn't count" "output: $(cat "${work}/gone.txt")" grep -q 'not counted: names under 1 folder' "${work}/gone.txt"
+check ddya1 "gone: exit" "$(gone)" 0
+check ddya2 "gone: only the deleted name" "$(grep -c '^gone' "${work}/gone.txt") $(grep '^gone' "${work}/gone.txt" | cut -f2)" "1 ${gd}/a/del"
+expect ddya3 "gone: says what it didn't count" "output: $(cat "${work}/gone.txt")" grep -q 'not counted: names under 1 folder' "${work}/gone.txt"
 last="$(gq 'SELECT max(id) FROM runs')"
 gq "UPDATE runs SET status = 'stopped' WHERE id = ${last}"
-check 0vCpfa "gone: a stopped run refused" "$(gone --run "${last}")" 1
-check 0vCpfb "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gone.txt") $(grep -c '^gone' "${work}/gone.txt")" "0 run $((last - 1)) 0"
+check ddya4 "gone: a stopped run refused" "$(gone --run "${last}")" 1
+check ddya5 "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gone.txt") $(grep -c '^gone' "${work}/gone.txt")" "0 run $((last - 1)) 0"
 
 # 19. prune removes only contents no name points at.
 orphans="$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)')"
 paths_before="$(q 'SELECT count(*) FROM paths')"
-st=0; [[ "${orphans}" =~ ^[0-9]+$ && "${orphans}" -gt 0 ]] || st=1; expect 0vCpfc "prune: edits left contents behind (${orphans})" "nothing to prune" "${st}"
+st=0; [[ "${orphans}" =~ ^[0-9]+$ && "${orphans}" -gt 0 ]] || st=1; expect ddya6 "prune: edits left contents behind (${orphans})" "nothing to prune" "${st}"
 rc=0; "${bin}" prune --db "${db}" > "${work}/prune.txt" 2>&1 || rc=$?
-check 0vCpfd "prune: exit and count" "${rc} $(cat "${work}/prune.txt")" "0 removed ${orphans} content(s) no name points at"
-check 0vCpfe "prune: none left, every name kept" "$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)') $(q 'SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id')" "0 ${paths_before}"
+check ddya7 "prune: exit and count" "${rc} $(cat "${work}/prune.txt")" "0 removed ${orphans} content(s) no name points at"
+check ddya8 "prune: none left, every name kept" "$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)') $(q 'SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id')" "0 ${paths_before}"
 
 # 20. --rmlint takes blake2b from the same read for every file, and writes
 # rmlint's set where it's missing or stale, the same bytes rmlint would.
@@ -510,17 +515,17 @@ rdb="${work}/db/rd.sqlite"
 rscan() { local rc=0; "${bin}" scan --db "${rdb}" --root "${rd}" --progress 3600 --since "${tomorrow}" "${@}" > "${work}/rd.txt" 2>&1 || rc=$?; echo "${rc}"; }
 xhex() { getfattr --only-values -n "${2}" "${1}" 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
 b2bhex() { printf '%s' "$(b2sum "${1}" | cut -d' ' -f1)" | od -An -tx1 | tr -d ' \n'; echo 00; }
-check 0vEgnk "rmlint: plain scan" "$(rscan)" 0
-check 0vEgnl "rmlint: none written without the flag" "$(xget "${rd}/one" user.rmlint.blake2b.mtime)" ""
-check 0vEgnm "rmlint: none in the database either" "$(sqlite3 "${rdb}" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 0
-check 0vEgnn "rmlint: flagged scan" "$(rscan --rmlint)" 0
-check 0vEgno "rmlint: checksum with its NUL" "$(xhex "${rd}/one" user.rmlint.blake2b.cksum)" "$(b2bhex "${rd}/one")"
-check 0vEgnp "rmlint: time as rmlint writes it" "$(xget "${rd}/one" user.rmlint.blake2b.mtime)" "1620310089.1234567"
-check 0vEgnq "rmlint: stale set replaced" "$(xhex "${rd}/two" user.rmlint.blake2b.cksum) $(xget "${rd}/two" user.rmlint.blake2b.mtime)" "$(b2bhex "${rd}/two") 915177600"
-check 0vEgnr "rmlint: none in a git work tree" "$(xget "${rd}/repo/g" user.rmlint.blake2b.mtime)" ""
-check 0vEgns "rmlint: every file's blake2b stored" "$(sqlite3 "${rdb}" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 3
-check 0vEgnt "rmlint: counted" "$(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "rmlint 2"
-check 0vEgnu "rmlint: next scan verifies them" "$(rscan --rmlint) $(grep -o 'b2b [0-9]*' "${work}/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "0 b2b 2 rmlint 0"
+check de5g2 "rmlint: plain scan" "$(rscan)" 0
+check de5g3 "rmlint: none written without the flag" "$(xget "${rd}/one" user.rmlint.blake2b.mtime)" ""
+check de5g4 "rmlint: none in the database either" "$(sqlite3 "${rdb}" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 0
+check de5g5 "rmlint: flagged scan" "$(rscan --rmlint)" 0
+check de5g6 "rmlint: checksum with its NUL" "$(xhex "${rd}/one" user.rmlint.blake2b.cksum)" "$(b2bhex "${rd}/one")"
+check de5g7 "rmlint: time as rmlint writes it" "$(xget "${rd}/one" user.rmlint.blake2b.mtime)" "1620310089.1234567"
+check de5g8 "rmlint: stale set replaced" "$(xhex "${rd}/two" user.rmlint.blake2b.cksum) $(xget "${rd}/two" user.rmlint.blake2b.mtime)" "$(b2bhex "${rd}/two") 915177600"
+check de5g9 "rmlint: none in a git work tree" "$(xget "${rd}/repo/g" user.rmlint.blake2b.mtime)" ""
+check de5ga "rmlint: every file's blake2b stored" "$(sqlite3 "${rdb}" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 3
+check de5gb "rmlint: counted" "$(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "rmlint 2"
+check de5gc "rmlint: next scan verifies them" "$(rscan --rmlint) $(grep -o 'b2b [0-9]*' "${work}/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "0 b2b 2 rmlint 0"
 if command -v rmlint > /dev/null; then
 	# rmlint hashes only files that share a size, so a pair.
 	rp="${work}/rp"; mkdir -p "${rp}"
@@ -530,11 +535,11 @@ if command -v rmlint > /dev/null; then
 	theirs="$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)"
 	setfattr -x user.rmlint.blake2b.cksum "${rp}/a"; setfattr -x user.rmlint.blake2b.mtime "${rp}/a"
 	"${bin}" scan --db "${rdb}" --root "${rp}" --rmlint --progress 3600 > /dev/null 2>&1 || true
-	st=0; [[ "${#theirs}" -gt 100 ]] || st=1; expect 0vEgnv "rmlint: rmlint wrote a set" "rmlint left nothing" "${st}"
-	check 0vEgnw "rmlint: same bytes as rmlint's" "$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)" "${theirs}"
+	st=0; [[ "${#theirs}" -gt 100 ]] || st=1; expect de5gd "rmlint: rmlint wrote a set" "rmlint left nothing" "${st}"
+	check de5ge "rmlint: same bytes as rmlint's" "$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)" "${theirs}"
 else
-	skip 0vEgnv "rmlint: rmlint wrote a set (rmlint isn't installed)"
-	skip 0vEgnw "rmlint: same bytes as rmlint's (rmlint isn't installed)"
+	skip de5gd "rmlint: rmlint wrote a set (rmlint isn't installed)"
+	skip de5ge "rmlint: same bytes as rmlint's (rmlint isn't installed)"
 fi
 
 # 21. --version gives the version, and the build number when the pipeline
@@ -542,8 +547,8 @@ fi
 # from the source.
 ver="$("${bin}" --version)"
 st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+(\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
-expect 0vG6wF "version line" "version line is [${ver%%$'\n'*}]" "${st}"
-check 0vG6wG "copyright line" "${ver#*$'\n'}" "$(sed -n '1s|^// ||p' "${here}/src/main.rs")"
+expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
+check deb0e "copyright line" "${ver#*$'\n'}" "$(sed -n '1s|^// ||p' "${here}/src/main.rs")"
 
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
@@ -573,3 +578,7 @@ fi
 ##		- 20261024: A stop takes down what the test started before the work
 ##		  folder goes.
 ##		- 20261024: Step 5's files are synced before the scan.
+##		- 20261025: Step 5 stops the scan once it's past the top folder, not
+##		  after a fixed 0.1 s.
+##		- 20261025: Test IDs in Crockford base 32 minutes, and PASS, FAIL and
+##		  SKIP lines with no "integration" in them.

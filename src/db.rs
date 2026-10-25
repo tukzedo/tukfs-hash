@@ -528,7 +528,7 @@ mod tests {
 	// What's in databases already. A new variant has to be added here too.
 	#[test]
 	fn kind_names_are_the_stored_ones() {
-		let _id = test_id("0vG4fZ");
+		let _id = test_id("deavw");
 		let stored = |k: Kind| match k {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
 			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
@@ -556,7 +556,7 @@ mod tests {
 
 	#[test]
 	fn run_statuses_are_the_stored_ones() {
-		let _id = test_id("0vG4fa");
+		let _id = test_id("deavx");
 		let stored = |s: RunStatus| match s {
 			RunStatus::Running => "running",
 			RunStatus::Stopped => "stopped",
@@ -580,7 +580,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn enums_are_stored_as_their_text() {
-		let _id = test_id("0vG4fb");
+		let _id = test_id("deavy");
 		init();
 		let c = Connection::open_in_memory().unwrap();
 		let (k, s): (String, String) = c
@@ -603,7 +603,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn round_trip_and_non_utf8_names() {
-		let _id = test_id("0vCUqt");
+		let _id = test_id("ddwzs");
 		let (_dir, p) = temp_db("rt");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
@@ -670,7 +670,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_bad_row_keeps_the_events() {
-		let _id = test_id("0vCp8f");
+		let _id = test_id("ddy8d");
 		let (_dir, p) = temp_db("wfail");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
@@ -706,7 +706,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn close_rw_says_when_wal_stays() {
-		let _id = test_id("0vCp8g");
+		let _id = test_id("ddy8e");
 		let (_dir, p) = temp_db("walstays");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let conn = open_rw(&p).unwrap();
@@ -724,7 +724,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn seen_marks_only_its_row() {
-		let _id = test_id("0vG4lZ");
+		let _id = test_id("deaw2");
 		let (_dir, p) = temp_db("seen");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
@@ -754,7 +754,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn lookup_error_is_not_no_row() {
-		let _id = test_id("0vCo6l");
+		let _id = test_id("ddy6g");
 		let (_dir, p) = temp_db("lookup");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
@@ -773,7 +773,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_1_forward() {
-		let _id = test_id("0vCoNa");
+		let _id = test_id("ddy78");
 		let (_dir, p) = temp_db("schema1");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
@@ -806,7 +806,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_2_forward() {
-		let _id = test_id("0vCoNb");
+		let _id = test_id("ddy79");
 		let (_dir, p) = temp_db("schema2");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
@@ -833,7 +833,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_3_forward() {
-		let _id = test_id("0vEiNC");
+		let _id = test_id("de5k3");
 		let (_dir, p) = temp_db("schema3");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
@@ -865,7 +865,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn prune_drops_only_unnamed_contents() {
-		let _id = test_id("0vCpfE");
+		let _id = test_id("ddy9e");
 		let (_dir, p) = temp_db("prune");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
@@ -890,7 +890,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn refuses_other_schema() {
-		let _id = test_id("0vCUqu");
+		let _id = test_id("ddwzt");
 		let (_dir, p) = temp_db("schema");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();

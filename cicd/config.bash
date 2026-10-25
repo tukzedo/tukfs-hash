@@ -10,7 +10,8 @@
 ##		  stays generic.
 ##		- Command arrays run from the repo root. Plain strings are eval'd by the
 ##		  engine, with CPU_CAP and the run's other variables in scope.
-##		- A stage that's off here prints a skip line and nothing else.
+##		- A stage that's off here gets no step line, and the plan at the
+##		  start lists it as off in config.bash.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -71,13 +72,15 @@ _remap="--remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}=/cargo"
 if [[ " ${RUSTFLAGS:-} " != *" ${_remap} "* ]]; then export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${_remap}"; fi
 
 ## Stage 1: format. FMT_CMD rewrites in place; FMT_CHECK_CMD fails on a diff
-## and is what --gate runs. rustfmt.toml has the style. Bash is never formatted.
+## and is what the merge gate and backlog runs run. rustfmt.toml has the style. Bash is never formatted.
 FMT_CMD=(cargo fmt)
 FMT_CHECK_CMD=(cargo fmt --check)
 
 ## Stage 2: debug build. --locked everywhere, so a build never rewrites
-## Cargo.lock behind the run's back.
-BUILD_CMD=(cargo build -j "${CPU_CAP}" --locked)
+## Cargo.lock behind the run's back. No -j or --test-threads in the arrays,
+## since the job count can change between steps after this is read. cargo
+## and libtest take it from CARGO_BUILD_JOBS and RUST_TEST_THREADS.
+BUILD_CMD=(cargo build --locked)
 
 ## Stage 3: lint. The clippy lints are in Cargo.toml's [lints.clippy], so an
 ## editor's clippy sees the same ones: pedantic, mem_forget and
@@ -85,14 +88,14 @@ BUILD_CMD=(cargo build -j "${CPU_CAP}" --locked)
 ## markdownlint takes every tracked .md but license.md, which is the GPL's own
 ## text and stays as published. MD013 is line length, and the docs never wrap.
 ## All features, or the soak test behind its feature goes unlinted.
-LINT_CMD=(cargo clippy -j "${CPU_CAP}" --locked --all-targets --all-features -- -D warnings)
+LINT_CMD=(cargo clippy --locked --all-targets --all-features -- -D warnings)
 SHELLCHECK_EXTRA=(cicd/hooks/pre-push cicd/utility/n8git_backup-and-publish cicd/tool-pins.env utility/dogfood_tukfs-hash)
 MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
 ## Every tracked .ps1, with PSScriptAnalyzerSettings.psd1 at the repo root.
 PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
 ## Every tracked .py, by cicd/ruff.toml's rules, then its format. A box
-## without ruff skips them with a note, even under --gate.
+## without ruff skips them with a note, even under the merge gate.
 PY_LINT_CMD=(ruff check --config cicd/ruff.toml --)
 PY_FMT_CHECK_CMD=(ruff format --check --config cicd/ruff.toml --)
 ## "label|command", eval'd after the rest. Every test prints its status line
@@ -108,8 +111,11 @@ LINT_EXTRA=(
 ## skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
 ## libtest-quiet.bash drops libtest's per-test lines, since each test prints
 ## its own with its test ID.
-TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release -j "${CPU_CAP}" --locked -- --test-threads "${CPU_CAP}")
+TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release --locked)
 IT_CMD=(tests/integration.bash)
+## For --list: the IDs and names TEST_CMD's tests print, given unit, and
+## IT_CMD's, given it.
+TEST_ID_LIST_CMD=(python3 cicd/utility/test-ids.py list)
 IT_ROOTS=(
 	"ext4|${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}"
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
@@ -117,7 +123,7 @@ IT_ROOTS=(
 
 ## Stage 4, last: the slow leak and memory checks, eval'd in order, quick ones
 ## first. A run with no flags runs them, and --quick only with --leakcheck.
-## --gate never does. Any report fails. The sanitizers, Miri and CodeQL run in
+## --backlog-run-quick only for a leak area. Any report fails. The sanitizers, Miri and CodeQL run in
 ## the image below when docker answers, else on the host with a note.
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it
@@ -158,9 +164,9 @@ CTR_CARGO_HOME="${LEAK_DIR}/cargo-home"
 ## The workload is a tree on ext4, with its database beside it, in a dir of
 ## this run's under PROFILE_ROOT, removed after. TUKFS_CICD_PROFILE_ROOT
 ## overrides it, and a root that isn't there falls back to the run's temp dir.
-## --quick and --gate leave the stage out.
+## --quick and --backlog-run-quick leave the stage out.
 PROFILE_ENABLE=1
-PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling -j "${CPU_CAP}" --locked)
+PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling --locked)
 PROFILE_BIN="target/profiling/${EXE_NAME}"
 PROFILE_OUT_DIR="cicd/artifacts/profiling"
 PROFILE_ROOT="${TUKFS_CICD_PROFILE_ROOT:-${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}}"
@@ -175,10 +181,20 @@ PROFILE_TIMED=(
 	'rescan --rmlint|TUKFS_PROFILE_LABEL=rescan "${PROFILE_BIN}" scan --db "${PROFILE_WORKLOAD}/db/profile.sqlite" --root "${PROFILE_WORKLOAD}/tree" --progress 3600 --rmlint --since "$(date -d tomorrow +%F)"; [[ $? -eq 4 ]]'
 )
 
-## Stage 4's release build, on the host, which the integration test runs. It
-## needs the host's glibc, so it's never a release.
-RELEASE_NATIVE_CMD=(cargo build --release -j "${CPU_CAP}" --locked)
+## Stage 4's release build, which the integration test runs. It's never a
+## release, since it isn't from stage 6.
+RELEASE_NATIVE_CMD=(cargo build --release --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
+
+## Stages 2 to 4 run BUILD_CMD, clippy, TEST_CMD and RELEASE_NATIVE_CMD in the
+## release image below where docker answers, so they build with its pinned
+## toolchain and glibc 2.28, and the integration test can run their build
+## on any host. Into a target dir of their own, so a host build isn't
+## replaced. With no docker, or --no-container, they run on the host, with
+## a note. The integration test and the soak stay on the host, since they
+## scan the real disks.
+TESTS_CTR_TARGET_DIR="${root}/target/ctr"
+TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 
 ## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
 ## mounts and snapshots. Both targets build in the release image, from
@@ -241,12 +257,33 @@ DOGFOOD_RUNNERS=(
 ## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
 ## the private dir beside the checkout, unless it's the same as the newest
 ## there, and copied to GIF_OUT when it differs.
-## No Pillow or font warns and passes. --quick and --gate leave it out.
+## No Pillow or font warns and passes. --quick and --backlog-run-quick leave
+## it out, and the merge gate and --backlog-run-full draw it into the temp dir.
 GIF_ENABLE=1
 GIF_SCENARIO="cicd/demo/scenario.toml"
 GIF_OUT="assets/demo.gif"
 GIF_ROTATE_DIR="${root}/../private/demo/gif"
 GIF_CMD='cicd/utility/demo-gif.bash "${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
+
+## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
+## A leak area keeps each leak check its text is in. With no area named it's
+## fmt, build, lint, unit and it.
+BACKLOG_AREAS=(
+	"fmt||the format check"
+	"build||the debug build"
+	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff and the test IDs"
+	"unit||the unit tests"
+	"it||the integration test, on a release build, once per test root"
+	"leak|cicd/utility/|every leak check"
+	"advisories|advisories.bash|known advisories in Cargo.lock"
+	"soak|soak.bash|the soak test"
+	"asan|--asan|the unit tests under ASan and LSan"
+	"tsan|--tsan|the unit tests under TSan"
+	"miri|--miri|the unit tests under Miri"
+	"codeql|codeql|CodeQL, about 11 minutes"
+	"profile||the profiler"
+	"release||the release builds, packages and release checks"
+)
 
 ## What --quick leaves out, each matched as plain text against one step of
 ## LEAKCHECK_STEPS, CROSS_TARGETS, RELEASE_CHECKS or IT_ROOTS. Nothing yet
@@ -289,3 +326,8 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
 ##		- 2026-10-23: The release flag for build.rs.
 ##		- 2026-10-24: RUN_TMP_ROOT.
+##		- 2026-10-25: The job count from the environment, not -j.
+##		- 2026-10-25: BACKLOG_AREAS.
+##		- 2026-10-25: A stage off here is listed in the plan, not skipped in a line.
+##		- 2026-10-25: TEST_ID_LIST_CMD.
+##		- 2026-10-25: The build and tests in the release image.

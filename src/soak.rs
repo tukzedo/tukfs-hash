@@ -114,7 +114,7 @@ fn heap() -> Heap {
 
 #[test]
 fn the_heap_holds_steady() {
-	let _id = test_id("0vG98N");
+	let _id = test_id("deb4t");
 	let out = std::env::var_os("TUKFS_SOAK_OUT").map_or_else(std::env::temp_dir, PathBuf::from);
 	let t = tree();
 	// On the stack, so the table itself isn't growth.

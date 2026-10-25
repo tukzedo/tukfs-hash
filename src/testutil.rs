@@ -28,17 +28,13 @@ impl Drop for TestId {
 		let status = if std::thread::panicking() {
 			"FAIL"
 		} else {
-			"ok"
+			"PASS"
 		};
 		// libtest names each test's thread after the test, and captures only
 		// the print macros, so this goes past it. One write, so another
 		// test's line can't land in the middle of it.
 		let thread = std::thread::current();
-		let line = format!(
-			"{status:<4} {} rust {}\n",
-			self.0,
-			thread.name().unwrap_or("?")
-		);
+		let line = format!("{status} {} {}\n", self.0, thread.name().unwrap_or("?"));
 		let _ = io::stderr().write_all(line.as_bytes());
 	}
 }
@@ -213,7 +209,7 @@ mod tests {
 	// A failed test's folder goes, a read-only one inside it too.
 	#[test]
 	fn a_scratch_folder_goes_on_a_panic() {
-		let _id = test_id("0vGC4A");
+		let _id = test_id("debap");
 		let (tx, rx) = std::sync::mpsc::channel();
 		let failed = std::thread::spawn(move || {
 			let d = scratch("testutil_panic");
@@ -241,7 +237,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't start a process")]
 	fn only_a_dead_runs_old_folders_are_swept() {
-		let _id = test_id("0vGC4B");
+		let _id = test_id("debaq");
 		let d = scratch("testutil_sweep");
 		let mut child = std::process::Command::new("true").spawn().unwrap();
 		let dead = child.id();

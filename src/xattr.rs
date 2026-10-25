@@ -237,7 +237,7 @@ mod tests {
 
 	#[test]
 	fn rmlint_time_tolerance() {
-		let _id = test_id("0vCUr8");
+		let _id = test_id("ddx08");
 		let of = OnFile {
 			b2b: Some([7; 64]),
 			b2b_mtime_s: Some(1692238421.9263258),
@@ -251,7 +251,7 @@ mod tests {
 	// Expected values are from rmlint 2.10.3 and C's printf.
 	#[test]
 	fn rmlint_time_text() {
-		let _id = test_id("0vEgni");
+		let _id = test_id("de5g0");
 		let t = |s: i64, ns: i64| g17(s as f64 + ns as f64 / 1e9);
 		assert_eq!(t(1620310089, 123456789), "1620310089.1234567");
 		assert_eq!(t(1704096000, 351000100), "1704096000.3510001");
@@ -269,7 +269,7 @@ mod tests {
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_reads_back() {
-		let _id = test_id("0vEgnj");
+		let _id = test_id("de5g1");
 		let d = scratch("xattr_rmset");
 		let p = d.join("f");
 		std::fs::write(&p, "x").unwrap();
@@ -288,7 +288,7 @@ mod tests {
 
 	#[test]
 	fn b3_needs_size_and_time() {
-		let _id = test_id("0vCUr9");
+		let _id = test_id("ddx09");
 		let of = OnFile {
 			b3: Some([1; 32]),
 			b3_bytes: Some(10),
@@ -302,7 +302,7 @@ mod tests {
 
 	#[test]
 	fn b3_fresh_needs_our_inode_and_a_sane_date() {
-		let _id = test_id("0vCnaf");
+		let _id = test_id("ddy59");
 		let of = OnFile {
 			b3: Some([1; 32]),
 			b3_bytes: Some(10),
@@ -334,7 +334,7 @@ mod tests {
 
 	#[test]
 	fn inode_text_round_trip() {
-		let _id = test_id("0vCnag");
+		let _id = test_id("ddy5a");
 		let d = [9u8; 32];
 		let t = inode_text(u64::MAX, 3, &d);
 		assert_eq!(

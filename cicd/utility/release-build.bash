@@ -14,7 +14,8 @@
 ##		host's glibc. --no-release leaves the whole stage out instead.
 ##	Syntax:
 ##		release-build.bash build|test TARGET...
-##		CPU_CAP sets the jobs and test threads (default half the cores).
+##		CPU_CAP sets the jobs and test threads (default half the cores, or a
+##		quarter when the box is busy).
 ##	Exit: 0 = done, 1 = a build or test failed, 2 = can't run.
 ##	History: At bottom of script.
 
@@ -28,6 +29,8 @@ set -Eeuo pipefail
 
 me="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${me}/include/leak-common.bash"
+## Not a leak check, so not held to a quarter.
+fCpuCap
 trap 'fStopDescendants; fScratchGone || true' EXIT
 
 fUsage(){ echo "usage: release-build.bash build|test TARGET..." >&2; exit 2; }
@@ -72,3 +75,4 @@ done
 
 ##	History:
 ##		- 2026-10-23: Created, for the glibc floor.
+##		- 2026-10-25: Half the cores, or a quarter when busy.
