@@ -10,7 +10,8 @@
 ##		  stays generic.
 ##		- Command arrays run from the repo root. Plain strings are eval'd by the
 ##		  engine, with CPU_CAP and the run's other variables in scope.
-##		- A stage that's off here prints a skip line and nothing else.
+##		- A stage that's off here gets no step line, and the plan at the
+##		  start lists it as off in config.bash.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -314,3 +315,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-24: RUN_TMP_ROOT.
 ##		- 2026-10-25: The job count from the environment, not -j.
 ##		- 2026-10-25: BACKLOG_AREAS.
+##		- 2026-10-25: A stage off here is listed in the plan, not skipped in a line.

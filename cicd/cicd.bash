@@ -28,7 +28,10 @@
 ##	   8. demo gif (a scenario run against the release build, drawn as a
 ##	      fake terminal, GFS-rotated, and copied to GIF_OUT when it changed)
 ##	   9. backup + publish to git
-##	   A stage config.bash has off prints one skip line. Cleanup comes last.
+##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
+##	   is the second of 5 in this run. The plan at the start lists the ones
+##	   off, with the flag or reason. Each step opens with a timed "Starting"
+##	   line and closes with PASS or FAIL and its name. Cleanup comes last.
 ##	- Syntax:
 ##	  cicd/cicd.bash [options]
 ##	  Options:
@@ -160,9 +163,12 @@ source "${here}/config.bash"
 ## stages 2-6 only, and TUKFS_GREEN_TREE is the tree the copy holds. The
 ## pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then
 ## what gets copied, with nothing uncommitted.
-run_part="${TUKFS_RUN_PART:-}"; green_given="${TUKFS_GREEN_TREE:-}"; gate_rev="${TUKFS_GATE_REV:-}"
-unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV
+## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count
+## on from its.
+run_part="${TUKFS_RUN_PART:-}"; green_given="${TUKFS_GREEN_TREE:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
+unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV TUKFS_STEP_PLAN
 case "${run_part}" in ''|build) ;; *) echo "TUKFS_RUN_PART=${run_part}: not build" >&2; exit 2 ;; esac
+if [[ -n "${plan_given}" && ! "${plan_given}" =~ ^[0-9]+( [a-z]+=[0-9]+)*$ ]]; then echo "TUKFS_STEP_PLAN=${plan_given}: not a step plan" >&2; exit 2; fi
 if [[ -n "${gate_rev}" && ! "${gate_rev}" =~ ^[0-9a-f]{40}$ ]]; then echo "TUKFS_GATE_REV=${gate_rev}: not a full commit hash" >&2; exit 2; fi
 inner_run=0
 if [[ -n "${run_part}" ]]; then inner_run=1; fi
@@ -185,6 +191,9 @@ unit_off=0; it_off=0; keep_temp=0; list_only=0; no_container=0; no_remote=0
 ## gate_mode is set for all 3: check only, strict, and nothing written back.
 mode=""; mode_flag=""
 declare -a areas=()
+## Why a stage is off, for the plan. The first reason given stays.
+declare -A off_why=()
+fOffWhy(){ local k; for k in "${@:2}"; do [[ -n "${off_why["${k}"]:-}" ]] || off_why["${k}"]="$1"; done; }
 fMode(){   ## fMode MODE FLAG
 	if [[ -n "${mode}" && "${mode}" != "$1" ]]; then echo "${mode_flag} and $2 can't go together (try --help)" >&2; exit 2; fi
 	mode="$1"; mode_flag="$2"; gate_mode=1; assume_yes=1
@@ -209,19 +218,19 @@ while (($#)); do case "$1" in
 	--no-codeql)              no_codeql=1; gate_partial=1; inner_pass+=("$1"); shift ;;
 	-q|--quiet)               quiet=1; assume_yes=1; QUIET_FLAG="-q"; export CARGO_TERM_QUIET=true; shift ;;
 	-y|--yes)                 assume_yes=1; shift ;;
-	--no-sync)                sync_enable=0; shift ;;
-	--no-fmt)                 fmt_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
-	--no-debug)               debug_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
-	--no-lint)                lint_off=1; gate_partial=1; inner_pass+=("$1"); shift ;;
-	--no-tests)               tests_off=1; LEAKCHECK_STEPS=(); gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-sync)                sync_enable=0; fOffWhy "$1" sync; shift ;;
+	--no-fmt)                 fmt_off=1; fOffWhy "$1" format; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-debug)               debug_off=1; fOffWhy "$1" build; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-lint)                lint_off=1; fOffWhy "$1" lint; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-tests)               tests_off=1; LEAKCHECK_STEPS=(); fOffWhy "$1" tests; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-cross)               CROSS_TARGETS=(); gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-package)             PACKAGE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
-	--no-profile)             PROFILE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-profile)             PROFILE_ENABLE=0; fOffWhy "$1" profile; gate_partial=1; inner_pass+=("$1"); shift ;;
 	## Dogfood and the gif take the release binary, so a stale one would go out.
-	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
-	--no-dogfood)             DOGFOOD_ENABLE=0; shift ;;
-	--no-gif)                 GIF_ENABLE=0; shift ;;
-	--no-publish)             GIT_PUBLISH=(); shift ;;
+	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; fOffWhy "$1" release dogfood gif; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-dogfood)             DOGFOOD_ENABLE=0; fOffWhy "$1" dogfood; shift ;;
+	--no-gif)                 GIF_ENABLE=0; fOffWhy "$1" gif; shift ;;
+	--no-publish)             GIT_PUBLISH=(); fOffWhy "$1" publish; shift ;;
 	--no-freeze)              no_freeze=1; shift ;;
 	--message=*|--msg=*|-m=*) cli_message="${1#*=}"; shift ;;
 	-m|--message|--msg)       (($# >= 2)) || { echo "$1 needs a message (try --help)" >&2; exit 2; }; cli_message="$2"; shift 2 ;;
@@ -256,11 +265,12 @@ if ((gate_mode)); then
 	sync_enable=0
 	FMT_CMD=()
 	DOGFOOD_ENABLE=0; GIT_PUBLISH=()
+	fOffWhy "${mode_flag}" sync dogfood publish
 	## The gif is drawn, as a check, but goes nowhere the tree or the private
 	## dir would see it. A rotate dir under a parent that isn't there is a note.
 	gif_to_tmp=1
 	if [[ "${mode}" == bq ]]; then
-		GIF_ENABLE=0
+		GIF_ENABLE=0; fOffWhy "${mode_flag}" gif
 		## Only what's named, when anything is. Each name is an area in
 		## config.bash, and a leak area keeps the leak checks its text is in.
 		_known=" "; _leakKept=()
@@ -277,19 +287,21 @@ if ((gate_mode)); then
 			done
 		done
 		_named=" ${areas[*]} "
+		_unnamed="${mode_flag}"
 		if ((${#areas[@]})); then
 			gate_partial=1
-			[[ "${_named}" == *" fmt "* ]]   || fmt_off=1
-			[[ "${_named}" == *" build "* ]] || debug_off=1
-			[[ "${_named}" == *" lint "* ]]  || lint_off=1
+			_unnamed="not in the areas named"
+			[[ "${_named}" == *" fmt "* ]]   || { fmt_off=1; fOffWhy "${_unnamed}" format; }
+			[[ "${_named}" == *" build "* ]] || { debug_off=1; fOffWhy "${_unnamed}" build; }
+			[[ "${_named}" == *" lint "* ]]  || { lint_off=1; fOffWhy "${_unnamed}" lint; }
 			[[ "${_named}" == *" unit "* ]]  || unit_off=1
 			[[ "${_named}" == *" it "* ]]    || it_off=1
 			((leakcheck_flag)) || LEAKCHECK_STEPS=("${_leakKept[@]}")
 		elif ((! leakcheck_flag)); then
 			LEAKCHECK_STEPS=()
 		fi
-		[[ "${_named}" == *" release "* ]] || { release_off=1; CROSS_TARGETS=(); PACKAGE_ENABLE=0; }
-		[[ "${_named}" == *" profile "* ]] || PROFILE_ENABLE=0
+		[[ "${_named}" == *" release "* ]] || { release_off=1; CROSS_TARGETS=(); PACKAGE_ENABLE=0; fOffWhy "${_unnamed}" release; }
+		[[ "${_named}" == *" profile "* ]] || { PROFILE_ENABLE=0; fOffWhy "${_unnamed}" profile; }
 	fi
 else
 	gate_strict=0
@@ -322,7 +334,7 @@ fQuickDrop(){   ## fQuickDrop ARRAY_NAME
 }
 ## Packages stay in, since nfpm takes about a second for all of them.
 if ((quick)); then
-	PROFILE_ENABLE=0; GIF_ENABLE=0
+	PROFILE_ENABLE=0; GIF_ENABLE=0; fOffWhy --quick profile gif
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
 ## A run with no options does everything, the leak checks included, and so do
@@ -348,25 +360,38 @@ fEcho_ResetBlankCounter(){ _wasLastEchoBlank=0; }
 fEcho_Clean(){ if [[ -n "${1:-}" ]]; then echo -e "$*"; _wasLastEchoBlank=0; elif [[ "${_wasLastEchoBlank}" == 0 ]] && echo; then _wasLastEchoBlank=1; fi; }
 fEcho(){       if [[ -n "$*"     ]]; then fEcho_Clean "[ $* ]"; else fEcho_Clean ""; fi; }
 fEcho_Force(){ fEcho_ResetBlankCounter; fEcho "$*"; }
-_letterbox="••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
+_letterbox="•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••"
 fSection(){ fEcho_Clean; fEcho_Clean "${_letterbox}"; fEcho "$*"; }
 ## Set once the run has said how it ended, so the EXIT trap knows a stop by
 ## its silence. $? there is 0 after a TERM.
 run_said=0
-fDie(){ run_said=1; { fEcho_Force "FAILED: $*"; echo; } >&2; exit 1; }
-fNow(){ printf '%(%Y%m%d-%H%M%S)T' -1; }
-## A stage opens with its start line and closes with a PASS or SKIP line.
-step_n=0; step_name=""
+fDie(){ run_said=1; { fEcho_Force "FAILED: $*"; fStepFail; echo; } >&2; exit 1; }
+## To the hundredth. EPOCHREALTIME's point follows the locale.
+fNow(){ local t="${EPOCHREALTIME}"; printf '%(%Y%m%d-%H%M%S)T.%s' "${t%[.,]*}" "${t: -6:2}"; }
+## A step opens with its start line and closes with a PASS or FAIL line. Only
+## the steps that run get a number; step_no is filled by fStepPlan.
+step_n=0; step_name=""; step_open=0; step_total=0
+declare -A step_no=()
 ## The job count, when it's not what was last shown.
 cpu_shown=""
 fCpuShow(){ if [[ "${CPU_CAP}" != "${cpu_shown}" ]]; then fEcho_Clean "jobs: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}"; cpu_shown="${CPU_CAP}"; fi; }
-fStep(){     step_n="$1"; step_name="$2"; fSection "$(fNow); Step ${step_n} of 9; ${step_name} ..."; fCpuCap; fCpuShow; }
-fStepPass(){ fEcho "$(fNow); PASS: Step ${step_n} of 9; ${step_name}."; fEcho_Clean; }
-fStepSkip(){ fEcho_Clean "${1:-skipped}"; fEcho "$(fNow); SKIP: Step ${step_n} of 9; ${step_name}."; fEcho_Clean; }
+## In the order they run.
+step_keys=(sync format build lint tests profile release dogfood gif publish)
+declare -A step_title=([sync]="Remote sync" [format]="Format" [build]="Build (debug)" [lint]="Lint" [tests]="Tests"
+	[profile]="Profiler" [release]="Release builds" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish")
+## fStep KEY -> 1 when the plan has the step off, which then prints nothing.
+fStep(){
+	[[ -n "${step_no["$1"]:-}" ]] || return 1
+	step_n="${step_no["$1"]}"; step_name="${step_title["$1"]}"; step_open=1
+	fSection "$(fNow): Step ${step_n} of ${step_total}; Starting ${step_name}"
+	fCpuCap; fCpuShow
+}
+fStepPass(){ step_open=0; fEcho_Clean "PASS ${step_name}"; fEcho_Clean; }
+fStepFail(){ if ((step_open)); then step_open=0; echo "FAIL ${step_name}"; fi; }
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 ## KB to a size a person reads.
 fSize(){ if (($1 >= 1048576)); then printf '%d.%d GB' $(($1 / 1048576)) $(($1 % 1048576 * 10 / 1048576)); else printf '%d MB' $((($1 + 512) / 1024)); fi; }
-trap 'rc=$?; run_said=1; printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n\n" "$rc" "$LINENO" "$BASH_COMMAND" >&2; exit $rc' ERR
+trap 'rc=$?; run_said=1; { printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n" "$rc" "$LINENO" "$BASH_COMMAND"; fStepFail; echo; } >&2; exit $rc' ERR
 
 ## Git that talks to the remote goes through gitsby where it's installed, so it
 ## uses the account the repo belongs to. Plain git on a box without it.
@@ -598,6 +623,49 @@ elif ((assume_yes));                       then publish_msg="${APP_NAME} CI/CD $
 fi
 
 fOnOff(){ if (($1)); then echo "${2}"; else echo "(off${3:+, $3})"; fi; }
+
+## Which steps run, numbered in order, and why each other one is off. The run
+## on the frozen copy takes the numbers of the run that started it.
+declare -a steps_on=() steps_off=()
+step_plan=""
+fStepOn(){   ## fStepOn KEY -> 0 when the step runs
+	case "$1" in
+		sync)    ((sync_enable)) ;;
+		format)  if ((gate_mode)); then ((${#FMT_CHECK_CMD[@]})); else ((${#FMT_CMD[@]})); fi ;;
+		build)   ((! debug_off)) ;;
+		lint)    ((! lint_off)) ;;
+		tests)   ((! tests_off)) && ((! unit_off || ! it_off || ${#LEAKCHECK_STEPS[@]})) ;;
+		profile) ((PROFILE_ENABLE && ${#PROFILE_BUILD_CMD[@]})) ;;
+		release) ((! release_off)) ;;
+		dogfood) ((DOGFOOD_ENABLE && ${#DOGFOOD_DESTS[@]})) ;;
+		gif)     ((GIF_ENABLE)) && [[ -n "${GIF_CMD}" ]] ;;
+		publish) ((${#GIT_PUBLISH[@]})) ;;
+		*)       return 1 ;;
+	esac
+}
+fStepPlan(){
+	local k why n=0
+	local -a words=()
+	if ((inner_run)) && [[ -n "${plan_given}" ]]; then
+		read -r -a words <<< "${plan_given}"
+		step_total="${words[0]}"
+		for k in "${words[@]:1}"; do step_no["${k%%=*}"]="${k#*=}"; done
+		return 0
+	fi
+	for k in "${step_keys[@]}"; do
+		if fStepOn "${k}"; then
+			n=$((n + 1)); step_no["${k}"]="${n}"; step_plan+=" ${k}=${n}"
+			steps_on+=("${step_title["${k}"]}")
+			continue
+		fi
+		why="${off_why["${k}"]:-}"
+		## Only the areas turn the unit and integration tests off.
+		if [[ -z "${why}" && "${k}" == tests ]] && ((unit_off && it_off)); then why="not in the areas named"; fi
+		steps_off+=("${step_title["${k}"]}: ${why:-off in config.bash}")
+	done
+	step_total="${n}"; step_plan="${n}${step_plan}"
+}
+fStepPlan
 case "${mode}" in
 	bq) run_kind="backlog run, quick${areas[*]:+: ${areas[*]}}" ;;
 	bf) run_kind="backlog run, full" ;;
@@ -647,7 +715,17 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host')"
 	fEcho_Clean "Other hosts ....: (none in this pipeline)"
 	fEcho_Clean "Temp files .....: $( ((keep_temp)) && echo 'kept, --keep-temp' || echo 'removed at the end')"
+	_on="$(printf '%s, ' "${steps_on[@]}")"
+	fEcho_Clean "Steps ..........: ${step_total}$( ((step_total)) && echo ": ${_on%, }")"
+	if ((${#steps_off[@]})); then
+		fEcho_Clean "Steps off ......: ${steps_off[0]}"
+		for _o in "${steps_off[@]:1}"; do fEcho_Clean "                  ${_o}"; done
+	fi
 	fEcho_Clean
+elif ((! inner_run)) && ((${#steps_off[@]})); then
+	## -q has no plan, so the count in the step lines would go unexplained.
+	_off="$(printf '%s; ' "${steps_off[@]}")"
+	fEcho_Clean "steps off: ${_off%; }"
 fi
 if ((list_only)); then
 	fEcho_Clean "--list: nothing was run"
@@ -699,8 +777,7 @@ fi
 ## the tree that gets pushed. The publish stage pulls too, but after the tests.
 fStageSync(){
 	local branch="" upstream="" out="" ahead=0 behind=0 dirty=0 ff=0
-	fStep 0 "Remote sync"
-	if ((! sync_enable)); then fStepSkip "remote sync skipped"; return 0; fi
+	fStep sync || return 0
 	branch="$(git -C "${root}" symbolic-ref --quiet --short HEAD || true)"
 	upstream="$(git -C "${root}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
 	if [[ -z "${branch}" ]]; then
@@ -738,7 +815,7 @@ fStageSync(){
 
 ## Stage 1: format. In place; check-only in the check-only modes.
 fStageFormat(){
-	fStep 1 "Format"
+	fStep format || return 0
 	if ((gate_mode)) && ((${#FMT_CHECK_CMD[@]})); then
 		fEcho_Clean "${FMT_CHECK_CMD[*]}"
 		"${FMT_CHECK_CMD[@]}" || fDie "format check failed; run ${FMT_CMD[*]:-cargo fmt} and commit"
@@ -748,15 +825,14 @@ fStageFormat(){
 		"${FMT_CMD[@]}" || fDie "formatter failed"
 		fEcho "OK: formatted"
 	else
-		fStepSkip "format skipped"; return 0
+		fDie "the plan has the format step on, but there's no format command"
 	fi
 	fStepPass
 }
 
 ## Stage 2: debug build.
 fStageBuild(){
-	fStep 2 "Build (debug)"
-	if ((debug_off)); then fStepSkip "debug build skipped"; return 0; fi
+	fStep build || return 0
 	fEcho_Clean "${BUILD_CMD[*]}"
 	fBg "${BUILD_CMD[@]}" || fDie "debug build failed"
 	fEcho "OK: debug build"
@@ -783,8 +859,7 @@ fLintTool(){   ## fLintTool NAME -> 0 when it's here
 fStageLint(){
 	local -a failed=() files=() shFiles=() mdFiles=() psFiles=() pyFiles=()
 	local f skip s c
-	fStep 3 "Lint"
-	if ((lint_off)); then fStepSkip "lint skipped"; return 0; fi
+	fStep lint || return 0
 	if [[ "${mode}" != bq ]] && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 		lint_log="${root}/${LINT_LOG_DIR}/lint_${stamp}.log"
 	fi
@@ -870,8 +945,7 @@ fRunIt(){   ## fRunIt LABEL ROOT
 ## Stage 4: tests, then the slow leak checks.
 fStageTests(){
 	local r step t0
-	fStep 4 "Tests"
-	if ((tests_off)) || ((unit_off && it_off && ! ${#LEAKCHECK_STEPS[@]})); then fStepSkip "tests skipped"; return 0; fi
+	fStep tests || return 0
 	if ((! unit_off)); then
 		fEcho_Clean "${TEST_CMD[*]}  (TMPDIR=${TMPDIR})"
 		fBg "${TEST_CMD[@]}" || fDie "unit tests failed"
@@ -919,8 +993,7 @@ fSecsSince(){ local us=$(( ${EPOCHREALTIME/./} - ${1/./} )); printf '%d.%02d s' 
 ## --check marker, which is the session start's.
 fStageProfile(){
 	local base="" fsType="" work="" step="" name="" cmd="" t0="" svg="" profDir="" latest=""
-	fStep 5 "Profiler"
-	if ((! PROFILE_ENABLE)) || ((! ${#PROFILE_BUILD_CMD[@]})); then fStepSkip "profiler off in config.bash, or skipped"; return 0; fi
+	fStep profile || return 0
 	fEcho_Clean "${PROFILE_BUILD_CMD[*]}"
 	"${PROFILE_BUILD_CMD[@]}" || fDie "profiling build failed"
 	export PROFILE_BIN="${root}/${PROFILE_BIN}"
@@ -990,8 +1063,7 @@ declare -a staged_osarchs=()
 fStageRelease(){
 	local t label osarch art cmd c f n artDir sums
 	local -a built=() names=()
-	fStep 6 "Release builds"
-	if ((release_off)); then fStepSkip "release builds skipped"; return 0; fi
+	fStep release || return 0
 	ver="$(fVersion)"
 	[[ -n "${ver}" ]] || fDie "no version in ${VERSION_MANIFEST}"
 	fEcho_Clean "${RELEASE_BUILD_CMD[*]}"
@@ -1063,8 +1135,7 @@ fStageRelease(){
 fStageDogfood(){
 	local src="" dest="" runner rSrc rDir sorry=0
 	local -a parts=()
-	fStep 7 "Dogfood"
-	if ((! DOGFOOD_ENABLE)) || ((! ${#DOGFOOD_DESTS[@]})); then fStepSkip "dogfood off in config.bash, or skipped"; return 0; fi
+	fStep dogfood || return 0
 	src="${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}"
 	[[ -n "${RELEASE_ARTIFACT_DIR}" && -f "${src}" ]] || fDie "no native release build at ${src}"
 	dest="$(fFirstWritableDir "${DOGFOOD_DESTS[@]}")"
@@ -1097,8 +1168,7 @@ fStageDogfood(){
 fGifIn(){ cd "$1" && root="$1" && eval "${GIF_CMD}"; }
 fStageGif(){
 	local gifRoot="${root}"
-	fStep 8 "Demo gif"
-	if ((! GIF_ENABLE)) || [[ -z "${GIF_CMD}" ]]; then fStepSkip "demo gif off in config.bash, or skipped"; return 0; fi
+	fStep gif || return 0
 	if ((gif_to_tmp)); then
 		GIF_OUT="${run_tmp}/demo.gif"; GIF_ROTATE_DIR="${run_tmp}/no-private/demo/gif"
 		if [[ -n "${gate_rev}" && -n "${frozen_root}" ]]; then gifRoot="${frozen_root}"; fi
@@ -1110,8 +1180,7 @@ fStageGif(){
 ## Stage 9: backup + publish through the copied publisher.
 fStagePublish(){
 	local flag="--no-prompt"
-	fStep 9 "Backup + publish"
-	if ((! ${#GIT_PUBLISH[@]})); then fStepSkip "publish skipped"; return 0; fi
+	fStep publish || return 0
 	command -v rar >/dev/null 2>&1 || export GIT_BACKUP_AND_PUBLISH_NOBACKUP=1
 	## This run already asked, so the publisher doesn't. -q also quiets it.
 	((quiet)) && flag="--quiet"
@@ -1175,7 +1244,7 @@ fRunFrozen(){
 	local -a inner=("$( ((quiet)) && echo -q || echo -y )" --no-sync --no-dogfood --no-gif --no-publish "${inner_pass[@]}")
 	local rc=0 green=""
 	((record_green)) && green="${frozen_tree}"
-	TUKFS_RUN_PART=build TUKFS_GREEN_TREE="${green}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
+	TUKFS_RUN_PART=build TUKFS_GREEN_TREE="${green}" TUKFS_STEP_PLAN="${step_plan}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
 	_wasLastEchoBlank=1
 	## A stopped run stays a stopped run, and the EXIT trap says so.
@@ -1294,7 +1363,7 @@ fCleanup(){
 		for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
 		return 0
 	fi
-	fSection "$(fNow); Cleanup"
+	fSection "$(fNow): Cleanup"
 	## Measured first, while the frozen copy is still in it.
 	kb="$(du -sk -- "${run_tmp}" 2>/dev/null | cut -f1 || true)"
 	[[ "${kb}" =~ ^[0-9]{1,15}$ ]] || kb=0
@@ -1398,3 +1467,7 @@ exit 0
 ##		  areas, --backlog-run-full, --merge-gate, --no-container, --no-remote,
 ##		  --keep-temp and --list. --gate and --ci are other names. The tree is
 ##		  recorded after the release checks.
+##		- 2026-10-25: Step lines in the shared form, timed to the hundredth and
+##		  closed by PASS or FAIL. Only the steps that run are counted, the
+##		  frozen copy's included, and the plan lists the rest with the reason.
+##		  A 79 character rule.
