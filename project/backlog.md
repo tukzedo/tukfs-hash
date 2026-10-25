@@ -92,6 +92,32 @@
 	- Commit: `69bd3ee`
 	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
 
+- CICD reset: step output
+	- ID: 2026102416215931
+	- Type: Task
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The round's full run, `cicd/cicd.bash --backlog-run-full`. Its 7 steps should read `Step N of 7`, the profiler, release and gif steps included, each closed by `PASS`.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
+		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
+		- The rule above each step is 79 characters. It's 74 now.
+	- Progress log:
+		- 2026-10-25: Each step opens with `[ <time to the hundredth>: Step N of M; Starting <name> ]` under a 79 character rule, and closes with `PASS <name>`, or `FAIL <name>` after the `FAILED:` line. The cleanup line has the hundredths too.
+		- 2026-10-25: Only the steps that run are numbered and counted. A step that's off prints nothing. The plan lists them under `Steps off`, each with its flag, mode, "not in the areas named", or "off in config.bash". Under `-q`, which has no plan, that list is one `steps off:` line.
+		- 2026-10-25: The run on the frozen copy takes the outer run's numbers through `TUKFS_STEP_PLAN`, so its steps count on from the format step.
+		- 2026-10-25: Verified: the step check passes 25 cases and fails 18 on the code from before. A format failure prints one `FAIL Format`, in the checkout and in the frozen copy. `--backlog-run-quick` passes, as steps 1 to 4 of 4. The flags, CPU cap and `--no-debug` checks pass. shellcheck passes.
+	- Decisions:
+		- One table of step names and one on/off test per step, `fStepOn`, which both the plan and the steps read, so the two can't disagree.
+		- A stopped run prints no `FAIL` line. The stop already says `CICD ABORTED (stopped)`.
+	- Swept: all 10 `fStep` calls. No `fStepSkip`, `of 9` or old `PASS:` form is left in `cicd/`, `tests/`, the docs or the private tools. `lint-report.bash` reads `FAIL` at a line start as an error line, which a failed step is. The leak, release and integration scripts print their own lines, not steps.
+	- Branch: round-20261025
+	- Commit: `a17da2f`
+	- Test case: `cicd-steps-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline itself, in a clone with a format failure put in.
+
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
@@ -190,19 +216,6 @@
 		- The current image tag and the one before it are kept. Now the old one goes as soon as the new one answers.
 		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
 		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
-
-- CICD reset: step output
-	- ID: 2026102416215931
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
-		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
-		- The rule above each step is 79 characters. It's 74 now.
 
 - CICD reset: a test for every Done item
 	- ID: 2026102416215932
