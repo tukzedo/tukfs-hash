@@ -84,6 +84,8 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--no-container` from the flags item.
 	- Related IDs: 2026102318460622
 	- Requirements  [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
@@ -99,6 +101,8 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--no-remote` from the flags item.
 	- Requirements  [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- The arm64 unit tests and the integration test also run on the arm64 Linux test VM in the default run. The qemu run in the release image stays as the quick check.
@@ -113,6 +117,8 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--keep-temp` from the flags item.
 	- Related IDs: 2026102416215926
 	- Requirements  [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
@@ -173,6 +179,8 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215933
+		- New tests should get the new IDs.
 	- Requirements  [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
@@ -200,6 +208,8 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--keep-temp` from the flags item.
 	- Requirements  [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- The guarded removal is already in every script. What's left is the folder scheme.
@@ -216,6 +226,8 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--long` from the flags item.
 	- Requirements  [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
