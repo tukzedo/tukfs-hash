@@ -75,7 +75,7 @@
 - Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
 	- ID: 2026102519331112
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-193311
 	- Opened by: 2026102517244907, while writing the mount table fuzz test
@@ -84,6 +84,17 @@
 		- Result: `tukfs-hash: /proc/self/mountinfo: stream did not contain valid UTF-8`, exit 1.
 	- Reproduced [Bug]: Yes, with the release build at `d130ec6`, a tmpfs in a user and mount namespace, by `nonutf8-mount.bash DIR BINARY` in the private tools folder. The same scan outside the namespace passes.
 	- Possible cause [Bug]: `read_mounts` reads the table with `read_to_string`. The kernel escapes only space, tab, newline and backslash in it, so other bytes come through raw. `parse_mountinfo` would need to take bytes.
+	- Actual cause [Bug]: As above. A loop device's `backing_file` had the same read, so a loop on a file whose name isn't UTF-8 was taken for a disk of its own, and its real disk was missed when grouping.
+	- Actual fix [Bug]:
+		- The mount table is read and parsed as bytes, and a mount point keeps its bytes. The type and source stay text, with any bad byte shown as a replacement character, since they're only matched against `/dev/`, a pool name or a type name.
+		- `backing_file` is read as bytes too.
+	- Branch: round-20261026
+	- Commit: `0a45bc8`
+	- Test case: `deeby`, a scan with a tmpfs on `caf\xe9` in a user namespace, skipped on ZFS, whose pools can't be seen from one. Unit tests `deebw` (mount table) and `deebx` (loop backing file), and `deeb6`, the mount table fuzz test, now with non-UTF-8 mount points.
+	- Verified: `deeby` failed against the build from `d130ec6` with the error above, and passes after on ext4. Making the parse go through text again turns `deebw` and `deeb6` red. `--backlog-run-quick` passed in 1m 53s at load 16 to 22.
+	- Swept: every `read_to_string` and `from_utf8` in `src/`. The other `/sys` reads are numbers and kernel names. `zpool` output goes through `from_utf8_lossy` for `/dev/` paths only. The xattr and snapshot diff readers were already on bytes.
+	- Acceptance signoff: Self-closed: as reported. Tests fail before and pass after.
+	- Closed: 20261025-194613
 
 - CICD reset: fuzz tests for the parsers
 	- ID: 2026102517244907
