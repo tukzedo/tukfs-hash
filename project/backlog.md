@@ -71,10 +71,23 @@
 		- 2026-10-25: Split in 2, since both won't fit one sitting: the leak check lengths in 2026102517244901, and the fuzz tests in 2026102517244907. This closes with the second.
 		- 2026-10-25: 2026102517244901 is Done.
 
+- Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
+	- ID: 2026102519331112
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-193311
+	- Opened by: 2026102517244907, while writing the mount table fuzz test
+	- Steps to reproduce [Bug]:
+		- Mount anything on a folder named `caf\xe9`, then scan any other root.
+		- Result: `tukfs-hash: /proc/self/mountinfo: stream did not contain valid UTF-8`, exit 1.
+	- Reproduced [Bug]: Yes, with the release build at `d130ec6`, a tmpfs in a user and mount namespace, by `private/claude_simple/tools/nonutf8-mount.bash DIR BINARY`. The same scan outside the namespace passes.
+	- Possible cause [Bug]: `read_mounts` reads the table with `read_to_string`. The kernel escapes only space, tab, newline and backslash in it, so other bytes come through raw. `parse_mountinfo` would need to take bytes.
+
 - CICD reset: fuzz tests for the parsers
 	- ID: 2026102517244907
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-172449
 	- Opened by: split from 2026102416215935
@@ -83,6 +96,23 @@
 		- Where in the run the fuzz tests go, and at what length, follows the leak check lengths.
 	- Requirements  [Feature]:
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+	- Progress log:
+		- 2026-10-25: Unit tests named `fuzz_*`, beside each parser: the mount table, `zfs diff`, find-new and list input, `--since` dates, and the base64url, hex and inode xattr values. A generator for each format builds input with odd bytes in it, and the parse has to come out as built. Real samples, `/proc/self/mountinfo` among them, are cut, bit-flipped and spliced, and have to parse without a panic into output that holds up. Each test also checks its generator still makes every kind of line.
+		- 2026-10-25: `TUKFS_FUZZ_SECS` is the wall time per parser, 1 s in the plain unit tests. Each case is a pure function of its seed, and a failure prints the `TUKFS_FUZZ_SEED` that runs it again.
+		- 2026-10-25: `cicd/utility/fuzz.bash SECS` runs only those, on a quarter of the cores. It's a fast leak check at 20 s and a long one at an hour, and the `fuzz` area of `--backlog-run-quick`.
+		- 2026-10-25: Verified: `--backlog-run-quick` passed in 2m 11s, and `--backlog-run-quick fuzz` in 44 s at load 42. Breaking the mount table's octal unescape, or the `zfs diff` link count field, turns their fuzz test red. A seed replays alone. clippy, rustfmt, shellcheck, the test ID check and the markdown checks pass.
+		- 2026-10-25: Updated pinned asserts in the private checks for the new leak check counts: `leak-lengths-check.bash` 6 to 7 (8 for `--long`, 5 for `--quick`), plus a `bq fuzz` case, and `cicd-flags-check.bash` 6 to 7 (8 for `--long`). Both pass.
+	- Decisions:
+		- Plain tests with a hand-built generator, on stable, with no new crate, per the fuzz note in CLAUDE.md. cargo-fuzz needs the nightly and a corpus to keep.
+		- Fast at 20 s and long at an hour, with none at mid. The unit tests' 1 s each is the floor every run already gets.
+		- Miri skips them, since they're safe code and would run too few cases.
+		- A find-new or list name may come out absolute. `run` refuses those, so the test checks that only for `zfs diff`, where mount points are stripped.
+	- Branch: round-20261026
+	- Commit: `d130ec6`
+	- Test case: `deeb6`, `deeb7`, `deeb8`, `deeb9`, `deeba`, `deebb`, and `deebc` for the seed and budget runner.
+	- Swept: every parser of outside input in `src/`: `parse_mountinfo` and its unescape, `parse_zfs_diff`, `parse_find_new`, `parse_list`, `parse_date`, `b64u_decode`, `unhex`, `trim_value` and `inode_of`. The arguments in `main.rs` aren't covered, since they come from the person running it. The integration test covers them.
+	- Acceptance signoff: Self-closed: per the requirement. The hour-long run hasn't been run, since only `--long` runs it. It's the same script with a bigger number.
+	- Closed: 20261025-193341
 
 - A killed cicd run's folder and frozen copy now wait 2 days for the sweep.
 	- ID: 2026102518150001
