@@ -81,7 +81,7 @@
 	- Steps to reproduce [Bug]:
 		- Mount anything on a folder named `caf\xe9`, then scan any other root.
 		- Result: `tukfs-hash: /proc/self/mountinfo: stream did not contain valid UTF-8`, exit 1.
-	- Reproduced [Bug]: Yes, with the release build at `d130ec6`, a tmpfs in a user and mount namespace, by `private/claude_simple/tools/nonutf8-mount.bash DIR BINARY`. The same scan outside the namespace passes.
+	- Reproduced [Bug]: Yes, with the release build at `d130ec6`, a tmpfs in a user and mount namespace, by `nonutf8-mount.bash DIR BINARY` in the private tools folder. The same scan outside the namespace passes.
 	- Possible cause [Bug]: `read_mounts` reads the table with `read_to_string`. The kernel escapes only space, tab, newline and backslash in it, so other bytes come through raw. `parse_mountinfo` would need to take bytes.
 
 - CICD reset: fuzz tests for the parsers
