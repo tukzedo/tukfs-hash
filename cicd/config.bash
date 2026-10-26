@@ -35,11 +35,9 @@ VERSION_MANIFEST="Cargo.toml"
 BUILD_ENV_NAME="TUKFS_HASH_BUILD"
 BUILD_RELEASE_ENV_NAME="TUKFS_HASH_RELEASE"
 
-## Each run's temp dir and the integration test's dirs are named with this,
-## under <root>/tukfs-hash/, and nothing else is ever removed by the guard.
-RUN_TMP_PREFIX="cicd_tukfs-hash_qx7j"
-## Where the run's temp dir goes when the caller sets no TMPDIR, or /tmp if
-## it isn't there. b23's /tmp is btrfs on LUKS, and slow to fsync under load
+## Each run's temp dir is <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>.
+## This is where it goes when HOST_TEMP isn't set, then TMPDIR, then /tmp.
+## b23's /tmp is btrfs on LUKS, and slow to fsync under load
 ## (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
 RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
@@ -106,8 +104,9 @@ LINT_EXTRA=(
 )
 
 ## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
-## integration test on a release build, once per root below, each in a dir of
-## its own made under <root>/tukfs-hash/. "label|root". A root that isn't there
+## integration test on a release build, once per root below, given as its
+## HOST_TEMP, so it makes its own dir under <root>/tukfs-hash/. "label|root".
+## A root that isn't there
 ## skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
 ## libtest-quiet.bash drops libtest's per-test lines, since each test prints
 ## its own with its test ID.
@@ -121,26 +120,31 @@ IT_ROOTS=(
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
 )
 
-## Stage 4, last: the slow leak and memory checks, eval'd in order, quick ones
-## first. A run with no flags runs them, and --quick only with --leakcheck.
-## --backlog-run-quick only for a leak area. Any report fails. The sanitizers, Miri and CodeQL run in
-## the image below when docker answers, else on the host with a note.
+## Stage 4, last: the leak and memory checks, eval'd in order, quick ones
+## first, each "length|command". The lengths go by measured time on b23 with
+## the image and build dirs warm. fast, under a minute: every run, --quick
+## included. mid, minutes: a run with no options, --long, --backlog-run-full,
+## the merge gate, and --quick --leakcheck. long, hours: --long only, and none
+## takes that long yet. --backlog-run-quick runs none of them, but for a leak
+## area or --leakcheck. Any report fails. The sanitizers, Miri and CodeQL run
+## in the image below when docker answers, else on the host with a note.
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it
-	## fetches RustSec's database. Offline is a noted skip.
-	'cicd/utility/advisories.bash'
+	## fetches RustSec's database. Offline is a noted skip. 1 to 3 s.
+	'fast|cicd/utility/advisories.bash'
 	## The main actions 20 times over in one process, with the heap at round
 	## 20 held to round 10. The table goes in cicd/artifacts/soak/. On the
-	## host, since a scan needs the real disks.
-	'cicd/utility/soak.bash'
+	## host, since a scan needs the real disks. 23 to 51 s.
+	'fast|cicd/utility/soak.bash'
 	## The unit tests under ASan and LSan, then TSan, then Miri, each in a
-	## build dir of its own under target/leakcheck.
-	'cicd/utility/sanitize-rust.bash --asan'
-	'cicd/utility/sanitize-rust.bash --tsan'
-	'cicd/utility/sanitize-rust.bash --miri'
+	## build dir of its own under target/leakcheck. ASan and TSan 10 to 59 s,
+	## and 7.5 min for a cold build dir. Miri 42 s to 1.5 min.
+	'fast|cicd/utility/sanitize-rust.bash --asan'
+	'fast|cicd/utility/sanitize-rust.bash --tsan'
+	'mid|cicd/utility/sanitize-rust.bash --miri'
 	## Over the tree with every crate vendored. The SARIF and findings go in
-	## cicd/artifacts/codeql/.
-	'cicd/utility/codeql-scan.bash'
+	## cicd/artifacts/codeql/. 9 to 16.5 min.
+	'mid|cicd/utility/codeql-scan.bash'
 )
 
 ## The leak check image, from CTR_DIR, tagged by a hash of it and
@@ -205,6 +209,10 @@ TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 ## command eval'd. Each build is named <exe>-<version>-<os-arch> in
 ## RELEASE_ARTIFACT_DIR, with <exe>-<version>-sha256sums.txt beside them.
 ## Download links depend on these names, so they stay.
+## Where the image can't be used, as for stages 2 to 4, RELEASE_HOST_BUILD_CMD
+## builds x86_64 on the box with one note, into a dir of its own. It needs the
+## box's glibc, so the floor check notes it rather than failing, and arm64 is
+## left out, since the box has no cross gcc (2026102509342993).
 GLIBC_FLOOR="2.28"
 REL_CTR_DIR="cicd/container-release"
 REL_CTR_IMAGE="${APP_NAME}-release"
@@ -215,6 +223,9 @@ REL_CTR_CARGO_HOME="${REL_TARGET_DIR}/cargo-home"
 REL_TARGETS=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
 RELEASE_BUILD_CMD=(cicd/utility/release-build.bash build x86_64-unknown-linux-gnu)
 RELEASE_BUILD_BIN="target/release-ctr/x86_64-unknown-linux-gnu/release/${EXE_NAME}"
+REL_HOST_TARGET_DIR="${root}/target/release-host"
+RELEASE_HOST_BUILD_CMD=(cicd/utility/release-build.bash --host build x86_64-unknown-linux-gnu)
+RELEASE_HOST_BUILD_BIN="target/release-host/x86_64-unknown-linux-gnu/release/${EXE_NAME}"
 RELEASE_NATIVE_OSARCH="linux-x86_64"
 CROSS_TARGETS=(
 	"Linux arm64|linux-arm64|target/release-ctr/aarch64-unknown-linux-gnu/release/${EXE_NAME}|cicd/utility/release-build.bash build aarch64-unknown-linux-gnu"
@@ -226,18 +237,34 @@ PACKAGE_ENABLE=1
 PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_work}"'
 ## Over the stage dir, once everything's built and packaged; "label|command",
 ## eval'd. A failure keeps the whole set out of RELEASE_ARTIFACT_DIR.
+## release_glibc is glibc, or glibc-note for a host build.
 RELEASE_CHECKS=(
 	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}" "${build_release}"'
 	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
 	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
-	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash glibc "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
+	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash "${release_glibc}" "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
 	## The release builds aren't the ones stage 4 tested, so the integration
 	## test runs again on the x86_64 one, and the unit tests on arm64.
 	'the integration test passes on the x86_64 release build|TMPDIR="${release_work}" "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
 	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 
-## Stage 7: dogfood. The native release build goes into the first of these
+## Stage 7: other hosts. The unit tests and the integration test on a box of
+## each other arch, "host|os-arch|target", on stage 6's build of that os-arch,
+## through cicd/utility/remote-tests.bash. The qemu run in the release image
+## stays as the quick check. The box is held through the host lock for as
+## long as it's used, and put back as it was found, by the VM state helper's
+## wrap, which TUKFS_CICD_VM_WRAP overrides. A box that's held elsewhere is
+## waited for up to REMOTE_LOCK_WAIT seconds, or TUKFS_CICD_LOCK_WAIT. A box
+## that isn't there, no helper, or no build of its arch in the run, is a
+## SKIP, and the run goes on. vmDebARM64 is emulated, so it takes about 3
+## minutes, and --quick leaves the stage out.
+REMOTE_HOSTS=("vmDebARM64|linux-arm64|aarch64-unknown-linux-gnu")
+_vmWrap="$(compgen -G "${HOME}/synced/0-0/common/exec/util/linux/bash/*_vm-state.bash" || true)"
+REMOTE_VM_WRAP="${TUKFS_CICD_VM_WRAP:-${_vmWrap%%$'\n'*}}"
+REMOTE_LOCK_WAIT="${TUKFS_CICD_LOCK_WAIT:-900}"
+
+## Stage 8: dogfood. The native release build goes into the first of these
 ## that's there and writable, under EXE_NAME, since the scan wrappers and root
 ## steps run it from there. Not when that copy is running. No arm64 dest,
 ## since the synced tree has no dir for one. TUKFS_CICD_DOGFOOD_UTIL moves
@@ -252,7 +279,7 @@ DOGFOOD_RUNNERS=(
 	"utility/dogfood_tukfs-hash|${_dfUtil}/linux/bash"
 )
 
-## Stage 8: demo gif, eval'd. cicd/demo/scenario.toml runs against the
+## Stage 9: demo gif, eval'd. cicd/demo/scenario.toml runs against the
 ## native release build from stage 6, in a home in the run's temp dir, and
 ## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
 ## the private dir beside the checkout, unless it's the same as the newest
@@ -274,7 +301,7 @@ BACKLOG_AREAS=(
 	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff and the test IDs"
 	"unit||the unit tests"
 	"it||the integration test, on a release build, once per test root"
-	"leak|cicd/utility/|every leak check"
+	"leak|cicd/utility/|every leak check but the long ones"
 	"advisories|advisories.bash|known advisories in Cargo.lock"
 	"soak|soak.bash|the soak test"
 	"asan|--asan|the unit tests under ASan and LSan"
@@ -283,6 +310,7 @@ BACKLOG_AREAS=(
 	"codeql|codeql|CodeQL, about 11 minutes"
 	"profile||the profiler"
 	"release||the release builds, packages and release checks"
+	"remote||the arm64 tests on vmDebARM64, with the release builds they need"
 )
 
 ## What --quick leaves out, each matched as plain text against one step of
@@ -291,7 +319,7 @@ BACKLOG_AREAS=(
 ## the native build they come after.
 QUICK_SKIP=()
 
-## Stages 2-6 run from a frozen copy of the tree. These link back to the
+## Stages 2-7 run from a frozen copy of the tree. These link back to the
 ## checkout's own, so builds start warm and the logs land where they're read.
 FROZEN_LINKS=(target cicd/artifacts)
 ## The pre-push gate's builds go here instead of target, since the commit it
@@ -306,7 +334,7 @@ CACHE_DIRS=(target target-gate)
 ## Run and lint logs, gitignored and GFS-rotated. lint-report.bash reads them.
 LINT_LOG_DIR="cicd/artifacts/lint"
 
-## Stage 9: backup and publish, through the copied publisher: a versioned rar of
+## Stage 10: backup and publish, through the copied publisher: a versioned rar of
 ## the project folder, then stash, pull --ff-only, pop, add, commit and push.
 GIT_PUBLISH=(cicd/utility/n8git_backup-and-publish)
 PUBLISH_AUTO_MESSAGE=""
@@ -331,3 +359,8 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: A stage off here is listed in the plan, not skipped in a line.
 ##		- 2026-10-25: TEST_ID_LIST_CMD.
 ##		- 2026-10-25: The build and tests in the release image.
+##		- 2026-10-25: The x86_64 release build on the host without docker.
+##		- 2026-10-25: REMOTE_HOSTS, the arm64 tests on vmDebARM64.
+##		- 2026-10-25: No RUN_TMP_PREFIX, since run dirs are named by time and
+##		  a counter.
+##		- 2026-10-25: A length on each leak check.

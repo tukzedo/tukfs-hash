@@ -14,11 +14,13 @@
 ##		  arch and glibc floor are right. WORK_DIR takes rpm's empty database.
 ##		- glibc: no build needs a glibc newer than FLOOR, so a build that
 ##		  picked up the box's glibc can't go out as a release.
+##		- glibc-note: the same, but one over FLOOR is a NOTE, for a build
+##		  made on the box since there was no docker.
 ##	Syntax:
 ##		check-release.bash version BIN NAME VERSION BUILD [RELEASE]
 ##		check-release.bash arch STAGE_DIR PREFIX OS-ARCH...
 ##		check-release.bash package STAGE_DIR NAME VERSION WORK_DIR OS-ARCH...
-##		check-release.bash glibc STAGE_DIR PREFIX FLOOR OS-ARCH...
+##		check-release.bash glibc|glibc-note STAGE_DIR PREFIX FLOOR OS-ARCH...
 ##		A binary is STAGE_DIR/PREFIX-OS-ARCH, and PREFIX is NAME-VERSION.
 ##	History: At bottom of script.
 
@@ -146,9 +148,9 @@ fPackageCheck(){   ## fPackageCheck STAGE_DIR NAME VERSION WORK_DIR OS-ARCH...
 	done
 }
 
-fGlibcCheck(){   ## fGlibcCheck STAGE_DIR PREFIX FLOOR OS-ARCH...
-	local dir="$1" prefix="$2" floor="$3" osarch bin glibc gcc newer
-	shift 3
+fGlibcCheck(){   ## fGlibcCheck NOTE(0|1) STAGE_DIR PREFIX FLOOR OS-ARCH...
+	local noteOnly="$1" dir="$2" prefix="$3" floor="$4" osarch bin glibc gcc newer
+	shift 4
 	(($#)) || fDie "glibc: no os-arch given"
 	[[ "${floor}" =~ ^[0-9]+\.[0-9]+$ ]] || fDie "glibc: '${floor}' isn't a version"
 	for osarch in "$@"; do
@@ -157,8 +159,13 @@ fGlibcCheck(){   ## fGlibcCheck STAGE_DIR PREFIX FLOOR OS-ARCH...
 		read -r glibc gcc <<<"$(fNeeds "${bin}")"
 		[[ -n "${glibc}" ]] || fDie "no GLIBC_ symbol version in ${bin}"
 		newer="$(printf '%s\n' "${floor}" "${glibc}" | sort -V | tail -n 1)"
-		[[ "${newer}" == "${floor}" ]] || fDie "${bin##*/} needs glibc ${glibc}, newer than ${floor}"
-		fOk "${bin##*/}: glibc ${glibc}"
+		if [[ "${newer}" == "${floor}" ]]; then
+			fOk "${bin##*/}: glibc ${glibc}"
+		elif ((noteOnly)); then
+			echo "[ NOTE: ${bin##*/} needs glibc ${glibc}, newer than ${floor}, since it was built on the box ]"
+		else
+			fDie "${bin##*/} needs glibc ${glibc}, newer than ${floor}"
+		fi
 	done
 }
 
@@ -168,8 +175,9 @@ case "${mode}" in
 	version) (($# == 4 || $# == 5)) || fDie "usage: version BIN NAME VERSION BUILD [RELEASE]"; fVersionCheck "$@" ;;
 	arch)    (($# >= 3)) || fDie "usage: arch STAGE_DIR PREFIX OS-ARCH..."; fArchCheck "$@" ;;
 	package) (($# >= 5)) || fDie "usage: package STAGE_DIR NAME VERSION WORK_DIR OS-ARCH..."; fPackageCheck "$@" ;;
-	glibc)   (($# >= 4)) || fDie "usage: glibc STAGE_DIR PREFIX FLOOR OS-ARCH..."; fGlibcCheck "$@" ;;
-	*) fDie "usage: check-release.bash version|arch|package|glibc ... (see the header)" ;;
+	glibc)   (($# >= 4)) || fDie "usage: glibc STAGE_DIR PREFIX FLOOR OS-ARCH..."; fGlibcCheck 0 "$@" ;;
+	glibc-note) (($# >= 4)) || fDie "usage: glibc-note STAGE_DIR PREFIX FLOOR OS-ARCH..."; fGlibcCheck 1 "$@" ;;
+	*) fDie "usage: check-release.bash version|arch|package|glibc|glibc-note ... (see the header)" ;;
 esac
 
 
@@ -177,3 +185,4 @@ esac
 ##		- 2026-10-23: Created.
 ##		- 2026-10-23: glibc, for the release image's floor.
 ##		- 2026-10-23: version checks the date a build between releases shows.
+##		- 2026-10-25: glibc-note, for a build on the box.
