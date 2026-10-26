@@ -29,17 +29,6 @@
 
 ## Issues
 
-- `opt-level = "z"` hasn't been measured on a quiet box.
-	- ID: 2026101916404105
-	- Type: Task
-	- Status: Stalled
-		- Held for a quiet box. Load was 18 on 2026-10-23.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Prereq IDs: 2026101916404100
-	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
-
 - 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
 	- ID: 2026102308220558
 	- Type: Enhancement
@@ -52,6 +41,18 @@
 	- Requirements  [Feature]:
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
+
+- `opt-level = "z"` hasn't been measured on a quiet box.
+	- ID: 2026101916404105
+	- Type: Task
+	- Status: Queued
+		- Held for a quiet box. Load was 18 on 2026-10-23.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Prereq IDs: 2026101916404100
+	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
+	- Released 2026-10-27, load 3.6 on 32 cores.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
