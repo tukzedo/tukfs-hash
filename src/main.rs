@@ -43,7 +43,6 @@ const VERSION: &str = concat!(
 );
 // Empty for a release, or with no build number.
 const BUILD_MINUTES: &str = env!("TUKFS_HASH_BUILD_MINUTES");
-const COPYRIGHT: &str = "Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)";
 
 const USAGE: &str = "\
 tukfs-hash - checksum every file, remember it, and notice when one changes on its own
@@ -121,6 +120,7 @@ Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
 (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both
 kinds found. A resumed scan counts what its earlier parts found too. accept
 exits 1 if any file wasn't taken.
+
 ";
 
 fn version_line(minutes: &str) -> String {
@@ -174,7 +174,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		return Ok(0);
 	}
 	if cmd == "--version" {
-		out!("{}\n{COPYRIGHT}", version_line(BUILD_MINUTES));
+		out!("{}", version_line(BUILD_MINUTES));
 		return Ok(0);
 	}
 

@@ -8,7 +8,7 @@
 
 - First version: scan, plan, runs, report and snapdiff.
 
-- `--version` gives the build number and the copyright line, and a local pipeline builds, lints, tests and publishes it.
+- `--version` gives the build number, and a local pipeline builds, lints, tests and publishes it.
 
 - A build between releases shows its date after the build number, in the local time zone.
 

@@ -571,12 +571,21 @@ else
 fi
 
 # 21. --version gives the version, and the build number when the pipeline
-# stamped one, with its date unless it's a release, then the copyright line
-# from the source.
-ver="$("${bin}" --version)"
+# stamped one, with its date unless it's a release. That one line and nothing
+# else, so the x keeps a trailing blank line from being stripped.
+ver="$("${bin}" --version; echo x)"; ver="${ver%x}"
 st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+(\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
 expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
-check deb0e "copyright line" "${ver#*$'\n'}" "$(sed -n '1s|^// ||p' "${here}/src/main.rs")"
+check deb0e "version line alone" "${ver}" "${ver%%$'\n'*}"$'\n'
+
+# 22. Help ends with one blank line before the prompt, however it's asked
+# for. The bare command shows it too, with exit 1.
+helpBad=""
+for helpArg in -h --help help ''; do
+	if [[ -n "${helpArg}" ]]; then helpOut="$("${bin}" "${helpArg}"; echo x)"; else helpOut="$("${bin}" || true; echo x)"; fi
+	[[ "${helpOut}" == *[![:space:]]$'\n\nx' ]] || helpBad+=" [${helpArg}]"
+done
+check dee8e "help ends with a blank line" "${helpBad}" ""
 
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
@@ -612,3 +621,5 @@ fi
 ##		  SKIP lines with no "integration" in them.
 ##		- 20261025: The work folder is <HOST_TEMP>/tukfs-hash/<stamp>_<NNN>,
 ##		  with run.pid, and old ones go after 2 days. --keep-temp.
+##		- 20261025: --version is one line, with no copyright. Help ends with a
+##		  blank line.
