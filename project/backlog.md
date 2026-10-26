@@ -144,6 +144,7 @@
 		- The name ends in a counter for the run, since one step can start several containers and `--keep-temp` keeps them all. Filed as a Check in questions.md.
 		- A KILLed run's containers aren't removed by the next run, though `--rm` takes most of them when they finish. Filed as a Check.
 	- Branch: round-20261025b
+	- Commit: `146545f`
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `docker run`, `docker build`, `fCtrRun`, `fCtrRunSelf`, `--label` and `builder prune` in `cicd/` and `tests/`. All 3 scripts that start containers set `ctr_step`: cicd.bash, `leak-common.bash` and `release-build.bash`.
 
@@ -178,6 +179,7 @@
 		- A killed run's folder now waits 2 days, where 2026102407311809 took it at once, per this item. `--keep-temp`'s 2-day mark went, since every folder waits 2 days. Filed as a Check.
 		- The leak checks' scratch dirs keep their names, since in a run they sit in the run's folder.
 	- Branch: round-20261025b
+	- Commit: `146545f`
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `RUN_TMP_PREFIX`, `fRunDirMake`, `fSweepStale`, `.cicd-kept`, `TMPDIR` and `itzq` in `cicd/`, `tests/`, the private tools, design.md and README.md. `scratch.bash` and box-side's folders were left as they were.
 
