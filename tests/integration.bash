@@ -70,6 +70,7 @@ done
 work="${base}/${stamp}_$(printf '%03d' "${n}")"
 printf '%s\n' "${token}" > "${work}/.test-run"
 printf '%s\n' "$$" > "${work}/run.pid"
+if [[ -n "${keep}" ]]; then : > "${work}/.test-kept"; fi
 export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
 
 fCleanup() {

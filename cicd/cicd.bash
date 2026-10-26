@@ -521,6 +521,8 @@ fRunDirMake(){   ## fRunDirMake BASE
 	run_dirs+=("${d}")
 	printf '%s\n' "${run_token}" > "${d}/${run_mark}" || fDie "could not mark ${d}"
 	printf '%s\n' "$$" > "${d}/run.pid" || fDie "could not write ${d}/run.pid"
+	## Here too, so a kept run that's killed still waits.
+	if ((keep_temp)); then : > "${d}/${kept_mark}" || true; fi
 	made_dir="${d}"
 }
 
