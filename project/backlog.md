@@ -56,7 +56,7 @@
 - CICD reset: CICD process gaps
 	- ID: 2026102416215935
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -70,6 +70,7 @@
 	- Progress log:
 		- 2026-10-25: Split in 2, since both won't fit one sitting: the leak check lengths in 2026102517244901, and the fuzz tests in 2026102517244907. This closes with the second.
 		- 2026-10-25: 2026102517244901 is Done.
+	- 2026-10-26: 2026102517244907 is Done, so this closes with it.
 
 - Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
 	- ID: 2026102519331112
