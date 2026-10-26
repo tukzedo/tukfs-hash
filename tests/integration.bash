@@ -2,13 +2,14 @@
 #  shellcheck disable=1091  ## 'Not following.' The stop include is checked on its own.
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
-##		root and no mounts, so mount boundaries are left to `plan` on a real box.
+##		root, and no mounts but step 23's in a user namespace, so mount
+##		boundaries are left to `plan` on a real box.
 ##	Usage: tests/integration.bash [--keep-temp] [BINARY]
 ##		Works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or under
 ##		TMPDIR when HOST_TEMP isn't set, so HOST_TEMP picks the filesystem.
 ##		It's removed at the end unless --keep-temp, or TUKFS_KEEP_TEMP, says
-##		to keep it. Its own folders there over 2 days old whose run is gone
-##		are removed first.
+##		to keep it. Its own folders there whose run is gone are removed
+##		first, but a kept one only once it's 2 days old.
 ##	History: At bottom of script.
 
 # Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -48,16 +49,18 @@ fSafeRm() {
 	rm -rf --one-file-system -- "${p}"
 }
 
-# Ours, over 2 days old, and its run gone. A folder with no marker of this
-# script's, such as a cicd run's, isn't.
+# Ours, and its run gone, such as a killed one's. A kept one waits 2 days
+# (2026102518150001). A folder with no marker of this script's, such as a
+# cicd run's, isn't ours.
 mkdir -p -- "${base}"
 while IFS= read -r -d '' old; do
 	pid=''; got=''
 	read -r pid 2> /dev/null < "${old}/run.pid" || continue
 	read -r got 2> /dev/null < "${old}/.test-run" || continue
 	[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" ]] || continue
+	if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
 	fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
-done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -mmin +2880 -print0 2> /dev/null)
+done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
 
 n=1
 stamp="$(date +%Y%m%d-%H%M%S)"
@@ -68,12 +71,13 @@ done
 work="${base}/${stamp}_$(printf '%03d' "${n}")"
 printf '%s\n' "${token}" > "${work}/.test-run"
 printf '%s\n' "$$" > "${work}/run.pid"
+if [[ -n "${keep}" ]]; then : > "${work}/.test-kept"; fi
 export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
 
 fCleanup() {
 	local got=''
 	fStopDescendants
-	if [[ -n "${keep}" ]]; then printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
+	if [[ -n "${keep}" ]]; then : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
 	fSafeRm "${work}" || true
@@ -587,6 +591,31 @@ for helpArg in -h --help help ''; do
 done
 check dee8e "help ends with a blank line" "${helpBad}" ""
 
+# 23. A mount point whose name isn't UTF-8 doesn't stop a scan of some other
+# root (2026102519331112). The mounts are in a user namespace, so no root is
+# needed, and they go when it ends. A box that won't make one skips, and so
+# does ZFS, whose pools can't be seen from one.
+ns="${work}/ns"
+mkdir -p "${ns}/mnt" "${ns}/root"
+printf 'x\n' > "${ns}/root/f"
+cat > "${ns}/in.bash" << 'EOF'
+odd="${1}/mnt/$(printf 'caf\xe9')"
+mount -t tmpfs none "${1}/mnt" && mkdir "${odd}" && mount -t tmpfs none "${odd}" || exit 1
+: > "${1}/mounted"
+"${2}" scan --db "${1}/t.sqlite" --root "${1}/root" --progress 3600 > "${1}/out.txt" 2>&1
+EOF
+rc=0; nsfs="$(stat -f -c %T "${ns}/root")"
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/in.bash" "${ns}" "${bin}" 2> /dev/null || rc=$?
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip deeby "scan with a mount point that isn't UTF-8 (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/mounted" ]]; then
+	check deeby "scan with a mount point that isn't UTF-8" "${rc} $(head -1 "${ns}/out.txt" | grep mountinfo || true)" "0 "
+else
+	skip deeby "scan with a mount point that isn't UTF-8 (no user namespace here)"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -623,3 +652,7 @@ fi
 ##		  with run.pid, and old ones go after 2 days. --keep-temp.
 ##		- 20261025: --version is one line, with no copyright. Help ends with a
 ##		  blank line.
+##		- 20261025: A killed run's folder goes at the next run. Only a kept
+##		  one waits 2 days.
+##		- 20261025: A scan with a mount point that isn't UTF-8, in a user
+##		  namespace.

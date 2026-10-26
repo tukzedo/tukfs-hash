@@ -233,7 +233,7 @@ pub fn write_b3(
 #[allow(clippy::unreadable_literal, reason = "as rmlint and stat print them")]
 mod tests {
 	use super::*;
-	use crate::testutil::{scratch, test_id};
+	use crate::testutil::{fuzz, mutate, scratch, test_id};
 
 	#[test]
 	fn rmlint_time_tolerance() {
@@ -343,5 +343,35 @@ mod tests {
 		);
 		assert!(inode_of(Some(b"1:2".to_vec())).is_none());
 		assert!(inode_of(Some(b"x:2:abc".to_vec())).is_none());
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_inode_values() {
+		let _id = test_id("deebb");
+		fuzz("inode", |r| {
+			let mut covered = 0;
+			let dev = r.next_u64() >> r.below(64);
+			let ino = r.next_u64() >> r.below(64);
+			let digest: [u8; 32] = std::array::from_fn(|_| r.next_u64() as u8);
+			let mut stored = inode_text(dev, ino, &digest).into_bytes();
+			if r.one_in(2) {
+				stored.push(*r.pick(&[0, b'\n']));
+				covered |= 1;
+			}
+			assert_eq!(inode_of(Some(stored.clone())), Some((dev, ino, digest)));
+			let bad = mutate(r, &stored);
+			if let Some((d, i, g)) = inode_of(Some(bad)) {
+				assert_eq!(
+					inode_of(Some(inode_text(d, i, &g).into_bytes())),
+					Some((d, i, g))
+				);
+				covered |= 2;
+			} else {
+				covered |= 4;
+			}
+			covered
+		})
+		.covers(7);
 	}
 }

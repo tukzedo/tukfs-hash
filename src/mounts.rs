@@ -19,9 +19,9 @@ pub struct Mount {
 	pub source: String,
 }
 
-// Mount points use octal escapes for space, tab, newline and backslash.
-fn unescape(s: &str) -> PathBuf {
-	let b = s.as_bytes();
+// Mount points use octal escapes for space, tab, newline and backslash. Every
+// other byte comes through raw, UTF-8 or not.
+fn unescape(b: &[u8]) -> PathBuf {
 	let mut out = Vec::with_capacity(b.len());
 	let mut i = 0;
 	while i < b.len() {
@@ -42,29 +42,30 @@ fn unescape(s: &str) -> PathBuf {
 	PathBuf::from(OsString::from_vec(out))
 }
 
-pub fn parse_mountinfo(text: &str) -> Vec<Mount> {
+/// Bytes, not text, since a mount point needn't be UTF-8 (2026102519331112).
+pub fn parse_mountinfo(text: &[u8]) -> Vec<Mount> {
 	let mut out = Vec::new();
-	for line in text.lines() {
-		let Some((left, right)) = line.split_once(" - ") else {
+	for line in text.split(|&c| c == b'\n') {
+		let Some(at) = line.windows(3).position(|w| w == b" - ") else {
 			continue;
 		};
-		let l: Vec<&str> = left.split(' ').collect();
-		let r: Vec<&str> = right.split(' ').collect();
+		let l: Vec<&[u8]> = line[..at].split(|&c| c == b' ').collect();
+		let r: Vec<&[u8]> = line[at + 3..].split(|&c| c == b' ').collect();
 		if l.len() < 5 || r.len() < 2 {
 			continue;
 		}
 		out.push(Mount {
 			point: unescape(l[4]),
-			fstype: r[0].to_string(),
-			source: r[1].to_string(),
+			fstype: String::from_utf8_lossy(r[0]).into_owned(),
+			source: String::from_utf8_lossy(r[1]).into_owned(),
 		});
 	}
 	out
 }
 
 pub fn read_mounts() -> Result<Vec<Mount>, String> {
-	let text = fs::read_to_string("/proc/self/mountinfo")
-		.map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
+	let text =
+		fs::read("/proc/self/mountinfo").map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
 	Ok(parse_mountinfo(&text))
 }
 
@@ -152,9 +153,20 @@ fn btrfs_disks(kname: &str, out: &mut BTreeSet<String>) {
 
 // A loop device reads a file, so the disks that matter are the ones under it.
 fn loop_backing(kname: &str) -> Option<PathBuf> {
-	let s = fs::read_to_string(format!("/sys/block/{kname}/loop/backing_file")).ok()?;
-	let s = s.trim_end_matches('\n');
-	Some(PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(s)))
+	fs::read(format!("/sys/block/{kname}/loop/backing_file"))
+		.ok()
+		.map(backing_path)
+}
+
+// The kernel prints the backing file's name raw, so it can be any bytes.
+fn backing_path(mut s: Vec<u8>) -> PathBuf {
+	while s.last() == Some(&b'\n') {
+		s.pop();
+	}
+	if s.ends_with(b" (deleted)") {
+		s.truncate(s.len() - b" (deleted)".len());
+	}
+	PathBuf::from(OsString::from_vec(s))
 }
 
 pub fn disks_for(m: &Mount, mounts: &[Mount]) -> Result<BTreeSet<String>, String> {
@@ -284,6 +296,8 @@ pub fn hands_off_at(mounts: &[Mount], path: &Path) -> Option<String> {
 mod tests {
 	use super::*;
 	use crate::testutil::test_id;
+	use std::ffi::OsStr;
+	use std::os::unix::ffi::OsStrExt;
 
 	const SAMPLE: &str = "\
 22 1 0:21 /@ / rw,noatime shared:1 - btrfs /dev/mapper/luks-x rw
@@ -296,7 +310,7 @@ mod tests {
 	#[test]
 	fn parses_and_unescapes() {
 		let _id = test_id("ddwzv");
-		let m = parse_mountinfo(SAMPLE);
+		let m = parse_mountinfo(SAMPLE.as_bytes());
 		assert_eq!(m.len(), 5);
 		assert_eq!(m[3].point, PathBuf::from("/mnt/my disk"));
 		assert_eq!(m[1].fstype, "zfs");
@@ -306,7 +320,7 @@ mod tests {
 	#[test]
 	fn finds_deepest_mount() {
 		let _id = test_id("ddwzw");
-		let m = parse_mountinfo(SAMPLE);
+		let m = parse_mountinfo(SAMPLE.as_bytes());
 		assert_eq!(
 			mount_for(&m, Path::new("/home/u/x")).unwrap().source,
 			"zf10/secure_home/u"
@@ -357,9 +371,12 @@ mod tests {
 			assert!(!hands_off(&m(t, "/dev/sdd1")), "{t}");
 		}
 		assert!(!hands_off(&m("fuse", "portal")));
-		let all = parse_mountinfo(&format!(
-			"{SAMPLE}70 22 8:49 / /mnt/win rw - ntfs3 /dev/sdd1 rw\n71 22 8:50 / /mnt/mac ro - apfs /dev/sdd2 ro\n"
-		));
+		let all = parse_mountinfo(
+			format!(
+				"{SAMPLE}70 22 8:49 / /mnt/win rw - ntfs3 /dev/sdd1 rw\n71 22 8:50 / /mnt/mac ro - apfs /dev/sdd2 ro\n"
+			)
+			.as_bytes(),
+		);
 		assert_eq!(
 			hands_off_at(&all, Path::new("/mnt/win/a/b")).as_deref(),
 			Some("ntfs3")
@@ -386,5 +403,148 @@ mod tests {
 		assert_eq!(g[0].1, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
 		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);
 		assert_eq!(group_name(&g[1].0), "sda+sdb");
+	}
+
+	#[test]
+	fn mount_point_not_utf8() {
+		let _id = test_id("deebw");
+		let text = b"22 1 0:21 / / rw - ext4 /dev/sda1 rw\n\
+			80 22 0:50 / /mnt/caf\xe9\\040x rw - tmpfs n\xffne rw\n";
+		let m = parse_mountinfo(text);
+		assert_eq!(m.len(), 2);
+		assert_eq!(m[1].point.as_os_str().as_bytes(), b"/mnt/caf\xe9 x");
+		assert_eq!(m[1].fstype, "tmpfs");
+		assert_eq!(m[1].source, "n\u{fffd}ne");
+		let under = Path::new(OsStr::from_bytes(b"/mnt/caf\xe9 x/a"));
+		assert_eq!(
+			mount_for(&m, under).map(|m| m.fstype.as_str()),
+			Some("tmpfs")
+		);
+	}
+
+	#[test]
+	fn loop_backing_file_not_utf8() {
+		let _id = test_id("deebx");
+		for (raw, want) in [
+			(&b"/x/caf\xe9.img\n"[..], &b"/x/caf\xe9.img"[..]),
+			(b"/x/a b.img (deleted)\n", b"/x/a b.img"),
+			(b"/x/\xff\n\n", b"/x/\xff"),
+		] {
+			assert_eq!(backing_path(raw.to_vec()).as_os_str().as_bytes(), want);
+		}
+	}
+
+	const BITS: &[&[u8]] = &[
+		b"a",
+		b"bin",
+		"é".as_bytes(),
+		"日本".as_bytes(),
+		b"\xe9",
+		b"\xff\xfe",
+		b" ",
+		b"\t",
+		b"\n",
+		b"\\",
+		b"\\040",
+		b"-",
+		b" - ",
+		b"0",
+	];
+
+	// The kernel's own escape, which unescape undoes.
+	fn mangle(s: &[u8]) -> Vec<u8> {
+		let mut out = Vec::with_capacity(s.len());
+		for &c in s {
+			match c {
+				b' ' => out.extend_from_slice(b"\\040"),
+				b'\t' => out.extend_from_slice(b"\\011"),
+				b'\n' => out.extend_from_slice(b"\\012"),
+				b'\\' => out.extend_from_slice(b"\\134"),
+				_ => out.push(c),
+			}
+		}
+		out
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_mountinfo() {
+		let _id = test_id("deeb6");
+		let real = fs::read("/proc/self/mountinfo").unwrap_or_default();
+		crate::testutil::fuzz("mountinfo", |r| {
+			let mut covered = 0;
+			let mut text = Vec::new();
+			let mut want = Vec::new();
+			for i in 0..r.below(12) {
+				let mut point = Vec::new();
+				for _ in 0..=r.below(4) {
+					point.extend_from_slice(b"/");
+					for _ in 0..=r.below(3) {
+						point.extend_from_slice(r.pick(BITS));
+					}
+				}
+				let fstype = *r.pick(&["ext4", "zfs", "btrfs", "fuse.sshfs", "ntfs3", "tmpfs"]);
+				let source =
+					*r.pick(&["/dev/sdc1", "zf10/a/b", "none", "UUID=1-2", "//host/share"]);
+				let optional = [" shared:1", " master:3", " propagate_from:2", " unbindable"];
+				let mut left = format!("{} {} 0:{i} /", 20 + i, 1 + i).into_bytes();
+				left.extend(mangle(r.pick(BITS)));
+				left.push(b' ');
+				left.extend(mangle(&point));
+				left.extend_from_slice(b" rw,noatime");
+				for _ in 0..r.below(3) {
+					left.extend_from_slice(r.pick(&optional).as_bytes());
+					covered |= 1;
+				}
+				let right = format!("{fstype} {source} rw,xattr");
+				// Junk has no " - ", or too few fields on a side, and is skipped.
+				let shape = r.below(8);
+				let (head, sep, tail): (Vec<u8>, &[u8], &str) = match shape {
+					0 => (left, b" _ ", &right),
+					1 => {
+						let cut: Vec<&[u8]> = left.splitn(5, |&c| c == b' ').take(4).collect();
+						(cut.join(&b' '), b" - ", &right)
+					}
+					2 => (left, b" - ", fstype),
+					_ => {
+						want.push((
+							PathBuf::from(OsString::from_vec(point.clone())),
+							fstype,
+							source,
+						));
+						(left, b" - ", &right)
+					}
+				};
+				covered |= if shape < 3 { 2 } else { 8 };
+				text.extend(head);
+				text.extend_from_slice(sep);
+				text.extend_from_slice(tail.as_bytes());
+				text.push(b'\n');
+				if point.iter().any(|c| b"\n \\".contains(c)) {
+					covered |= 4;
+				}
+				if std::str::from_utf8(&point).is_err() {
+					covered |= 16;
+				}
+			}
+			let got = parse_mountinfo(&text);
+			let got: Vec<_> = got
+				.iter()
+				.map(|m| (m.point.clone(), m.fstype.as_str(), m.source.as_str()))
+				.collect();
+			assert_eq!(got, want, "{}", text.escape_ascii());
+			// Real lines gone bad: no panic, and no field runs past a space.
+			let bad = crate::testutil::mutate(r, &real);
+			let got = parse_mountinfo(&bad);
+			assert!(got.len() <= bad.split(|&c| c == b'\n').count());
+			for m in &got {
+				assert!(
+					!m.fstype.contains([' ', '\n']) && !m.source.contains([' ', '\n']),
+					"{m:?}"
+				);
+			}
+			covered
+		})
+		.covers(0b1_1111);
 	}
 }

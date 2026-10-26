@@ -212,7 +212,7 @@ pub fn show_path(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testutil::test_id;
+	use crate::testutil::{fuzz, mutate, test_id};
 
 	#[test]
 	fn b64u_round_trip() {
@@ -310,5 +310,105 @@ mod tests {
 		assert_eq!(escape_name("a\u{85}b".as_bytes()), "a\\xc2\\x85b");
 		assert_eq!(escape_name(b"\xff\xfe\\x"), "\\xff\\xfe\\\\x");
 		assert_eq!(escape_name("\u{1f600}\r".as_bytes()), "\u{1f600}\\x0d");
+	}
+
+	fn days_in(year: i32, month: i32) -> i32 {
+		match month {
+			2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+			2 => 28,
+			4 | 6 | 9 | 11 => 30,
+			_ => 31,
+		}
+	}
+
+	// The date's own text, as fmt_local starts.
+	fn day_text(s: &str) -> String {
+		let mut it = s.splitn(3, '-').map(|p| p.parse::<i32>().unwrap());
+		let (y, m, d) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
+		format!("{y:04}-{m:02}-{d:02} 00:00:00")
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
+	fn fuzz_dates() {
+		let _id = test_id("deeb9");
+		fuzz("dates", |r| {
+			let mut covered = 0;
+			let year = 1960 + r.below(8100) as i32;
+			let month = r.below(15) as i32 - 1;
+			let day = r.below(34) as i32 - 1;
+			let text = if r.one_in(4) {
+				format!("{year}-{month}-{day}")
+			} else {
+				format!("{year:04}-{month:02}-{day:02}")
+			};
+			let real = (1970..=9999).contains(&year)
+				&& (1..=12).contains(&month)
+				&& (1..=days_in(year, month)).contains(&day);
+			let got = parse_date(&text);
+			assert_eq!(got.is_some(), real, "{text}");
+			covered |= if real { 1 } else { 2 };
+			if real && month == 2 && day == 29 {
+				covered |= 4;
+			}
+			// A zone that skips midnight would start the day at 01:00, so
+			// midnight is whatever local_midnight_us says it is.
+			if let Some(t) = got {
+				assert_eq!(local_midnight_us(t), t, "{text}");
+				assert_eq!(fmt_local(t)[..10], day_text(&text)[..10], "{text}");
+			}
+			// Gone bad: what still parses is the day it says, at its start.
+			let bad = String::from_utf8_lossy(&mutate(r, text.as_bytes())).into_owned();
+			if let Some(t) = parse_date(&bad) {
+				assert_eq!(local_midnight_us(t), t, "{bad:?}");
+				assert_eq!(fmt_local(t)[..10], day_text(&bad)[..10], "{bad:?}");
+				covered |= 8;
+			}
+			covered
+		})
+		.covers(0xf);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_b64u_hex_and_values() {
+		let _id = test_id("deeba");
+		fuzz("b64u and hex", |r| {
+			let mut covered = 0;
+			let data: Vec<u8> = (0..r.below(80)).map(|_| r.next_u64() as u8).collect();
+			let text = b64u_encode(&data);
+			assert_eq!(b64u_decode(text.as_bytes()).as_ref(), Some(&data));
+			assert_eq!(unhex(hex(&data).as_bytes()).as_ref(), Some(&data));
+			assert_eq!(
+				unhex(hex(&data).to_uppercase().as_bytes()).as_ref(),
+				Some(&data)
+			);
+			// One text per value, so what decodes encodes back the same.
+			let bad = mutate(r, text.as_bytes());
+			if let Some(v) = b64u_decode(&bad) {
+				assert_eq!(b64u_encode(&v).as_bytes(), bad.as_slice());
+				covered |= 1;
+			} else {
+				covered |= 2;
+			}
+			let bad = mutate(r, hex(&data).as_bytes());
+			if let Some(v) = unhex(&bad) {
+				assert_eq!(hex(&v).into_bytes(), bad.to_ascii_lowercase());
+				covered |= 4;
+			} else {
+				covered |= 8;
+			}
+			// Only NUL and white space, and only off the end.
+			let t = trim_value(&bad);
+			assert!(bad.starts_with(t));
+			assert!(
+				bad[t.len()..]
+					.iter()
+					.all(|&c| c == 0 || c.is_ascii_whitespace())
+			);
+			assert!(t.last().is_none_or(|&c| c != 0 && !c.is_ascii_whitespace()));
+			covered
+		})
+		.covers(0xf);
 	}
 }

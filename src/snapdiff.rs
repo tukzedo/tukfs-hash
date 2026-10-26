@@ -582,7 +582,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::testutil::{scratch, test_id};
+	use crate::testutil::{Rng, scratch, test_id};
 
 	fn mounts(m: &str) -> Vec<&Path> {
 		vec![Path::new(m)]
@@ -746,5 +746,304 @@ transid marker was 12\n";
 		fs::write(dir.join("b"), &a[..100]).unwrap();
 		let d = cmp("a", "b");
 		assert_eq!(d.differing, a.len() as u64 - 100);
+	}
+
+	// zfs diff's own escape: all but printable ASCII, and space and backslash.
+	fn zfs_path(base: &[u8], rel: &[u8]) -> Vec<u8> {
+		let mut full = base.to_vec();
+		if !full.ends_with(b"/") {
+			full.push(b'/');
+		}
+		full.extend_from_slice(rel);
+		let mut out = Vec::with_capacity(full.len());
+		for c in full {
+			if c > b' ' && c != b'\\' && c < 0x7f {
+				out.push(c);
+			} else {
+				out.extend(format!("\\{c:04o}").bytes());
+			}
+		}
+		out
+	}
+
+	fn fuzz_name(r: &mut Rng, newlines: bool) -> Vec<u8> {
+		const BITS: &[&[u8]] = &[
+			b"a",
+			b"file.txt",
+			b" ",
+			b"\t",
+			b"\\",
+			b"->",
+			b" -> ",
+			b"(+1)",
+			b"\xff",
+			b"caf\xc3\xa9",
+			b"-",
+			b"\\0040",
+			b"F",
+			b"\n",
+		];
+		let bits = if newlines {
+			BITS
+		} else {
+			&BITS[..BITS.len() - 1]
+		};
+		let mut name = Vec::new();
+		for i in 0..=r.below(3) {
+			if i > 0 {
+				name.push(b'/');
+			}
+			for _ in 0..=r.below(3) {
+				name.extend_from_slice(r.pick(bits));
+			}
+		}
+		name
+	}
+
+	fn rel(b: &[u8]) -> PathBuf {
+		PathBuf::from(OsStr::from_bytes(b))
+	}
+
+	// What went bad is reported by its own line number and text.
+	fn bad_lines_are_named(text: &[u8], p: &Parsed) {
+		let lines: Vec<&[u8]> = text.split(|&c| c == b'\n').collect();
+		for list in [&p.unusable, &p.outside] {
+			assert!(list.windows(2).all(|w| w[0].0 < w[1].0));
+			for (n, t) in list {
+				assert_eq!(lines[n - 1], t.as_slice());
+			}
+		}
+		assert!(
+			p.unusable
+				.iter()
+				.all(|u| p.outside.iter().all(|o| o.0 != u.0))
+		);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	#[allow(clippy::too_many_lines, reason = "one generator, top to bottom")]
+	fn fuzz_zfs_diff() {
+		let _id = test_id("deeb7");
+		let real: &[u8] = b"M\t/home/u/a\\0040b.txt\nR\t/home/u/old\t/home/u/new\n+\t/home/u/added\nM\t/other/x\n1700000000.5\tM\t/home/u/t\nM\tF\t/home/u/h\t(+1)\nR\t/home/u/old\\0040x -> /home/u/new\n-\t/home/u/saved\n+\t/home/u/saved\nX\t/home/u/a\n";
+		crate::testutil::fuzz("zfs diff", |r| {
+			let mut covered = 0;
+			let mount: &[u8] = r.pick(&[b"/home/u".as_slice(), b"/mnt/my disk", b"/"]);
+			let both = [mount, b"/real/u"];
+			let bases = if mount == b"/" {
+				&both[..1]
+			} else {
+				&both[..=r.below(2)]
+			};
+			let mounts: Vec<&Path> = bases
+				.iter()
+				.map(|b| Path::new(OsStr::from_bytes(b)))
+				.collect();
+			let (tabbed, timed, typed) = (r.one_in(2), r.one_in(3), r.one_in(2));
+			let (mut text, mut want) = (Vec::new(), Parsed::default());
+			let (mut removed, mut added, mut gone) =
+				(BTreeSet::new(), BTreeSet::new(), Vec::<Vec<u8>>::new());
+			for i in 0..r.below(16) {
+				let line_no = i + 1;
+				if r.one_in(10) {
+					text.push(b'\n');
+					continue;
+				}
+				let kind = *r.pick(b"MMR-+X");
+				let ftype = if typed { *r.pick(b"FFFF/@") } else { b'F' };
+				let name = if kind == b'+' && !gone.is_empty() && r.one_in(2) {
+					r.pick(&gone).clone()
+				} else {
+					fuzz_name(r, true)
+				};
+				let outside = mount != b"/" && r.one_in(8);
+				let base: &[u8] = if outside { b"/other" } else { r.pick(bases) };
+				let mut line = Vec::new();
+				if timed {
+					line.extend(
+						format!(
+							"{:>10}.{:09}\t",
+							r.below(2_000_000_000),
+							r.below(1_000_000_000)
+						)
+						.bytes(),
+					);
+					covered |= 1;
+				}
+				line.push(kind);
+				if typed {
+					line.extend([b'\t', ftype]);
+					covered |= 2;
+				}
+				line.push(b'\t');
+				line.extend(zfs_path(base, &name));
+				let new_name = fuzz_name(r, true);
+				if kind == b'R' {
+					line.extend_from_slice(if tabbed { b"\t" } else { b" -> " });
+					line.extend(zfs_path(r.pick(bases), &new_name));
+					covered |= if tabbed { 4 } else { 8 };
+				}
+				if kind == b'M' && r.one_in(4) {
+					line.extend(format!("\t({}{})", r.pick(&['+', '-']), 1 + r.below(20)).bytes());
+					covered |= 16;
+				}
+				text.extend_from_slice(&line);
+				text.push(b'\n');
+				if kind == b'X' {
+					want.unusable.push((line_no, line));
+					covered |= 32;
+				} else if outside {
+					want.outside.push((line_no, line));
+					covered |= 64;
+				} else if ftype != b'F' {
+				} else if kind == b'M' {
+					want.pairs.push(same_bytes(&name));
+				} else if kind == b'R' {
+					want.pairs.push(Pair {
+						old: rel(&name),
+						new: rel(&new_name),
+						ino: None,
+					});
+				} else if kind == b'-' {
+					removed.insert(rel(&name));
+					gone.push(name);
+				} else {
+					added.insert(rel(&name));
+				}
+			}
+			let replaced: Vec<_> = removed
+				.intersection(&added)
+				.cloned()
+				.map(Pair::same)
+				.collect();
+			if !replaced.is_empty() {
+				covered |= 128;
+			}
+			want.pairs.extend(replaced);
+			assert_eq!(
+				parse_zfs_diff(&text, &mounts),
+				want,
+				"{}",
+				escape_name(&text)
+			);
+			let bad = crate::testutil::mutate(r, real);
+			let p = parse_zfs_diff(&bad, &[Path::new("/home/u")]);
+			bad_lines_are_named(&bad, &p);
+			// Mount points are stripped, so no name comes out absolute. The
+			// other sources are checked for that in run.
+			assert!(
+				p.pairs
+					.iter()
+					.all(|x| !x.old.has_root() && !x.new.has_root())
+			);
+			if !p.unusable.is_empty() {
+				covered |= 256;
+			}
+			covered
+		})
+		.covers(0x1ff);
+	}
+
+	fn same_bytes(b: &[u8]) -> Pair {
+		Pair::same(rel(b))
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_find_new_and_list() {
+		let _id = test_id("deeb8");
+		let real: &[u8] = b"inode 257 file offset 0 len 4096 disk start 0 offset 0 gen 9 flags INLINE dir/a file\n\
+inode 300 file offset 0 len 4096 disk start 12 offset 0 gen 9 flags COMPRESS|PREALLOC b\n\
+inode x file offset 0 len 4096 disk start 12 offset 0 gen 9 flags NONE c\n\
+transid marker was 12\n";
+		crate::testutil::fuzz("find-new", |r| {
+			let mut covered = 0;
+			let (mut text, mut seen, mut unusable, mut names) =
+				(Vec::new(), BTreeMap::new(), Vec::new(), Vec::new());
+			for i in 0..r.below(16) {
+				// find-new prints names raw, so one with a newline can't be told apart.
+				let name = fuzz_name(r, false);
+				let ino = r.next_u64() >> r.below(64);
+				let flags = r.pick(&["NONE", "INLINE", "COMPRESS|PREALLOC"]);
+				let good = format!(
+					"inode {ino} file offset {} len 4096 disk start {} offset 0 gen {} flags {flags} ",
+					r.below(1 << 30),
+					r.below(1 << 30),
+					r.below(99)
+				);
+				let mut line = good.clone().into_bytes();
+				match r.below(8) {
+					0 => {
+						line = format!("transid marker was {ino}").into_bytes();
+						covered |= 1;
+					}
+					1 => {
+						// Each of these is one field off.
+						let off = r.below(4);
+						line = match off {
+							0 => {
+								good.replacen(&format!("inode {ino}"), &format!("inode -{ino}"), 1)
+							}
+							1 => good.replacen(" file ", " FILE ", 1),
+							2 => good.replacen(" flags ", " flagz ", 1),
+							_ => good.clone(),
+						}
+						.into_bytes();
+						// The last has no name.
+						if off < 3 {
+							line.extend_from_slice(&name);
+						}
+						unusable.push((i + 1, line.clone()));
+						covered |= 2;
+					}
+					_ => {
+						line.extend_from_slice(&name);
+						if seen.insert(rel(&name), ino).is_some() {
+							covered |= 4;
+						}
+					}
+				}
+				text.extend_from_slice(&line);
+				text.push(b'\n');
+				names.push(line);
+			}
+			let pairs = seen
+				.into_iter()
+				.map(|(p, ino)| Pair {
+					ino: Some(ino),
+					..Pair::same(p)
+				})
+				.collect();
+			assert_eq!(
+				parse_find_new(&text),
+				Parsed {
+					pairs,
+					unusable,
+					outside: Vec::new()
+				},
+				"{}",
+				escape_name(&text)
+			);
+			// Each line of a list is one name, as it stands.
+			let want: Vec<Pair> = names
+				.iter()
+				.filter(|n| !n.is_empty())
+				.map(|n| same_bytes(n))
+				.collect();
+			assert_eq!(parse_list(&text).pairs, want);
+			let bad = crate::testutil::mutate(r, real);
+			let p = parse_find_new(&bad);
+			bad_lines_are_named(&bad, &p);
+			assert!(p.pairs.windows(2).all(|w| w[0].new < w[1].new));
+			assert!(p.pairs.iter().all(|x| x.ino.is_some() && x.old == x.new));
+			let lines = bad.split(|&c| c == b'\n').filter(|l| !l.is_empty()).count();
+			assert!(p.pairs.len() + p.unusable.len() <= lines);
+			assert_eq!(parse_list(&bad).pairs.len(), lines);
+			if !p.unusable.is_empty() {
+				covered |= 8;
+			}
+			covered
+		})
+		.covers(0xf);
 	}
 }
