@@ -99,16 +99,16 @@
 	- Expected behavior [Bug]: A folder whose `run.pid` process is gone is removed at the next run's start. Only a folder kept by `--keep-temp` waits 2 days.
 	- Actual cause [Bug]: 2026102416215934 swept only folders over 2 days old, and dropped the kept mark.
 	- Progress log:
-		- 2026-10-25: The sweep takes any marked run folder whose PID is gone. `--keep-temp` writes `.cicd-kept` in each kept folder, and the sweep leaves it until that mark is 2 days old.
+		- 2026-10-25: The sweep takes any marked run folder whose PID is gone. `--keep-temp` writes `.cicd-kept` in each kept folder, when it's made and again at the end, and the sweep leaves it until that mark is 2 days old. So a kept run that's killed still waits.
 		- 2026-10-25: The integration test's own sweep does the same, with `.test-kept`.
-		- 2026-10-25: Verified: `temp-ctr-check.bash sweep` and `it` pass, and 7 of their cases fail on the code from before. `cicd-stop-check.bash killed`, with no aging now, passes, and fails on the code from before. `--backlog-run-quick` passes in 1m 46s at load 23 to 44. shellcheck and the markdown checks are clean.
+		- 2026-10-25: Verified: `temp-ctr-check.bash sweep` and `it` pass, and 7 of their cases fail on the code from before. `cicd-stop-check.bash killed`, with no aging now, passes, and fails on the code from before. Its new `keptkilled` case, a killed `--keep-temp` run, passes, and fails without the mark written up front. `--backlog-run-quick` passes in 2m 04s at load 25 to 34. shellcheck and the markdown checks are clean.
 	- Decisions:
 		- The integration test follows the same rule, so a killed test's folder doesn't wait either.
 		- `box-side.bash` on the arm64 VM keeps its 2-day wait. Its `run.pid` is written by a process that exits before the files are copied in, so going at once could take a folder in use.
 	- Actual fix [Bug]: `fSweepStale` and `fRunDirGone` in `cicd/cicd.bash`, and the sweep and `fCleanup` in `tests/integration.bash`.
 	- Branch: round-20261026
-	- Commit: `25df9db`
-	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|it]` and `cicd-stop-check.bash REPO 20 killed`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Commit: `25df9db`, `239cc99`
+	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|it]` and `cicd-stop-check.bash REPO 20 [killed|keptkilled]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `-mmin +2880`, `2 days` and `run.pid` in `cicd/`, `tests/`, design.md and README.md. The Rust unit tests' day-old sweep in `src/testutil.rs` stays, per 2026102309501607.
 	- Closed: 20261025-190702
 
