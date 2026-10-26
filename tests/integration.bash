@@ -2,7 +2,8 @@
 #  shellcheck disable=1091  ## 'Not following.' The stop include is checked on its own.
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
-##		root and no mounts, so mount boundaries are left to `plan` on a real box.
+##		root, and no mounts but step 23's in a user namespace, so mount
+##		boundaries are left to `plan` on a real box.
 ##	Usage: tests/integration.bash [--keep-temp] [BINARY]
 ##		Works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or under
 ##		TMPDIR when HOST_TEMP isn't set, so HOST_TEMP picks the filesystem.
@@ -590,6 +591,31 @@ for helpArg in -h --help help ''; do
 done
 check dee8e "help ends with a blank line" "${helpBad}" ""
 
+# 23. A mount point whose name isn't UTF-8 doesn't stop a scan of some other
+# root (2026102519331112). The mounts are in a user namespace, so no root is
+# needed, and they go when it ends. A box that won't make one skips, and so
+# does ZFS, whose pools can't be seen from one.
+ns="${work}/ns"
+mkdir -p "${ns}/mnt" "${ns}/root"
+printf 'x\n' > "${ns}/root/f"
+cat > "${ns}/in.bash" << 'EOF'
+odd="${1}/mnt/$(printf 'caf\xe9')"
+mount -t tmpfs none "${1}/mnt" && mkdir "${odd}" && mount -t tmpfs none "${odd}" || exit 1
+: > "${1}/mounted"
+"${2}" scan --db "${1}/t.sqlite" --root "${1}/root" --progress 3600 > "${1}/out.txt" 2>&1
+EOF
+rc=0; nsfs="$(stat -f -c %T "${ns}/root")"
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/in.bash" "${ns}" "${bin}" 2> /dev/null || rc=$?
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip deeby "scan with a mount point that isn't UTF-8 (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/mounted" ]]; then
+	check deeby "scan with a mount point that isn't UTF-8" "${rc} $(head -1 "${ns}/out.txt" | grep mountinfo || true)" "0 "
+else
+	skip deeby "scan with a mount point that isn't UTF-8 (no user namespace here)"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -628,3 +654,5 @@ fi
 ##		  blank line.
 ##		- 20261025: A killed run's folder goes at the next run. Only a kept
 ##		  one waits 2 days.
+##		- 20261025: A scan with a mount point that isn't UTF-8, in a user
+##		  namespace.
