@@ -45,10 +45,10 @@
 - CICD reset: release builds without docker
 	- ID: 2026102509342993
 	- Type: Task
-	- Status: Waiting on automated testing
+	- Status: Done
 		- Answered 2026-10-25: don't fail if there's no docker. That's option (a), build x86_64 on the host with a note from the floor check and arm64 skipped, and the merge gate doesn't fail on it either.
 		- Done but for the tree record, which only a run as thorough as the merge gate shows.
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full --no-container`. It passes, its release step has the host NOTE and the floor NOTE and no arm64, and the end says the tree wasn't recorded, skipped `release-image`.
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261025-093429
 	- Opened by: 2026102416215926
@@ -68,6 +68,8 @@
 	- Commit: `feb7806`
 	- Test case: none with an ID. `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every use of `RELEASE_BUILD_CMD`, `RELEASE_BUILD_BIN`, `release-build.bash`, `check-release.bash glibc` and `tests_ctr` in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md and README.md. On an arm64 box the host build still stops, since the native target there isn't x86_64.
+	- Verified 2026-10-25: `--backlog-run-full --no-container` passed in 9m 49s on d812cd9. The release step printed the host NOTE and the glibc 2.39 floor NOTE, built no arm64, Other hosts skipped for it, and the end said the tree wasn't recorded, skipping `release-image`.
+	- Checks settled 2026-10-25, both as the worker picked.
 
 - CICD reset: other hosts and VMs
 	- ID: 2026102416215927
@@ -103,6 +105,7 @@
 	- Test case: none with an ID. `remote-check.bash REPO [plan|nohelper|busy|box|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883). The pass case needs the VM, so it's the full run's.
 	- Swept: every `no_remote`, `step_keys`, `fStepOn`, `stages 2-6` and stage number in `cicd/`, the plan's Other hosts line, `--list`'s test ID lines, the private checks that match plan text or step counts, design.md and README.md. tests/integration.bash reads `src/main.rs` and the stop include from the tree beside it, and both go to the box.
 	- Verified 2026-10-25: `--backlog-run-full` passed in 30m 00s (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). Other hosts passed on vmDebARM64 in about 5 minutes, the VM was found off and put back to off, and the end had no `Skipped:` list. The tree was recorded.
+	- Checks settled 2026-10-25, all as the worker picked.
 
 - CICD reset: container cleanup
 	- ID: 2026102416215928
@@ -136,6 +139,7 @@
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `docker run`, `docker build`, `fCtrRun`, `fCtrRunSelf`, `--label` and `builder prune` in `cicd/` and `tests/`. All 3 scripts that start containers set `ctr_step`: cicd.bash, `leak-common.bash` and `release-build.bash`.
 	- Verified 2026-10-25: `--backlog-run-full` passed in the release image (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). The cleanup line named no containers left, `docker ps -a --filter label=dev.project=tukfs-hash` was empty after, and both temp roots were empty but for the round's own run folders. Names and labels were shown by the worker's `--keep-temp` run with real docker.
+	- Checks settled 2026-10-25, all as the worker picked.
 
 - CICD reset: temp files and safe removal
 	- ID: 2026102416215934
@@ -172,6 +176,7 @@
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `RUN_TMP_PREFIX`, `fRunDirMake`, `fSweepStale`, `.cicd-kept`, `TMPDIR` and `itzq` in `cicd/`, `tests/`, the private tools, design.md and README.md. `scratch.bash` and box-side's folders were left as they were.
 	- Verified 2026-10-25: `--backlog-run-full` passed (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). Its run folder was `20261025-175553_001` under HOST_TEMP, and after it nothing was left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/` but the round's own run folders. vmDebARM64's work folder was `/var/tmp/tukfs-hash/20261025-182246_001`, and step 7 passed.
+	- Checks settled 2026-10-25. The killed-run folder call went the other way, filed as 2026102518150001. The rest as the worker picked.
 
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
@@ -200,7 +205,7 @@
 - CICD reset: containers
 	- ID: 2026102416215926
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 		- Its own part is in. It closes with child 2026102509342993, the release builds without docker, which waits on a question.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
@@ -227,6 +232,7 @@
 	- Commit: `e628037`
 	- Test case: `tests-ctr-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline and needs docker. 2026102508462883 asks whether such checks move into the pipeline.
 	- Swept: every use of `BUILD_CMD`, `LINT_CMD`, `TEST_CMD`, `RELEASE_NATIVE_CMD` and `RELEASE_NATIVE_BIN` in `cicd/`, the plan's Containers line, the private checks that match plan text, design.md, and the soak's header. `release-build.bash` still has no host path, which is the child's.
+	- Closed 2026-10-25 with its last child, 2026102509342993.
 
 - CICD reset: CICD process gaps
 	- ID: 2026102416215935
@@ -911,6 +917,7 @@
 	- Test case: none with an ID. `backup-excludes-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Acceptance signoff: Self-closed: the check passes, and fails without the exclude.
 	- Closed: 20261025-175112
+	- Checks settled 2026-10-25, all as the worker picked.
 
 - A stopped cicd run can leave its temp dir and a locked frozen copy.
 	- ID: 2026102407311809
@@ -1131,6 +1138,7 @@
 	- Commit: `b8ea7c0`
 	- Test case: none with an ID. `leak-lengths-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Closed: 20261025-174051
+	- Checks settled 2026-10-25, all as the worker picked.
 
 - `cicd.bash --list` prints the plan, but not the test IDs the run would print.
 	- ID: 2026102507210235
@@ -1940,6 +1948,7 @@
 	- Test case: `dee8e`.
 	- Acceptance signoff: Self-closed: `dee8e` passes, and fails on the old build.
 	- Closed: 20261025-175112
+	- Checks settled 2026-10-25, all as the worker picked.
 
 - `--version` prints a copyright line and blank lines.
 	- ID: 2026102515550001
@@ -1962,6 +1971,7 @@
 	- Test case: `deb0e`, with `deb0d` for the line itself.
 	- Acceptance signoff: Self-closed: `deb0e` passes, and fails on the old build.
 	- Closed: 20261025-175112
+	- Checks settled 2026-10-25, all as the worker picked.
 
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407
