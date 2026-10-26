@@ -103,7 +103,7 @@
 		- 2026-10-25: Verified: `--backlog-run-quick` passed in 2m 11s, and `--backlog-run-quick fuzz` in 44 s at load 42. Breaking the mount table's octal unescape, or the `zfs diff` link count field, turns their fuzz test red. A seed replays alone. clippy, rustfmt, shellcheck, the test ID check and the markdown checks pass.
 		- 2026-10-25: Updated pinned asserts in the private checks for the new leak check counts: `leak-lengths-check.bash` 6 to 7 (8 for `--long`, 5 for `--quick`), plus a `bq fuzz` case, and `cicd-flags-check.bash` 6 to 7 (8 for `--long`). Both pass.
 	- Decisions:
-		- Plain tests with a hand-built generator, on stable, with no new crate, per the fuzz note in CLAUDE.md. cargo-fuzz needs the nightly and a corpus to keep.
+		- Plain tests with a hand-built generator, on stable, with no new crate. cargo-fuzz needs the nightly and a corpus to keep.
 		- Fast at 20 s and long at an hour, with none at mid. The unit tests' 1 s each is the floor every run already gets.
 		- Miri skips them, since they're safe code and would run too few cases.
 		- A find-new or list name may come out absolute. `run` refuses those, so the test checks that only for `zfs diff`, where mount points are stripped.
