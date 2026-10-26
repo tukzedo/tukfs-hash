@@ -53,107 +53,6 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
-- CICD reset: CICD process gaps
-	- ID: 2026102416215935
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Prereq IDs: 2026102416215930
-		- It needs `--long` from the flags item.
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
-		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
-		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
-	- Progress log:
-		- 2026-10-25: Split in 2, since both won't fit one sitting: the leak check lengths in 2026102517244901, and the fuzz tests in 2026102517244907. This closes with the second.
-		- 2026-10-25: 2026102517244901 is Done.
-	- 2026-10-26: 2026102517244907 is Done, so this closes with it.
-
-- Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
-	- ID: 2026102519331112
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-193311
-	- Opened by: 2026102517244907, while writing the mount table fuzz test
-	- Steps to reproduce [Bug]:
-		- Mount anything on a folder named `caf\xe9`, then scan any other root.
-		- Result: `tukfs-hash: /proc/self/mountinfo: stream did not contain valid UTF-8`, exit 1.
-	- Reproduced [Bug]: Yes, with the release build at `d130ec6`, a tmpfs in a user and mount namespace, by `nonutf8-mount.bash DIR BINARY` in the private tools folder. The same scan outside the namespace passes.
-	- Possible cause [Bug]: `read_mounts` reads the table with `read_to_string`. The kernel escapes only space, tab, newline and backslash in it, so other bytes come through raw. `parse_mountinfo` would need to take bytes.
-	- Actual cause [Bug]: As above. A loop device's `backing_file` had the same read, so a loop on a file whose name isn't UTF-8 was taken for a disk of its own, and its real disk was missed when grouping.
-	- Actual fix [Bug]:
-		- The mount table is read and parsed as bytes, and a mount point keeps its bytes. The type and source stay text, with any bad byte shown as a replacement character, since they're only matched against `/dev/`, a pool name or a type name.
-		- `backing_file` is read as bytes too.
-	- Branch: round-20261026
-	- Commit: `0a45bc8`
-	- Test case: `deeby`, a scan with a tmpfs on `caf\xe9` in a user namespace, skipped on ZFS, whose pools can't be seen from one. Unit tests `deebw` (mount table) and `deebx` (loop backing file), and `deeb6`, the mount table fuzz test, now with non-UTF-8 mount points.
-	- Verified: `deeby` failed against the build from `d130ec6` with the error above, and passes after on ext4. Making the parse go through text again turns `deebw` and `deeb6` red. `--backlog-run-quick` passed in 1m 53s at load 16 to 22.
-	- Swept: every `read_to_string` and `from_utf8` in `src/`. The other `/sys` reads are numbers and kernel names. `zpool` output goes through `from_utf8_lossy` for `/dev/` paths only. The xattr and snapshot diff readers were already on bytes.
-	- Acceptance signoff: Self-closed: as reported. Tests fail before and pass after.
-	- Closed: 20261025-194613
-
-- CICD reset: fuzz tests for the parsers
-	- ID: 2026102517244907
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261025-172449
-	- Opened by: split from 2026102416215935
-	- Parent ID: 2026102416215935
-	- Prereq IDs: 2026102517244901
-		- Where in the run the fuzz tests go, and at what length, follows the leak check lengths.
-	- Requirements  [Feature]:
-		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
-	- Progress log:
-		- 2026-10-25: Unit tests named `fuzz_*`, beside each parser: the mount table, `zfs diff`, find-new and list input, `--since` dates, and the base64url, hex and inode xattr values. A generator for each format builds input with odd bytes in it, and the parse has to come out as built. Real samples, `/proc/self/mountinfo` among them, are cut, bit-flipped and spliced, and have to parse without a panic into output that holds up. Each test also checks its generator still makes every kind of line.
-		- 2026-10-25: `TUKFS_FUZZ_SECS` is the wall time per parser, 1 s in the plain unit tests. Each case is a pure function of its seed, and a failure prints the `TUKFS_FUZZ_SEED` that runs it again.
-		- 2026-10-25: `cicd/utility/fuzz.bash SECS` runs only those, on a quarter of the cores. It's a fast leak check at 20 s and a long one at an hour, and the `fuzz` area of `--backlog-run-quick`.
-		- 2026-10-25: Verified: `--backlog-run-quick` passed in 2m 11s, and `--backlog-run-quick fuzz` in 44 s at load 42. Breaking the mount table's octal unescape, or the `zfs diff` link count field, turns their fuzz test red. A seed replays alone. clippy, rustfmt, shellcheck, the test ID check and the markdown checks pass.
-		- 2026-10-25: Updated pinned asserts in the private checks for the new leak check counts: `leak-lengths-check.bash` 6 to 7 (8 for `--long`, 5 for `--quick`), plus a `bq fuzz` case, and `cicd-flags-check.bash` 6 to 7 (8 for `--long`). Both pass.
-	- Decisions:
-		- Plain tests with a hand-built generator, on stable, with no new crate. cargo-fuzz needs the nightly and a corpus to keep.
-		- Fast at 20 s and long at an hour, with none at mid. The unit tests' 1 s each is the floor every run already gets.
-		- Miri skips them, since they're safe code and would run too few cases.
-		- A find-new or list name may come out absolute. `run` refuses those, so the test checks that only for `zfs diff`, where mount points are stripped.
-	- Branch: round-20261026
-	- Commit: `d130ec6`
-	- Test case: `deeb6`, `deeb7`, `deeb8`, `deeb9`, `deeba`, `deebb`, and `deebc` for the seed and budget runner.
-	- Swept: every parser of outside input in `src/`: `parse_mountinfo` and its unescape, `parse_zfs_diff`, `parse_find_new`, `parse_list`, `parse_date`, `b64u_decode`, `unhex`, `trim_value` and `inode_of`. The arguments in `main.rs` aren't covered, since they come from the person running it. The integration test covers them.
-	- Acceptance signoff: Self-closed: per the requirement. The hour-long run hasn't been run, since only `--long` runs it. It's the same script with a bigger number.
-	- Closed: 20261025-193341
-
-- A killed cicd run's folder and frozen copy now wait 2 days for the sweep.
-	- ID: 2026102518150001
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No. `--backlog-run-quick` runs the sweep at its start and end.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-181500
-	- Opened by: round-20261025b, answer to a Check on 2026102416215934
-	- Related IDs: 2026102416215934, 2026102407311809
-	- Steps to reproduce [Bug]:
-		- Start `cicd/cicd.bash --backlog-run-quick`, `kill -9` it, then start another run.
-		- Result: the dead run's folder and its locked frozen copy stay until they're 2 days old. 2026102407311809 removed them as soon as the PID was gone.
-	- Expected behavior [Bug]: A folder whose `run.pid` process is gone is removed at the next run's start. Only a folder kept by `--keep-temp` waits 2 days.
-	- Actual cause [Bug]: 2026102416215934 swept only folders over 2 days old, and dropped the kept mark.
-	- Progress log:
-		- 2026-10-25: The sweep takes any marked run folder whose PID is gone. `--keep-temp` writes `.cicd-kept` in each kept folder, when it's made and again at the end, and the sweep leaves it until that mark is 2 days old. So a kept run that's killed still waits.
-		- 2026-10-25: The integration test's own sweep does the same, with `.test-kept`.
-		- 2026-10-25: Verified: `temp-ctr-check.bash sweep` and `it` pass, and 7 of their cases fail on the code from before. `cicd-stop-check.bash killed`, with no aging now, passes, and fails on the code from before. Its new `keptkilled` case, a killed `--keep-temp` run, passes, and fails without the mark written up front. `--backlog-run-quick` passes in 2m 04s at load 25 to 34. shellcheck and the markdown checks are clean.
-	- Decisions:
-		- The integration test follows the same rule, so a killed test's folder doesn't wait either.
-		- `box-side.bash` on the arm64 VM keeps its 2-day wait. Its `run.pid` is written by a process that exits before the files are copied in, so going at once could take a folder in use.
-	- Actual fix [Bug]: `fSweepStale` and `fRunDirGone` in `cicd/cicd.bash`, and the sweep and `fCleanup` in `tests/integration.bash`.
-	- Branch: round-20261026
-	- Commit: `25df9db`, `239cc99`
-	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|it]` and `cicd-stop-check.bash REPO 20 [killed|keptkilled]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
-	- Swept: every `-mmin +2880`, `2 days` and `run.pid` in `cicd/`, `tests/`, design.md and README.md. The Rust unit tests' day-old sweep in `src/testutil.rs` stays, per 2026102309501607.
-	- Closed: 20261025-190702
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -1103,6 +1002,55 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 
+- CICD reset: CICD process gaps
+	- ID: 2026102416215935
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--long` from the flags item.
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
+		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
+		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+	- Progress log:
+		- 2026-10-25: Split in 2, since both won't fit one sitting: the leak check lengths in 2026102517244901, and the fuzz tests in 2026102517244907. This closes with the second.
+		- 2026-10-25: 2026102517244901 is Done.
+	- 2026-10-26: 2026102517244907 is Done, so this closes with it.
+
+- CICD reset: fuzz tests for the parsers
+	- ID: 2026102517244907
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-172449
+	- Opened by: split from 2026102416215935
+	- Parent ID: 2026102416215935
+	- Prereq IDs: 2026102517244901
+		- Where in the run the fuzz tests go, and at what length, follows the leak check lengths.
+	- Requirements  [Feature]:
+		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+	- Progress log:
+		- 2026-10-25: Unit tests named `fuzz_*`, beside each parser: the mount table, `zfs diff`, find-new and list input, `--since` dates, and the base64url, hex and inode xattr values. A generator for each format builds input with odd bytes in it, and the parse has to come out as built. Real samples, `/proc/self/mountinfo` among them, are cut, bit-flipped and spliced, and have to parse without a panic into output that holds up. Each test also checks its generator still makes every kind of line.
+		- 2026-10-25: `TUKFS_FUZZ_SECS` is the wall time per parser, 1 s in the plain unit tests. Each case is a pure function of its seed, and a failure prints the `TUKFS_FUZZ_SEED` that runs it again.
+		- 2026-10-25: `cicd/utility/fuzz.bash SECS` runs only those, on a quarter of the cores. It's a fast leak check at 20 s and a long one at an hour, and the `fuzz` area of `--backlog-run-quick`.
+		- 2026-10-25: Verified: `--backlog-run-quick` passed in 2m 11s, and `--backlog-run-quick fuzz` in 44 s at load 42. Breaking the mount table's octal unescape, or the `zfs diff` link count field, turns their fuzz test red. A seed replays alone. clippy, rustfmt, shellcheck, the test ID check and the markdown checks pass.
+		- 2026-10-25: Updated pinned asserts in the private checks for the new leak check counts: `leak-lengths-check.bash` 6 to 7 (8 for `--long`, 5 for `--quick`), plus a `bq fuzz` case, and `cicd-flags-check.bash` 6 to 7 (8 for `--long`). Both pass.
+	- Decisions:
+		- Plain tests with a hand-built generator, on stable, with no new crate. cargo-fuzz needs the nightly and a corpus to keep.
+		- Fast at 20 s and long at an hour, with none at mid. The unit tests' 1 s each is the floor every run already gets.
+		- Miri skips them, since they're safe code and would run too few cases.
+		- A find-new or list name may come out absolute. `run` refuses those, so the test checks that only for `zfs diff`, where mount points are stripped.
+	- Branch: round-20261026
+	- Commit: `d130ec6`
+	- Test case: `deeb6`, `deeb7`, `deeb8`, `deeb9`, `deeba`, `deebb`, and `deebc` for the seed and budget runner.
+	- Swept: every parser of outside input in `src/`: `parse_mountinfo` and its unescape, `parse_zfs_diff`, `parse_find_new`, `parse_list`, `parse_date`, `b64u_decode`, `unhex`, `trim_value` and `inode_of`. The arguments in `main.rs` aren't covered, since they come from the person running it. The integration test covers them.
+	- Acceptance signoff: Self-closed: per the requirement. The hour-long run hasn't been run, since only `--long` runs it. It's the same script with a bigger number.
+	- Closed: 20261025-193341
+
 - CICD reset: temp files and safe removal
 	- ID: 2026102416215934
 	- Type: Task
@@ -1569,6 +1517,58 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
+	- ID: 2026102519331112
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-193311
+	- Opened by: 2026102517244907, while writing the mount table fuzz test
+	- Steps to reproduce [Bug]:
+		- Mount anything on a folder named `caf\xe9`, then scan any other root.
+		- Result: `tukfs-hash: /proc/self/mountinfo: stream did not contain valid UTF-8`, exit 1.
+	- Reproduced [Bug]: Yes, with the release build at `d130ec6`, a tmpfs in a user and mount namespace, by `nonutf8-mount.bash DIR BINARY` in the private tools folder. The same scan outside the namespace passes.
+	- Possible cause [Bug]: `read_mounts` reads the table with `read_to_string`. The kernel escapes only space, tab, newline and backslash in it, so other bytes come through raw. `parse_mountinfo` would need to take bytes.
+	- Actual cause [Bug]: As above. A loop device's `backing_file` had the same read, so a loop on a file whose name isn't UTF-8 was taken for a disk of its own, and its real disk was missed when grouping.
+	- Actual fix [Bug]:
+		- The mount table is read and parsed as bytes, and a mount point keeps its bytes. The type and source stay text, with any bad byte shown as a replacement character, since they're only matched against `/dev/`, a pool name or a type name.
+		- `backing_file` is read as bytes too.
+	- Branch: round-20261026
+	- Commit: `0a45bc8`
+	- Test case: `deeby`, a scan with a tmpfs on `caf\xe9` in a user namespace, skipped on ZFS, whose pools can't be seen from one. Unit tests `deebw` (mount table) and `deebx` (loop backing file), and `deeb6`, the mount table fuzz test, now with non-UTF-8 mount points.
+	- Verified: `deeby` failed against the build from `d130ec6` with the error above, and passes after on ext4. Making the parse go through text again turns `deebw` and `deeb6` red. `--backlog-run-quick` passed in 1m 53s at load 16 to 22.
+	- Swept: every `read_to_string` and `from_utf8` in `src/`. The other `/sys` reads are numbers and kernel names. `zpool` output goes through `from_utf8_lossy` for `/dev/` paths only. The xattr and snapshot diff readers were already on bytes.
+	- Acceptance signoff: Self-closed: as reported. Tests fail before and pass after.
+	- Closed: 20261025-194613
+
+- A killed cicd run's folder and frozen copy now wait 2 days for the sweep.
+	- ID: 2026102518150001
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No. `--backlog-run-quick` runs the sweep at its start and end.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-181500
+	- Opened by: round-20261025b, answer to a Check on 2026102416215934
+	- Related IDs: 2026102416215934, 2026102407311809
+	- Steps to reproduce [Bug]:
+		- Start `cicd/cicd.bash --backlog-run-quick`, `kill -9` it, then start another run.
+		- Result: the dead run's folder and its locked frozen copy stay until they're 2 days old. 2026102407311809 removed them as soon as the PID was gone.
+	- Expected behavior [Bug]: A folder whose `run.pid` process is gone is removed at the next run's start. Only a folder kept by `--keep-temp` waits 2 days.
+	- Actual cause [Bug]: 2026102416215934 swept only folders over 2 days old, and dropped the kept mark.
+	- Progress log:
+		- 2026-10-25: The sweep takes any marked run folder whose PID is gone. `--keep-temp` writes `.cicd-kept` in each kept folder, when it's made and again at the end, and the sweep leaves it until that mark is 2 days old. So a kept run that's killed still waits.
+		- 2026-10-25: The integration test's own sweep does the same, with `.test-kept`.
+		- 2026-10-25: Verified: `temp-ctr-check.bash sweep` and `it` pass, and 7 of their cases fail on the code from before. `cicd-stop-check.bash killed`, with no aging now, passes, and fails on the code from before. Its new `keptkilled` case, a killed `--keep-temp` run, passes, and fails without the mark written up front. `--backlog-run-quick` passes in 2m 04s at load 25 to 34. shellcheck and the markdown checks are clean.
+	- Decisions:
+		- The integration test follows the same rule, so a killed test's folder doesn't wait either.
+		- `box-side.bash` on the arm64 VM keeps its 2-day wait. Its `run.pid` is written by a process that exits before the files are copied in, so going at once could take a folder in use.
+	- Actual fix [Bug]: `fSweepStale` and `fRunDirGone` in `cicd/cicd.bash`, and the sweep and `fCleanup` in `tests/integration.bash`.
+	- Branch: round-20261026
+	- Commit: `25df9db`, `239cc99`
+	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|it]` and `cicd-stop-check.bash REPO 20 [killed|keptkilled]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `-mmin +2880`, `2 days` and `run.pid` in `cicd/`, `tests/`, design.md and README.md. The Rust unit tests' day-old sweep in `src/testutil.rs` stays, per 2026102309501607.
+	- Closed: 20261025-190702
 
 - `lint-report.bash --check` counts archived file names with "warning" in them as warnings.
 	- ID: 2026102516000002
