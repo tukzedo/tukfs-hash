@@ -41,9 +41,11 @@
 ##	  Options:
 ##	   With no options a run does every stage config.bash has on.
 ##	   --quick             leave out the steps config.bash lists in QUICK_SKIP,
-##	                       the leak checks, profiler and demo gif
-##	   --long              everything, the same as no options, since no step
-##	                       takes hours. Also --slow. Not with --quick
+##	                       the leak checks but the fast ones, the profiler
+##	                       and demo gif
+##	   --long              everything a run with no options does, and the
+##	                       leak checks that take hours, of which there are
+##	                       none yet. Also --slow. Not with --quick
 ##	   The next 3 never sync, dogfood, publish, commit, push, install, rewrite
 ##	   a tracked file, or prompt. The format stage only checks, and a missing
 ##	   tool fails the run.
@@ -65,8 +67,8 @@
 ##	   --keep-temp         keep the run's temp dirs and containers, and print
 ##	                       where they are. The next run's sweep leaves them
 ##	                       for 2 days
-##	   --leakcheck         add the slow leak checks to --quick or
-##	                       --backlog-run-quick
+##	   --leakcheck         add the leak checks a run with no options has to
+##	                       --quick or --backlog-run-quick
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
 ##	                       --leakcheck
 ##	   --no-codeql         leave out the leak check steps that name codeql,
@@ -217,7 +219,7 @@ while (($#)); do case "$1" in
 	--backlog-run-full)       fMode bf "$1"; shift ;;
 	--merge-gate)             fMode mg "$1"; shift ;;
 	--quick)                  quick=1; inner_pass+=("$1"); shift ;;
-	--slow|--long)            slow=1; shift ;;
+	--slow|--long)            slow=1; inner_pass+=("$1"); shift ;;
 	--no-container)           no_container=1; inner_pass+=("$1"); shift ;;
 	--no-remote)              remote_off=1; fOffWhy "$1" remote; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--keep-temp)              keep_temp=1; inner_pass+=("$1"); shift ;;
@@ -255,6 +257,19 @@ if ((leakcheck_flag && no_leakcheck)); then echo "--leakcheck and --no-leakcheck
 if ((quick && slow)); then echo "--quick and --long can't go together (try --help)" >&2; exit 2; fi
 if [[ -n "${mode}" ]] && ((quick || slow)); then echo "${mode_flag} has its own steps; drop --quick and --long" >&2; exit 2; fi
 if [[ -n "${gate_rev}" ]] && ((! gate_mode)); then echo "TUKFS_GATE_REV is only for --merge-gate and the backlog runs" >&2; exit 2; fi
+## Each leak check by its length in config.bash: fast in every run, mid in a
+## run with no options and the long modes, and long in --long alone.
+_byLength=()
+for _step in "${LEAKCHECK_STEPS[@]}"; do
+	case "${_step%%|*}" in
+		fast) ;;
+		mid)  if ((quick && ! leakcheck_flag)); then continue; fi ;;
+		long) if ((! slow)); then continue; fi ;;
+		*)    echo "config.bash: a leak check with no length (fast, mid or long): ${_step}" >&2; exit 2 ;;
+	esac
+	_byLength+=("${_step#*|}")
+done
+LEAKCHECK_STEPS=("${_byLength[@]}")
 ## The release builds and the leak checks fall back to the host on this, as
 ## they do when docker doesn't answer.
 if ((no_container)); then export TUKFS_NO_CONTAINER=1; fi
@@ -349,9 +364,8 @@ if ((quick)); then
 	PROFILE_ENABLE=0; GIF_ENABLE=0; remote_off=1; fOffWhy --quick profile remote gif
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
-## A run with no options does everything, the leak checks included, and so do
-## the merge gate and --backlog-run-full. --backlog-run-quick picked its own.
-if ((no_leakcheck)) || { ((quick)) && ((! leakcheck_flag)); }; then LEAKCHECK_STEPS=(); fi
+## --quick kept the fast leak checks above, and --backlog-run-quick picked its own.
+if ((no_leakcheck)); then LEAKCHECK_STEPS=(); fi
 ## CodeQL is most of a full run's time, so it goes off alone.
 if ((no_codeql)); then
 	_kept=()
@@ -1689,3 +1703,5 @@ exit 0
 ##		  run.pid, and swept after 2 days. TEMP and TMP too. The integration
 ##		  test makes its own dir. The run's containers are removed by label
 ##		  at the end.
+##		- 2026-10-25: Leak checks in 3 lengths. The fast ones run in --quick
+##		  too, and long ones only in --long, which the frozen copy now gets.

@@ -120,26 +120,31 @@ IT_ROOTS=(
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
 )
 
-## Stage 4, last: the slow leak and memory checks, eval'd in order, quick ones
-## first. A run with no flags runs them, and --quick only with --leakcheck.
-## --backlog-run-quick only for a leak area. Any report fails. The sanitizers, Miri and CodeQL run in
-## the image below when docker answers, else on the host with a note.
+## Stage 4, last: the leak and memory checks, eval'd in order, quick ones
+## first, each "length|command". The lengths go by measured time on b23 with
+## the image and build dirs warm. fast, under a minute: every run, --quick
+## included. mid, minutes: a run with no options, --long, --backlog-run-full,
+## the merge gate, and --quick --leakcheck. long, hours: --long only, and none
+## takes that long yet. --backlog-run-quick runs none of them, but for a leak
+## area or --leakcheck. Any report fails. The sanitizers, Miri and CodeQL run
+## in the image below when docker answers, else on the host with a note.
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it
-	## fetches RustSec's database. Offline is a noted skip.
-	'cicd/utility/advisories.bash'
+	## fetches RustSec's database. Offline is a noted skip. 1 to 3 s.
+	'fast|cicd/utility/advisories.bash'
 	## The main actions 20 times over in one process, with the heap at round
 	## 20 held to round 10. The table goes in cicd/artifacts/soak/. On the
-	## host, since a scan needs the real disks.
-	'cicd/utility/soak.bash'
+	## host, since a scan needs the real disks. 23 to 51 s.
+	'fast|cicd/utility/soak.bash'
 	## The unit tests under ASan and LSan, then TSan, then Miri, each in a
-	## build dir of its own under target/leakcheck.
-	'cicd/utility/sanitize-rust.bash --asan'
-	'cicd/utility/sanitize-rust.bash --tsan'
-	'cicd/utility/sanitize-rust.bash --miri'
+	## build dir of its own under target/leakcheck. ASan and TSan 10 to 59 s,
+	## and 7.5 min for a cold build dir. Miri 42 s to 1.5 min.
+	'fast|cicd/utility/sanitize-rust.bash --asan'
+	'fast|cicd/utility/sanitize-rust.bash --tsan'
+	'mid|cicd/utility/sanitize-rust.bash --miri'
 	## Over the tree with every crate vendored. The SARIF and findings go in
-	## cicd/artifacts/codeql/.
-	'cicd/utility/codeql-scan.bash'
+	## cicd/artifacts/codeql/. 9 to 16.5 min.
+	'mid|cicd/utility/codeql-scan.bash'
 )
 
 ## The leak check image, from CTR_DIR, tagged by a hash of it and
@@ -296,7 +301,7 @@ BACKLOG_AREAS=(
 	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff and the test IDs"
 	"unit||the unit tests"
 	"it||the integration test, on a release build, once per test root"
-	"leak|cicd/utility/|every leak check"
+	"leak|cicd/utility/|every leak check but the long ones"
 	"advisories|advisories.bash|known advisories in Cargo.lock"
 	"soak|soak.bash|the soak test"
 	"asan|--asan|the unit tests under ASan and LSan"
@@ -358,3 +363,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: REMOTE_HOSTS, the arm64 tests on vmDebARM64.
 ##		- 2026-10-25: No RUN_TMP_PREFIX, since run dirs are named by time and
 ##		  a counter.
+##		- 2026-10-25: A length on each leak check.

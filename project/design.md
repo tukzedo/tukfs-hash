@@ -180,7 +180,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 ## Leak and memory checks
 
-- A full run, and `--quick --leakcheck`, ends the tests stage with the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, then Miri, and CodeQL. Any report fails the run. `--gate` never runs them, since it's the pre-push hook.
+- Each leak check has a length in `cicd/config.bash`, by its measured time with the image and build dirs warm. The fast ones, under a minute each, run in every run but `--backlog-run-quick`, `--quick` included: the known-advisory scan, the soak, and the unit tests under ASan and LSan, then TSan. The ones that take minutes, Miri and CodeQL, run in a run with no options, `--long`, the merge gate and `--backlog-run-full`, and in `--quick` only with `--leakcheck`. Ones that take hours run only in `--long`, and none does yet. `--backlog-run-quick` runs them only for a leak area or `--leakcheck`. They end the tests stage in that order, and any report fails the run (2026102517244901).
 
 - `--no-codeql` leaves out only CodeQL, which is about 11 of a full run's 17 minutes. It drops each leak check step whose command names codeql.
 
