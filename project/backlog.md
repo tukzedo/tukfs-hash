@@ -279,6 +279,22 @@
 		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
 		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+	- Progress log:
+		- 2026-10-25: Split in 2, since both won't fit one sitting: the leak check lengths in 2026102517244901, and the fuzz tests in 2026102517244907. This closes with the second.
+		- 2026-10-25: 2026102517244901 is Done.
+
+- CICD reset: fuzz tests for the parsers
+	- ID: 2026102517244907
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-172449
+	- Opened by: split from 2026102416215935
+	- Parent ID: 2026102416215935
+	- Prereq IDs: 2026102517244901
+		- Where in the run the fuzz tests go, and at what length, follows the leak check lengths.
+	- Requirements  [Feature]:
+		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1070,6 +1086,30 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+
+- CICD reset: leak checks in 3 lengths
+	- ID: 2026102517244901
+	- Type: Task
+	- Status: Done
+		- It departs from the wording in one way. `--backlog-run-quick` still runs no leak checks but for a leak area or `--leakcheck`, so "every run" leaves out the worker's gate. Filed as a Check.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-172449
+	- Opened by: split from 2026102416215935
+	- Parent ID: 2026102416215935
+	- Requirements  [Feature]:
+		- Leak checks in 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
+		- It overrides design.md "Leak and memory checks", where `--quick` runs no leak checks without `--leakcheck`.
+	- Progress log:
+		- 2026-10-25: Each leak check in `cicd/config.bash` has a length, by its times in the run logs. Fast, under a minute: the advisory scan, the soak, ASan and TSan. Mid, minutes: Miri and CodeQL. Long, hours: none yet. Fast ones run in every run, `--quick` included. Mid ones run in a run with no options, `--long`, the merge gate and `--backlog-run-full`, and in `--quick` with `--leakcheck`. Long ones run in `--long` alone, which the frozen copy's run now gets too. A check with no length stops the run.
+		- 2026-10-25: Verified: `leak-lengths-check.bash` passes 21 cases, and 10 fail on the code from before. With `--long` not passed to the frozen copy, its `--long` run case fails. `--quick` passed in 4m 50s at load 34, with the 4 fast ones in 70 s. `--backlog-run-quick` passed in 3m 23s at load 28 to 40. The flags check and shellcheck pass.
+	- Decisions:
+		- Miri is mid, since it went over a minute in 3 of 5 runs. Filed as a Check.
+		- Nothing takes hours, so the long length is empty. Filed as a Check, with what could go there.
+	- Swept: every `LEAKCHECK_STEPS`, `--leakcheck`, `--long` and `--slow` in `cicd/`, the private tools, design.md and README.md. `cicd-flags-check.bash` matches only the counts, which stay the same.
+	- Branch: round-20261025b
+	- Commit: `b8ea7c0`
+	- Test case: none with an ID. `leak-lengths-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Closed: 20261025-174051
 
 - `cicd.bash --list` prints the plan, but not the test IDs the run would print.
 	- ID: 2026102507210235
