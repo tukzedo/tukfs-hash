@@ -7,8 +7,8 @@
 ##		Works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or under
 ##		TMPDIR when HOST_TEMP isn't set, so HOST_TEMP picks the filesystem.
 ##		It's removed at the end unless --keep-temp, or TUKFS_KEEP_TEMP, says
-##		to keep it. Its own folders there over 2 days old whose run is gone
-##		are removed first.
+##		to keep it. Its own folders there whose run is gone are removed
+##		first, but a kept one only once it's 2 days old.
 ##	History: At bottom of script.
 
 # Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -48,16 +48,18 @@ fSafeRm() {
 	rm -rf --one-file-system -- "${p}"
 }
 
-# Ours, over 2 days old, and its run gone. A folder with no marker of this
-# script's, such as a cicd run's, isn't.
+# Ours, and its run gone, such as a killed one's. A kept one waits 2 days
+# (2026102518150001). A folder with no marker of this script's, such as a
+# cicd run's, isn't ours.
 mkdir -p -- "${base}"
 while IFS= read -r -d '' old; do
 	pid=''; got=''
 	read -r pid 2> /dev/null < "${old}/run.pid" || continue
 	read -r got 2> /dev/null < "${old}/.test-run" || continue
 	[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" ]] || continue
+	if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
 	fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
-done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -mmin +2880 -print0 2> /dev/null)
+done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
 
 n=1
 stamp="$(date +%Y%m%d-%H%M%S)"
@@ -73,7 +75,7 @@ export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
 fCleanup() {
 	local got=''
 	fStopDescendants
-	if [[ -n "${keep}" ]]; then printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
+	if [[ -n "${keep}" ]]; then : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
 	fSafeRm "${work}" || true
@@ -623,3 +625,5 @@ fi
 ##		  with run.pid, and old ones go after 2 days. --keep-temp.
 ##		- 20261025: --version is one line, with no copyright. Help ends with a
 ##		  blank line.
+##		- 20261025: A killed run's folder goes at the next run. Only a kept
+##		  one waits 2 days.

@@ -65,8 +65,8 @@
 ##	   --no-remote         skip the other hosts, the arm64 tests on
 ##	                       vmDebARM64
 ##	   --keep-temp         keep the run's temp dirs and containers, and print
-##	                       where they are. The next run's sweep leaves them
-##	                       for 2 days
+##	                       where they are. The next runs' sweep leaves the
+##	                       dirs for 2 days
 ##	   --leakcheck         add the leak checks a run with no options has to
 ##	                       --quick or --backlog-run-quick
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
@@ -118,8 +118,9 @@
 ##	  removed at the end, even when the run fails or is stopped, and only by
 ##	  fSafeRm, and so are the run's containers, by their dev.run label. A
 ##	  stop kills the running ones first. Each run also removes this
-##	  project's run dirs over 2 days old whose run is gone. --keep-temp
-##	  keeps the dir and the containers, and says where.
+##	  project's run dirs whose run is gone, such as a killed run's.
+##	  --keep-temp keeps the dir and the containers, and says where, and the
+##	  sweep leaves a kept dir for 2 days.
 ##	- Stages 2-7 run from a copy of the tree taken after the format stage,
 ##	  uncommitted work included, so a merge, checkout or edit during a run
 ##	  can't reach them. The copy sits in the run's temp dir.
@@ -459,6 +460,7 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 ## the profiler's workload. Other folders there, such as the integration
 ## test's, have no mark and are left alone.
 run_mark=".cicd-run"
+kept_mark=".cicd-kept"
 run_token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 declare -a run_dirs=()   ## made by this run, removed at the end
 
@@ -529,9 +531,9 @@ declare -a kept_dirs=(); kept_shown=0
 fRunDirGone(){   ## fRunDirGone DIR
 	local d="$1" kb="" i
 	gone_kb=0
-	## --keep-temp. The next runs' sweep leaves it for 2 days, as any.
+	## --keep-temp. The next runs' sweep leaves it for 2 days from the mark.
 	if ((keep_temp)); then
-		[[ " ${kept_dirs[*]} " == *" ${d} "* ]] || kept_dirs+=("${d}")
+		[[ " ${kept_dirs[*]} " == *" ${d} "* ]] || { kept_dirs+=("${d}"); : > "${d}/${kept_mark}" || true; }
 		return 0
 	fi
 	kb="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
@@ -1514,10 +1516,10 @@ fPruneCache(){   ## fPruneCache DIR
 	echo "${n} ${kb}"
 }
 
-## Run dirs over 2 days old whose run is gone: killed outright, so their trap
-## never ran, or kept by --keep-temp. A strict name, a run.pid that's gone,
-## and a mark that names the same PID. A frozen copy in one goes through git
-## first, so its locked record goes too.
+## Run dirs whose run is gone: killed outright, so their trap never ran, or
+## kept by --keep-temp over 2 days ago (2026102518150001). A strict name, a
+## run.pid that's gone, and a mark that names the same PID. A frozen copy in
+## one goes through git first, so its locked record goes too.
 fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 	local base="" d="" got="" pid="" kb=0 n=0 size=0 repo=""
 	base="$(realpath -e -- "$1" 2>/dev/null || true)"
@@ -1531,6 +1533,7 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		[[ -d "/proc/${pid}" ]] && continue
 		got=""; { read -r got < "${d}/${run_mark}"; } 2>/dev/null || continue
 		[[ "${got}" == "${pid}-"* ]] || continue
+		if [[ -e "${d}/${kept_mark}" && -n "$(find "${d}/${kept_mark}" -maxdepth 0 -mmin -2880 2>/dev/null)" ]]; then continue; fi
 		size="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 		[[ "${size}" =~ ^[0-9]{1,15}$ ]] || size=0
 		repo=""
@@ -1544,7 +1547,7 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		fi
 		if fSafeRm "${d}" "${got}"; then n=$((n + 1)); kb=$((kb + size)); fi
 		if [[ -n "${repo}" ]]; then fFrozenRemove "${repo}" "${d}/tree" || true; fi
-	done < <(find "${base}/tukfs-hash" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -mmin +2880 -print0 2>/dev/null)
+	done < <(find "${base}/tukfs-hash" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2>/dev/null)
 	echo "${n} ${kb}"
 }
 
@@ -1705,3 +1708,5 @@ exit 0
 ##		  at the end.
 ##		- 2026-10-25: Leak checks in 3 lengths. The fast ones run in --quick
 ##		  too, and long ones only in --long, which the frozen copy now gets.
+##		- 2026-10-25: A killed run's dir and frozen copy go at the next run
+##		  again. Only a kept dir waits 2 days.
