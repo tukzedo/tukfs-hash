@@ -124,10 +124,11 @@ IT_ROOTS=(
 ## first, each "length|command". The lengths go by measured time on b23 with
 ## the image and build dirs warm. fast, under a minute: every run, --quick
 ## included. mid, minutes: a run with no options, --long, --backlog-run-full,
-## the merge gate, and --quick --leakcheck. long, hours: --long only, and none
-## takes that long yet. --backlog-run-quick runs none of them, but for a leak
-## area or --leakcheck. Any report fails. The sanitizers, Miri and CodeQL run
-## in the image below when docker answers, else on the host with a note.
+## the merge gate, and --quick --leakcheck. long, hours: --long only, which
+## is the fuzz tests at an hour each. --backlog-run-quick runs none of them,
+## but for a leak area or --leakcheck. Any report fails. The sanitizers, Miri
+## and CodeQL run in the image below when docker answers, else on the host
+## with a note.
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it
 	## fetches RustSec's database. Offline is a noted skip. 1 to 3 s.
@@ -142,6 +143,10 @@ LEAKCHECK_STEPS=(
 	'fast|cicd/utility/sanitize-rust.bash --asan'
 	'fast|cicd/utility/sanitize-rust.bash --tsan'
 	'mid|cicd/utility/sanitize-rust.bash --miri'
+	## The parser fuzz tests, SECS each, side by side on a quarter of the
+	## cores. Their 1 s each in the unit tests is the floor.
+	'fast|cicd/utility/fuzz.bash 20'
+	'long|cicd/utility/fuzz.bash 3600'
 	## Over the tree with every crate vendored. The SARIF and findings go in
 	## cicd/artifacts/codeql/. 9 to 16.5 min.
 	'mid|cicd/utility/codeql-scan.bash'
@@ -307,6 +312,7 @@ BACKLOG_AREAS=(
 	"asan|--asan|the unit tests under ASan and LSan"
 	"tsan|--tsan|the unit tests under TSan"
 	"miri|--miri|the unit tests under Miri"
+	"fuzz|fuzz.bash 20|the parser fuzz tests, 20 s each"
 	"codeql|codeql|CodeQL, about 11 minutes"
 	"profile||the profiler"
 	"release||the release builds, packages and release checks"
@@ -364,3 +370,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: No RUN_TMP_PREFIX, since run dirs are named by time and
 ##		  a counter.
 ##		- 2026-10-25: A length on each leak check.
+##		- 2026-10-26: The parser fuzz tests, fast and long.

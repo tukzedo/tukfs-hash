@@ -180,7 +180,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 ## Leak and memory checks
 
-- Each leak check has a length in `cicd/config.bash`, by its measured time with the image and build dirs warm. The fast ones, under a minute each, run in every run but `--backlog-run-quick`, `--quick` included: the known-advisory scan, the soak, and the unit tests under ASan and LSan, then TSan. The ones that take minutes, Miri and CodeQL, run in a run with no options, `--long`, the merge gate and `--backlog-run-full`, and in `--quick` only with `--leakcheck`. Ones that take hours run only in `--long`, and none does yet. `--backlog-run-quick` runs them only for a leak area or `--leakcheck`. They end the tests stage in that order, and any report fails the run (2026102517244901).
+- Each leak check has a length in `cicd/config.bash`, by its measured time with the image and build dirs warm. The fast ones, under a minute each, run in every run but `--backlog-run-quick`, `--quick` included: the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, and the parser fuzz tests at 20 s each. The ones that take minutes, Miri and CodeQL, run in a run with no options, `--long`, the merge gate and `--backlog-run-full`, and in `--quick` only with `--leakcheck`. Ones that take hours run only in `--long`, which is the fuzz tests again at an hour each. `--backlog-run-quick` runs them only for a leak area or `--leakcheck`. They end the tests stage in that order, and any report fails the run (2026102517244901).
 
 - `--no-codeql` leaves out only CodeQL, which is about 11 of a full run's 17 minutes. It drops each leak check step whose command names codeql.
 
@@ -193,6 +193,11 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - The bundled SQLite is built by clang with the same sanitizer as the Rust code, with its lookaside and page cache pools off so each block is a malloc of its own.
 
 - SQLite sets itself up on first use with plain reads and writes, and TSan caught 2 test threads doing that at once. `db::init()` does it once, behind a `Once`, before any connection opens. A scan already did it on the main thread before its workers started.
+
+- The parser fuzz tests are plain unit tests named `fuzz_*`, beside each parser: the mount table, `zfs diff` and find-new output, lists, `--since` dates, and the base64url, hex and inode xattr values. A generator that knows each format makes well-formed input with the odd bytes in it, and its parse has to come out as built. Real samples gone bad, with bits flipped, cut short and the separator bytes put in, have to give no panic, and what comes out has to hold up, such as each line a snapshot diff can't use named by its own number and text (2026102517244907).
+	- Each case is a pure function of one seed, so a failure prints the `TUKFS_FUZZ_SEED` that runs it again alone. `TUKFS_FUZZ_SECS` is the wall time per parser, 1 s in the plain unit tests and at least 300 cases. Each run starts from a new seed, so runs add up.
+	- Each also checks that its generator still makes every kind of line it's meant to, so a change that stops one fails rather than passing on less.
+	- `cicd/utility/fuzz.bash SECS` runs only those, from the unit tests' release build, a quarter of the cores at a time. Miri skips them, since they're safe code and get too few cases in the time.
 
 - Miri skips what it can't run: SQLite, which is C, xattrs, `openat2` and `mktime`. 2 tests of safe code that take it over 15 minutes are skipped too. Each says why in its `#[cfg_attr(miri, ignore = ...)]`.
 

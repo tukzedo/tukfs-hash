@@ -201,9 +201,145 @@ fn remove_tree(dir: &Path, md: &fs::Metadata, dev: u64) -> io::Result<()> {
 	fs::remove_dir(dir)
 }
 
+/// splitmix64, so a case is a pure function of its seed on every box.
+pub struct Rng(u64);
+
+impl Rng {
+	pub fn next_u64(&mut self) -> u64 {
+		self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+		let mut z = self.0;
+		z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+		z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+		z ^ (z >> 31)
+	}
+
+	/// 0 to n - 1.
+	pub fn below(&mut self, n: usize) -> usize {
+		(self.next_u64() % n.max(1) as u64) as usize
+	}
+
+	pub fn one_in(&mut self, n: usize) -> bool {
+		self.below(n) == 0
+	}
+
+	pub fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+		&items[self.below(items.len())]
+	}
+}
+
+pub struct Fuzzed {
+	pub cases: u64,
+	covered: u32,
+	replay: bool,
+}
+
+impl Fuzzed {
+	/// The guard that the generator still makes what it's meant to: each bit
+	/// is something some case must have hit. A replayed seed can't hit them all.
+	pub fn covers(&self, want: u32) {
+		assert!(
+			self.replay || self.covered & want == want,
+			"{} cases never hit {:#b}",
+			self.cases,
+			want & !self.covered
+		);
+	}
+}
+
+fn fuzz_env(name: &str) -> Option<String> {
+	std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// Runs `case` over one seed after another until `TUKFS_FUZZ_SECS` of wall
+/// time is gone, 1 s when unset. Each run starts from a new seed, and a
+/// failure names its own, which `TUKFS_FUZZ_SEED` runs again alone. A case
+/// returns the coverage bits it hit.
+pub fn fuzz(name: &str, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
+	let one = |seed: u64| {
+		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| case(&mut Rng(seed))))
+			.unwrap_or_else(|_| {
+				panic!("{name}: seed {seed} failed; TUKFS_FUZZ_SEED={seed} runs it again")
+			})
+	};
+	if let Some(seed) = fuzz_env("TUKFS_FUZZ_SEED") {
+		let seed = seed.parse().expect("TUKFS_FUZZ_SEED is a number");
+		return Fuzzed {
+			cases: 1,
+			covered: one(seed),
+			replay: true,
+		};
+	}
+	let secs: f64 = fuzz_env("TUKFS_FUZZ_SECS").map_or(1.0, |s| {
+		s.parse()
+			.ok()
+			.filter(|s: &f64| s.is_finite() && *s >= 0.0)
+			.expect("TUKFS_FUZZ_SECS is seconds")
+	});
+	let until = std::time::Instant::now() + Duration::from_secs_f64(secs);
+	let start = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |d| d.as_nanos() as u64);
+	let mut done = Fuzzed {
+		cases: 0,
+		covered: 0,
+		replay: false,
+	};
+	// At least a few hundred, so a busy box still gets some coverage.
+	while done.cases < 300 || std::time::Instant::now() < until {
+		done.covered |= one(start.wrapping_add(done.cases));
+		done.cases += 1;
+	}
+	done
+}
+
+/// Real input gone bad: bits flipped, cut short, bytes dropped, doubled or
+/// changed, and the bytes the parsers split on put in.
+pub fn mutate(rng: &mut Rng, input: &[u8]) -> Vec<u8> {
+	const SPLICE: &[&[u8]] = &[
+		b"\n",
+		b"\t",
+		b" ",
+		b"\\",
+		b" - ",
+		b" -> ",
+		b":",
+		b"-",
+		b"\\0040",
+		b"\\040",
+		b"\\777",
+		b"\r",
+		b"\0",
+		b"(+1)",
+		b"\xff",
+		b"/",
+		b"..",
+		b"9999999999999999999999",
+	];
+	let mut out = input.to_vec();
+	for _ in 0..=rng.below(8) {
+		let at = rng.below(out.len() + 1);
+		match rng.below(6) {
+			0 if at < out.len() => out[at] ^= 1 << rng.below(8),
+			1 => out.truncate(at),
+			2 if at < out.len() => {
+				out.remove(at);
+			}
+			3 => {
+				let end = (at + rng.below(24)).min(out.len());
+				out = [&out[..end], &out[at..]].concat();
+			}
+			4 => out = [&out[..at], rng.pick(SPLICE), &out[at..]].concat(),
+			_ if at < out.len() => out[at] = rng.next_u64() as u8,
+			_ => {}
+		}
+	}
+	out
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::collections::BTreeSet;
 	use std::time::SystemTime;
 
 	// A failed test's folder goes, a read-only one inside it too.
@@ -231,6 +367,28 @@ mod tests {
 			"{} is still there",
 			dir.display()
 		);
+	}
+
+	#[test]
+	fn a_case_is_its_seed() {
+		let _id = test_id("deebc");
+		let run = |seed| {
+			let mut r = Rng(seed);
+			mutate(&mut r, b"M\t/home/u/a\nR\t/home/u/b\t/home/u/c\n")
+		};
+		assert_eq!(run(7), run(7));
+		assert!((0..50).map(run).collect::<BTreeSet<_>>().len() > 40);
+		let mut r = Rng(0);
+		// Pinned, so a change to the generator shows here first.
+		assert_eq!(r.next_u64(), 0xe220_a839_7b1d_cdaf);
+		let hit = std::cell::Cell::new(0u64);
+		let f = fuzz("self", |r| {
+			hit.set(hit.get() + 1);
+			1 << r.below(3)
+		});
+		assert_eq!(f.cases, hit.get());
+		assert!(f.cases >= 300);
+		f.covers(0b111);
 	}
 
 	// Of these only the old one of a pid that's gone may go.

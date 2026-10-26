@@ -387,4 +387,98 @@ mod tests {
 		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);
 		assert_eq!(group_name(&g[1].0), "sda+sdb");
 	}
+
+	const BITS: &[&str] = &[
+		"a", "bin", "é", "日本", " ", "\t", "\n", "\\", "\\040", "-", " - ", "0",
+	];
+
+	// The kernel's own escape, which unescape undoes.
+	fn mangle(s: &str) -> String {
+		let mut out = String::with_capacity(s.len());
+		for c in s.chars() {
+			match c {
+				' ' => out.push_str("\\040"),
+				'\t' => out.push_str("\\011"),
+				'\n' => out.push_str("\\012"),
+				'\\' => out.push_str("\\134"),
+				_ => out.push(c),
+			}
+		}
+		out
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_mountinfo() {
+		let _id = test_id("deeb6");
+		let real = fs::read("/proc/self/mountinfo").unwrap_or_default();
+		crate::testutil::fuzz("mountinfo", |r| {
+			let mut covered = 0;
+			let mut text = String::new();
+			let mut want = Vec::new();
+			for i in 0..r.below(12) {
+				let mut point = String::new();
+				for _ in 0..=r.below(4) {
+					point.push('/');
+					for _ in 0..=r.below(3) {
+						point.push_str(r.pick(BITS));
+					}
+				}
+				let fstype = *r.pick(&["ext4", "zfs", "btrfs", "fuse.sshfs", "ntfs3", "tmpfs"]);
+				let source =
+					*r.pick(&["/dev/sdc1", "zf10/a/b", "none", "UUID=1-2", "//host/share"]);
+				let optional = [" shared:1", " master:3", " propagate_from:2", " unbindable"];
+				let mut left = format!(
+					"{} {} 0:{i} /{} {} rw,noatime",
+					20 + i,
+					1 + i,
+					mangle(r.pick(BITS)),
+					mangle(&point)
+				);
+				for _ in 0..r.below(3) {
+					left.push_str(r.pick(&optional));
+					covered |= 1;
+				}
+				let right = format!("{fstype} {source} rw,xattr");
+				// Junk has no " - ", or too few fields on a side, and is skipped.
+				let shape = r.below(8);
+				let line = match shape {
+					0 => format!("{left} _ {right}"),
+					1 => {
+						let cut: Vec<&str> = left.splitn(5, ' ').take(4).collect();
+						format!("{} - {right}", cut.join(" "))
+					}
+					2 => format!("{left} - {fstype}"),
+					_ => {
+						want.push((PathBuf::from(&point), fstype, source));
+						format!("{left} - {right}")
+					}
+				};
+				covered |= if shape < 3 { 2 } else { 8 };
+				text.push_str(&line);
+				text.push('\n');
+				if point.contains(['\n', ' ', '\\']) {
+					covered |= 4;
+				}
+			}
+			let got = parse_mountinfo(&text);
+			let got: Vec<_> = got
+				.iter()
+				.map(|m| (m.point.clone(), m.fstype.as_str(), m.source.as_str()))
+				.collect();
+			assert_eq!(got, want, "{text:?}");
+			// Real lines gone bad: no panic, and no field runs past a space.
+			let bad = String::from_utf8_lossy(&crate::testutil::mutate(r, &real)).into_owned();
+			let got = parse_mountinfo(&bad);
+			assert!(got.len() <= bad.lines().count());
+			for m in &got {
+				assert!(
+					!m.fstype.contains([' ', '\n']) && !m.source.contains([' ', '\n']),
+					"{m:?}"
+				);
+			}
+			covered
+		})
+		.covers(0b1111);
+	}
 }
