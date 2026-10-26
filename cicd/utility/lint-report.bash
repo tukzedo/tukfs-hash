@@ -104,16 +104,20 @@ if ((check)) && ((! noMark)) && ((finished)) && [[ -z "${file}" && "${ts}" =~ ^[
 	printf '%s\n' "${ts}" > "${marker}" 2>/dev/null || echo "lint-report: could not write marker: ${marker}" >&2
 fi
 
+## The backup's rar file list. A crate's absence_of_deprecated_warning.rs isn't
+## a finding.
+archived='^[0-9]+:(Adding|Updating)  '
+
 ## Warnings. Drop the "0 warnings" noise, and the echoed command lines that hold
 ## the word, such as clippy's `-D warnings`.
-warns="$(grep -inE 'warning|rustsec-|vulnerab|unmaintained|yanked' "${log}" 2>/dev/null \
+warns="$(grep -inE 'warning|rustsec-|vulnerab|unmaintained|yanked' "${log}" 2>/dev/null | grep -vE "${archived}" \
 	| grep -viE 'generated 0 warnings|: 0 warnings|no warnings|0 warnings emitted|-D warnings' || true)"
 if [[ -n "${warns}" ]]; then n=$(printf '%s\n' "${warns}" | grep -c .); else n=0; fi
 
 ## A failed run is never clean. Case-sensitive, since each tool says it one way
 ## and the lower-case words turn up in passing output. markdownlint says
 ## "error MD033/...", with no colon.
-errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null || true)"
+errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null | grep -vE "${archived}" || true)"
 if [[ -n "${errs}" ]]; then e=$(printf '%s\n' "${errs}" | grep -c .); else e=0; fi
 
 lead=""; ((check)) && lead="NEW "
@@ -143,3 +147,4 @@ fi
 ##		  a failure, and a log with no done or abort line is INCOMPLETE.
 ##		- 2026-10-23: Copied into tukfs-hash from shcl's cicd. Under --check every
 ##		  report that isn't SEEN starts with NEW. markdownlint's error lines count.
+##		- 2026-10-25: rar's file list from the backup step isn't read as findings.
