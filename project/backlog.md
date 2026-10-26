@@ -98,9 +98,9 @@
 - CICD reset: other hosts and VMs
 	- ID: 2026102416215927
 	- Type: Task
-	- Status: Waiting on automated testing
+	- Status: Done
 		- It departs from the wording in one way. Where the box's temp root is in memory, as vmDebARM64's tmpfs `/tmp` is, the work folder goes under `/var/tmp`, since the scan refuses tmpfs.
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`. Step 7, Other hosts, passes on vmDebARM64 in about 3 to 4 minutes, the VM is back as it was found, and the end has no `Skipped:` list.
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -128,13 +128,14 @@
 	- Commit: `234b09f`
 	- Test case: none with an ID. `remote-check.bash REPO [plan|nohelper|busy|box|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883). The pass case needs the VM, so it's the full run's.
 	- Swept: every `no_remote`, `step_keys`, `fStepOn`, `stages 2-6` and stage number in `cicd/`, the plan's Other hosts line, `--list`'s test ID lines, the private checks that match plan text or step counts, design.md and README.md. tests/integration.bash reads `src/main.rs` and the stop include from the tree beside it, and both go to the box.
+	- Verified 2026-10-25: `--backlog-run-full` passed in 30m 00s (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). Other hosts passed on vmDebARM64 in about 5 minutes, the VM was found off and put back to off, and the end had no `Skipped:` list. The tree was recorded.
 
 - CICD reset: container cleanup
 	- ID: 2026102416215928
 	- Type: Task
-	- Status: Waiting on automated testing
+	- Status: Done
 		- Done, but for the leak check and profiler containers, which only a full run starts.
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`. It passes. The leak checks, the profiler and the release builds start containers named `tukfs-hash-<run folder>-<step>-<n>`, the end's cleanup line names no containers left or says what it removed, `docker ps -a --filter label=dev.project=tukfs-hash` is empty after, and nothing is left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/`. Step 7 on vmDebARM64 still passes.
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -160,13 +161,14 @@
 	- Commit: `146545f`
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `docker run`, `docker build`, `fCtrRun`, `fCtrRunSelf`, `--label` and `builder prune` in `cicd/` and `tests/`. All 3 scripts that start containers set `ctr_step`: cicd.bash, `leak-common.bash` and `release-build.bash`.
+	- Verified 2026-10-25: `--backlog-run-full` passed in the release image (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). The cleanup line named no containers left, `docker ps -a --filter label=dev.project=tukfs-hash` was empty after, and both temp roots were empty but for the round's own run folders. Names and labels were shown by the worker's `--keep-temp` run with real docker.
 
 - CICD reset: temp files and safe removal
 	- ID: 2026102416215934
 	- Type: Task
-	- Status: Waiting on automated testing
+	- Status: Done
 		- Done, but for the profiler's dir and the run on vmDebARM64, which only a full run has.
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`. It passes, the profiler's workload dir and both integration test dirs are gone after, and nothing is left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/`. Step 7 on vmDebARM64 still passes.
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -195,6 +197,7 @@
 	- Commit: `146545f`
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `RUN_TMP_PREFIX`, `fRunDirMake`, `fSweepStale`, `.cicd-kept`, `TMPDIR` and `itzq` in `cicd/`, `tests/`, the private tools, design.md and README.md. `scratch.bash` and box-side's folders were left as they were.
+	- Verified 2026-10-25: `--backlog-run-full` passed (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). Its run folder was `20261025-175553_001` under HOST_TEMP, and after it nothing was left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/` but the round's own run folders. vmDebARM64's work folder was `/var/tmp/tukfs-hash/20261025-182246_001`, and step 7 passed.
 
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
