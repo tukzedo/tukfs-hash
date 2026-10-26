@@ -29,6 +29,19 @@
 
 ## Issues
 
+- A killed cicd run's folder and frozen copy now wait 2 days for the sweep.
+	- ID: 2026102518150001
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-181500
+	- Opened by: round-20261025b, answer to a Check on 2026102416215934
+	- Related IDs: 2026102416215934, 2026102407311809
+	- Steps to reproduce [Bug]:
+		- Start `cicd/cicd.bash --backlog-run-quick`, `kill -9` it, then start another run.
+		- Result: the dead run's folder and its locked frozen copy stay until they're 2 days old. 2026102407311809 removed them as soon as the PID was gone.
+	- Expected behavior [Bug]: A folder whose `run.pid` process is gone is removed at the next run's start. Only a folder kept by `--keep-temp` waits 2 days.
+
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
