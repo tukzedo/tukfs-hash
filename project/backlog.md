@@ -42,32 +42,6 @@
 		- Result: the dead run's folder and its locked frozen copy stay until they're 2 days old. 2026102407311809 removed them as soon as the PID was gone.
 	- Expected behavior [Bug]: A folder whose `run.pid` process is gone is removed at the next run's start. Only a folder kept by `--keep-temp` waits 2 days.
 
-- Dropping each file's cached pages before reading it costs about as much CPU as blake3.
-	- ID: 2026102316421705
-	- Type: Enhancement
-	- Status: Waiting on UAT
-		- Answered 2026-10-25: the hard drive timing is run by hand, not by a round, since the scan writes to real data outside the project.
-		- It departs from the wording. Neither idea in the note was taken. The read is `O_DIRECT` now, and the drops stay.
-	- Needs hand testing: Wall time of a `--rmlint` scan of a cold hard drive group on b23, such as bf7, against `debkt`. Direct reads have no readahead, so hashing no longer overlaps the next read. That didn't slow a SATA SSD, but a hard drive wasn't timed.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261023-164217
-	- Opened by: first profiler graph
-	- Note: On the 1.5 GB profiler workload, `posix_fadvise` was 16% of self time against 15% for blake3. `read_sums` drops the pages on ext4 and btrfs so a read can't come from a cached copy. Look at whether one call per file, or skipping it for files the page cache can't hold, keeps that promise for less.
-	- Progress log:
-		- 2026-10-24: Measured on 1.1 GB of 250 files on ext4, by sys CPU. The drop before a read costs nothing on a file that isn't cached. Each drop of a cached copy costs about 0.25 s per GB, about what blake3 takes. The profiler's tree is freshly written and still cached, so it paid for that twice per file. A real scan pays once, after the read.
-		- 2026-10-24: Leaving out the drop after the read only hands the same work to kswapd, and a full page cache is what keeps vm925w's hugepages from mapping. Skipping big files breaks the promise. Dropping in 8 MB pieces behind the read saved nothing.
-		- 2026-10-24: An `O_DIRECT` read took 0.07 to 0.15 s of sys CPU per GB, against 0.5 to 1.0 s for a cached read plus its drop. With it, the drops find nothing to evict.
-		- 2026-10-24: Verified: a scan of the same tree went from 0.66 to 1.65 s of sys CPU to 0.06 to 0.11 s, plain or `--rmlint`, over 5 rounds each. User CPU rose about 0.1 s. Wall time came out even, at load 20 to 37.
-		- 2026-10-24: Verified: on ZFS with `direct=standard` it reads direct too, with the same wall and CPU as before and no rise in ARC misses.
-		- 2026-10-25: The hard drive timing wasn't reached in the test batch. A scan of bf7 writes attributes and database rows on data outside the project, and no `debkt` build is on hand to compare. bf7 is btrfs with `compress=zstd:4`, so how its compressed files take a direct read is part of what to look at.
-	- Decisions:
-		- Read with `O_DIRECT` where the filesystem takes it, and keep both drops for the plain-read fallback.
-		- It falls back to a plain read if `O_DIRECT` is refused, or if a read gets EINVAL or EOPNOTSUPP partway through. The fd's flags are put back after.
-	- Branch: round-20261024
-	- Test case: `scan::tests::direct_reads_hash_every_byte`, sizes around the block size with an aligned buffer, one off by a byte, and one too small to go direct, and the fd's flags restored. It fails with the restore taken out. That a read skips the page cache can't be seen without root, as in 2026101406340901.
-	- Verified: release build, clippy, rustfmt, `cargo test --release` (67 passed), and the integration test on ext4 and ZFS.
-	- Swept: `read_sums` is the only content read in scan and accept, the second read after a mismatch included. snapdiff still reads plain, as 2026101406340901 left it.
-
 - CICD reset: release builds without docker
 	- ID: 2026102509342993
 	- Type: Task
@@ -284,6 +258,38 @@
 		- Where in the run the fuzz tests go, and at what length, follows the leak check lengths.
 	- Requirements  [Feature]:
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
+
+- Dropping each file's cached pages before reading it costs about as much CPU as blake3.
+	- ID: 2026102316421705
+	- Type: Enhancement
+	- Status: Done
+		- Answered 2026-10-25: the hard drive timing is run by hand, not by a round, since the scan writes to real data outside the project.
+		- It departs from the wording. Neither idea in the note was taken. The read is `O_DIRECT` now, and the drops stay.
+	- Needs hand testing: None left. A read-only timing on bf7 stood in for the `--rmlint` scan, since a scan writes there.
+		- Stand-in: the scan's read path, one reader as on any hard drive, with 990 us per MiB of hashing time (blake3 plus blake2b at b23's speed). It showed direct reads within 3 percent of plain ones by median, per the Progress log.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-164217
+	- Opened by: first profiler graph
+	- Note: On the 1.5 GB profiler workload, `posix_fadvise` was 16% of self time against 15% for blake3. `read_sums` drops the pages on ext4 and btrfs so a read can't come from a cached copy. Look at whether one call per file, or skipping it for files the page cache can't hold, keeps that promise for less.
+	- Progress log:
+		- 2026-10-24: Measured on 1.1 GB of 250 files on ext4, by sys CPU. The drop before a read costs nothing on a file that isn't cached. Each drop of a cached copy costs about 0.25 s per GB, about what blake3 takes. The profiler's tree is freshly written and still cached, so it paid for that twice per file. A real scan pays once, after the read.
+		- 2026-10-24: Leaving out the drop after the read only hands the same work to kswapd, and a full page cache is what keeps vm925w's hugepages from mapping. Skipping big files breaks the promise. Dropping in 8 MB pieces behind the read saved nothing.
+		- 2026-10-24: An `O_DIRECT` read took 0.07 to 0.15 s of sys CPU per GB, against 0.5 to 1.0 s for a cached read plus its drop. With it, the drops find nothing to evict.
+		- 2026-10-24: Verified: a scan of the same tree went from 0.66 to 1.65 s of sys CPU to 0.06 to 0.11 s, plain or `--rmlint`, over 5 rounds each. User CPU rose about 0.1 s. Wall time came out even, at load 20 to 37.
+		- 2026-10-24: Verified: on ZFS with `direct=standard` it reads direct too, with the same wall and CPU as before and no rise in ARC misses.
+		- 2026-10-25: The hard drive timing wasn't reached in the test batch. A scan of bf7 writes attributes and database rows on data outside the project, and no `debkt` build is on hand to compare. bf7 is btrfs with `compress=zstd:4`, so how its compressed files take a direct read is part of what to look at.
+		- 2026-10-25: Verified: on bf7, cold, 5 rounds with the variants alternated, at load 19 to 39, by median wall time. Direct reads used the scan's aligned length, 1 MiB less 4 KiB.
+			- 2.1 GB of uncompressed video: direct 13.26 s against plain 13.08 s with hashing time (+1%), and 11.48 s against 11.84 s without. Sys CPU fell from about 2.3 s to 0.3 s.
+			- 2.5 GB in 4 files whose extents are 15 to 97 percent zstd: direct 38.72 s against plain 37.71 s with hashing time (+3%). Without it, 36.20 s against 30.49 s by median, but both variants read in either about 30 or about 37 s from run to run, and the means were 34.85 against 32.57 s (+7%). Sys CPU came out even.
+	- Decisions:
+		- Read with `O_DIRECT` where the filesystem takes it, and keep both drops for the plain-read fallback.
+		- It falls back to a plain read if `O_DIRECT` is refused, or if a read gets EINVAL or EOPNOTSUPP partway through. The fd's flags are put back after.
+	- Branch: round-20261024
+	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`), sizes around the block size with an aligned buffer, one off by a byte, and one too small to go direct, and the fd's flags restored. It fails with the restore taken out. That a read skips the page cache can't be seen without root, as in 2026101406340901.
+	- Verified: release build, clippy, rustfmt, `cargo test --release` (67 passed), and the integration test on ext4 and ZFS.
+	- Swept: `read_sums` is the only content read in scan and accept, the second read after a mismatch included. snapdiff still reads plain, as 2026101406340901 left it.
+	- Acceptance signoff: self-closed 2026-10-25 under the 2026-10-14 rule, on the bf7 timing.
+	- Closed: 20261025-184950
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
