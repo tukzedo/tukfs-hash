@@ -116,6 +116,71 @@
 	- Test case: none with an ID. `remote-check.bash REPO [plan|nohelper|busy|box|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883). The pass case needs the VM, so it's the full run's.
 	- Swept: every `no_remote`, `step_keys`, `fStepOn`, `stages 2-6` and stage number in `cicd/`, the plan's Other hosts line, `--list`'s test ID lines, the private checks that match plan text or step counts, design.md and README.md. tests/integration.bash reads `src/main.rs` and the stop include from the tree beside it, and both go to the box.
 
+- CICD reset: container cleanup
+	- ID: 2026102416215928
+	- Type: Task
+	- Status: Waiting on automated testing
+		- Done, but for the leak check and profiler containers, which only a full run starts.
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`. It passes. The leak checks, the profiler and the release builds start containers named `tukfs-hash-<run folder>-<step>-<n>`, the end's cleanup line names no containers left or says what it removed, `docker ps -a --filter label=dev.project=tukfs-hash` is empty after, and nothing is left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/`. Step 7 on vmDebARM64 still passes.
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--keep-temp` from the flags item.
+	- Related IDs: 2026102416215926
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- Every container, image, and volume gets `dev.project=tukfs-hash` and `dev.run=<run folder name>`, and containers are named `tukfs-hash-<run folder name>-<step>`. Now the only label is the image name.
+		- At the end of a run, on failure and Ctrl+C too, the run's containers are removed by their `dev.run` label. The kill by container ID on a stop stays.
+		- The current image tag and the one before it are kept. Now the old one goes as soon as the new one answers.
+		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
+		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
+	- Progress log:
+		- 2026-10-25: Every container goes through `fCtrRun`, which names it `tukfs-hash-<run folder name>-<step>-<n>` and labels it `dev.project=tukfs-hash` and `dev.run=<run folder name>`. Images get both labels too. No step uses a volume. The run folder name reaches every script as `TUKFS_RUN_NAME`.
+		- 2026-10-25: At the end of a run, on a failure or a stop too, cicd.bash lists the run's containers by both labels and removes them, after a stop's kill by ID, and the cleanup line says how many and about what they freed. `--keep-temp` keeps them and says so. It asks docker only when the run started a container.
+		- 2026-10-25: A new image keeps the newest other tag and removes the older ones, once it answers. The build cache prune is `docker builder prune -f --filter until=168h`.
+		- 2026-10-25: Verified: `temp-ctr-check.bash stub` and `image` pass 16 cases, and 9 of them fail on the code from before. `--backlog-run-quick build --keep-temp` with docker kept `tukfs-hash-20261025-171416_001-tests-1`, with both labels. `cicd-stop-check.bash` passes all 5 cases, with a container killed in each stop and none left after. `--backlog-run-quick`, the flags, steps, remote and tests-in-image checks, and `release-host-check.bash image` pass. shellcheck and the markdown checks are clean.
+	- Decisions:
+		- The name ends in a counter for the run, since one step can start several containers and `--keep-temp` keeps them all. Filed as a Check in questions.md.
+		- A KILLed run's containers aren't removed by the next run, though `--rm` takes most of them when they finish. Filed as a Check.
+	- Branch: round-20261025b
+	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `docker run`, `docker build`, `fCtrRun`, `fCtrRunSelf`, `--label` and `builder prune` in `cicd/` and `tests/`. All 3 scripts that start containers set `ctr_step`: cicd.bash, `leak-common.bash` and `release-build.bash`.
+
+- CICD reset: temp files and safe removal
+	- ID: 2026102416215934
+	- Type: Task
+	- Status: Waiting on automated testing
+		- Done, but for the profiler's dir and the run on vmDebARM64, which only a full run has.
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`. It passes, the profiler's workload dir and both integration test dirs are gone after, and nothing is left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/`. Step 7 on vmDebARM64 still passes.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261024-162159
+	- Opened by: CICD reset
+	- Prereq IDs: 2026102416215930
+		- It needs `--keep-temp` from the flags item.
+	- Requirements  [Feature]:
+		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
+		- The guarded removal is already in every script. What's left is the folder scheme.
+		- Each run's folder is `<HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>/`, made with a plain `mkdir` and a counter, with `HOST_TEMP` from the environment. `RUN_TMP_ROOT` can stay as its default here.
+		- `TEMP` and `TMP` point there too, beside `TMPDIR`.
+		- `--keep-temp` keeps the folder and prints its path.
+		- Each run writes `run.pid` in its folder, and removes the project's folders older than 2 days whose process is gone. Now the PID is in the folder's name.
+		- The integration test, run on its own, uses the same scheme.
+	- Progress log:
+		- 2026-10-25: A run's folder is `<HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>`, made by a plain `mkdir` that counts up while the name is taken. Without `HOST_TEMP` it's under `RUN_TMP_ROOT`, then `TMPDIR`, then `/tmp`. `TMPDIR`, `TEMP` and `TMP` point into it, and so does `HOST_TEMP` for what the run starts, so the run on the frozen copy nests its folder in it. The profiler's workload dir uses the same scheme. `RUN_TMP_PREFIX` is gone.
+		- 2026-10-25: Each folder has `run.pid`. A run's start and end remove this project's run folders over 2 days old whose PID is gone and whose mark names it. Folders without the mark, such as hand-made ones or the integration test's, stay.
+		- 2026-10-25: The integration test makes its own folder the same way under `HOST_TEMP`, else `TMPDIR`, with its own `run.pid` and sweep, and takes `--keep-temp` or `TUKFS_KEEP_TEMP`. cicd.bash passes each test root as `HOST_TEMP`. On vmDebARM64, `box-side.bash` sets `HOST_TEMP` beside `TMPDIR`.
+		- 2026-10-25: Verified: `temp-ctr-check.bash sweep` and `it` pass 20 cases, and 11 of them fail on the code from before. `--backlog-run-quick` passes in 1m 42s at load 20 to 24, and left nothing in either test root. `cicd-stop-check.bash` passes all 5 cases, `it-stop-check.bash` is clean, and the flags, steps, remote and tests-in-image checks pass. shellcheck and the markdown checks are clean.
+		- 2026-10-25: The private `cicd-stop-check.bash` and `it-stop-check.bash` find run folders by the new names. The first's `killed` case ages the dead run's folder past 2 days before the next run sweeps it.
+	- Decisions:
+		- `HOST_TEMP` comes before `RUN_TMP_ROOT` and `TMPDIR`, so a caller's `TMPDIR` no longer picks the run's folder. Filed as a Check in questions.md.
+		- The integration test takes `HOST_TEMP` over `TMPDIR` too, so the ZFS run is `HOST_TEMP=~/tmp/tukfs-hash-zfs-it tests/integration.bash`. Filed as a Check.
+		- A killed run's folder now waits 2 days, where 2026102407311809 took it at once, per this item. `--keep-temp`'s 2-day mark went, since every folder waits 2 days. Filed as a Check.
+		- The leak checks' scratch dirs keep their names, since in a run they sit in the run's folder.
+	- Branch: round-20261025b
+	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `RUN_TMP_PREFIX`, `fRunDirMake`, `fSweepStale`, `.cicd-kept`, `TMPDIR` and `itzq` in `cicd/`, `tests/`, the private tools, design.md and README.md. `scratch.bash` and box-side's folders were left as they were.
+
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
@@ -197,42 +262,6 @@
 	- Commit: `e628037`
 	- Test case: `tests-ctr-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline and needs docker. 2026102508462883 asks whether such checks move into the pipeline.
 	- Swept: every use of `BUILD_CMD`, `LINT_CMD`, `TEST_CMD`, `RELEASE_NATIVE_CMD` and `RELEASE_NATIVE_BIN` in `cicd/`, the plan's Containers line, the private checks that match plan text, design.md, and the soak's header. `release-build.bash` still has no host path, which is the child's.
-
-- CICD reset: container cleanup
-	- ID: 2026102416215928
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Prereq IDs: 2026102416215930
-		- It needs `--keep-temp` from the flags item.
-	- Related IDs: 2026102416215926
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- Every container, image, and volume gets `dev.project=tukfs-hash` and `dev.run=<run folder name>`, and containers are named `tukfs-hash-<run folder name>-<step>`. Now the only label is the image name.
-		- At the end of a run, on failure and Ctrl+C too, the run's containers are removed by their `dev.run` label. The kill by container ID on a stop stays.
-		- The current image tag and the one before it are kept. Now the old one goes as soon as the new one answers.
-		- The build cache prune is `docker builder prune -f --filter until=168h`. Now it prunes every project's cache, with no age.
-		- `--keep-temp` keeps the run's containers, and the end of the run says what it removed and about what that freed.
-
-- CICD reset: temp files and safe removal
-	- ID: 2026102416215934
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261024-162159
-	- Opened by: CICD reset
-	- Prereq IDs: 2026102416215930
-		- It needs `--keep-temp` from the flags item.
-	- Requirements  [Feature]:
-		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
-		- The guarded removal is already in every script. What's left is the folder scheme.
-		- Each run's folder is `<HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>/`, made with a plain `mkdir` and a counter, with `HOST_TEMP` from the environment. `RUN_TMP_ROOT` can stay as its default here.
-		- `TEMP` and `TMP` point there too, beside `TMPDIR`.
-		- `--keep-temp` keeps the folder and prints its path.
-		- Each run writes `run.pid` in its folder, and removes the project's folders older than 2 days whose process is gone. Now the PID is in the folder's name.
-		- The integration test, run on its own, uses the same scheme.
 
 - CICD reset: CICD process gaps
 	- ID: 2026102416215935

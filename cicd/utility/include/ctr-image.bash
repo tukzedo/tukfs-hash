@@ -32,8 +32,14 @@
 ##			                    The build number, its release flag and
 ##			                    SOURCE_DATE_EPOCH go in when they're set.
 ##			                    Returns the script's exit, or 2.
-##		A build replaces the image of the old recipe, once the new one has
-##		answered, and then prunes the build cache and any <none> image of ours.
+##		Every container is named tukfs-hash-<run>-<step>-<n> and labeled
+##		dev.project and dev.run, and every image dev.project and dev.run too.
+##		<run> is TUKFS_RUN_NAME, the cicd run's folder name, and <step> is
+##		ctr_step, which the caller sets. cicd.bash removes a run's
+##		containers by that label at its end.
+##		A build keeps the new tag and the one before it, once the new one has
+##		answered, and then prunes build cache over a week old and any <none>
+##		image of ours.
 ##		From shcl's cicd/utility/include/ctr-image.bash.
 ##	History: At bottom of script.
 
@@ -45,6 +51,17 @@
 
 ctr_tag=""
 ctr_kind="leak"
+ctr_step="${ctr_step:-ctr}"
+ctr_run=""; ctr_labels=()
+
+## At first use, since cicd.bash names its run after this is sourced. A
+## script run on its own, outside a cicd run, gets a name of its own.
+fCtrLabels(){
+	[[ -z "${ctr_run}" ]] || return 0
+	ctr_run="${TUKFS_RUN_NAME:-}"
+	[[ "${ctr_run}" =~ ^[A-Za-z0-9_.-]+$ ]] || printf -v ctr_run '%(%Y%m%d-%H%M%S)T_p%s' -1 "$$"
+	ctr_labels=(--label "dev.project=${APP_NAME}" --label "dev.run=${ctr_run}")
+}
 
 fCtrUseRelease(){
 	ctr_kind="release"
@@ -85,19 +102,28 @@ fCtrSize(){ "${TUKFS_DOCKER:-docker}" image inspect --format '{{.Size}}' "$1" 2>
 ## cidfile goes in TUKFS_CID_DIR, else in DIR. nice on the client doesn't
 ## reach a container, so each gets CPU_CAP cores at a low share, and the ones
 ## that do real work run nice inside too.
-fCtrRun(){   ## fCtrRun DIR RUN_ARG...
-	local engine="${TUKFS_DOCKER:-docker}" rc=0 cidfile="" f
+## <n> is taken with a plain mkdir in the cid dir, which the whole run
+## shares, so a name kept by --keep-temp can't come up twice.
+fCtrRun(){   ## fCtrRun DIR STEP RUN_ARG...
+	local engine="${TUKFS_DOCKER:-docker}" rc=0 cidfile="" f step="${2:-ctr}" n=1
 	local -a kept=() args=()
 	fStopCidfile "$1" || { echo "ctr-image: no dir for a cidfile" >&2; return 2; }
 	cidfile="${stop_cidfile}"
-	shift
+	shift 2
+	fCtrLabels
+	step="${step//[^A-Za-z0-9_.-]/-}"
+	while [[ "${step}" == *--* ]]; do step="${step//--/-}"; done
+	while ! mkdir -- "${cidfile%/*}/name_${n}" 2>/dev/null; do
+		n=$((n + 1)); ((n < 10000)) || { echo "ctr-image: no free container name" >&2; return 2; }
+	done
 	## --keep-temp keeps the container, stopped, for a look after.
 	if [[ -n "${TUKFS_KEEP_TEMP:-}" ]]; then
 		for f in "$@"; do [[ "${f}" == --rm ]] || args+=("${f}"); done
 		set -- "${args[@]}"
 	fi
 	stop_cidfiles+=("${cidfile}")
-	"${engine}" run --cidfile "${cidfile}" --cpus "${CPU_CAP:-1}" --cpu-shares 256 "$@" || rc=$?
+	"${engine}" run --cidfile "${cidfile}" --name "${APP_NAME}-${ctr_run}-${step}-${n}" "${ctr_labels[@]}" \
+		--cpus "${CPU_CAP:-1}" --cpu-shares 256 "$@" || rc=$?
 	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
 	stop_cidfiles=("${kept[@]}")
 	if [[ -n "${TUKFS_KEEP_TEMP:-}" && -s "${cidfile}" ]]; then echo "[ kept (--keep-temp): container $(head -c 12 -- "${cidfile}") ]" >&2; fi
@@ -108,42 +134,46 @@ fCtrGB(){ awk -v b="${1:-0}" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 
 ## The label is what finds a <none> image of ours, and only ours.
 fCtrBuild(){   ## fCtrBuild TAG DIR
-	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" id="" have="" bytes=0 freed=0 pruned=""
+	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" prev="" id="" have="" bytes=0 freed=0 pruned=""
 	local -a gone=() args=()
+	fCtrLabels
 	if [[ "${ctr_kind}" == leak ]]; then
 		args=(--build-arg "NIGHTLY=${PIN_NIGHTLY}" --build-arg "CODEQL_VER=${PIN_CODEQL}"
 			--build-arg "CODEQL_SHA256=${PIN_CODEQL_SHA256}" --build-arg "JOBS=${CPU_CAP:-1}")
 	fi
-	"${engine}" build -q --label "${CTR_IMAGE}" -t "${tag}" "${args[@]}" "${ctx}" >/dev/null || return 1
+	"${engine}" build -q --label "${CTR_IMAGE}" "${ctr_labels[@]}" -t "${tag}" "${args[@]}" "${ctx}" >/dev/null || return 1
 	## It has to answer before the old one goes.
 	if [[ "${ctr_kind}" == leak ]]; then
-		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
+		have="$(fCtrRun "${ctx}" "${ctr_step}-probe" --rm --label "${CTR_IMAGE}" --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
 		if [[ "${have}" != "${PIN_CODEQL}" ]]; then echo "ctr-image: ${tag} has CodeQL '${have}', not ${PIN_CODEQL}" >&2; return 1; fi
-		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
+		have="$(fCtrRun "${ctx}" "${ctr_step}-probe" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
 		if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${have}"; then
 			echo "ctr-image: ${tag} has no ${PIN_NIGHTLY}" >&2; return 1
 		fi
 	else
-		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" ldd --version 2>/dev/null | head -n 1 || true)"
+		have="$(fCtrRun "${ctx}" "${ctr_step}-probe" --rm --label "${CTR_IMAGE}" --network none "${tag}" ldd --version 2>/dev/null | head -n 1 || true)"
 		if [[ "${have}" != *" ${GLIBC_FLOOR}" ]]; then echo "ctr-image: ${tag} has '${have}', not glibc ${GLIBC_FLOOR}" >&2; return 1; fi
-		have="$(fCtrRun "${ctx}" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
+		have="$(fCtrRun "${ctx}" "${ctr_step}-probe" --rm --label "${CTR_IMAGE}" --network none "${tag}" rustup toolchain list 2>/dev/null || true)"
 		if ! grep -q -- "^${RUST_PIN}-" <<<"${have}"; then
 			echo "ctr-image: ${tag} has no ${RUST_PIN}" >&2; return 1
 		fi
 	fi
-	## Not -f, so an image a container still has stays.
-	while IFS= read -r old; do
+	## The newest other tag stays too, to go back to. Not -f, so an image a
+	## container still has stays.
+	while IFS=$'\t' read -r _ old; do
 		[[ -n "${old}" && "${old}" != "${tag}" ]] || continue
+		if [[ -z "${prev}" ]]; then prev="${old}"; continue; fi
 		bytes="$(fCtrSize "${old}")"
 		if "${engine}" rmi "${old}" >/dev/null 2>&1; then gone+=("${old}"); freed=$((freed + bytes)); else echo "ctr-image: kept ${old}, which is in use"; fi
-	done < <("${engine}" image ls "${CTR_IMAGE}" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
-	pruned="$("${engine}" builder prune -f 2>/dev/null | sed -n 's/^Total\( reclaimed space\)\{0,1\}:[[:space:]]*//p' || true)"
+	done < <("${engine}" image ls "${CTR_IMAGE}" --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' 2>/dev/null | LC_ALL=C sort -r || true)
+	## A week of every project's cache stays, since a cold one costs minutes.
+	pruned="$("${engine}" builder prune -f --filter until=168h 2>/dev/null | sed -n 's/^Total\( reclaimed space\)\{0,1\}:[[:space:]]*//p' || true)"
 	while IFS= read -r id; do
 		[[ -n "${id}" ]] || continue
 		bytes="$(fCtrSize "${id}")"
 		if "${engine}" rmi "${id}" >/dev/null 2>&1; then gone+=("<none> ${id:0:12}"); freed=$((freed + bytes)); fi
 	done < <("${engine}" image ls -q --filter dangling=true --filter "label=${CTR_IMAGE}" 2>/dev/null || true)
-	echo "ctr-image: built ${tag} ($(fCtrGB "$(fCtrSize "${tag}")")); removed ${gone[*]:-no old image}, freeing $(fCtrGB "${freed}"), and ${pruned:-0B} of build cache"
+	echo "ctr-image: built ${tag} ($(fCtrGB "$(fCtrSize "${tag}")")); kept ${prev:-no older tag}; removed ${gone[*]:-no old image}, freeing $(fCtrGB "${freed}"), and ${pruned:-0B} of build cache"
 	return 0
 }
 
@@ -167,7 +197,7 @@ fCtrFetch(){   ## fCtrFetch WORK
 	want="$(sha256sum < "${root}/Cargo.lock" | cut -c1-16) ${ctr_tag}"
 	{ read -r got < "${ch}/.fetched"; } 2>/dev/null || true
 	[[ "${got}" != "${want}" ]] || return 0
-	if fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --user "$(id -u):$(id -g)" \
+	if fCtrRun "${work}" "${ctr_step}-fetch" --rm --init --label "${CTR_IMAGE}" --user "$(id -u):$(id -g)" \
 		-v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" -w "${root}" \
 		-e "TMPDIR=${work}/tmp" -e "HOME=${work}/home" -e "CARGO_HOME=${ch}" \
 		"${ctr_tag}" nice -n 19 ionice -c 3 bash "${root}/cicd/utility/include/ctr-fetch.bash" "${nightly[@]}"; then
@@ -193,7 +223,7 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 		rwMount+=(-v "${d}:${d}")
 	done
 	## A stop takes the container down too, even when its client won't go.
-	fCtrRun "${work}" --rm --init --label "${CTR_IMAGE}" --network none \
+	fCtrRun "${work}" "${ctr_step}" --rm --init --label "${CTR_IMAGE}" --network none \
 		--user "$(id -u):$(id -g)" -v "${root}:${root}:ro" -v "${work}:${work}" -v "${ch}:${ch}" \
 		"${rwMount[@]}" -w "${root}" \
 		-e TUKFS_IN_IMAGE=1 -e TINI_KILL_PROCESS_GROUP=1 -e "CPU_CAP=${CPU_CAP:-1}" -e "TMPDIR=${work}/tmp" \
@@ -214,3 +244,6 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		- 2026-10-23: The release flag goes in with the build number.
 ##		- 2026-10-25: --cpus and --cpu-shares 256 on every container, and nice
 ##		  and idle I/O inside the ones that build or test.
+##		- 2026-10-25: Container names and dev.project and dev.run labels. A
+##		  build keeps the tag before the new one, and the cache prune keeps a
+##		  week.

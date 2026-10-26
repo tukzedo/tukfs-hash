@@ -95,7 +95,8 @@ fTest(){
 	echo "$$" > "${dir}/run.pid"
 	cap="$(fCap)"
 	mkdir -- "${dir}/tmp" || return 2
-	export TMPDIR="${dir}/tmp" TEMP="${dir}/tmp" TMP="${dir}/tmp" RUST_TEST_THREADS="${cap}"
+	## HOST_TEMP too, since the integration test takes it over TMPDIR.
+	export TMPDIR="${dir}/tmp" TEMP="${dir}/tmp" TMP="${dir}/tmp" HOST_TEMP="${dir}/tmp" RUST_TEST_THREADS="${cap}"
 	echo "on $(uname -n) ($(uname -m)), ${cap} of $(nproc) cores, in ${dir} ($(stat -f -c %T -- "${dir}"))"
 	for t in "${dir}"/unit/*; do
 		[[ -f "${t}" ]] || continue
@@ -117,3 +118,4 @@ esac
 
 ##	History:
 ##		- 2026-10-25: Created, for the arm64 tests on vmDebARM64.
+##		- 2026-10-25: HOST_TEMP for the integration test.

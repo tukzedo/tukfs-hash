@@ -35,11 +35,9 @@ VERSION_MANIFEST="Cargo.toml"
 BUILD_ENV_NAME="TUKFS_HASH_BUILD"
 BUILD_RELEASE_ENV_NAME="TUKFS_HASH_RELEASE"
 
-## Each run's temp dir and the integration test's dirs are named with this,
-## under <root>/tukfs-hash/, and nothing else is ever removed by the guard.
-RUN_TMP_PREFIX="cicd_tukfs-hash_qx7j"
-## Where the run's temp dir goes when the caller sets no TMPDIR, or /tmp if
-## it isn't there. b23's /tmp is btrfs on LUKS, and slow to fsync under load
+## Each run's temp dir is <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>.
+## This is where it goes when HOST_TEMP isn't set, then TMPDIR, then /tmp.
+## b23's /tmp is btrfs on LUKS, and slow to fsync under load
 ## (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
 RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
@@ -106,8 +104,9 @@ LINT_EXTRA=(
 )
 
 ## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
-## integration test on a release build, once per root below, each in a dir of
-## its own made under <root>/tukfs-hash/. "label|root". A root that isn't there
+## integration test on a release build, once per root below, given as its
+## HOST_TEMP, so it makes its own dir under <root>/tukfs-hash/. "label|root".
+## A root that isn't there
 ## skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
 ## libtest-quiet.bash drops libtest's per-test lines, since each test prints
 ## its own with its test ID.
@@ -357,3 +356,5 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: The build and tests in the release image.
 ##		- 2026-10-25: The x86_64 release build on the host without docker.
 ##		- 2026-10-25: REMOTE_HOSTS, the arm64 tests on vmDebARM64.
+##		- 2026-10-25: No RUN_TMP_PREFIX, since run dirs are named by time and
+##		  a counter.

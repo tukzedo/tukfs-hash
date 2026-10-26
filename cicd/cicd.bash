@@ -109,12 +109,15 @@
 ##	  hook lets a push of that tree through without running the gate again.
 ##	  --quick, --backlog-run-quick, any --no- option that drops a check, a
 ##	  missing tool and a missing test root each keep a run from recording.
-##	- Each run works in <TMPDIR>/tukfs-hash/<prefix>_run_<stamp>_<pid>, or
-##	  under config.bash's RUN_TMP_ROOT when TMPDIR isn't set, with TMPDIR
-##	  pointed into it, so what a failed test leaves goes with it. It and
-##	  the integration test's dirs are removed at the end, even when the run
-##	  fails or is stopped, and only by fSafeRm. A stop kills the containers
-##	  the run started first.
+##	- Each run works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or
+##	  under config.bash's RUN_TMP_ROOT when HOST_TEMP isn't set, then
+##	  TMPDIR, with TMPDIR, TEMP and TMP pointed into it, so what a failed
+##	  test leaves goes with it. It has the run's PID in run.pid. It's
+##	  removed at the end, even when the run fails or is stopped, and only by
+##	  fSafeRm, and so are the run's containers, by their dev.run label. A
+##	  stop kills the running ones first. Each run also removes this
+##	  project's run dirs over 2 days old whose run is gone. --keep-temp
+##	  keeps the dir and the containers, and says where.
 ##	- Stages 2-7 run from a copy of the tree taken after the format stage,
 ##	  uncommitted work included, so a merge, checkout or edit during a run
 ##	  can't reach them. The copy sits in the run's temp dir.
@@ -163,7 +166,6 @@ QUIET_FLAG=""
 
 ## shellcheck source=config.bash
 source "${here}/config.bash"
-[[ "${RUN_TMP_PREFIX:-}" =~ ^[a-z0-9_-]{8,}$ ]] || { echo "config.bash: RUN_TMP_PREFIX has to be 8 or more of a-z, 0-9, _ and -" >&2; exit 2; }
 
 ## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs
 ## stages 2-7 only, and TUKFS_GREEN_TREE is the tree the copy holds. The
@@ -438,9 +440,10 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
 ## Temp dirs, and the only rm -rf this script does
 
-## Every dir the run makes is <root>/tukfs-hash/<prefix>_<kind>_<stamp>_<pid>[_<label>],
-## with this run's token in its mark file. The kinds are run, it for the
-## integration test, and prof for the profiler's workload.
+## Every dir the run makes is <root>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, with
+## the run's PID in run.pid and its token in the mark file: the run's own, and
+## the profiler's workload. Other folders there, such as the integration
+## test's, have no mark and are left alone.
 run_mark=".cicd-run"
 run_token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 declare -a run_dirs=()   ## made by this run, removed at the end
@@ -452,7 +455,7 @@ fSafePath(){
 	if [[ -z "${p}" || "${p}" != /* || "${p}" == *..* || "${p}" == *//* || "${p}" == *$'\n'* ]]; then
 		printf 'cleanup: refused, bad path: "%s"\n' "${p}" >&2; return 1
 	fi
-	if ! [[ "${p}" =~ ^(/[A-Za-z0-9._+-]+)+/tukfs-hash/${RUN_TMP_PREFIX}_(run|it|prof)_[0-9]{8}-[0-9]{6}_[0-9]+(_[a-z0-9]+)?$ ]]; then
+	if ! [[ "${p}" =~ ^(/[A-Za-z0-9._+-]+)+/tukfs-hash/[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then
 		printf 'cleanup: refused, not a cicd run dir: %s\n' "${p}" >&2; return 1
 	fi
 	for fhs in / /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var "${HOME:-/}"; do
@@ -484,16 +487,24 @@ fSafeRm(){   ## fSafeRm PATH TOKEN
 
 ## Make one of this run's dirs under BASE/tukfs-hash/, and set made_dir to it.
 ## A global rather than output, since the list it adds to has to outlive a $( ).
+## A plain mkdir, counting up while the name is taken.
 made_dir=""
-fRunDirMake(){   ## fRunDirMake BASE KIND [LABEL]
-	local base="" d=""
+fRunDirMake(){   ## fRunDirMake BASE
+	local base="" d="" t="" nnn="" n=1
 	base="$(realpath -e -- "$1")" || fDie "temp root isn't there: $1"
-	d="${base}/tukfs-hash/${RUN_TMP_PREFIX}_$2_${stamp}_$$${3:+_$3}"
-	fSafePath "${d}" || fDie "can't make a temp dir under ${base} that the cleanup could remove"
 	mkdir -p -- "${base}/tukfs-hash" || fDie "could not make ${base}/tukfs-hash"
-	mkdir -- "${d}" || fDie "could not make ${d}"
+	printf -v t '%(%Y%m%d-%H%M%S)T' -1
+	while :; do
+		printf -v nnn '%03d' "${n}"
+		d="${base}/tukfs-hash/${t}_${nnn}"
+		fSafePath "${d}" || fDie "can't make a temp dir under ${base} that the cleanup could remove"
+		mkdir -- "${d}" 2>/dev/null && break
+		[[ -e "${d}" ]] || fDie "could not make ${d}"
+		n=$((n + 1)); ((n < 1000)) || fDie "no free temp dir name under ${base}/tukfs-hash"
+	done
 	run_dirs+=("${d}")
 	printf '%s\n' "${run_token}" > "${d}/${run_mark}" || fDie "could not mark ${d}"
+	printf '%s\n' "$$" > "${d}/run.pid" || fDie "could not write ${d}/run.pid"
 	made_dir="${d}"
 }
 
@@ -504,9 +515,9 @@ declare -a kept_dirs=(); kept_shown=0
 fRunDirGone(){   ## fRunDirGone DIR
 	local d="$1" kb="" i
 	gone_kb=0
-	## --keep-temp. The mark keeps the next run's sweep off it for 2 days.
+	## --keep-temp. The next runs' sweep leaves it for 2 days, as any.
 	if ((keep_temp)); then
-		[[ " ${kept_dirs[*]} " == *" ${d} "* ]] || { kept_dirs+=("${d}"); : > "${d}/.cicd-kept"; }
+		[[ " ${kept_dirs[*]} " == *" ${d} "* ]] || kept_dirs+=("${d}")
 		return 0
 	fi
 	kb="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
@@ -530,11 +541,20 @@ fFrozenGone(){
 	return 0
 }
 
-run_tmp_root="$(realpath -e -- "${TMPDIR:-${RUN_TMP_ROOT:-/tmp}}" 2>/dev/null || true)"
-[[ "${run_tmp_root}" == /* ]] || run_tmp_root="$(realpath -e /tmp)"
-fRunDirMake "${run_tmp_root}" run
+## HOST_TEMP, else config.bash's RUN_TMP_ROOT, else TMPDIR, the first that's
+## there. The run on the frozen copy gets its starter's dir as HOST_TEMP.
+run_tmp_root=""
+for _b in "${HOST_TEMP:-}" "${RUN_TMP_ROOT:-}" "${TMPDIR:-}" /tmp; do
+	[[ -n "${_b}" && -d "${_b}" ]] || continue
+	run_tmp_root="$(realpath -e -- "${_b}" 2>/dev/null)" && break
+done
+[[ "${run_tmp_root}" == /* ]] || fDie "no temp root: HOST_TEMP, RUN_TMP_ROOT, TMPDIR and /tmp aren't there"
+fRunDirMake "${run_tmp_root}"
 run_tmp="${made_dir}"
-export TMPDIR="${run_tmp}"
+## So what the steps write, and the runs they start, land in it.
+export TMPDIR="${run_tmp}" TEMP="${run_tmp}" TMP="${run_tmp}" HOST_TEMP="${run_tmp}"
+## Every container of the run is labeled with this, the outer run's name.
+if ((! inner_run)) || [[ ! "${TUKFS_RUN_NAME:-}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then export TUKFS_RUN_NAME="${run_tmp##*/}"; fi
 ## Every container a step starts leaves its ID here, so a stop of the run
 ## kills each one, however far down its client is.
 if ((! inner_run)); then
@@ -550,6 +570,35 @@ skip_log="${run_tmp}/skips"
 if ((inner_run)) && [[ "${TUKFS_SKIP_LOG:-}" == /* ]]; then skip_log="${TUKFS_SKIP_LOG}"; else : > "${skip_log}"; fi
 export TUKFS_SKIP_LOG="${skip_log}"
 
+## The run's containers, by its dev.run label, once it's done with them, into
+## ctrs_said. A stop has killed the running ones by ID first. Only when one
+## was started, so a run that had none asks docker nothing. --keep-temp keeps
+## them.
+ctrs_done=0; ctrs_said=""; ctrs_kb=0
+fCtrsGone(){
+	local engine="${TUKFS_DOCKER:-docker}" out="" line=""
+	local -a ids=() limit=()
+	((! ctrs_done && ! inner_run)) || return 0
+	ctrs_done=1; ctrs_said=""; ctrs_kb=0
+	[[ -n "${stop_cid_dir}" ]] && compgen -G "${stop_cid_dir}/name_*" >/dev/null 2>&1 || return 0
+	if command -v timeout >/dev/null 2>&1; then limit=(timeout 30); fi
+	out="$("${limit[@]}" "${engine}" ps -a --size --filter "label=dev.project=${APP_NAME}" --filter "label=dev.run=${TUKFS_RUN_NAME}" \
+		--format '{{.ID}} {{.Size}}' 2>/dev/null || true)"
+	while read -r line; do [[ "${line%% *}" =~ ^[0-9a-f]{12,64}$ ]] && ids+=("${line%% *}"); done <<< "${out}"
+	((${#ids[@]})) || return 0
+	if ((keep_temp)); then ctrs_said="kept (--keep-temp): ${#ids[@]} container(s) labeled dev.run=${TUKFS_RUN_NAME}"; return 0; fi
+	## docker's sizes are SI, such as 12.3kB, before "(virtual ...)".
+	ctrs_kb="$(awk '{ v = $2; u = v; sub(/^[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
+		m = (u == "kB") ? 1 : (u == "MB") ? 1e3 : (u == "GB") ? 1e6 : (u == "TB") ? 1e9 : 0; t += v * m } END { printf "%d", t / 1.024 }' <<< "${out}")"
+	[[ "${ctrs_kb}" =~ ^[0-9]{1,15}$ ]] || ctrs_kb=0
+	if "${limit[@]}" "${engine}" rm -f "${ids[@]}" >/dev/null 2>&1; then
+		ctrs_said="${#ids[@]} container(s)"
+	else
+		ctrs_said="some of ${#ids[@]} container(s), labeled dev.run=${TUKFS_RUN_NAME}"
+	fi
+	return 0
+}
+
 ## A run that stops early: whatever it started, then its dirs. fCleanup has
 ## done this already on a whole run. A stop says so in the form lint-report.bash
 ## takes for a finished run.
@@ -560,6 +609,10 @@ fRunTmpGone(){
 	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
+	fCtrsGone || true
+	if [[ "${ctrs_said}" == kept* ]]; then printf '[ %s ]\n' "${ctrs_said}" >&2
+	elif [[ -n "${ctrs_said}" ]]; then printf '[ cleanup: removed %s, about %s ]\n' "${ctrs_said}" "$(fSize "${ctrs_kb}")" >&2; fi
+	ctrs_said=""
 	((${#run_dirs[@]})) || { fFrozenGone || true; return 0; }
 	## Measured first, while the frozen copy is still in it.
 	for d in "${run_dirs[@]}"; do
@@ -899,6 +952,7 @@ fTestsWhere(){
 	local why=""
 	[[ -z "${tests_ctr}" ]] || return 0
 	fCtrUseRelease
+	ctr_step=tests
 	why="$(fCtrWhyNot)"
 	if [[ -z "${why}" ]]; then
 		tests_ctr_work="${run_tmp}/ctr"
@@ -1016,9 +1070,10 @@ fStageLint(){
 	fStepPass
 }
 
-## The integration test once on ROOT, in a dir of this run's under it.
+## The integration test once on ROOT, which makes its own dir under it, and
+## sweeps its own stale ones.
 fRunIt(){   ## fRunIt LABEL ROOT
-	local label="$1" itRoot="$2" real="" fsType="" want="" d="" rc=0
+	local label="$1" itRoot="$2" real="" fsType="" want="" rc=0
 	if [[ ! -d "${itRoot}" ]]; then
 		fEcho "NOTE: integration test on ${label} skipped, since ${itRoot} isn't there"
 		echo "it-${label}" >> "${gate_skips}"
@@ -1028,12 +1083,9 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
 	case "${label}" in ext4) want="ext2/ext3" ;; *) want="${label}" ;; esac
 	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; fi
-	fRunDirMake "${real}" it "${label}"
-	d="${made_dir}"
-	fEcho_Clean "integration test on ${label}: TMPDIR=${d} ${RELEASE_NATIVE_BIN}"
-	TMPDIR="${d}" fBg "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
+	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real} ${RELEASE_NATIVE_BIN}"
+	HOST_TEMP="${real}" fBg "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
-	if fRunDirGone "${d}"; then freed_kb=$((freed_kb + gone_kb)); fi
 	fEcho "OK: integration test on ${label}"
 }
 
@@ -1104,7 +1156,7 @@ fStageProfile(){
 		fEcho "NOTE: the profiler root ${base:-(none)} isn't there; the workload goes in the run's temp dir"
 		base="${run_tmp_root}"
 	fi
-	fRunDirMake "${base}" prof
+	fRunDirMake "${base}"
 	work="${made_dir}"
 	fsType="$(stat -f -c %T -- "${work}" 2>/dev/null || true)"
 	if [[ "${fsType}" != ext2/ext3 ]]; then fEcho "WARNING: the profiler workload is on ${fsType:-unknown}, not ext4"; fi
@@ -1448,24 +1500,23 @@ fPruneCache(){   ## fPruneCache DIR
 	echo "${n} ${kb}"
 }
 
-## Run dirs left by runs that were killed outright, so their trap never ran:
-## a strict name, and a mark whose PID matches the name and is gone. A frozen
-## copy in one goes through git first, so its locked record goes too.
+## Run dirs over 2 days old whose run is gone: killed outright, so their trap
+## never ran, or kept by --keep-temp. A strict name, a run.pid that's gone,
+## and a mark that names the same PID. A frozen copy in one goes through git
+## first, so its locked record goes too.
 fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 	local base="" d="" got="" pid="" kb=0 n=0 size=0 repo=""
 	base="$(realpath -e -- "$1" 2>/dev/null || true)"
 	[[ -n "${base}" && -d "${base}/tukfs-hash" ]] || { echo "0 0"; return 0; }
-	for d in "${base}/tukfs-hash/${RUN_TMP_PREFIX}"_{run,it,prof}_*; do
+	while IFS= read -r -d '' d; do
 		[[ -d "${d}" && ! -L "${d}" ]] || continue
 		fSafePath "${d}" 2>/dev/null || continue
-		[[ "${d}" =~ _[0-9]{8}-[0-9]{6}_([0-9]+)(_[a-z0-9]+)?$ ]] || continue
-		pid="${BASH_REMATCH[1]}"
-		[[ "${pid}" != "$$" ]] || continue
-		got=""; { read -r got < "${d}/${run_mark}"; } 2>/dev/null || continue
-		[[ "${got}" == "${pid}-"* ]] || continue
+		pid=""; { read -r pid < "${d}/run.pid"; } 2>/dev/null || continue
+		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${pid}" != "$$" ]] || continue
 		## Not kill -0, which fails on another user's process too.
 		[[ -d "/proc/${pid}" ]] && continue
-		if [[ -f "${d}/.cicd-kept" ]] && [[ -n "$(find "${d}/.cicd-kept" -maxdepth 0 -mmin -2880 2>/dev/null)" ]]; then continue; fi
+		got=""; { read -r got < "${d}/${run_mark}"; } 2>/dev/null || continue
+		[[ "${got}" == "${pid}-"* ]] || continue
 		size="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 		[[ "${size}" =~ ^[0-9]{1,15}$ ]] || size=0
 		repo=""
@@ -1479,7 +1530,7 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		fi
 		if fSafeRm "${d}" "${got}"; then n=$((n + 1)); kb=$((kb + size)); fi
 		if [[ -n "${repo}" ]]; then fFrozenRemove "${repo}" "${d}/tree" || true; fi
-	done
+	done < <(find "${base}/tukfs-hash" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -mmin +2880 -print0 2>/dev/null)
 	echo "${n} ${kb}"
 }
 
@@ -1488,9 +1539,9 @@ declare -a swept=(); swept_kb=0
 fSweepKilled(){
 	local r out n=0 kb=0
 	swept=(); swept_kb=0
-	for r in "${run_tmp_root}" "${IT_ROOTS[@]#*|}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do
+	for r in "${run_tmp_root}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do
 		out="$(fSweepStale "${r}")"; read -r n kb <<< "${out}"
-		if ((n)); then swept+=("${n} dir(s) of killed runs under ${r}"); swept_kb=$((swept_kb + kb)); fi
+		if ((n)); then swept+=("${n} stale run dir(s) under ${r}"); swept_kb=$((swept_kb + kb)); fi
 	done
 	return 0
 }
@@ -1519,6 +1570,10 @@ fCleanup(){
 	fi
 	fSweepKilled
 	gone+=("${swept[@]}"); total=$((total + swept_kb))
+	fCtrsGone
+	if [[ "${ctrs_said}" == kept* ]]; then fEcho_Clean "${ctrs_said}"
+	elif [[ -n "${ctrs_said}" ]]; then gone+=("${ctrs_said}"); total=$((total + ctrs_kb)); fi
+	ctrs_said=""
 	for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
 	if ((keep_temp)); then
 		kept_shown=1
@@ -1630,3 +1685,7 @@ exit 0
 ##		- 2026-10-25: Stage 7, other hosts: the arm64 unit and integration
 ##		  tests on vmDebARM64. A box that isn't there is a SKIP, listed again
 ##		  at the end. --no-remote skips it.
+##		- 2026-10-25: Run dirs named <stamp>_<NNN> under HOST_TEMP, with
+##		  run.pid, and swept after 2 days. TEMP and TMP too. The integration
+##		  test makes its own dir. The run's containers are removed by label
+##		  at the end.

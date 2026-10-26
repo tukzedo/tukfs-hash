@@ -86,7 +86,7 @@ cargo build --release
 tests/integration.bash
 ~~~
 
-The integration test needs `sqlite3`, `getfattr`, `setfattr` and `b2sum`, and a `TMPDIR` on a filesystem with user xattrs.
+The integration test needs `sqlite3`, `getfattr`, `setfattr` and `b2sum`, and a `HOST_TEMP`, or else a `TMPDIR`, on a filesystem with user xattrs. It works in a folder of its own under `tukfs-hash/` there, and `--keep-temp` keeps it.
 
 `rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline: format, build, lint, tests, release builds for x86_64 and arm64 Linux with a `.deb` and an `.rpm` of each, dogfood, the demo gif above, and publish. The release builds run in a Debian 10 image under docker, so each one needs only glibc 2.28 or newer. Without docker, or with `--no-container`, only the x86_64 one builds, on the box, and it needs the box's glibc. Where an arm64 Linux test VM is set up, the arm64 build's unit and integration tests also run there. A VM that isn't there is skipped, and `--no-remote` skips it on purpose. The gif needs Pillow, and is skipped without it. `cicd/cicd.bash --merge-gate` runs every check without publishing anything, and the pre-push hook runs it on pushes to `main` after `git config core.hooksPath cicd/hooks`. Pushes that only change docs skip it. `--help` lists the rest.
 

@@ -51,6 +51,7 @@ fLeakInImage(){
 	if [[ -n "${TUKFS_NO_IMAGE:-}" ]]; then
 		leak_why="TUKFS_NO_IMAGE is set"
 	else
+		ctr_step="${name}"
 		source "${here}/utility/include/ctr-image.bash"
 		leak_why="$(fCtrWhyNot)"
 	fi

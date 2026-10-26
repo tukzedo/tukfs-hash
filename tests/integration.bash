@@ -3,7 +3,12 @@
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
 ##		root and no mounts, so mount boundaries are left to `plan` on a real box.
-##	Usage: tests/integration.bash [BINARY]
+##	Usage: tests/integration.bash [--keep-temp] [BINARY]
+##		Works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or under
+##		TMPDIR when HOST_TEMP isn't set, so HOST_TEMP picks the filesystem.
+##		It's removed at the end unless --keep-temp, or TUKFS_KEEP_TEMP, says
+##		to keep it. Its own folders there over 2 days old whose run is gone
+##		are removed first.
 ##	History: At bottom of script.
 
 # Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -12,26 +17,25 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+keep="${TUKFS_KEEP_TEMP:-}"
+if [[ "${1:-}" == --keep-temp ]]; then keep=1; shift; fi
 bin="${1:-${here}/target/release/tukfs-hash}"
 # Resolved, so fSafeRm can insist the path has no links in it.
-work="$(realpath -e -- "${TMPDIR:-/tmp}")/tukfs-hash/test_tukfs-hash_itzq_$(date +%Y%m%d-%H%M%S)_$$"
+base="$(realpath -e -- "${HOST_TEMP:-${TMPDIR:-/tmp}}")/tukfs-hash"
 # The exit trap removes it only while the marker holds this run's token, so
 # a folder this run didn't make is never touched.
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 # A TERM to this shell alone leaves its children writing into the folder.
 source "${here}/cicd/utility/include/stop-descendants.bash"
-mkdir -p -- "${work%/*}"
-mkdir -- "${work}"
-printf '%s\n' "${token}" > "${work}/.test-run"
 
 # rm -rf, but only on what can only be one of this script's work folders:
-# .../tmp/<something>/test_tukfs-hash_itzq_<stamp>_<pid>, no links, no dots.
+# <base>/<stamp>_<NNN>, no links, no dots.
 fSafeRm() {
 	local p="${1:-}" real='' fhs=''
 	if [[ -z "${p}" || "${p}" != /* || "${p}" == *..* || "${p}" == *//* || "${p}" == *$'\n'* ]]; then
 		printf 'fSafeRm: refused, bad path: "%s"\n' "${p}" >&2; return 1
 	fi
-	if ! [[ "${p}" =~ ^(/.+)?/tmp/[^/]+(/[^/]+)*/test_tukfs-hash_itzq_[0-9]{8}-[0-9]{6}_[0-9]+$ ]]; then
+	if [[ "${p%/*}" != "${base}" || ! "${p##*/}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then
 		printf 'fSafeRm: refused, not a test folder: %s\n' "${p}" >&2; return 1
 	fi
 	for fhs in / /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var "${HOME:-/}"; do
@@ -43,9 +47,33 @@ fSafeRm() {
 	fi
 	rm -rf --one-file-system -- "${p}"
 }
+
+# Ours, over 2 days old, and its run gone. A folder with no marker of this
+# script's, such as a cicd run's, isn't.
+mkdir -p -- "${base}"
+while IFS= read -r -d '' old; do
+	pid=''; got=''
+	read -r pid 2> /dev/null < "${old}/run.pid" || continue
+	read -r got 2> /dev/null < "${old}/.test-run" || continue
+	[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" ]] || continue
+	fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
+done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -mmin +2880 -print0 2> /dev/null)
+
+n=1
+stamp="$(date +%Y%m%d-%H%M%S)"
+until mkdir -- "${base}/${stamp}_$(printf '%03d' "${n}")" 2> /dev/null; do
+	[[ -e "${base}/${stamp}_$(printf '%03d' "${n}")" ]] || { echo "could not make a work folder in ${base}" >&2; exit 2; }
+	n=$((n + 1)); [[ "${n}" -lt 1000 ]] || { echo "no free work folder name in ${base}" >&2; exit 2; }
+done
+work="${base}/${stamp}_$(printf '%03d' "${n}")"
+printf '%s\n' "${token}" > "${work}/.test-run"
+printf '%s\n' "$$" > "${work}/run.pid"
+export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
+
 fCleanup() {
 	local got=''
 	fStopDescendants
+	if [[ -n "${keep}" ]]; then printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
 	fSafeRm "${work}" || true
@@ -582,3 +610,5 @@ fi
 ##		  after a fixed 0.1 s.
 ##		- 20261025: Test IDs in Crockford base 32 minutes, and PASS, FAIL and
 ##		  SKIP lines with no "integration" in them.
+##		- 20261025: The work folder is <HOST_TEMP>/tukfs-hash/<stamp>_<NNN>,
+##		  with run.pid, and old ones go after 2 days. --keep-temp.
