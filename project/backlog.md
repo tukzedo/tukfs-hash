@@ -269,98 +269,6 @@
 	- Requirements  [Feature]:
 		- Fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
 
-- Help-related flags don't leave a blank line before the prompt returns.
-	- ID: 2026102515550002
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-155500
-	- Opened by: user
-	- Requirements  [Feature]:
-		- All help-related flags other than `--version` end with a blank line before the prompt returns.
-	- Progress log:
-		- 2026-10-25: `-h`, `--help`, `help` and the bare command all print the help with one blank line at the end.
-		- 2026-10-25: Verified: new integration check `dee8e` fails on the build from before for all 4, and passes now. `cicd/cicd.bash --backlog-run-quick` passed.
-	- Decisions:
-		- Only the binary's help. Filed as a Check in questions.md.
-	- Swept: every path that prints `USAGE`.
-	- Branch: round-20261025b
-	- Commit: `d317f52`
-	- Test case: `dee8e`.
-	- Acceptance signoff: Self-closed: `dee8e` passes, and fails on the old build.
-	- Closed: 20261025-175112
-
-- `--version` prints a copyright line and blank lines.
-	- ID: 2026102515550001
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-155500
-	- Opened by: user
-	- Requirements  [Feature]:
-		- No copyright line, and no blank lines.
-	- Progress log:
-		- 2026-10-25: `--version` prints the version line alone. The changelog says so.
-		- 2026-10-25: Integration check `deb0e` was "copyright line", the second line matching the source's. It's "version line alone" now: the output is that one line, with no blank lines, counting trailing ones.
-		- 2026-10-25: Verified: `deb0e` fails on the build from before and passes now. `cicd/cicd.bash --backlog-run-quick` passed in 1m 37s at load 16, with the integration test on ext4 and ZFS.
-	- Decisions:
-		- The binary printed no blank lines that I could find, so only the copyright line went. Filed as a Check in questions.md.
-	- Swept: the release check reads only the first line of `--version`. The dogfood wrapper passes it through.
-	- Branch: round-20261025b
-	- Commit: `d317f52`
-	- Test case: `deb0e`, with `deb0d` for the line itself.
-	- Acceptance signoff: Self-closed: `deb0e` passes, and fails on the old build.
-	- Closed: 20261025-175112
-
-- `lint-report.bash --check` counts archived file names with "warning" in them as warnings.
-	- ID: 2026102516000002
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261025-160000
-	- Opened by: round-20261025b startup lint check
-	- Steps to reproduce [Bug]:
-		- Run `cicd/utility/lint-report.bash --check` after a default run whose backup step listed its files.
-		- Result: `NEW FLAG run_20261025-112314.log (10 warning line(s))`, every one an `Adding ...` line for a file such as `zerocopy-derive-0.8.62/tests/ui/absence_of_deprecated_warning.rs`.
-	- Expected behavior [Bug]: The archiver's file list isn't read as lint output. A real warning in the same log still flags.
-	- Related IDs: 2026102516000001
-	- Actual cause [Bug]: The warning and error greps read every line of the run log, and the backup step's rar lists each file it adds.
-	- Progress log:
-		- 2026-10-25: `lint-report.bash` drops rar's `Adding` and `Updating` file lines before it counts warnings or errors.
-		- 2026-10-25: Verified: on the 11:23 run log it reads CLEAN, against FLAG with 10 lines before. With a real warning put in that log it still flags that 1 line. `report-check.bash REPO` passes, with 2 new cases, a rar list alone and a rar list beside a warning, and both fail on the code from before.
-	- Swept: `flame-report.py` reads graphs, not logs. Nothing else in `cicd/` greps the run log for warnings.
-	- Branch: round-20261025b
-	- Commit: `015fd1a`
-	- Test case: none with an ID. `report-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
-	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
-	- Closed: 20261025-175112
-
-- The default run's backup rar grew from 1.7 MB to 130 MB, since it now takes the cargo homes under `target/`.
-	- ID: 2026102516000001
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261025-160000
-	- Opened by: round-20261025b startup lint check
-	- Steps to reproduce [Bug]:
-		- Run `cicd/cicd.bash` with no flags, after a run that built the leak check or release images.
-		- Result: the `Backup + publish` step adds `target/leakcheck/cargo-home` and `target/release-ctr/cargo-home` to `../versions/tukfs-hash_<stamp>_latest.rar`. The 2026-10-25 11:37 rar is 131 MB, against 1.7 MB on 2026-10-23.
-	- Incorrect behavior [Bug]:
-		- `target` is a plain folder now, not a link to the no-snapshots dataset, so the backup's skip of linked folders no longer leaves it out. The image steps put about 490 MB of crate sources there.
-	- Expected behavior [Bug]: Nothing under `target/` goes in the backup, linked or not.
-	- Actual cause [Bug]: The publisher keeps release builds under `target/` on purpose, and only skipped this one while it was a link. Since `target` is a plain folder, the leak check and release image steps' cargo homes under it go in too.
-	- Progress log:
-		- 2026-10-25: New `cicd/rar-excludes.conf`, which the publisher reads, leaves out `*/target`. The release set the backup keeps is in `cicd/artifacts/release`. Nothing changed in the publisher itself.
-		- 2026-10-25: Verified: `backup-excludes-check.bash REPO` passes its 6 cases: nothing under `repo/target` is archived, plain or linked, while the source, the release set and `private/` are. With a conf that has no `*/target`, its first case fails on `repo/target/ctr/release/tukfs-hash`.
-	- Decisions:
-		- All of `target`, release builds included, as the issue asks. Filed as a Check in questions.md.
-	- Swept: the publisher is the only archiver in `cicd/`. Its `*/target-*/` already left out `target-gate`.
-	- Branch: round-20261025b
-	- Commit: `bfe3665`
-	- Test case: none with an ID. `backup-excludes-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
-	- Acceptance signoff: Self-closed: the check passes, and fails without the exclude.
-	- Closed: 20261025-175112
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -955,6 +863,32 @@
 	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
+
+- The default run's backup rar grew from 1.7 MB to 130 MB, since it now takes the cargo homes under `target/`.
+	- ID: 2026102516000001
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261025-160000
+	- Opened by: round-20261025b startup lint check
+	- Steps to reproduce [Bug]:
+		- Run `cicd/cicd.bash` with no flags, after a run that built the leak check or release images.
+		- Result: the `Backup + publish` step adds `target/leakcheck/cargo-home` and `target/release-ctr/cargo-home` to `../versions/tukfs-hash_<stamp>_latest.rar`. The 2026-10-25 11:37 rar is 131 MB, against 1.7 MB on 2026-10-23.
+	- Incorrect behavior [Bug]:
+		- `target` is a plain folder now, not a link to the no-snapshots dataset, so the backup's skip of linked folders no longer leaves it out. The image steps put about 490 MB of crate sources there.
+	- Expected behavior [Bug]: Nothing under `target/` goes in the backup, linked or not.
+	- Actual cause [Bug]: The publisher keeps release builds under `target/` on purpose, and only skipped this one while it was a link. Since `target` is a plain folder, the leak check and release image steps' cargo homes under it go in too.
+	- Progress log:
+		- 2026-10-25: New `cicd/rar-excludes.conf`, which the publisher reads, leaves out `*/target`. The release set the backup keeps is in `cicd/artifacts/release`. Nothing changed in the publisher itself.
+		- 2026-10-25: Verified: `backup-excludes-check.bash REPO` passes its 6 cases: nothing under `repo/target` is archived, plain or linked, while the source, the release set and `private/` are. With a conf that has no `*/target`, its first case fails on `repo/target/ctr/release/tukfs-hash`.
+	- Decisions:
+		- All of `target`, release builds included, as the issue asks. Filed as a Check in questions.md.
+	- Swept: the publisher is the only archiver in `cicd/`. Its `*/target-*/` already left out `target-gate`.
+	- Branch: round-20261025b
+	- Commit: `bfe3665`
+	- Test case: none with an ID. `backup-excludes-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and fails without the exclude.
+	- Closed: 20261025-175112
 
 - A stopped cicd run can leave its temp dir and a locked frozen copy.
 	- ID: 2026102407311809
@@ -1581,6 +1515,29 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- `lint-report.bash --check` counts archived file names with "warning" in them as warnings.
+	- ID: 2026102516000002
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-160000
+	- Opened by: round-20261025b startup lint check
+	- Steps to reproduce [Bug]:
+		- Run `cicd/utility/lint-report.bash --check` after a default run whose backup step listed its files.
+		- Result: `NEW FLAG run_20261025-112314.log (10 warning line(s))`, every one an `Adding ...` line for a file such as `zerocopy-derive-0.8.62/tests/ui/absence_of_deprecated_warning.rs`.
+	- Expected behavior [Bug]: The archiver's file list isn't read as lint output. A real warning in the same log still flags.
+	- Related IDs: 2026102516000001
+	- Actual cause [Bug]: The warning and error greps read every line of the run log, and the backup step's rar lists each file it adds.
+	- Progress log:
+		- 2026-10-25: `lint-report.bash` drops rar's `Adding` and `Updating` file lines before it counts warnings or errors.
+		- 2026-10-25: Verified: on the 11:23 run log it reads CLEAN, against FLAG with 10 lines before. With a real warning put in that log it still flags that 1 line. `report-check.bash REPO` passes, with 2 new cases, a rar list alone and a rar list beside a warning, and both fail on the code from before.
+	- Swept: `flame-report.py` reads graphs, not logs. Nothing else in `cicd/` greps the run log for warnings.
+	- Branch: round-20261025b
+	- Commit: `015fd1a`
+	- Test case: none with an ID. `report-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261025-175112
+
 - Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
 	- ID: 2026102507222620
 	- Type: Bug
@@ -1940,6 +1897,49 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- Help-related flags don't leave a blank line before the prompt returns.
+	- ID: 2026102515550002
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-155500
+	- Opened by: user
+	- Requirements  [Feature]:
+		- All help-related flags other than `--version` end with a blank line before the prompt returns.
+	- Progress log:
+		- 2026-10-25: `-h`, `--help`, `help` and the bare command all print the help with one blank line at the end.
+		- 2026-10-25: Verified: new integration check `dee8e` fails on the build from before for all 4, and passes now. `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- Only the binary's help. Filed as a Check in questions.md.
+	- Swept: every path that prints `USAGE`.
+	- Branch: round-20261025b
+	- Commit: `d317f52`
+	- Test case: `dee8e`.
+	- Acceptance signoff: Self-closed: `dee8e` passes, and fails on the old build.
+	- Closed: 20261025-175112
+
+- `--version` prints a copyright line and blank lines.
+	- ID: 2026102515550001
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261025-155500
+	- Opened by: user
+	- Requirements  [Feature]:
+		- No copyright line, and no blank lines.
+	- Progress log:
+		- 2026-10-25: `--version` prints the version line alone. The changelog says so.
+		- 2026-10-25: Integration check `deb0e` was "copyright line", the second line matching the source's. It's "version line alone" now: the output is that one line, with no blank lines, counting trailing ones.
+		- 2026-10-25: Verified: `deb0e` fails on the build from before and passes now. `cicd/cicd.bash --backlog-run-quick` passed in 1m 37s at load 16, with the integration test on ext4 and ZFS.
+	- Decisions:
+		- The binary printed no blank lines that I could find, so only the copyright line went. Filed as a Check in questions.md.
+	- Swept: the release check reads only the first line of `--version`. The dogfood wrapper passes it through.
+	- Branch: round-20261025b
+	- Commit: `d317f52`
+	- Test case: `deb0e`, with `deb0d` for the line itself.
+	- Acceptance signoff: Self-closed: `deb0e` passes, and fails on the old build.
+	- Closed: 20261025-175112
 
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407
