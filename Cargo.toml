@@ -26,6 +26,8 @@ soak = ["dep:dhat"]
 profiling = ["dep:pprof"]
 
 [profile.release]
+# opt-level stays at 3. "z" made it 36% smaller but cost 7% to 23% more CPU
+# on a rescan (2026101916404105).
 lto = true
 codegen-units = 1
 strip = true
