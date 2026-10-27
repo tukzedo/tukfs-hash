@@ -29,19 +29,6 @@
 
 ## Issues
 
-- 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
-	- ID: 2026102308220558
-	- Type: Enhancement
-	- Status: Stalled
-		- Held for the next change to each function.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261023-082205
-	- Opened by: split from 2026101916404110
-	- Parent ID: 2026101916404110
-	- Requirements  [Feature]:
-		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
-	- Test case: the existing unit and integration suites, since a split changes no behavior.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -2560,6 +2547,20 @@
 		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
 		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
 	- Closed: 20261025
+
+- 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
+	- ID: 2026102308220558
+	- Type: Enhancement
+	- Status: Canceled
+		- Decided 2026-10-26 to leave the 4 functions as they are. Their `too_many_lines` allows stay and still name this item.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261023-082205
+	- Opened by: split from 2026101916404110
+	- Parent ID: 2026101916404110
+	- Requirements  [Feature]:
+		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
+	- Test case: the existing unit and integration suites, since a split changes no behavior.
+	- Closed: 20261026-193507
 
 - `st` names the stats in `scan.rs` and a SQL statement in `main.rs` and `gone.rs`.
 	- ID: 2026101916404117
