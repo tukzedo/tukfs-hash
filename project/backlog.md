@@ -42,18 +42,6 @@
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 
-- `opt-level = "z"` hasn't been measured on a quiet box.
-	- ID: 2026101916404105
-	- Type: Task
-	- Status: Queued
-		- Held for a quiet box. Load was 18 on 2026-10-23.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261019-164041
-	- Opened by: style and performance review
-	- Prereq IDs: 2026101916404100
-	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
-	- Released 2026-10-27, load 3.6 on 32 cores.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -1953,6 +1941,28 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- `opt-level = "z"` hasn't been measured on a quiet box.
+	- ID: 2026101916404105
+	- Type: Task
+	- Status: Done
+		- Kept opt-level 3, so the profile is unchanged but for a comment saying why.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261019-164041
+	- Opened by: style and performance review
+	- Prereq IDs: 2026101916404100
+	- Note: With "z" the binary was 1.91 MB against 3.02 MB, mostly from building the bundled SQLite for size. A same-day rescan of 200k files was about 5% slower, but the box was under heavy load. Measure again when it's quiet, then pick.
+	- Released 2026-10-27, load 3.6 on 32 cores.
+	- Progress log:
+		- 2026-10-26: Sizes: 3,026,312 bytes at 3, 2,084,360 with z for `libsqlite3-sys` only, and 1,924,328 with z for everything.
+		- 2026-10-26: The profiler's workload at 4000 MB, about 3,800 files, rescan with `--rmlint`, mean user CPU. 3 against z, 6 rounds: 4.63 s and 4.99 s, 8% more. 3, SQLite only and z, 5 rounds: 4.52, 4.41 and 4.83 s. First scans were the same within the noise. Wall time was the same for all, since the scan waits on the disk.
+		- 2026-10-26: 100,000 files of 1 to 4 KB, 3 rounds. First scan user 2.41, 2.38 and 2.73 s. Rescan user 3.04, 3.25 and 3.73 s, so 7% more for SQLite only and 23% for z.
+		- 2026-10-26: Load ran 7 to 23 on 32 cores through the runs, with the refs taking turns each round. A fourth small-file round at load 59 was dropped.
+	- Decisions:
+		- Keep 3. Speed ranks above disk use, and 1.1 MB of a 3 MB binary doesn't pay for up to 23% more CPU on a tree of small files, which is b23's common case.
+		- z for SQLite alone saves most of the size, but still costs 7% on small files, so it isn't taken either.
+	- Test case: none. It's a build setting, and the measuring tool is `profile-ab.bash` in the private tools folder, which now takes `REF@OPT`, `REF@PKG:OPT` and `AB_SMALL_FILES=N`.
+	- Closed: 20261026-173549
 
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
