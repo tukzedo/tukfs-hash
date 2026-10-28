@@ -939,20 +939,19 @@ fn list_dir(
 				continue;
 			}
 		};
-		if kind == beneath::Kind::Other {
-			continue;
-		}
-		if kind == beneath::Kind::Dir
-			&& &*ent.name == ".zfs"
-			&& sh.mount_points.get(&dir).is_some_and(|t| t == "zfs")
-		{
+		let is_dir = match kind {
+			beneath::Kind::Dir => true,
+			beneath::Kind::File => false,
+			beneath::Kind::Other => continue,
+		};
+		if is_dir && &*ent.name == ".zfs" && sh.mount_points.get(&dir).is_some_and(|t| t == "zfs") {
 			continue;
 		}
 		let p = dir.join(&*ent.name);
 		if sh.mount_points.contains_key(&p) || excluded(sh, &p) {
 			continue;
 		}
-		if kind == beneath::Kind::Dir {
+		if is_dir {
 			subdirs.push(ent.name);
 			continue;
 		}

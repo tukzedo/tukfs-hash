@@ -218,28 +218,17 @@
 		- 2026-10-28: On 20,000 files of 1 to 4 KB, a scan took about 0.4 to 0.5 s user and 1.8 to 2.2 s sys CPU, at load 6. Without the 3 `posix_fadvise` calls it was the same. Without `O_DIRECT`, sys fell by about 0.7 s, which child 2026102809554675 takes up. The rest of the notes are in child 2026102809554785.
 		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
 
-- Per-entry checks and copies in the scan's walk and record path haven't been measured.
-	- ID: 2026102809554785
+- Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
+	- ID: 2026102810135573
 	- Type: Enhancement
 	- Status: Queued
 	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-095547
+	- Opened: 20261028-101355
 	- Opened by: style and performance review
-	- Parent ID: 2026102808215738
-	- Note: The parent's notes on `Prior.b3`, `excluded()` and `no_xattr`, the copies in `hashed_msg`, `xattr::fget`, `text_of`, `write_b3` and `beneath`, and the `SELECT` per file.
-	- Note: User CPU is about 0.4 to 0.5 s of a 20,000-small-file scan, so these can win only a part of that. Time each with `profile-ab.bash` and `AB_SMALL_FILES`, and keep only what moves it.
-
-- The directory walk would treat a new entry kind as a file.
-	- ID: 2026102808215728
-	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `9120949`. Plausible, read only.
-	- Note: `list_dir` in `src/scan.rs` tests `beneath::Kind` with `if ==` and queues anything else as a file. An exhaustive match makes a new kind a compile error.
+	- Related IDs: 2026102808215738, 2026102809554785
+	- Note: On 20,000 files of 1 to 4 KB, over 5 rounds at load 5, a build with the lookup taken out used about 0.07 s less user CPU on a first scan, from 0.40 s, and 0.08 s less on a `--rmlint` rescan, from 0.51 s. That's about 4 us per file, and it costs as much on an empty database. Sys CPU fell by up to 0.1 s, and wall time didn't move.
+	- Note: A query per folder is the redesign the parent named. A read transaction held across many lookups might do it cheaper, but it would hold back the writer's checkpoints and hide rows written since it began, which a resumed run reads.
 
 - PSScriptAnalyzer's Information level and its constant-string rule are off.
 	- ID: 2026102809033225
@@ -323,6 +312,43 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- Per-entry checks and copies in the scan's walk and record path haven't been measured.
+	- ID: 2026102809554785
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No, nothing was kept.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-095547
+	- Opened by: style and performance review
+	- Parent ID: 2026102808215738
+	- Note: The parent's notes on `Prior.b3`, `excluded()` and `no_xattr`, the copies in `hashed_msg`, `xattr::fget`, `text_of`, `write_b3` and `beneath`, and the `SELECT` per file.
+	- Note: User CPU is about 0.4 to 0.5 s of a 20,000-small-file scan, so these can win only a part of that. Time each with `profile-ab.bash` and `AB_SMALL_FILES`, and keep only what moves it.
+	- Progress log:
+		- 2026-10-28: `Prior.b3` as `[u8; 32]`, one reused buffer for all of a file's attributes with no `text_of` copies, and one digest encode in `write_b3`, timed together on 20,000 files of 1 to 4 KB, over 5 rounds at load 7 to 9: user CPU 0.36 to 0.52 s against 0.37 to 0.46 s on a first scan, and 0.52 to 0.60 s against 0.54 to 0.63 s on a rescan. Within the noise, so none was kept.
+		- 2026-10-28: The lookup, taken out to bound it, was about 4 us of user CPU per file, a sixth of the total. Filed as 2026102810135573.
+	- Decisions:
+		- `excluded()`, `no_xattr`, the `hashed_msg` copy and the `beneath` name weren't timed one by one. Each is a compare or a copy per file, smaller than the allocations above, which didn't show.
+		- The per-folder query is a redesign of its own, so it went to a new item rather than into this one's time cap.
+	- Test case: None, no change was kept.
+	- Closed: 20261028-101355
+
+- The directory walk would treat a new entry kind as a file.
+	- ID: 2026102808215728
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's build, lint, unit and integration steps cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `9120949`. Plausible, read only.
+	- Note: `list_dir` in `src/scan.rs` tests `beneath::Kind` with `if ==` and queues anything else as a file. An exhaustive match makes a new kind a compile error.
+	- Progress log:
+		- 2026-10-28: `list_dir` matches all 3 kinds once, so a new one fails to build. Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
+	- Swept: `beneath::Kind` is matched nowhere else outside `beneath.rs`, which builds it with its own match.
+	- Branch: round-20261028
+	- Test case: None. No behavior change, and the compiler is the check. The integration test walks the trees.
+	- Closed: 20261028-101355
 
 - The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
 	- ID: 2026102808215758
