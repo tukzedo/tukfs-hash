@@ -207,13 +207,21 @@
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789
 	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
+	- Status: Done
+	- Needs local test suite run?: No, the launcher runs only in the default run's dogfood step.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
 	- Opened by: style and performance review
 	- Origin: `4a1977a`. Plausible, read only.
 	- Note: `utility/dogfood_tukfs-hash` walks links one hop at a time with `readlink` and `dirname`, and has no end on a loop. One `readlink -f` does it.
+	- Progress log:
+		- 2026-10-28: The launcher resolves its path with one `readlink -f`, and exits 1 with a message when that gives nothing. Verified: a chain of relative and absolute links reaches the .ps1 beside the target and passes arguments on. The quick gate passed.
+	- Decisions:
+		- No test for the loop itself: bash can't open a script path that is a loop, so the launcher never runs on one. The change is a simplification, and the check covers the chain, which old and new code both pass.
+	- Swept: `grep readlink` over `utility/`, and the `.ps1` twin has no link walk.
+	- Branch: round-20261028
+	- Test case: none with an ID. `private/claude_simple/tools/dogfood-launcher-check.bash REPO [LAUNCHER]` checks the link chain.
+	- Closed: 20261028-091400
 
 - Scan progress shows no growth while a large file is read, then a jump.
 	- ID: 2026102808215779

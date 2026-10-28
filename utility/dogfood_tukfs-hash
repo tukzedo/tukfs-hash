@@ -15,13 +15,12 @@
 
 set -eu
 
-## Through any links, so the lookup below works from a link on PATH too.
-self="${BASH_SOURCE[0]}"
-while [[ -L "${self}" ]]; do
-	target="$(readlink "${self}")"
-	if [[ "${target}" == /* ]]; then self="${target}"
-	else                             self="$(dirname "${self}")/${target}"; fi
-done
+## Through any links, so the lookup below works from a link on PATH too. Empty on a loop.
+self="$(readlink -f -- "${BASH_SOURCE[0]}" || true)"
+if [[ -z "${self}" ]]; then
+	echo "dogfood_tukfs-hash: can't resolve ${BASH_SOURCE[0]} (link loop?)" >&2
+	exit 1
+fi
 selfDir="$(cd -P "$(dirname "${self}")" && pwd)"
 
 ps1=""
@@ -45,3 +44,4 @@ exec pwsh -NoProfile -File "${ps1}" "$@"
 
 ##	History:
 ##		- 2026-10-23: Created from shcl's dogfood_shcl.
+##		- 2026-10-28: Resolve links with one readlink -f, so a link loop ends.
