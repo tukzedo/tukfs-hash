@@ -29,6 +29,15 @@
 
 ## Issues
 
+- A writer-thread panic in a scan can still leave its run marked running.
+	- ID: 2026102809213002
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-092130
+	- Opened by: style and performance review
+	- Found 2026-10-28 while fixing 2026102808215852. A panic between begin() and finish() in scan::run returns without closing the run row. Not reproduced.
+
 - The demo gif shows a scan's real time, so a slow run redraws it.
 	- ID: 2026102808415586
 	- Type: Bug
