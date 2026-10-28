@@ -41,18 +41,6 @@
 	- Note: `scan::run` reads the mounts after `begin()` has written the run row. An error there returns before `finish()`, so the run stays running, the database stays in WAL mode, and a sudo run leaves files owned by root.
 	- Note: Move both calls above `begin()`, and reuse the mount table `plan()` read. A run reads it 3 times now.
 
-- The integration test stops with no FAIL line when 2 of its checks find nothing.
-	- ID: 2026102808215842
-	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `ef00124`. Plausible, read only.
-	- Note: Under `set -euo pipefail`, a `grep` with no match in ddx1e's `skipped=` line, or a missing attribute in `xhex` for de5gd, fails the assignment and ends the script. de5gd's own failure case is the one that trips it.
-	- Note: Add `|| true` inside both, as `xget` has.
-
 - snapdiff allocates and zeroes 2 MiB for every file pair it compares.
 	- ID: 2026102808215768
 	- Type: Enhancement
@@ -278,19 +266,6 @@
 	- Note: `test-ids.py` reuses `line` as a str and then an int, which strict mypy refuses. Some of its patterns are compiled and some aren't.
 	- Note: `flame-report.py` came from silkterm, so a fix may belong there too.
 	- Decided against: renaming the mix of PEP 8 and fCamelCase names in `test-ids.py`. New names follow the majority.
-
-- The integration test has a duplicate helper name, an odd header, and 2 hard-to-read one-liners.
-	- ID: 2026102808215647
-	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: `rscan()` is defined twice in `tests/integration.bash`, for step 14 and step 20, with different databases. Rename the second.
-	- Note: The header uses `#` lines with no SPDX line, unlike the other scripts, and the bottom says `Script history:` where the header says `History:`.
-	- Note: `fFlipByte` and `wait_reached` are single lines that need reading twice. Split them.
-	- Decided against: renaming the mixed snake_case and camelCase names here and in `cicd.bash`, since committed names stay. New names follow the file's majority.
 
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
@@ -1026,6 +1001,28 @@
 	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
+
+- The integration test stops with no FAIL line when 2 of its checks find nothing.
+	- ID: 2026102808215842
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No. The quick run's integration test on ext4 and ZFS covers the one file changed.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `ef00124`. Plausible, read only.
+	- Note: Under `set -euo pipefail`, a `grep` with no match in ddx1e's `skipped=` line, or a missing attribute in `xhex` for de5gd, fails the assignment and ends the script. de5gd's own failure case is the one that trips it.
+	- Note: Add `|| true` inside both, as `xget` has.
+	- Reproduced [Bug]: Yes. With an `rmlint` on PATH that writes nothing, the test ended after de5gc with exit 1 and no FAIL line. The `skipped=` line alone, on output with no match, ends a `set -euo pipefail` shell.
+	- Actual cause [Bug]: A failed pipeline in an assignment trips `set -e`. Step 20 had a third: `setfattr -x` on the attribute rmlint never wrote.
+	- Actual fix [Bug]: `|| true` on the `skipped=` pipeline and on `getfattr` inside `xhex`, and `setfattr -x` there ignores a missing attribute.
+	- Decisions:
+		- Followed the note's `|| true`, not a rewrite with `BASH_REMATCH`, to keep the change small.
+	- Branch: round-20261028
+	- Test case: ddx1e and de5gd themselves. No standing test of the test script's own failure path.
+	- Verified: With the do-nothing `rmlint`, the old script ended after de5gc with no FAIL line. The new one printed `FAIL de5gd rmlint left nothing` and `FAIL de5ge`, then ran to the end, `2 failed`. The `skipped=` line alone exits 1 before and 0 after. `cicd/cicd.bash --backlog-run-quick` passed in 1m 38s, the integration test on ext4 and ZFS included.
+	- Swept: every assignment from a command substitution in `tests/integration.bash`. The rest read the database, `stat`, `date` or the binary, where a failure is a real one. Every `setfattr -x`. The other helpers that call `getfattr` already end in `|| true`.
+	- Closed: 20261028-083400
 
 - The default run's backup rar grew from 1.7 MB to 130 MB, since it now takes the cargo homes under `target/`.
 	- ID: 2026102516000001
@@ -2200,6 +2197,27 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- The integration test has a duplicate helper name, an odd header, and 2 hard-to-read one-liners.
+	- ID: 2026102808215647
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No. The quick run's integration test on ext4 and ZFS covers the one file changed.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: `rscan()` is defined twice in `tests/integration.bash`, for step 14 and step 20, with different databases. Rename the second.
+	- Note: The header uses `#` lines with no SPDX line, unlike the other scripts, and the bottom says `Script history:` where the header says `History:`.
+	- Note: `fFlipByte` and `wait_reached` are single lines that need reading twice. Split them.
+	- Decided against: renaming the mixed snake_case and camelCase names here and in `cicd.bash`, since committed names stay. New names follow the file's majority.
+	- Decisions:
+		- Step 20's helper is `rdscan`, after its `rd` folder and `rd.txt`.
+		- `wait_started` is split too, since it is the same loop as `wait_reached`.
+		- The copyright and license lines take `##` like the rest of the header, with `SPDX-License-Identifier: GPL-2.0-only` after them.
+	- Branch: round-20261028
+	- Test case: A restructure, so the integration test itself. Every check still passes.
+	- Verified: shellcheck is clean. `cicd/cicd.bash --backlog-run-quick` passed in 1m 38s, the integration test on ext4 and ZFS included, with steps 5 and 20 passing.
+	- Closed: 20261028-083400
 
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
