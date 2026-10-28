@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2034  ## 'variable appears unused.' leak_host_note is read by leak-common.bash.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' PIN_ and LEAK_ settings come from config.bash, through leak-common.bash.
-
 ##	Purpose:
 ##		CodeQL's Rust security-and-quality suite over a copy of the crate with
 ##		every dependency vendored into it (cargo vendor), so the crates are
@@ -72,7 +68,7 @@ work="${scratch}"; src="${work}/src"; db="${work}/db"
 mkdir -p -- "${src}/tests" "${src}/.cargo" "${work}/rtarget" "${work}/tmp"
 export TMPDIR="${work}/tmp"
 cp -a -- Cargo.toml Cargo.lock build.rs src "${src}/"
-## The profiling build never ships, and uuid's Display, which comes in with
+## The profiling build isn't released, and uuid's Display, which comes in with
 ## pprof, reads to CodeQL as a secret that every format! in the tree could
 ## log. So the copy has no profiling feature, pprof or src/profiling.rs, and
 ## its lock loses their crates, which only removes lines.
@@ -106,8 +102,10 @@ fi
 ## what the database kept.
 full=1
 listed="$(unzip -Z1 "${db}/src.zip")"
+declare -A inDb=()
+while IFS= read -r f; do [[ -z "${f}" ]] || inDb["${f}"]=1; done <<<"${listed}"
 while IFS= read -r -d '' f; do
-	if ! grep -qxF -- "${f#/}" <<<"${listed}"; then echo "codeql-scan: the database left out ${f#"${src}/"}"; full=0; fi
+	if [[ -z "${inDb["${f#/}"]:-}" ]]; then echo "codeql-scan: the database left out ${f#"${src}/"}"; full=0; fi
 done < <(find "${src}/src" "${src}/tests" -name '*.rs' -print0)
 roots="$(cd "${src}" && cargo metadata --format-version 1 --locked --offline --all-features --filter-platform x86_64-unknown-linux-gnu \
 	| jq -r '[.resolve.nodes[].id] as $ids | .packages[] | select(.id as $i | $ids | index($i)) | select(.source != null)
@@ -116,7 +114,7 @@ nRoots=0
 while IFS= read -r f; do
 	[[ -n "${f}" ]] || continue
 	nRoots=$((nRoots + 1))
-	if ! grep -qxF -- "${f#/}" <<<"${listed}"; then echo "codeql-scan: the database left out the crate root ${f#"${src}/"}"; full=0; fi
+	if [[ -z "${inDb["${f#/}"]:-}" ]]; then echo "codeql-scan: the database left out the crate root ${f#"${src}/"}"; full=0; fi
 done <<<"${roots}"
 ## A file outside every module tree says "semantic analyzer unavailable" too,
 ## which a crate's benches and Windows code do, so only ours count.
@@ -146,7 +144,7 @@ jq -r --arg pre "file://${src}/" '.suppressions.tuples[] | select(.[1] | test("(
 	[(.[3].url.uri | ltrimstr($pre)), (.[3].url.startLine | tostring), (.[0].url.startLine | tostring),
 	(.[2] | sub("^lgtm\\["; "") | sub("\\]$"; "")), (.[1] | sub("^[^\\]]*\\]\\s*"; ""))] | @tsv' \
 	"${work}/sup.json" > "${work}/sup.tsv"
-## Of the crates, what the shipped binary builds: crates the Linux build
+## Of the crates, what the release binary builds: crates the Linux build
 ## takes, without dev-dependencies, so not the soak's dhat, and files in a
 ## module tree, so not a crate's benches or its Windows code.
 for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
@@ -209,7 +207,7 @@ while IFS=$'\t' read -r state uri line rule msg; do
 		stalereview) echo "codeql-scan: cicd/codeql/vendored-reviewed.tsv: ${uri} ${line} has no such finding now"; suppressOk=0 ;;
 	esac
 done < "${work}/judged.tsv"
-echo "codeql-scan: of the crates' findings, ${nReviewed} were reviewed, ${nNotBuilt} are in files the build leaves out, and ${nUnshipped} in crates the shipped binary doesn't link"
+echo "codeql-scan: of the crates' findings, ${nReviewed} were reviewed, ${nNotBuilt} are in files the build leaves out, and ${nUnshipped} in crates the release binary doesn't link"
 bad=0
 if ((! baitSeen)); then echo "codeql-scan: nothing reported in the planted ${bait}"; bad=1; fi
 if ((! full)); then bad=1; fi

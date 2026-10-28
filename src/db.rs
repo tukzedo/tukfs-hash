@@ -14,6 +14,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+/// The table version this binary writes.
 pub const SCHEMA: i64 = 4;
 
 // Matches the dataset's recordsize, so a page write is one record write.
@@ -75,6 +76,7 @@ impl ToSql for PathKey<'_> {
 	}
 }
 
+/// A stored path, escaped for showing.
 pub fn path_text(v: ValueRef<'_>) -> String {
 	match v {
 		ValueRef::Text(t) | ValueRef::Blob(t) => crate::util::escape_name(t),
@@ -99,6 +101,7 @@ pub fn init() {
 	});
 }
 
+/// Opens the database to write, creating it if needed.
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
 	let fresh = !path.exists();
@@ -186,6 +189,7 @@ pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 	)
 }
 
+/// Opens the database read only, for a worker's lookups.
 pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	init();
 	let conn = Connection::open_with_flags(
@@ -197,15 +201,11 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	Ok(conn)
 }
 
-/// Puts the file back in rollback mode, so a user without write access to the
-/// folder can still open it read-only after a run as root. Leaving WAL mode
-/// checkpoints on its own; an explicit TRUNCATE checkpoint after `quick_check`
-/// fails with "table is locked" on SQLite 3.46 to 3.50.
-///
-/// It needs the file to itself, so another reader makes it fail, at once or
-/// after the busy wait. Everything is committed by then, so the caller only
-/// warns, and a long wait would only hold up the result.
+/// Puts the file back in rollback mode. See design.md, Database. Leaving WAL
+/// mode checkpoints on its own, and an explicit TRUNCATE checkpoint after
+/// `quick_check` fails with "table is locked" on SQLite 3.46 to 3.50.
 pub fn close_rw(conn: Connection) -> Result<(), String> {
+	// Short, since a failure here only warns.
 	conn.busy_timeout(Duration::from_secs(5)).ok();
 	let mode = conn
 		.pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get::<_, String>(0))
@@ -217,6 +217,7 @@ pub fn close_rw(conn: Connection) -> Result<(), String> {
 	}
 }
 
+/// What the database holds for a path.
 #[derive(Debug, Clone)]
 pub struct Prior {
 	pub id: i64,
@@ -228,6 +229,7 @@ pub struct Prior {
 	pub b3: Vec<u8>,
 }
 
+/// The query `lookup` runs.
 pub const LOOKUP: &str = "SELECT p.id, p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
@@ -248,6 +250,7 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Resu
 	.optional()
 }
 
+/// A file's sums and stat, as read, for the writer to store.
 #[derive(Debug)]
 pub struct Hashed {
 	pub path: Vec<u8>,
@@ -279,6 +282,7 @@ pub enum Kind {
 }
 
 impl Kind {
+	/// Every kind.
 	pub const ALL: [Kind; 13] = [
 		Kind::XattrMismatch,
 		Kind::RmlintMismatch,
@@ -295,6 +299,7 @@ impl Kind {
 		Kind::Accepted,
 	];
 
+	/// The name stored and shown.
 	pub fn name(self) -> &'static str {
 		match self {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
@@ -313,6 +318,7 @@ impl Kind {
 		}
 	}
 
+	/// The kind with that name.
 	pub fn parse(name: &str) -> Option<Kind> {
 		Kind::ALL.into_iter().find(|k| k.name() == name)
 	}
@@ -358,6 +364,7 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
+	/// Every status.
 	pub const ALL: [RunStatus; 6] = [
 		RunStatus::Running,
 		RunStatus::Stopped,
@@ -367,6 +374,7 @@ impl RunStatus {
 		RunStatus::Accept,
 	];
 
+	/// The text stored and shown.
 	pub fn text(self) -> &'static str {
 		match self {
 			RunStatus::Running => "running",
@@ -378,6 +386,7 @@ impl RunStatus {
 		}
 	}
 
+	/// The status with that text.
 	pub fn parse(text: &str) -> Option<RunStatus> {
 		RunStatus::ALL.into_iter().find(|s| s.text() == text)
 	}
@@ -391,10 +400,11 @@ impl ToSql for RunStatus {
 	}
 }
 
+/// What workers send the database writer.
 #[derive(Debug)]
 pub enum Msg {
 	Hashed(Box<Hashed>),
-	// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
+	/// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
 	Seen(i64),
 	Event {
 		kind: Kind,
@@ -468,13 +478,34 @@ fn commit(conn: &mut Connection, run_id: i64, msgs: &mut Vec<Msg>) -> rusqlite::
 /// among the rest can't take a mismatch down with it.
 ///
 /// After a failure the rest are dropped, but events are still kept, until one
-/// of those fails too. `halt` is called once, to stop the workers.
+/// of those fails too. `halt` stops the workers. A panic is a failure too, and
+/// the connection still comes back, so the run can be marked failed.
 pub fn writer(
 	mut conn: Connection,
 	run_id: i64,
 	rx: &Receiver<Msg>,
 	halt: impl Fn(),
 ) -> (Connection, Result<(), String>) {
+	let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		batches(&mut conn, run_id, rx, &halt)
+	}))
+	.unwrap_or_else(|_| {
+		halt();
+		Err("the database writer panicked".into())
+	});
+	(conn, r)
+}
+
+#[cfg(test)]
+/// Writers on these databases panic at their first batch.
+pub static PANIC_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn batches(
+	conn: &mut Connection,
+	run_id: i64,
+	rx: &Receiver<Msg>,
+	halt: &impl Fn(),
+) -> Result<(), String> {
 	let mut events: Vec<Msg> = Vec::new();
 	let mut rest: Vec<Msg> = Vec::with_capacity(4096);
 	let mut failed: Option<String> = None;
@@ -499,11 +530,18 @@ pub fn writer(
 		};
 		let n = events.len() + rest.len();
 		if n > 0 && (done || n >= 20000 || last.elapsed() >= Duration::from_secs(1)) {
-			let r = commit(&mut conn, run_id, &mut events);
+			#[cfg(test)]
+			if conn
+				.path()
+				.is_some_and(|p| PANIC_ON.lock().unwrap().iter().any(|q| q == p))
+			{
+				panic!("test fault");
+			}
+			let r = commit(conn, run_id, &mut events);
 			if r.is_err() {
 				events_ok = false;
 			}
-			if let Err(x) = r.and_then(|()| commit(&mut conn, run_id, &mut rest)) {
+			if let Err(x) = r.and_then(|()| commit(conn, run_id, &mut rest)) {
 				events.clear();
 				rest.clear();
 				if failed.is_none() {
@@ -514,7 +552,7 @@ pub fn writer(
 			last = Instant::now();
 		}
 		if done {
-			return (conn, failed.map_or(Ok(()), Err));
+			return failed.map_or(Ok(()), Err);
 		}
 	}
 }

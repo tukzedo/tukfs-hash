@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'source is valid here, but shellcheck doesn't know the path to it.'
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes, use double quotes for that.' I know, and I often want an explicit '$'.
 #  shellcheck disable=2034  ## 'variable appears unused.' Complains about valid use of variable indirection.
-#  shellcheck disable=2153  ## 'Possible misspelling.' False hit on vars assigned in the sourced config.bash.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' False hit on trap strings that assign the var they use (rc=$?).
-#  shellcheck disable=2155  ## 'Declare and assign separately to avoid masking return values.' Cumbersome and unnecessary.
-#  shellcheck disable=2317  ## 'Can't reach.' False hits on functions that only run from a trap.
-#  shellcheck disable=2329  ## 'This function is never invoked.' The same, for the EXIT trap's function.
+#  shellcheck disable=2329  ## 'This function is never invoked.' False hit on the EXIT trap's function.
 
 ##	- Purpose: Local CI/CD pipeline. Generic engine; the project's settings
 ##	  are in config.bash.
@@ -17,7 +12,7 @@
 ##	   2. build (debug)
 ##	   3. lint (clippy, shellcheck over every tracked *.bash, markdownlint over
 ##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1, ruff
-##	      over every tracked .py, then LINT_EXTRA, such as the test ID check)
+##	      and mypy over every tracked .py, then LINT_EXTRA, such as the test ID check)
 ##	   4. tests (cargo test, then the integration test once per test root),
 ##	      then the slow leak checks
 ##	   5. profiler (a flamegraph of a scan, from an in-process sampler, into
@@ -159,7 +154,7 @@ fCpuCap
 
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
-RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); LINT_EXTRA=()
+RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); PY_TYPE_CMD=(); LINT_EXTRA=()
 TEST_ID_LIST_CMD=(); REMOTE_HOSTS=(); REMOTE_VM_WRAP=''; REMOTE_LOCK_WAIT=900
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
@@ -167,7 +162,7 @@ PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
-## shellcheck source=config.bash
+# shellcheck source=config.bash
 source "${here}/config.bash"
 
 ## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs
@@ -429,12 +424,14 @@ fGitRemote(){ if command -v gitsby >/dev/null 2>&1; then gitsby raw git "$@"; el
 ## Dogfood helpers, from shcl's engine.
 ## First existing and writable dir from the list; nothing when there's none.
 fFirstWritableDir(){ local d; for d in "$@"; do if [[ -d "${d}" && -w "${d}" ]]; then echo "${d}"; break; fi; done; return 0; }
-## 0 when a running process was started from this file.
+## 0 when a running process was started from this file. -ef compares the
+## inode the exe link points at, with no process per entry. A replaced file's
+## old inode doesn't match, the same as its "(deleted)" name didn't.
 fInUse(){   ## fInUse PATH
-	local path exe
-	path="$(readlink -f -- "$1" 2>/dev/null)" || return 1
+	local exe
+	[[ -e "$1" ]] || return 1
 	for exe in /proc/[0-9]*/exe; do
-		if [[ "$(readlink -- "${exe}" 2>/dev/null || true)" == "${path}" ]]; then return 0; fi
+		if [[ "${exe}" -ef "$1" ]]; then return 0; fi
 	done
 	return 1
 }
@@ -453,7 +450,7 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
-## Temp dirs, and the only rm -rf this script does
+## Temp dirs and their rm -rf. fSafeRmCache has the only other one.
 
 ## Every dir the run makes is <root>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, with
 ## the run's PID in run.pid and its token in the mark file: the run's own, and
@@ -569,7 +566,7 @@ done
 [[ "${run_tmp_root}" == /* ]] || fDie "no temp root: HOST_TEMP, RUN_TMP_ROOT, TMPDIR and /tmp aren't there"
 fRunDirMake "${run_tmp_root}"
 run_tmp="${made_dir}"
-## So what the steps write, and the runs they start, land in it.
+## So what the steps write, and the runs they start, go in it.
 export TMPDIR="${run_tmp}" TEMP="${run_tmp}" TMP="${run_tmp}" HOST_TEMP="${run_tmp}"
 ## Every container of the run is labeled with this, the outer run's name.
 if ((! inner_run)) || [[ ! "${TUKFS_RUN_NAME:-}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then export TUKFS_RUN_NAME="${run_tmp##*/}"; fi
@@ -773,7 +770,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
 	fEcho_Clean "Build (debug) ..: $( ((debug_off)) && echo '(skipped)' || echo "${BUILD_CMD[*]}")"
-	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
+	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff, mypy$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
 	_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*} (${_r#*|}), "; done
 	fEcho_Clean "Tests ..........: $( ((tests_off || unit_off)) && echo '(skipped)' || echo "${TEST_CMD[*]}")"
 	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }")"
@@ -873,8 +870,8 @@ if ((! assume_yes && ! inner_run)) && ((${#GIT_PUBLISH[@]})) && [[ -z "${publish
 fi
 
 ## The whole run into a rotated log, for lint-report.bash. Not under
-## --backlog-run-quick, which writes nothing, and not in the run on the frozen copy, whose output
-## already goes through this one.
+## --backlog-run-quick, which writes nothing, and not in the run on the
+## frozen copy, whose output already goes through this one.
 if [[ "${mode}" != bq ]] && ((! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
 	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C
@@ -1064,7 +1061,8 @@ fStageLint(){
 		fEcho_Clean "PSScriptAnalyzer: ${#psFiles[@]} file(s)"
 		if fLintRun "${PS_LINT_CMD[@]}" "${psFiles[@]}"; then fEcho "OK: PSScriptAnalyzer clean"; else failed+=(PSScriptAnalyzer); fi
 	fi
-	## Not through fLintTool: a box without ruff skips it even in the merge gate.
+	## Not through fLintTool: a box without ruff or mypy skips it even in the
+	## merge gate.
 	if ((${#pyFiles[@]})) && ((${#PY_LINT_CMD[@]})); then
 		if ! command -v "${PY_LINT_CMD[0]}" >/dev/null 2>&1; then
 			fEcho "NOTE: ${PY_LINT_CMD[0]} isn't installed; ${#pyFiles[@]} Python file(s) not linted"
@@ -1076,6 +1074,15 @@ fStageLint(){
 			else
 				failed+=(ruff)
 			fi
+		fi
+	fi
+	if ((${#pyFiles[@]})) && ((${#PY_TYPE_CMD[@]})); then
+		if ! command -v "${PY_TYPE_CMD[0]}" >/dev/null 2>&1; then
+			fEcho "NOTE: ${PY_TYPE_CMD[0]} isn't installed; ${#pyFiles[@]} Python file(s) not type-checked"
+			echo "${PY_TYPE_CMD[0]}" >> "${gate_skips}"
+		else
+			fEcho_Clean "mypy: ${#pyFiles[@]} file(s)"
+			if fLintRun "${PY_TYPE_CMD[@]}" "${pyFiles[@]}"; then fEcho "OK: mypy clean"; else failed+=(mypy); fi
 		fi
 	fi
 	for c in "${LINT_EXTRA[@]}"; do
@@ -1150,8 +1157,9 @@ fRecordGreen(){
 	return 0
 }
 
-## Seconds since an EPOCHREALTIME, to 2 places, with no fork.
-fSecsSince(){ local us=$(( ${EPOCHREALTIME/./} - ${1/./} )); printf '%d.%02d s' $((us / 1000000)) $((us % 1000000 / 10000)); }
+## Seconds since an EPOCHREALTIME, to 2 places, with no fork. Its point
+## follows the locale, so a comma goes too.
+fSecsSince(){ local us=$(( ${EPOCHREALTIME/[.,]/} - ${1/[.,]/} )); printf '%d.%02d s' $((us / 1000000)) $((us % 1000000 / 10000)); }
 
 ## Stage 5: profiler. The attribution check comes before any graph is drawn,
 ## since a graph that names the wrong code is worse than none. A failed build,
@@ -1468,17 +1476,26 @@ fRunFrozen(){
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
 ## Cleanup
 
-## rm -rf for a build cache entry: TARGET/<profile>/<area>/<name>, or the same
-## under a target triple, no links, and ours. The profiles are debug, release
-## and profiling.
-fSafeRmCache(){   ## fSafeRmCache CACHE_REAL PATH
-	local cache="$1" p="$2" real=""
+## rm -rf for build cache entries in one area: TARGET/<profile>/<area>/<name>,
+## or the same under a target triple, no links, and ours. The profiles are
+## debug, release and profiling. The area is resolved once, so a name in it
+## that isn't a link can't lead anywhere else. One rm for the lot, since after
+## a toolchain update every entry is stale. A name that fails a check is left.
+fSafeRmCache(){   ## fSafeRmCache CACHE_REAL AREA NAME...
+	local cache="$1" area="$2" real="" name="" p=""
+	local -a ok=()
+	shift 2
 	[[ "${cache}" == /* && "${cache}" != *//* && "${cache}" != *..* ]] || return 1
-	[[ "${p}" == "${cache}/"* && "${p}" != *..* && "${p}" != *$'\n'* ]] || return 1
-	[[ "${p#"${cache}/"}" =~ ^([a-z0-9_-]+/)?(debug|release|profiling)/(deps|build|\.fingerprint|incremental)/[A-Za-z0-9_.+-]+$ ]] || return 1
-	real="$(realpath -e -- "${p}" 2>/dev/null || true)"
-	[[ "${real}" == "${p}" && ! -L "${p}" && -O "${p}" ]] || return 1
-	rm -rf --one-file-system -- "${p}"
+	[[ "${area}" == "${cache}/"* && "${area}" != *..* && "${area}" != *$'\n'* ]] || return 1
+	[[ "${area#"${cache}/"}" =~ ^([a-z0-9_-]+/)?(debug|release|profiling)/(deps|build|\.fingerprint|incremental)$ ]] || return 1
+	real="$(realpath -e -- "${area}" 2>/dev/null || true)"
+	[[ "${real}" == "${area}" && ! -L "${area}" ]] || return 1
+	for name in "$@"; do
+		p="${area}/${name}"
+		if [[ "${name}" =~ ^[A-Za-z0-9_.+-]+$ && "${name}" != *..* && ! -L "${p}" && -O "${p}" ]]; then ok+=("${p}"); fi
+	done
+	((${#ok[@]})) || return 0
+	printf '%s\0' "${ok[@]}" | xargs -0 rm -rf --one-file-system --
 }
 
 ## Build cache entries that are dead for sure: made before the pinned
@@ -1487,7 +1504,8 @@ fSafeRmCache(){   ## fSafeRmCache CACHE_REAL PATH
 ## stays. Prints "COUNT KB".
 fPruneCache(){   ## fPruneCache DIR
 	local dir="${root}/$1" cache="" sysroot="" toolTime=0 mt=0 kb=0 n=0 name="" crate="" e="" area="" size="" stale=0
-	local -A crates=()
+	local -a names=()
+	local -A crates=() sizes=()
 	[[ -d "${dir}" ]] || { echo "0 0"; return 0; }
 	cache="$(realpath -e -- "${dir}")" || { echo "0 0"; return 0; }
 	sysroot="$(rustc --print sysroot 2>/dev/null || true)"
@@ -1497,6 +1515,7 @@ fPruneCache(){   ## fPruneCache DIR
 	## and build_script_build-<hash> beside its package's dir.
 	for area in "${cache}"/{,*/}{debug,release,profiling}/{deps,build,.fingerprint,incremental}; do
 		[[ -d "${area}" && ! -L "${area}" ]] || continue
+		names=()
 		while IFS=$'\t' read -r -d '' mt e; do
 			[[ "${mt}" =~ ^[0-9]{1,15}$ ]] || continue
 			name="${e##*/}"
@@ -1507,13 +1526,20 @@ fPruneCache(){   ## fPruneCache DIR
 				crate="${name%-*}"; crate="${crate//-/_}"
 				if [[ -z "${crates[${crate}]:-}" && -z "${crates[${crate#lib}]:-}" && "${crate}" != build_script_* ]]; then stale=1; fi
 			fi
-			((stale)) || continue
-			size="$(du -sk -- "${e}" 2>/dev/null | cut -f1 || true)"
-			if fSafeRmCache "${cache}" "${e}"; then
-				n=$((n + 1))
-				if [[ "${size}" =~ ^[0-9]{1,15}$ ]]; then kb=$((kb + size)); fi
-			fi
+			if ((stale)); then names+=("${name}"); fi
 		done < <(find "${area}" -mindepth 1 -maxdepth 1 -printf '%Ts\t%p\0' 2>/dev/null)
+		((${#names[@]})) || continue
+		## Sizes first, all in one du, a hard link counted in each name as
+		## before. A name is counted once it's gone.
+		sizes=()
+		while IFS=$'\t' read -r -d '' size e; do
+			if [[ "${size}" =~ ^[0-9]{1,15}$ ]]; then sizes["${e##*/}"]="${size}"; fi
+		done < <(printf '%s\0' "${names[@]/#/"${area}/"}" | du -skl -0 --files0-from=- 2>/dev/null)
+		fSafeRmCache "${cache}" "${area}" "${names[@]}" || true
+		for name in "${names[@]}"; do
+			[[ -e "${area}/${name}" || -L "${area}/${name}" ]] && continue
+			n=$((n + 1)); kb=$((kb + ${sizes["${name}"]:-0}))
+		done
 	done
 	echo "${n} ${kb}"
 }
@@ -1712,3 +1738,5 @@ exit 0
 ##		  too, and long ones only in --long, which the frozen copy now gets.
 ##		- 2026-10-25: A killed run's dir and frozen copy go at the next run
 ##		  again. Only a kept dir waits 2 days.
+##		- 2026-10-28: mypy in the lint stage. shellcheck follows sources, per
+##		  .shellcheckrc, so the disables that only covered for that are gone.

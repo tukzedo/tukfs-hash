@@ -1,0 +1,4 @@
+## LF in the repo and in every checkout, Windows too, so a script's shebang
+## line never ends in a CR.
+* text=auto eol=lf
+*.gif binary

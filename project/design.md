@@ -47,6 +47,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A file's cached pages are dropped before it's read, so a scribble in the page cache isn't hashed as if it were on disk. ZFS ignores that advice and answers from the ARC, so there a second read can't tell memory from disk.
 	- The read itself is `O_DIRECT` where the filesystem takes it, so the bytes go from the disk to the read buffer and nothing is cached. Filling the page cache and then dropping it cost about as much CPU as blake3 did.
+	- Files under 64 KiB are read plain. Going direct costs about 35 us of sys CPU per file, more than the drops cost on a file that small.
 	- Where `O_DIRECT` is refused, at the start or partway through, it's a plain read, and the drops before and after it still apply. ZFS 2.3 takes it with `direct=standard`, but whether a block already in the ARC is still served from there hasn't been checked, so the line above stands.
 
 - An EIO on ZFS means a block failed its checksum with no good copy left. It's reported the same as a mismatch.
@@ -177,6 +178,10 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	- Every container is named `tukfs-hash-<run folder name>-<step>-<n>`, and containers and images are labeled `dev.project=tukfs-hash` and `dev.run=<run folder name>`. Nothing uses a volume. The run removes its containers by that label at the end, once a stop has killed the running ones by ID, and says what that freed. `--keep-temp` keeps them. A new image keeps the tag before it, and the build cache prune keeps a week of every project's cache (2026102416215928).
 
 - The dogfood copy goes to `~/synced/0-0/common/exec/util/linux/bin/tukfs-hash`, where the scan wrappers look, rather than the `app/linux/` dir. `utility/dogfood_tukfs-hash` keeps up to 10 dated versions in `~/.local/bin/tukfs-hash_versions/`, with a link to the newest at `~/.local/bin/tukfs-hash`.
+	- It copies a new build in, rotates the pool, points the fixed name at the newest, and runs that with every argument passed through. A copy that's running is never deleted, so a long scan keeps going while a newer build arrives.
+	- Anything at the fixed name that isn't a link into the pool is left alone, and the newest version runs from the pool instead.
+	- The pool keeps at most 10 versions and at least 5, and between those only as many as fit in 1 GB. Which ones stay is a GFS rotation: the oldest, the newest, the last of each recent hour, day, week, month and year, and the few most recent. Under 10 and 1 GB, versions with none of those roles stay too, as spares.
+	- Each is named `tukfs-hash_<yyyyMMdd-HHmmss>_<role>`, from the build's write time in local time. Old versions go one file at a time, matched by that name, and never one that's running.
 
 ## Leak and memory checks
 
@@ -201,7 +206,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Miri skips what it can't run: SQLite, which is C, xattrs, `openat2` and `mktime`. 2 tests of safe code that take it over 15 minutes are skipped too. Each says why in its `#[cfg_attr(miri, ignore = ...)]`.
 
-- CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the shipped binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
+- CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the release binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
 
 ## Profiling
 
@@ -229,7 +234,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The output shows the home as `/home/<user>`, with the prompt's made-up user, and this box's host and user names as the prompt's. After that, a line with the real user, home, host or a temp path fails the stage rather than going into the README.
 
-- The demo files are the same bytes every run, and dates and times in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
+- The demo files are the same bytes every run, and dates, times and the scan's own run time in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
 
 - A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. No Pillow or font is a warning, and the run goes on.
 

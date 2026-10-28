@@ -31,6 +31,7 @@ fn main() {
 	let minutes = if build.is_empty() || !release.is_empty() {
 		String::new()
 	} else {
+		// The assert above let only DIGITS through.
 		build
 			.chars()
 			.fold(0u64, |n, c| n * 32 + DIGITS.find(c).unwrap() as u64)

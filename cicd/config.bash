@@ -2,7 +2,6 @@
 
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes.' On purpose: the eval'd strings expand in the engine.
 #  shellcheck disable=2034  ## 'variable appears unused.' Everything here is read by cicd.bash.
-#  shellcheck disable=1091  ## 'Not following.' The pins file is checked on its own.
 #  shellcheck disable=2154  ## 'referenced but not assigned.' here, root and CPU_CAP come from cicd.bash.
 
 ##	Purpose:
@@ -22,7 +21,7 @@
 
 ## Only allow running sourced.
 declare -i isSourced_k2vq9=0; [[ "${BASH_SOURCE[0]}" == "${0}" ]] || isSourced_k2vq9=1
-((isSourced_k2vq9)) || { echo -e "\nError in $(basename "${BASH_SOURCE[0]}"): This script is meant to be 'sourced' from within another script.\n"; exit 1; }
+((isSourced_k2vq9)) || { echo -e "\nError in ${BASH_SOURCE[0]##*/}: This script is meant to be 'sourced' from within another script.\n" >&2; exit 1; }
 
 
 ## Identity. Cargo.toml is the only place the version is kept; the tag and the
@@ -43,7 +42,7 @@ RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
 ## Tool pins. The engine warns, without failing, when a tool has drifted.
 ## "name|version|command": the version has to show up in the command's output.
-## shellcheck source=tool-pins.env
+# shellcheck source=tool-pins.env
 source "${here}/tool-pins.env"
 ## nfpm is go-installed, and ~/.go/bin isn't always on PATH. package.bash
 ## reads NFPM.
@@ -59,6 +58,7 @@ TOOL_PINS=(
 	"nfpm|${PIN_NFPM}|go version -m \"${NFPM}\""
 	"PSScriptAnalyzer|${PIN_PSSA}|pwsh -NoProfile -Command \"(Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1).Version.ToString()\""
 	"ruff|${PIN_RUFF}|ruff --version"
+	"mypy|${PIN_MYPY}|mypy --version"
 )
 
 ## Paths into cargo's home end up in panic messages, so they're mapped to one
@@ -70,7 +70,8 @@ _remap="--remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}=/cargo"
 if [[ " ${RUSTFLAGS:-} " != *" ${_remap} "* ]]; then export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${_remap}"; fi
 
 ## Stage 1: format. FMT_CMD rewrites in place; FMT_CHECK_CMD fails on a diff
-## and is what the merge gate and backlog runs run. rustfmt.toml has the style. Bash is never formatted.
+## and is what the merge gate and backlog runs run. rustfmt.toml has the
+## style. Bash is never formatted.
 FMT_CMD=(cargo fmt)
 FMT_CHECK_CMD=(cargo fmt --check)
 
@@ -92,10 +93,12 @@ MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
 ## Every tracked .ps1, with PSScriptAnalyzerSettings.psd1 at the repo root.
 PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
-## Every tracked .py, by cicd/ruff.toml's rules, then its format. A box
-## without ruff skips them with a note, even under the merge gate.
+## Every tracked .py, by cicd/ruff.toml's rules, then its format, then mypy by
+## cicd/mypy.ini. A box without ruff or mypy skips that one with a note, even
+## under the merge gate.
 PY_LINT_CMD=(ruff check --config cicd/ruff.toml --)
 PY_FMT_CHECK_CMD=(ruff format --check --config cicd/ruff.toml --)
+PY_TYPE_CMD=(mypy --config-file cicd/mypy.ini --)
 ## "label|command", eval'd after the rest. Every test prints its status line
 ## with its test ID, and a test with none, or 2 that share one, fails here
 ## rather than going by unseen.
@@ -106,8 +109,8 @@ LINT_EXTRA=(
 ## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
 ## integration test on a release build, once per root below, given as its
 ## HOST_TEMP, so it makes its own dir under <root>/tukfs-hash/. "label|root".
-## A root that isn't there
-## skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
+## A root that isn't there skips with a note. TUKFS_CICD_IT_EXT4 and
+## TUKFS_CICD_IT_ZFS override them.
 ## libtest-quiet.bash drops libtest's per-test lines, since each test prints
 ## its own with its test ID.
 TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release --locked)
@@ -120,15 +123,9 @@ IT_ROOTS=(
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
 )
 
-## Stage 4, last: the leak and memory checks, eval'd in order, quick ones
-## first, each "length|command". The lengths go by measured time on b23 with
-## the image and build dirs warm. fast, under a minute: every run, --quick
-## included. mid, minutes: a run with no options, --long, --backlog-run-full,
-## the merge gate, and --quick --leakcheck. long, hours: --long only, which
-## is the fuzz tests at an hour each. --backlog-run-quick runs none of them,
-## but for a leak area or --leakcheck. Any report fails. The sanitizers, Miri
-## and CodeQL run in the image below when docker answers, else on the host
-## with a note.
+## Stage 4, last: the leak and memory checks, eval'd in order, each
+## "length|command", with length fast, mid or long. Any report fails. See
+## design.md, Leak and memory checks.
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it
 	## fetches RustSec's database. Offline is a noted skip. 1 to 3 s.
@@ -162,18 +159,11 @@ CTR_CONTEXT_EXTRA=(rust-toolchain.toml cicd/tool-pins.env)
 LEAK_DIR="${root}/target/leakcheck"
 CTR_CARGO_HOME="${LEAK_DIR}/cargo-home"
 
-## Stage 5: profiler. A build like release with names kept and pprof's
-## sampler in it, src/profiling.rs, since perf can't record on b23. First
-## PROFILE_CHECK, the sampler's attribution against a workload whose answer
-## is known, then PROFILE_WORKLOAD_GEN and each PROFILE_TIMED step in order,
-## timed. All are eval'd from the repo root, with PROFILE_BIN, PROFILE_WORKLOAD
-## and TUKFS_PROFILE_DIR exported. The scans add their samples to one
-## flamegraph, which goes into PROFILE_OUT_DIR as flame_<stamp>_<role>.svg,
-## GFS-rotated, and flame-report.py's summary of it goes in the log.
-## The workload is a tree on ext4, with its database beside it, in a dir of
-## this run's under PROFILE_ROOT, removed after. TUKFS_CICD_PROFILE_ROOT
-## overrides it, and a root that isn't there falls back to the run's temp dir.
-## --quick and --backlog-run-quick leave the stage out.
+## Stage 5: profiler. See design.md, Profiling. PROFILE_CHECK, then
+## PROFILE_WORKLOAD_GEN and each PROFILE_TIMED step, are eval'd in order from
+## the repo root, with PROFILE_BIN, PROFILE_WORKLOAD and TUKFS_PROFILE_DIR
+## exported. TUKFS_CICD_PROFILE_ROOT overrides PROFILE_ROOT, and a root that
+## isn't there falls back to the run's temp dir.
 PROFILE_ENABLE=1
 PROFILE_BUILD_CMD=(cargo build --profile profiling --features profiling --locked)
 PROFILE_BIN="target/profiling/${EXE_NAME}"
@@ -195,29 +185,17 @@ PROFILE_TIMED=(
 RELEASE_NATIVE_CMD=(cargo build --release --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
 
-## Stages 2 to 4 run BUILD_CMD, clippy, TEST_CMD and RELEASE_NATIVE_CMD in the
-## release image below where docker answers, so they build with its pinned
-## toolchain and glibc 2.28, and the integration test can run their build
-## on any host. Into a target dir of their own, so a host build isn't
-## replaced. With no docker, or --no-container, they run on the host, with
-## a note. The integration test and the soak stay on the host, since they
-## scan the real disks.
+## Stages 2 to 4 build and test in the release image below where docker
+## answers, into a target dir of their own, else on the host with a note.
+## The integration test and the soak stay on the host, since they scan the
+## real disks.
 TESTS_CTR_TARGET_DIR="${root}/target/ctr"
 TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 
-## Stage 6: release builds, Linux only, since the tool reads Linux xattrs,
-## mounts and snapshots. Both targets build in the release image, from
-## REL_CTR_DIR, whose glibc is GLIBC_FLOOR, so that's all a build needs
-## and the floor doesn't move with the box. arm64 is cross-built with
-## Debian's cross gcc, which also builds the bundled SQLite, and takes about
-## as long as x86_64. Cross targets are "label|os-arch|binary|command", the
-## command eval'd. Each build is named <exe>-<version>-<os-arch> in
-## RELEASE_ARTIFACT_DIR, with <exe>-<version>-sha256sums.txt beside them.
-## Download links depend on these names, so they stay.
-## Where the image can't be used, as for stages 2 to 4, RELEASE_HOST_BUILD_CMD
-## builds x86_64 on the box with one note, into a dir of its own. It needs the
-## box's glibc, so the floor check notes it rather than failing, and arm64 is
-## left out, since the box has no cross gcc (2026102509342993).
+## Stage 6: release builds. See design.md, Build and release. Cross targets
+## are "label|os-arch|binary|command", the command eval'd. Download links use
+## the names in RELEASE_ARTIFACT_DIR, so they stay. RELEASE_HOST_BUILD_CMD is
+## the x86_64 build where the image can't be used (2026102509342993).
 GLIBC_FLOOR="2.28"
 REL_CTR_DIR="cicd/container-release"
 REL_CTR_IMAGE="${APP_NAME}-release"
@@ -254,16 +232,10 @@ RELEASE_CHECKS=(
 	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 
-## Stage 7: other hosts. The unit tests and the integration test on a box of
-## each other arch, "host|os-arch|target", on stage 6's build of that os-arch,
-## through cicd/utility/remote-tests.bash. The qemu run in the release image
-## stays as the quick check. The box is held through the host lock for as
-## long as it's used, and put back as it was found, by the VM state helper's
-## wrap, which TUKFS_CICD_VM_WRAP overrides. A box that's held elsewhere is
-## waited for up to REMOTE_LOCK_WAIT seconds, or TUKFS_CICD_LOCK_WAIT. A box
-## that isn't there, no helper, or no build of its arch in the run, is a
-## SKIP, and the run goes on. vmDebARM64 is emulated, so it takes about 3
-## minutes, and --quick leaves the stage out.
+## Stage 7: other hosts, "host|os-arch|target", through
+## cicd/utility/remote-tests.bash. See design.md, Build and release.
+## TUKFS_CICD_VM_WRAP overrides the VM state helper's wrap, and
+## TUKFS_CICD_LOCK_WAIT overrides REMOTE_LOCK_WAIT, in seconds.
 REMOTE_HOSTS=("vmDebARM64|linux-arm64|aarch64-unknown-linux-gnu")
 _vmWrap="$(compgen -G "${HOME}/synced/0-0/common/exec/util/linux/bash/*_vm-state.bash" || true)"
 REMOTE_VM_WRAP="${TUKFS_CICD_VM_WRAP:-${_vmWrap%%$'\n'*}}"
@@ -303,7 +275,7 @@ GIF_CMD='cicd/utility/demo-gif.bash "${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}
 BACKLOG_AREAS=(
 	"fmt||the format check"
 	"build||the debug build"
-	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff and the test IDs"
+	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff, mypy and the test IDs"
 	"unit||the unit tests"
 	"it||the integration test, on a release build, once per test root"
 	"leak|cicd/utility/|every leak check but the long ones"
@@ -326,7 +298,8 @@ BACKLOG_AREAS=(
 QUICK_SKIP=()
 
 ## Stages 2-7 run from a frozen copy of the tree. These link back to the
-## checkout's own, so builds start warm and the logs land where they're read.
+## checkout's own, so builds start warm and the logs are written where
+## they're read.
 FROZEN_LINKS=(target cicd/artifacts)
 ## The pre-push gate's builds go here instead of target, since the commit it
 ## builds may not be what's checked out.
@@ -371,3 +344,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  a counter.
 ##		- 2026-10-25: A length on each leak check.
 ##		- 2026-10-26: The parser fuzz tests, fast and long.
+##		- 2026-10-28: mypy over the pipeline's Python.

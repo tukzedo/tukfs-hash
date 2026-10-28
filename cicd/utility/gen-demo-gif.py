@@ -32,6 +32,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+from collections import deque
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
 
@@ -90,14 +92,23 @@ BLINK_MS = 530
 FRAME_MS = 20
 SCROLL_RATE = 448  # px/s
 GLIDE_FRAMES = 3
+GIFSICLE_TIMEOUT_S = 600
 
 QWERTY_ROWS = ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"]
 ANSI_RE = re.compile(r"\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|.)")
 HOME_MARK = ".gen-demo-gif"
+##	Printable ASCII only, the one range every font here draws.
+UNDRAWABLE_RE = re.compile(r"[^\x20-\x7e]")
+
+
+class KeyAction(Enum):
+    TYPE = auto()
+    BACKSPACE = auto()
+    PAUSE = auto()
 
 
 class KeyEvent(NamedTuple):
-    action: str  # "type", "bs" or "pause"
+    action: KeyAction
     text: str | None
     delay: float  # ms
 
@@ -126,24 +137,35 @@ def fail(msg: str) -> NoReturn:
     sys.exit(1)
 
 
-def optimize_gif(path: Path) -> bool:
+def optimize_gif(path: Path) -> str | None:
     ##	Lossless: gifsicle can make single unchanged pixels transparent, where
     ##	Pillow writes one changed box per frame. Pixels and delays don't change.
+    ##	None once it has run, or why it didn't, for the summary. Why it failed
+    ##	goes to stderr, since only a missing gifsicle is expected.
     tmp = path.with_name(path.name + ".gifsicle")
     try:
         res = subprocess.run(
             ["gifsicle", "-O2", "--no-warnings", str(path), "-o", str(tmp)],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=GIFSICLE_TIMEOUT_S,
         )
-        if res.returncode == 0 and tmp.stat().st_size > 0:
+    except FileNotFoundError:
+        return "no gifsicle"
+    except OSError as e:
+        why = f"could not start: {e}"
+    except subprocess.TimeoutExpired:
+        why = f"didn't finish in {GIFSICLE_TIMEOUT_S} s"
+    else:
+        if res.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
             tmp.replace(path)
-            return True
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+            return None
+        why = f"exited {res.returncode}" if res.returncode else "wrote nothing"
+        if err := res.stderr.strip():
+            why += f": {err}"
+    sys.stderr.write(f"gen-demo-gif: gifsicle {why}\n")
     tmp.unlink(missing_ok=True)
-    return False
+    return "gifsicle didn't run"
 
 
 def find_font(prefs: list[str], size: float) -> tuple[ImageFont.FreeTypeFont, str]:
@@ -189,7 +211,7 @@ def load_scenario(path: str) -> dict[str, Any]:
     ##	                                     and the rest of show is typed
     ##	    scrollrate, linems, gap, preenter, typescale, notepause
     try:
-        with open(path, "rb") as f:
+        with Path(path).open("rb") as f:
             sc = tomllib.load(f)
     except (OSError, tomllib.TOMLDecodeError) as e:
         fail(f"scenario: {e}")
@@ -377,18 +399,18 @@ def type_events(
         if ch == "-" and (i == 0 or text[i - 1] == " "):
             delay += rng.uniform(*FLAG_PAUSE_MS)
         if typos and fixes < 2 and ch.isalpha() and rng.random() < TYPO_RATE:
-            events.append(KeyEvent("type", neighbor_key(ch, rng), delay))
+            events.append(KeyEvent(KeyAction.TYPE, neighbor_key(ch, rng), delay))
             overshoot = None
             if i + 1 < len(text) and text[i + 1].isalpha() and rng.random() < 0.4:
                 overshoot = text[i + 1]
-                events.append(KeyEvent("type", overshoot, 60000.0 / (wpm * 5)))
-            events.append(KeyEvent("pause", None, rng.uniform(320, 640)))
-            for _ in range(2 if overshoot else 1):
-                events.append(KeyEvent("bs", None, rng.uniform(95, 150)))
-            events.append(KeyEvent("type", ch, rng.uniform(140, 260)))
+                events.append(KeyEvent(KeyAction.TYPE, overshoot, 60000.0 / (wpm * 5)))
+            events.append(KeyEvent(KeyAction.PAUSE, None, rng.uniform(320, 640)))
+            backs = 2 if overshoot else 1
+            events.extend(KeyEvent(KeyAction.BACKSPACE, None, rng.uniform(95, 150)) for _ in range(backs))
+            events.append(KeyEvent(KeyAction.TYPE, ch, rng.uniform(140, 260)))
             fixes += 1
             continue
-        events.append(KeyEvent("type", ch, delay))
+        events.append(KeyEvent(KeyAction.TYPE, ch, delay))
     return events
 
 
@@ -411,11 +433,9 @@ def build_palette(user_tint: Rgb, host_tint: Rgb) -> Image.Image:
 
     t = THEME
     colors = [*t.values(), user_tint, host_tint, *TRAFFIC_LIGHTS]
-    for c in (t["fg"], t["gray"], t["dim"], user_tint, host_tint):
-        for k in (0.22, 0.45, 0.68, 0.86):
-            colors.append(blend(t["bg"], c, k))
-    for k in (0.35, 0.7):
-        colors.append(blend(t["titlebar"], t["titletxt"], k))
+    ramps = (t["fg"], t["gray"], t["dim"], user_tint, host_tint)
+    colors.extend(blend(t["bg"], c, k) for c in ramps for k in (0.22, 0.45, 0.68, 0.86))
+    colors.extend(blend(t["titlebar"], t["titletxt"], k) for k in (0.35, 0.7))
     colors = list(dict.fromkeys(colors))
     colors = (colors + [(0, 0, 0)] * 256)[:256]
     pal = Image.new("P", (1, 1))
@@ -485,7 +505,7 @@ class Screen:
 
     def rest_scroll(self) -> float:
         rows = len(self.lines) + (len(self.live_rows()) if self.show_prompt else 0)
-        return max(0.0, rows * self.lh - self.view_h)
+        return max(0.0, float(rows * self.lh - self.view_h))
 
     def cursor_target(self) -> tuple[float, float]:
         live = self.live_rows()
@@ -584,9 +604,10 @@ def frame_delays(gif: bytes) -> list[int]:
 
 class Movie:
     ##	Frames with their times. A frame the same as the one before makes that
-    ##	one longer. Times round to whole 50 fps frames, the rest carried, so typing
-    ##	keeps its pace. Encoded 32 at a time, each batch behind the last frame
-    ##	of the one before, since held raw they ran to over a GB.
+    ##	one longer. Times round to whole 50 fps frames, with the rest added to
+    ##	the next, so typing keeps its pace. Encoded 32 at a time, each batch
+    ##	behind the last frame of the one before, since held raw they ran to
+    ##	over a GB.
     BATCH = 32
 
     def __init__(self) -> None:
@@ -632,9 +653,184 @@ class Movie:
     def save(self, path: Path) -> None:
         if self._pending:
             self._encode()
-        with open(path, "wb") as f:
+        with path.open("wb") as f:
             f.writelines(self._gif)
             f.write(b";")
+
+
+class Player:
+    ##	Plays the steps onto a Movie. The cursor is drawn where it's shown,
+    ##	which trails where it's headed while it glides.
+    def __init__(self, scr: Screen, colors: dict[str, Rgb], rng: random.Random, prog: str) -> None:
+        self.scr, self.colors, self.rng, self.prog = scr, colors, rng, prog
+        self.mov = Movie()
+        self.shown = scr.cursor_target()
+        self.last_cmd = ""
+
+    def snap(self, ms: float, cursor: bool = True) -> None:
+        self.mov.add(self.scr.render(self.shown if cursor else None, self.colors), ms)
+
+    def glide_cursor(self, ms: float) -> None:
+        ##	Ease toward the cell, then sit for the rest of the keystroke. The
+        ##	glide never takes longer than the keystroke does.
+        tx, ty = self.scr.cursor_target()
+        x0, y0 = self.shown
+        steps = max(1, min(int(ms // FRAME_MS), GLIDE_FRAMES))
+        glide_ms: float = steps * FRAME_MS
+        rest = ms - glide_ms
+        if rest < FRAME_MS:
+            glide_ms, rest = ms, 0.0
+        for s in range(1, steps + 1):
+            k = s / steps
+            k = k * k * (3.0 - 2.0 * k)
+            self.shown = (x0 + (tx - x0) * k, y0 + (ty - y0) * k)
+            self.snap(glide_ms / steps)
+        self.shown = (tx, ty)
+        if rest:
+            self.snap(rest)
+
+    def settle(self, rate: float, cursor: bool = True) -> None:
+        scr = self.scr
+        step = rate * FRAME_MS / 1000.0
+        while abs(scr.rest_scroll() - scr.scroll) >= 0.5:
+            d = scr.rest_scroll() - scr.scroll
+            scr.scroll += (1 if d > 0 else -1) * min(abs(d), step)
+            self.shown = scr.cursor_target()
+            self.snap(FRAME_MS, cursor)
+        scr.scroll = scr.rest_scroll()
+        self.shown = scr.cursor_target()
+
+    def emit(self, out_lines: list[str], rate: float, line_ms: float, overflow: str) -> None:
+        ##	Lines go in as the view catches up, rather than settling after each
+        ##	one, so the scroll keeps one speed instead of stuttering at every line.
+        scr = self.scr
+        step = rate * FRAME_MS / 1000.0
+        pending = deque(row for text in out_lines for row in scr.wrap(text, "fg", overflow))
+        while True:
+            if pending and scr.rest_scroll() - scr.scroll <= step + 0.5:
+                scr.put(pending.popleft())
+                if scr.rest_scroll() - scr.scroll <= 0.5:
+                    self.snap(line_ms, cursor=False)  # still room, nothing scrolls
+                    continue
+            d = scr.rest_scroll() - scr.scroll
+            if d <= 0.5:
+                break
+            scr.scroll += min(d, step)
+            self.snap(FRAME_MS, cursor=False)
+        scr.scroll = scr.rest_scroll()
+
+    def blink_pause(self, total_ms: float) -> None:
+        on = True
+        left = total_ms
+        while left > 0:
+            step = min(BLINK_MS, left)
+            self.snap(step, cursor=on)
+            on = not on
+            left -= step
+
+    def play_step(self, step: Step, out: list[str]) -> None:
+        scr = self.scr
+        rate = float(step.get("scrollrate", SCROLL_RATE))
+        overflow = step.get("overflow", "wrap")
+        rows_out = sum(len(scr.wrap(t, "fg", overflow)) for t in out)
+        rows_in = len(step_notes(step)) + (1 if step.get("show") else 0) + rows_out + 2
+        if step.get("clear", rows_in > scr.rows) and scr.lines:
+            scr.clear()
+            self.shown = scr.cursor_target()
+            self.snap(260)
+        typing = [TypedLine("# " + n, "dim", WPM_NOTES, False, 1.0) for n in step_notes(step)]
+        if step.get("show"):
+            typing.append(
+                TypedLine(
+                    step["show"].replace("{prog}", self.prog),
+                    "fg",
+                    WPM_LETTERS,
+                    True,
+                    float(step.get("typescale", 1.0)),
+                )
+            )
+        for tl in typing:
+            self.type_line(tl, step)
+            if tl.color == "dim":
+                self.after_note(step, rate)
+            else:
+                self.show_output(step, out, rate, overflow)
+        if not step.get("show"):
+            self.blink_pause(1000 * float(step.get("pause", 2.6)))
+
+    def type_line(self, tl: TypedLine, step: Step) -> None:
+        ##	Typed, then Enter, leaving the line in the scrollback.
+        scr, rng = self.scr, self.rng
+        line, key = tl.text, tl.color
+        scr.typed_key = key
+        if key == "fg" and step.get("recall"):
+            ##	Up arrow: the last command comes back whole, and only the
+            ##	rest is typed.
+            if not self.last_cmd or not line.startswith(self.last_cmd):
+                fail(f"recall: {line!r} doesn't start with the last command")
+            self.snap(rng.uniform(380, 520))
+            scr.typed = self.last_cmd
+            self.glide_cursor(rng.uniform(260, 360))
+            line = line[len(self.last_cmd) :]
+        for event in type_events(line, rng, tl.wpm, tl.typos, tl.scale):
+            if event.action is KeyAction.TYPE and event.text:
+                scr.typed += event.text
+            elif event.action is KeyAction.BACKSPACE:
+                scr.typed = scr.typed[:-1]
+            self.glide_cursor(event.delay)
+        self.snap(rng.uniform(260, 480) if key == "fg" else 130)  # a beat before Enter
+        if key == "fg" and step.get("preenter"):
+            self.blink_pause(1000 * float(step["preenter"]))
+        for row in scr.wrap_spans([*scr.prompt, (scr.typed, key)]):
+            scr.put(row)
+        if key == "fg":
+            self.last_cmd = scr.typed
+        scr.typed = ""
+
+    def after_note(self, step: Step, rate: float) -> None:
+        if self.scr.rest_scroll() > self.scr.scroll + 0.5:
+            self.settle(rate)
+        else:
+            self.glide_cursor(130)
+        self.snap(140)
+        if step.get("notepause"):
+            self.blink_pause(1000 * float(step["notepause"]))
+
+    def show_output(self, step: Step, out: list[str], rate: float, overflow: str) -> None:
+        scr = self.scr
+        ##	The prompt comes back only once the output is all in, as in a shell.
+        scr.show_prompt = False
+        if scr.rest_scroll() > scr.scroll + 0.5:
+            self.settle(rate, cursor=False)
+        out_lines = ([""] if step.get("gap") else []) + out
+        self.emit(out_lines, rate, float(step.get("linems", 26)), overflow)
+        ##	A blank line before the next prompt, to read it apart.
+        if out_lines and out_lines[-1].strip():
+            scr.put([("", "fg")])
+        scr.show_prompt = True
+        self.shown = scr.cursor_target()
+        if scr.rest_scroll() > scr.scroll + 0.5:
+            self.settle(rate)
+        self.snap(60)
+        self.blink_pause(1000 * float(step.get("pause", 2.6)))
+
+    def finish(self, hold_ms: float, black_ms: float) -> None:
+        ##	A still last frame, then a cut to black, so the loop's seam is plain.
+        ##	The black is one frame, where a fade would be dozens.
+        if hold_ms > 0:
+            self.snap(hold_ms)
+        if black_ms > 0:
+            black = Image.new("RGB", (CANVAS_W, CANVAS_H), (0, 0, 0))
+            self.mov.add(black.quantize(palette=self.scr.pal, dither=Image.Dither.NONE), black_ms)
+
+
+def check_shown(lines: list[str], scrub: Scrubber) -> None:
+    for i, ln in enumerate(lines):
+        hit = scrub.leak(ln)
+        if hit:
+            fail(f"line {i + 1} of the output or script shows {hit!r}")
+        if UNDRAWABLE_RE.search(ln):
+            fail(f"line {i + 1} has a character the font may not draw: {ln!r}")
 
 
 def main() -> None:
@@ -681,175 +877,26 @@ def main() -> None:
 
     typed = [step.get("show", "").replace("{prog}", prog) for step in sc["step"]]
     typed += [n for step in sc["step"] for n in step_notes(step)]
-    for i, ln in enumerate([ln for lines in step_out for ln in lines] + typed):
-        hit = scrub.leak(ln)
-        if hit:
-            fail(f"line {i + 1} of the output or script shows {hit!r}")
-        if any(ord(c) < 0x20 or ord(c) > 0x7E for c in ln):
-            fail(f"line {i + 1} has a character the font may not draw: {ln!r}")
+    check_shown([ln for lines in step_out for ln in lines] + typed, scrub)
 
-    mov = Movie()
-    shown = list(scr.cursor_target())
+    player = Player(scr, colors, rng, prog)
+    player.snap(700)
+    for step, out in zip(sc["step"], step_out, strict=True):
+        player.play_step(step, out)
+    player.finish(1000 * float(sc.get("end_hold", 2.0)), 1000 * float(sc.get("end_black", 3.0)))
 
-    def snap(ms: float, cursor: bool = True) -> None:
-        mov.add(scr.render((shown[0], shown[1]) if cursor else None, colors), ms)
-
-    def glide_cursor(ms: float) -> None:
-        ##	Ease toward the cell, then sit for the rest of the keystroke. The
-        ##	glide never takes longer than the keystroke does.
-        tx, ty = scr.cursor_target()
-        x0, y0 = shown
-        steps = max(1, min(int(ms // FRAME_MS), GLIDE_FRAMES))
-        glide_ms: float = steps * FRAME_MS
-        rest = ms - glide_ms
-        if rest < FRAME_MS:
-            glide_ms, rest = ms, 0.0
-        for s in range(1, steps + 1):
-            k = s / steps
-            k = k * k * (3.0 - 2.0 * k)
-            shown[0] = x0 + (tx - x0) * k
-            shown[1] = y0 + (ty - y0) * k
-            snap(glide_ms / steps)
-        shown[0], shown[1] = tx, ty
-        if rest:
-            snap(rest)
-
-    def settle(rate: float, cursor: bool = True) -> None:
-        step = rate * FRAME_MS / 1000.0
-        while abs(scr.rest_scroll() - scr.scroll) >= 0.5:
-            d = scr.rest_scroll() - scr.scroll
-            scr.scroll += (1 if d > 0 else -1) * min(abs(d), step)
-            shown[:] = scr.cursor_target()
-            snap(FRAME_MS, cursor)
-        scr.scroll = scr.rest_scroll()
-        shown[:] = scr.cursor_target()
-
-    def emit(out_lines: list[str], rate: float, line_ms: float, overflow: str) -> None:
-        ##	Lines go in as the view catches up, rather than settling after each
-        ##	one, so the scroll keeps one speed instead of stuttering at every line.
-        step = rate * FRAME_MS / 1000.0
-        pending = [row for text in out_lines for row in scr.wrap(text, "fg", overflow)]
-        while True:
-            if pending and scr.rest_scroll() - scr.scroll <= step + 0.5:
-                scr.put(pending.pop(0))
-                if scr.rest_scroll() - scr.scroll <= 0.5:
-                    snap(line_ms, cursor=False)  # still room, nothing scrolls
-                    continue
-            d = scr.rest_scroll() - scr.scroll
-            if d <= 0.5:
-                break
-            scr.scroll += min(d, step)
-            snap(FRAME_MS, cursor=False)
-        scr.scroll = scr.rest_scroll()
-
-    def blink_pause(total_ms: float) -> None:
-        on = True
-        left = total_ms
-        while left > 0:
-            step = min(BLINK_MS, left)
-            snap(step, cursor=on)
-            on = not on
-            left -= step
-
-    snap(700)
-    last_cmd = ""
-    for idx, step in enumerate(sc["step"]):
-        rate = float(step.get("scrollrate", SCROLL_RATE))
-        line_ms = float(step.get("linems", 26))
-        overflow = step.get("overflow", "wrap")
-        rows_out = sum(len(scr.wrap(t, "fg", overflow)) for t in step_out[idx])
-        rows_in = len(step_notes(step)) + (1 if step.get("show") else 0) + rows_out + 2
-        if step.get("clear", rows_in > scr.rows) and scr.lines:
-            scr.clear()
-            shown[:] = scr.cursor_target()
-            snap(260)
-        typing = [TypedLine("# " + n, "dim", WPM_NOTES, False, 1.0) for n in step_notes(step)]
-        if step.get("show"):
-            typing.append(
-                TypedLine(
-                    step["show"].replace("{prog}", prog),
-                    "fg",
-                    WPM_LETTERS,
-                    True,
-                    float(step.get("typescale", 1.0)),
-                )
-            )
-        for line, key, wpm, typos, scale in typing:
-            scr.typed_key = key
-            if key == "fg" and step.get("recall"):
-                ##	Up arrow: the last command comes back whole, and only the
-                ##	rest is typed.
-                if not last_cmd or not line.startswith(last_cmd):
-                    fail(f"recall: {line!r} doesn't start with the last command")
-                snap(rng.uniform(380, 520))
-                scr.typed = last_cmd
-                glide_cursor(rng.uniform(260, 360))
-                line = line[len(last_cmd) :]
-            for event in type_events(line, rng, wpm, typos, scale):
-                if event.action == "type" and event.text:
-                    scr.typed += event.text
-                elif event.action == "bs":
-                    scr.typed = scr.typed[:-1]
-                glide_cursor(event.delay)
-            snap(rng.uniform(260, 480) if key == "fg" else 130)  # a beat before Enter
-            if key == "fg" and step.get("preenter"):
-                blink_pause(1000 * float(step["preenter"]))
-            for row in scr.wrap_spans([*scr.prompt, (scr.typed, key)]):
-                scr.put(row)
-            if key == "fg":
-                last_cmd = scr.typed
-            scr.typed = ""
-            if key == "dim":
-                if scr.rest_scroll() > scr.scroll + 0.5:
-                    settle(rate)
-                else:
-                    glide_cursor(130)
-                snap(140)
-                if step.get("notepause"):
-                    blink_pause(1000 * float(step["notepause"]))
-                continue
-            ##	The prompt comes back only once the output is all in, as in a shell.
-            scr.show_prompt = False
-            if scr.rest_scroll() > scr.scroll + 0.5:
-                settle(rate, cursor=False)
-            out_lines = ([""] if step.get("gap") else []) + step_out[idx]
-            emit(out_lines, rate, line_ms, overflow)
-            ##	A blank line before the next prompt, to read it apart.
-            if out_lines and out_lines[-1].strip():
-                scr.put([("", "fg")])
-            scr.show_prompt = True
-            shown[:] = scr.cursor_target()
-            if scr.rest_scroll() > scr.scroll + 0.5:
-                settle(rate)
-            snap(60)
-            blink_pause(1000 * float(step.get("pause", 2.6)))
-        if not step.get("show"):
-            blink_pause(1000 * float(step.get("pause", 2.6)))
-
-    ##	A still last frame, then a cut to black, so the loop's seam is plain.
-    ##	The black is one frame, where a fade would be dozens.
-    hold_ms = 1000 * float(sc.get("end_hold", 2.0))
-    black_ms = 1000 * float(sc.get("end_black", 3.0))
-    if hold_ms > 0:
-        snap(hold_ms)
-    if black_ms > 0:
-        mov.add(
-            Image.new("RGB", (CANVAS_W, CANVAS_H), (0, 0, 0)).quantize(palette=scr.pal, dither=Image.Dither.NONE),
-            black_ms,
-        )
-
-    out = Path(args.out)
-    mov.save(out)
-    squeezed = optimize_gif(out)
-    delays = frame_delays(out.read_bytes())
+    out_path = Path(args.out)
+    player.mov.save(out_path)
+    why_big = optimize_gif(out_path)
+    delays = frame_delays(out_path.read_bytes())
     if not delays or min(delays) != FRAME_MS or any(d % FRAME_MS for d in delays):
         fail(f"frame times aren't all whole 50 fps frames: shortest {min(delays, default=0)} ms")
     if not args.quiet:
         secs = sum(delays) / 1000.0
-        kb = out.stat().st_size // 1024
+        kb = out_path.stat().st_size // 1024
         print(
             f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB"
-            f"{'' if squeezed else ' (no gifsicle, so bigger)'}, font {font_name}, "
+            f"{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, "
             f"{scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}"
         )
 
@@ -865,3 +912,6 @@ if __name__ == "__main__":
 ##		  as a generic one and the box's names as the prompt's. Anything
 ##		  personal left fails it. 3 s of black at the end, and every frame time
 ##		  checked to be whole 50 fps frames.
+##		- 2026-10-28: A gifsicle that fails or times out is reported as not
+##		  running, with its error, not as missing. The playback moved out of
+##		  main() into Player.

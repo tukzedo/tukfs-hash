@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=2155  ## 'Declare and assign separately.' Cumbersome and unnecessary here.
-#  shellcheck disable=2086  ## 'Double quote to prevent word splitting.' OK for integer flags.
-
 ##	Purpose:
 ##		Show the warnings and errors from the newest cicd run log. cicd tees each
 ##		run to cicd/artifacts/lint/run_<ts>.log (gitignored, GFS-rotated); this
@@ -56,7 +53,7 @@ fNewest() {
 	local d="$1" best="" newest="" f b t
 	for f in "${d}"/run_*.log; do
 		[[ -e "${f}" ]] || continue
-		b="$(basename "${f}")"; t="${b#run_}"; t="${t%%_*}"; t="${t%.log}"
+		b="${f##*/}"; t="${b#run_}"; t="${t%%_*}"; t="${t%.log}"
 		if [[ "${t}" > "${best}" ]]; then best="${t}"; newest="${f}"; fi
 	done
 	[[ -n "${newest}" ]] || return 1
@@ -65,7 +62,7 @@ fNewest() {
 
 if [[ -n "${file}" ]]; then
 	[[ -f "${file}" ]] || fSkip "no such file: ${file}"
-	log="${file}"; b="$(basename "${file}")"; ts="${b#run_}"; ts="${ts%%_*}"; ts="${ts%.log}"
+	log="${file}"; b="${file##*/}"; ts="${b#run_}"; ts="${ts%%_*}"; ts="${ts%.log}"
 else
 	[[ -d "${dir}" ]] || fSkip "no log dir: ${dir}"
 	nb="$(fNewest "${dir}")" || fSkip "no run logs in ${dir}"

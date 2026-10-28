@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The include is checked on its own.
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes.' On purpose: the writer's script expands in its own bash.
 
 ##	Purpose:
@@ -57,7 +56,7 @@ fFiles(){
 }
 
 fGen(){
-	local i d n mb
+	local i d n mb mm nn
 	local -a specs=() names=()
 	mb="${TUKFS_PROFILE_MB:-1500}"
 	[[ "${mb}" =~ ^[1-9][0-9]{0,4}$ ]] || fDie "TUKFS_PROFILE_MB=${mb}: not a count of MB"
@@ -68,20 +67,20 @@ fGen(){
 	## Photos and music hold most of the bytes, as on a real disk: about 55%
 	## in 2 to 24 MB, 40% in 1 to 8 MB.
 	for ((i = 0; i < mb * 55 / 1300; i++)); do
-		fRand; d="photos/$((2014 + seed % 11))/$(printf '%02d' $((seed % 12 + 1)))"
-		mkdir -p -- "${d}"
-		fRand; specs+=("${d}/IMG_$(printf '%04d' "${i}").jpg:$(( 2097152 + seed % 23068672 ))")
+		fRand; printf -v mm '%02d' $((seed % 12 + 1)); d="photos/$((2014 + seed % 11))/${mm}"
+		[[ -d "${d}" ]] || mkdir -p -- "${d}"
+		fRand; printf -v nn '%04d' "${i}"; specs+=("${d}/IMG_${nn}.jpg:$(( 2097152 + seed % 23068672 ))")
 	done
 	for ((i = 0; i < mb * 40 / 450; i++)); do
 		d="music/Artist $((i % 7))/Album ($((1990 + i % 30)))"
-		mkdir -p -- "${d}"
-		fRand; specs+=("${d}/$(printf '%02d' $((i % 14 + 1))) - Track number ${i}.flac:$(( 1048576 + seed % 7340032 ))")
+		[[ -d "${d}" ]] || mkdir -p -- "${d}"
+		fRand; printf -v nn '%02d' $((i % 14 + 1)); specs+=("${d}/${nn} - Track number ${i}.flac:$(( 1048576 + seed % 7340032 ))")
 	done
 	## Documents: 1 KB to 256 KB, with the odd names a scan has to keep.
 	names=("notes" "report final (2)" "a.b.c.d" ".hidden" "-starts-with-dash" "trailing space " $'caf\xc3\xa9' $'not utf-8 \xff\xfe' "$(printf 'long%.0s' {1..40})")
 	for ((i = 0; i < 500; i++)); do
 		d="docs/$((i % 9))/sub $((i % 4))"
-		mkdir -p -- "${d}"
+		[[ -d "${d}" ]] || mkdir -p -- "${d}"
 		fRand; specs+=("${d}/${names[i % ${#names[@]}]} ${i}.txt:$(( 1024 + seed % 261120 ))")
 	done
 	printf '%s\n' "${specs[@]}" | fFiles || fDie "could not write the big files"
@@ -96,7 +95,7 @@ fGen(){
 	## A repo, whose files get no attributes.
 	mkdir -p -- src/proj/.git/objects src/proj/lib
 	for ((i = 0; i < 400; i++)); do
-		d="src/proj/.git/objects/$(printf '%02x' $((i % 256)))"
+		printf -v d 'src/proj/.git/objects/%02x' $((i % 256))
 		[[ -d "${d}" ]] || mkdir -- "${d}"
 		printf 'blob %d\n%0*d\n' "${i}" $((i % 2000)) "${i}" > "${d}/obj${i}"
 	done

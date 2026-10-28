@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The include is checked on its own.
-
 ##	Purpose:
 ##		- The demo gif stage: gen-demo-gif.py draws the scenario against the
 ##		  release binary into the run's temp dir. The gif is GFS-rotated into
@@ -52,7 +50,7 @@ case "${rc}" in
 	2) fWarn "see the line above" ;;
 	*) echo "demo-gif: gen-demo-gif.py failed (${rc})" >&2; exit 1 ;;
 esac
-us=$(( ${EPOCHREALTIME/./} - ${t0/./} ))
+us=$(( ${EPOCHREALTIME/[.,]/} - ${t0/[.,]/} ))
 printf 'demo gif drawn in %d.%d s\n' $((us / 1000000)) $((us % 1000000 / 100000))
 
 ## The private dir is a link to somewhere else entirely, so it's resolved, and

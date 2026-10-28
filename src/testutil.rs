@@ -15,6 +15,7 @@ use std::time::Duration;
 
 /// Held for the length of a test. Its line goes out when it drops, as a
 /// failure when that's by a panic.
+#[derive(Debug)]
 pub struct TestId(&'static str);
 
 /// Every test calls this first. A new test's ID comes from
@@ -32,7 +33,7 @@ impl Drop for TestId {
 		};
 		// libtest names each test's thread after the test, and captures only
 		// the print macros, so this goes past it. One write, so another
-		// test's line can't land in the middle of it.
+		// test's line can't end up in the middle of it.
 		let thread = std::thread::current();
 		let line = format!("{status} {} {}\n", self.0, thread.name().unwrap_or("?"));
 		let _ = io::stderr().write_all(line.as_bytes());
@@ -45,6 +46,7 @@ const STALE: Duration = Duration::from_secs(86_400);
 static SWEEP: Once = Once::new();
 
 /// A test's own folder, removed when it drops, by a panic too.
+#[derive(Debug)]
 pub struct Scratch {
 	dir: PathBuf,
 	base: PathBuf,
@@ -202,9 +204,11 @@ fn remove_tree(dir: &Path, md: &fs::Metadata, dev: u64) -> io::Result<()> {
 }
 
 /// splitmix64, so a case is a pure function of its seed on every box.
+#[derive(Debug)]
 pub struct Rng(u64);
 
 impl Rng {
+	/// The next number.
 	pub fn next_u64(&mut self) -> u64 {
 		self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
 		let mut z = self.0;
@@ -218,15 +222,19 @@ impl Rng {
 		(self.next_u64() % n.max(1) as u64) as usize
 	}
 
+	/// True about once in n.
 	pub fn one_in(&mut self, n: usize) -> bool {
 		self.below(n) == 0
 	}
 
+	/// One of the items.
 	pub fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
 		&items[self.below(items.len())]
 	}
 }
 
+/// What a fuzz run did.
+#[derive(Debug)]
 pub struct Fuzzed {
 	pub cases: u64,
 	covered: u32,

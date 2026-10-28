@@ -17,6 +17,7 @@ use std::path::{Component, Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
+/// A scan root, held open so every path is opened beneath it.
 #[derive(Debug)]
 pub struct Root {
 	pub path: PathBuf,
@@ -66,6 +67,7 @@ fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 }
 
 impl Root {
+	/// Opens a root folder.
 	pub fn open(path: &Path) -> io::Result<Root> {
 		let dir = openat(
 			libc::AT_FDCWD,
@@ -80,11 +82,13 @@ impl Root {
 		})
 	}
 
+	/// A path made relative to the root, or as it was if it's outside.
 	pub fn rel<'a>(&self, p: &'a Path) -> &'a Path {
 		// An absolute path left over is refused by open_at.
 		p.strip_prefix(&self.path).unwrap_or(p)
 	}
 
+	/// Opens a relative path without leaving the root or its filesystem.
 	pub fn open_at(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
 		let rel = if rel.as_os_str().is_empty() {
 			Path::new(".")
@@ -147,16 +151,23 @@ impl Root {
 		openat(held.as_ref().unwrap_or(&self.dir).as_raw_fd(), last, flags)
 	}
 
-	// O_NOATIME needs ownership or root.
+	/// Opens a file to read without moving its atime, where allowed.
 	pub fn open_read(&self, rel: &Path) -> io::Result<File> {
 		let base = libc::O_RDONLY | libc::O_NONBLOCK;
-		match self.open_at(rel, base | libc::O_NOATIME) {
-			Err(e) if e.raw_os_error() == Some(libc::EPERM) => self.open_at(rel, base),
-			r => r,
-		}
+		with_noatime(|extra| self.open_at(rel, base | extra))
 	}
 }
 
+/// Calls `open` with `O_NOATIME`, and again without it if that's refused,
+/// since it needs ownership or root.
+pub fn with_noatime(open: impl Fn(libc::c_int) -> io::Result<File>) -> io::Result<File> {
+	match open(libc::O_NOATIME) {
+		Err(e) if e.raw_os_error() == Some(libc::EPERM) => open(0),
+		r => r,
+	}
+}
+
+/// What a folder entry is, by its type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
 	Dir,
@@ -164,6 +175,7 @@ pub enum Kind {
 	Other,
 }
 
+/// One folder entry.
 #[derive(Debug)]
 pub struct Entry {
 	pub name: Box<OsStr>,
@@ -178,6 +190,7 @@ pub struct List {
 }
 
 impl List {
+	/// Reads the entries of an open folder.
 	pub fn new(f: File) -> io::Result<List> {
 		let fd = f.into_raw_fd();
 		// SAFETY: fd came from into_raw_fd, so it's ours. On success the DIR owns it.
@@ -214,6 +227,7 @@ impl List {
 		Ok(unsafe { st.assume_init() })
 	}
 
+	/// Whether the folder holds an entry by that name.
 	pub fn has(&self, name: &str) -> bool {
 		self.lstat(name.as_bytes()).is_ok()
 	}

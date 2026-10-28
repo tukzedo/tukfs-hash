@@ -28,10 +28,11 @@ import html
 import re
 import sys
 import time
+from itertools import pairwise
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
-STEP = 16.0  # row height in the SVG, px, until fParse reads the real one off the rows
+STEP = 16.0  # row height in the SVG, px, for a graph with one row, where fParse can't measure it
 SELF_TOP = 22  # self-time leaders to list
 INCL_TOP = 14  # inclusive-time buckets to list
 CHAIN = 4  # leaves whose caller chain we walk up to the root
@@ -60,7 +61,13 @@ BUCKETS: list[tuple[str, tuple[str, ...]]] = [
     ("directory walk", ("scan::walk", "scan::list_dir", "scan::queue")),
 ]
 
-Frame = tuple[str, float, float, float]  # (name, x, y, w) in raw samples
+
+class Frame(NamedTuple):
+    ##	x and w in raw samples, y in px.
+    name: str
+    x: float
+    y: float
+    w: float
 
 
 def fSkip(msg: str) -> NoReturn:
@@ -101,13 +108,12 @@ def fAttr(attrs: str, key: str) -> float | None:
     return float(vm.group(1)) if vm else None
 
 
-def fParse(path: Path) -> tuple[int, list[Frame], str]:
+def fParse(path: Path) -> tuple[int, list[Frame], str, float]:
     ##	Skip rather than trust anything that isn't a whole graph: a file cut
     ##	off mid-write, or one whose rows aren't where the row height says,
     ##	still gives a sample count and some frames, and a report on a fraction
     ##	of the samples. The row height comes off the rows themselves; the root
     ##	and the self-time sum are the checks that a graph is all there.
-    global STEP
     text = path.read_text(encoding="utf-8", errors="replace")
     m = re.search(r'total_samples="(\d+)"', text)
     total = int(m.group(1)) if m else 0
@@ -118,22 +124,21 @@ def fParse(path: Path) -> tuple[int, list[Frame], str]:
         if y is None or x is None or w is None:
             continue
         name = SAMPLES_RE.sub("", html.unescape(fm.group(1)))
-        frames.append((name, x, y, w))
+        frames.append(Frame(name, x, y, w))
     if not total or not frames:
         fSkip(f"could not parse a flamegraph out of {path}")
     if not text.rstrip().endswith("</svg>"):
         fSkip(f"{path} doesn't end in </svg>; cut off mid-write")
-    ys = sorted({fr[2] for fr in frames})
-    gaps = {round(b - a, 6) for a, b in zip(ys, ys[1:], strict=False)}
+    ys = sorted({fr.y for fr in frames})
+    gaps = {round(b - a, 6) for a, b in pairwise(ys)}
     if len(gaps) > 1:
         fSkip(f"rows aren't evenly spaced in {path} (gaps {sorted(gaps)}); not a whole flamegraph")
-    if gaps:
-        STEP = gaps.pop()
-    roots = [fr for fr in frames if fr[2] == ys[-1]]
-    if len(roots) != 1 or abs(roots[0][3] - total) > 1e-6:
+    step = gaps.pop() if gaps else STEP
+    roots = [fr for fr in frames if fr.y == ys[-1]]
+    if len(roots) != 1 or abs(roots[0].w - total) > 1e-6:
         fSkip(f"no single root frame spanning all {total} samples in {path}; not a whole flamegraph")
     sm = SUBTITLE_RE.search(text)
-    return total, frames, html.unescape(sm.group(1)).strip() if sm else ""
+    return total, frames, html.unescape(sm.group(1)).strip() if sm else "", step
 
 
 def fBucket(anc: list[str]) -> str:
@@ -144,42 +149,42 @@ def fBucket(anc: list[str]) -> str:
     return "other"
 
 
-def fAnalyze(total: int, frames: list[Frame], top: int) -> None:
+def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
     ##	Rows keyed by y and sorted by x, with the x list beside each, so a
     ##	frame's parent or children are a bisect and a short walk rather than a
     ##	scan of the whole row for every frame.
     rows: dict[float, list[Frame]] = {}
     for fr in frames:
-        rows.setdefault(fr[2], []).append(fr)
+        rows.setdefault(fr.y, []).append(fr)
     rowXs: dict[float, list[float]] = {}
     for y, row in rows.items():
-        row.sort(key=lambda fr: fr[1])
-        rowXs[y] = [fr[1] for fr in row]
+        row.sort(key=lambda fr: fr.x)
+        rowXs[y] = [fr.x for fr in row]
     eps = 1e-6
 
     def kids(fr: Frame) -> list[Frame]:
         _, x, y, w = fr
-        row = rows.get(y - STEP)
+        row = rows.get(y - step)
         if not row:
             return []
         out = []
-        for c in row[bisect.bisect_left(rowXs[y - STEP], x - eps) :]:
-            if c[1] + c[3] > x + w + eps:
+        for c in row[bisect.bisect_left(rowXs[y - step], x - eps) :]:
+            if c.x + c.w > x + w + eps:
                 break
             out.append(c)
         return out
 
     def parent(fr: Frame) -> Frame | None:
         _, x, y, w = fr
-        row = rows.get(y + STEP)
+        row = rows.get(y + step)
         if not row:
             return None
-        i = bisect.bisect_right(rowXs[y + STEP], x + eps) - 1
-        if i >= 0 and row[i][1] + row[i][3] >= x + w - eps:
+        i = bisect.bisect_right(rowXs[y + step], x + eps) - 1
+        if i >= 0 and row[i].x + row[i].w >= x + w - eps:
             return row[i]
         return None
 
-    selfOf = {fr: fr[3] - sum(c[3] for c in kids(fr)) for fr in frames}
+    selfOf = {fr: fr.w - sum(c.w for c in kids(fr)) for fr in frames}
     if abs(sum(selfOf.values()) - total) > 1 or min(selfOf.values()) < -1e-6:
         fSkip(
             f"self time sums to {sum(selfOf.values()):.0f} of {total} samples; "
@@ -191,15 +196,15 @@ def fAnalyze(total: int, frames: list[Frame], top: int) -> None:
     byName: dict[str, list[Frame]] = {}
     bucketBy: dict[str, float] = {}
     for fr in frames:
-        name = fr[0]
+        name = fr.name
         byName.setdefault(name, []).append(fr)
         ##	Once per stack: a recursive call, or one name inlined at two depths,
         ##	sits inside itself and would be counted again.
         up = parent(fr)
-        while up and up[0] != name:
+        while up and up.name != name:
             up = parent(up)
         if not up:
-            inclBy[name] = inclBy.get(name, 0.0) + fr[3]
+            inclBy[name] = inclBy.get(name, 0.0) + fr.w
         s = selfOf[fr]
         selfBy[name] = selfBy.get(name, 0.0) + s
         if s <= 0:
@@ -207,7 +212,7 @@ def fAnalyze(total: int, frames: list[Frame], top: int) -> None:
         anc: list[str] = []  # self, then each caller up to the root
         cur: Frame | None = fr
         while cur:
-            anc.append(cur[0])
+            anc.append(cur.name)
             cur = parent(cur)
         b = fBucket(anc)
         bucketBy[b] = bucketBy.get(b, 0.0) + s
@@ -217,11 +222,11 @@ def fAnalyze(total: int, frames: list[Frame], top: int) -> None:
 
     ##	The run's own steps sit right under the root, one per scan.
     rootY = max(rows)
-    steps = rows.get(rootY - STEP, [])
+    steps = rows.get(rootY - step, [])
     if steps:
         print("by step:")
-        for fr in sorted(steps, key=lambda fr: fr[1]):
-            print(f"  {pct(fr[3])} {int(fr[3]):4d}  {fr[0]}")
+        for fr in sorted(steps, key=lambda fr: fr.x):
+            print(f"  {pct(fr.w)} {int(fr.w):4d}  {fr.name}")
         print()
 
     print("attribution (self-time):")
@@ -238,7 +243,8 @@ def fAnalyze(total: int, frames: list[Frame], top: int) -> None:
     print()
 
     print("top inclusive (call buckets, leaving out std and core):")
-    rest = [(n, v) for n, v in inclBy.items() if not NOISE_RE.search(n) and all(n != s[0] for s in steps)]
+    stepNames = {fr.name for fr in steps}
+    rest = [(n, v) for n, v in inclBy.items() if not NOISE_RE.search(n) and n not in stepNames]
     for name, v in sorted(rest, key=lambda kv: -kv[1])[:INCL_TOP]:
         print(f"  {pct(v)} {int(v):4d}  {name}")
     print()
@@ -249,8 +255,8 @@ def fAnalyze(total: int, frames: list[Frame], top: int) -> None:
         print(f"  {name}  ({pct(v)} self)")
         cur, depth = parent(fr), 0
         while cur and depth < 10:
-            if not NOISE_RE.search(cur[0]):
-                print(f"      {cur[0]}")
+            if not NOISE_RE.search(cur.name):
+                print(f"      {cur.name}")
                 depth += 1
             cur = parent(cur)
 
@@ -296,7 +302,7 @@ def main() -> None:
             print(f"SEEN {name}  (nothing newer than {seen}, {fAge(path)} old)")
             return
 
-    total, frames, subtitle = fParse(path)
+    total, frames, subtitle, step = fParse(path)
     print(f"{'NEW' if a.check else 'FLAME'} {name}  ({ts or 'n/a'}, {total} samples, {fAge(path)} old)")
     if subtitle:
         ##	The profiler's own count of CPU per step. A thread in the kernel
@@ -306,7 +312,7 @@ def main() -> None:
         print(f"  {subtitle}")
         print("  the graph undercounts the system time above, and the wall time past it is mostly waiting on the disk")
     print()
-    fAnalyze(total, frames, a.top)
+    fAnalyze(total, frames, step, a.top)
 
     if a.check and not a.no_mark and not a.file and ts:
         try:
@@ -323,3 +329,5 @@ if __name__ == "__main__":
 ##		- 2026-10-23: Copied from shcl's. Buckets redone for a scan, nearest
 ##		  caller wins. The profiler's CPU line from the subtitle replaces the
 ##		  sidecar, and std frames are left out of the call buckets and chains.
+##		- 2026-10-28: fParse returns the row height rather than setting STEP.
+##		  Frame is a NamedTuple.

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#  shellcheck disable=1091  ## 'Not following.' The stop include is checked on its own.
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
 ##		root, and no mounts but step 23's in a user namespace, so mount
@@ -12,8 +11,9 @@
 ##		first, but a kept one only once it's 2 days old.
 ##	History: At bottom of script.
 
-# Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
-# Licensed under GPL-2.0-only. No warranty.
+##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+##	Licensed under GPL-2.0-only. No warranty.
+##	SPDX-License-Identifier: GPL-2.0-only
 
 set -euo pipefail
 
@@ -63,12 +63,13 @@ while IFS= read -r -d '' old; do
 done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
 
 n=1
-stamp="$(date +%Y%m%d-%H%M%S)"
-until mkdir -- "${base}/${stamp}_$(printf '%03d' "${n}")" 2> /dev/null; do
-	[[ -e "${base}/${stamp}_$(printf '%03d' "${n}")" ]] || { echo "could not make a work folder in ${base}" >&2; exit 2; }
+printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
+printf -v work '%s/%s_%03d' "${base}" "${stamp}" "${n}"
+until mkdir -- "${work}" 2> /dev/null; do
+	[[ -e "${work}" ]] || { echo "could not make a work folder in ${base}" >&2; exit 2; }
 	n=$((n + 1)); [[ "${n}" -lt 1000 ]] || { echo "no free work folder name in ${base}" >&2; exit 2; }
+	printf -v work '%s/%s_%03d' "${base}" "${stamp}" "${n}"
 done
-work="${base}/${stamp}_$(printf '%03d' "${n}")"
 printf '%s\n' "${token}" > "${work}/.test-run"
 printf '%s\n' "$$" > "${work}/run.pid"
 if [[ -n "${keep}" ]]; then : > "${work}/.test-kept"; fi
@@ -103,7 +104,17 @@ expect() {
 }
 # fFlipByte FILE OFFSET MASK [COUNT]: xor COUNT bytes (default 1) at OFFSET
 # with MASK, then put the times back.
-fFlipByte() { python3 -I -c 'import os,sys; p,off,mask=sys.argv[1],int(sys.argv[2]),int(sys.argv[3],0); n=int(sys.argv[4]); st=os.stat(p); f=open(p,"r+b"); f.seek(off); b=f.read(n); f.seek(off); f.write(bytes(x^mask for x in b)); f.close(); os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))' "${1}" "${2}" "${3}" "${4:-1}"; }
+fFlipByte() {
+	python3 -I -c '
+import os, sys
+p, off, mask, n = sys.argv[1], int(sys.argv[2]), int(sys.argv[3], 0), int(sys.argv[4])
+st = os.stat(p)
+with open(p, "r+b") as f:
+	f.seek(off); b = f.read(n)
+	f.seek(off); f.write(bytes(x ^ mask for x in b))
+os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+' "${1}" "${2}" "${3}" "${4:-1}"
+}
 check() { if [[ "${3}" == "${4}" ]]; then ok "${1}" "${2}"; else bad "${1}" "${2}: got [${3}], want [${4}]"; fi; }
 q() { sqlite3 "${db}" "${1}"; }
 scan() { local rc=0; "${bin}" scan --db "${db}" --root "${tree}" --progress 3600 "${@}" > "${work}/out.txt" 2>&1 || rc=$?; echo "${rc}"; }
@@ -111,10 +122,25 @@ xget() { getfattr --only-values -n "${2}" "${1}" 2>/dev/null || true; }
 tomorrow="$(date -d tomorrow +%Y-%m-%d)"
 # Waits up to 10 s for a scan to say it has started, rather than guessing.
 # Up to 60 s, since a loaded box has taken more than 10 to get going.
-wait_started() { for _ in $(seq 1 1200); do grep -q '^group ' "${1}" 2> /dev/null && return 0; sleep 0.05; done; return 1; }
+wait_started() {
+	local i
+	for ((i = 0; i < 1200; i++)); do
+		grep -q '^group ' "${1}" 2> /dev/null && return 0
+		sleep 0.05
+	done
+	return 1
+}
 # wait_reached PID DIR: up to 60 s for a scan to have a file under DIR open.
 # Fails at once if it has ended, since a zombie has no fds.
-wait_reached() { for _ in $(seq 1 1200); do [[ -e "/proc/${1}/fd/1" ]] || return 1; [[ -n "$(find "/proc/${1}/fd" -lname "${2}/*" -print -quit 2> /dev/null)" ]] && return 0; sleep 0.05; done; return 1; }
+wait_reached() {
+	local i
+	for ((i = 0; i < 1200; i++)); do
+		[[ -e "/proc/${1}/fd/1" ]] || return 1
+		[[ -n "$(find "/proc/${1}/fd" -lname "${2}/*" -print -quit 2> /dev/null)" ]] && return 0
+		sleep 0.05
+	done
+	return 1
+}
 
 # Varied names, sizes and dates.
 : > "${tree}/empty"
@@ -238,7 +264,8 @@ check ddx1a "resume didn't report it twice" "$(q "SELECT count(*) FROM events WH
 expect ddx1b "summary counts the whole run" "summary: $(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1, b3-xattr-mismatch 1$' <<< "$(q 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
 check ddx1c "resume finished the rest" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")" 400
 check ddx1d "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_before + 1))"
-skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2)"
+# No match fails the pipeline, which would end the script with no FAIL line.
+skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2 || true)"
 st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect ddx1e "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
 check ddx1f "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
 
@@ -440,7 +467,7 @@ wscan > /dev/null
 sqlite3 "${wdb}" 'PRAGMA journal_mode=WAL' > /dev/null
 python3 -I -c 'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("SELECT count(*) FROM runs").fetchall(); print("open", flush=True); time.sleep(120)' "${wdb}" > "${work}/holder.txt" &
 holder=$!
-for _ in $(seq 1 200); do grep -q open "${work}/holder.txt" && break; sleep 0.05; done
+for ((i = 0; i < 200; i++)); do grep -q open "${work}/holder.txt" && break; sleep 0.05; done
 fFlipByte "${wl}/f" 0 1
 rc="$(wscan --since "${tomorrow}")"
 kill "${holder}"; wait "${holder}" 2> /dev/null || true
@@ -526,6 +553,11 @@ last="$(gq 'SELECT max(id) FROM runs')"
 gq "UPDATE runs SET status = 'stopped' WHERE id = ${last}"
 check ddya4 "gone: a stopped run refused" "$(gone --run "${last}")" 1
 check ddya5 "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gone.txt") $(grep -c '^gone' "${work}/gone.txt")" "0 run $((last - 1)) 0"
+# A typo or a run that isn't there is an error, not an empty list.
+rep() { local rc=0; "${bin}" report --db "${gdb}" "${@}" > "${work}/rep.txt" 2>&1 || rc=$?; echo "${rc}"; }
+check dehzs "report: an unknown kind refused" "$(rep --kind read-eror) $(grep -c 'unknown kind read-eror; kinds are b3-xattr-mismatch' "${work}/rep.txt") $(rep --kind dir-error)" "1 1 0"
+check dehzt "report and gone: an unknown run refused" "$(rep --run 999) $(grep -c '^tukfs-hash: no run 999$' "${work}/rep.txt") $(gone --run 999)" "1 1 1"
+check dehzv "report and gone: a negative limit refused" "$(rep --limit -1) $(gone --limit -1) $(rep --limit 0) $(grep -c $'^dir-error\t' "${work}/rep.txt")" "1 1 0 0"
 
 # 19. prune removes only contents no name points at.
 orphans="$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)')"
@@ -544,20 +576,21 @@ touch -d '1999-01-01 00:00:00' "${rd}/two"
 setfattr -n user.rmlint.blake2b.cksum -v "$(b2sum "${rd}/one" | cut -d' ' -f1)" "${rd}/two"
 setfattr -n user.rmlint.blake2b.mtime -v 1000.5 "${rd}/two"
 rdb="${work}/db/rd.sqlite"
-rscan() { local rc=0; "${bin}" scan --db "${rdb}" --root "${rd}" --progress 3600 --since "${tomorrow}" "${@}" > "${work}/rd.txt" 2>&1 || rc=$?; echo "${rc}"; }
-xhex() { getfattr --only-values -n "${2}" "${1}" 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
+rdscan() { local rc=0; "${bin}" scan --db "${rdb}" --root "${rd}" --progress 3600 --since "${tomorrow}" "${@}" > "${work}/rd.txt" 2>&1 || rc=$?; echo "${rc}"; }
+# Empty for a missing attribute, as xget is, so a check fails rather than the script.
+xhex() { { getfattr --only-values -n "${2}" "${1}" 2>/dev/null || true; } | od -An -tx1 | tr -d ' \n'; }
 b2bhex() { printf '%s' "$(b2sum "${1}" | cut -d' ' -f1)" | od -An -tx1 | tr -d ' \n'; echo 00; }
-check de5g2 "rmlint: plain scan" "$(rscan)" 0
+check de5g2 "rmlint: plain scan" "$(rdscan)" 0
 check de5g3 "rmlint: none written without the flag" "$(xget "${rd}/one" user.rmlint.blake2b.mtime)" ""
 check de5g4 "rmlint: none in the database either" "$(sqlite3 "${rdb}" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 0
-check de5g5 "rmlint: flagged scan" "$(rscan --rmlint)" 0
+check de5g5 "rmlint: flagged scan" "$(rdscan --rmlint)" 0
 check de5g6 "rmlint: checksum with its NUL" "$(xhex "${rd}/one" user.rmlint.blake2b.cksum)" "$(b2bhex "${rd}/one")"
 check de5g7 "rmlint: time as rmlint writes it" "$(xget "${rd}/one" user.rmlint.blake2b.mtime)" "1620310089.1234567"
 check de5g8 "rmlint: stale set replaced" "$(xhex "${rd}/two" user.rmlint.blake2b.cksum) $(xget "${rd}/two" user.rmlint.blake2b.mtime)" "$(b2bhex "${rd}/two") 915177600"
 check de5g9 "rmlint: none in a git work tree" "$(xget "${rd}/repo/g" user.rmlint.blake2b.mtime)" ""
 check de5ga "rmlint: every file's blake2b stored" "$(sqlite3 "${rdb}" 'SELECT count(*) FROM files WHERE b2b IS NOT NULL')" 3
 check de5gb "rmlint: counted" "$(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "rmlint 2"
-check de5gc "rmlint: next scan verifies them" "$(rscan --rmlint) $(grep -o 'b2b [0-9]*' "${work}/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "0 b2b 2 rmlint 0"
+check de5gc "rmlint: next scan verifies them" "$(rdscan --rmlint) $(grep -o 'b2b [0-9]*' "${work}/rd.txt" | head -1) $(grep -o 'rmlint [0-9]*' "${work}/rd.txt" | head -1)" "0 b2b 2 rmlint 0"
 if command -v rmlint > /dev/null; then
 	# rmlint hashes only files that share a size, so a pair.
 	rp="${work}/rp"; mkdir -p "${rp}"
@@ -565,7 +598,8 @@ if command -v rmlint > /dev/null; then
 	touch -d '2024-01-01 00:00:00.351000100' "${rp}/a" "${rp}/b"
 	(cd "${rp}" && env -u DISPLAY rmlint -a blake2b --xattr -o summary:/dev/null "${rp}" > /dev/null 2>&1) || true
 	theirs="$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)"
-	setfattr -x user.rmlint.blake2b.cksum "${rp}/a"; setfattr -x user.rmlint.blake2b.mtime "${rp}/a"
+	setfattr -x user.rmlint.blake2b.cksum "${rp}/a" 2> /dev/null || true
+	setfattr -x user.rmlint.blake2b.mtime "${rp}/a" 2> /dev/null || true
 	"${bin}" scan --db "${rdb}" --root "${rp}" --rmlint --progress 3600 > /dev/null 2>&1 || true
 	st=0; [[ "${#theirs}" -gt 100 ]] || st=1; expect de5gd "rmlint: rmlint wrote a set" "rmlint left nothing" "${st}"
 	check de5ge "rmlint: same bytes as rmlint's" "$(xhex "${rp}/a" user.rmlint.blake2b.cksum) $(xhex "${rp}/a" user.rmlint.blake2b.mtime)" "${theirs}"
@@ -624,14 +658,14 @@ else
 fi
 
 
-##	Script history:
+##	History:
 ##		- 20261013: Created, with scan, report and snapdiff.
 ##		- 20261014: accept, stored sums kept on a mismatch, exit codes, resume
 ##		  checks, snapdiff input checks and odd names, writer faults, --verify,
 ##		  gone and prune.
 ##		- 20261019: --rmlint and rmlint's blake2b xattrs, b2b names.
 ##		- 20261023: Header and history. Old commented-out checks dropped, every
-##		  expansion braced, adn the work folder is removed only when its marker
+##		  expansion braced, and the work folder is removed only when its marker
 ##		  holds the run's token.
 ##		- 20261023: expect takes a status for [[ ]] checks, one fFlipByte, and
 ##		  step 5's 400 files from one python3.
@@ -656,3 +690,6 @@ fi
 ##		  one waits 2 days.
 ##		- 20261025: A scan with a mount point that isn't UTF-8, in a user
 ##		  namespace.
+##		- 20261028: ddx1e and de5gd fail on their own line when they find
+##		  nothing, rather than ending the script. Step 20's scan helper is
+##		  rdscan, not a second rscan. SPDX line.

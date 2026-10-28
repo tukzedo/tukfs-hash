@@ -7,6 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Now, in microseconds since the epoch.
 pub fn now_us() -> i64 {
 	SystemTime::now()
 		.duration_since(UNIX_EPOCH)
@@ -27,6 +28,7 @@ pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
 	Ok(dir.join(name))
 }
 
+/// A path as a C string. A NUL in it is refused.
 pub fn cpath(p: &Path) -> io::Result<CString> {
 	CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }
@@ -51,6 +53,7 @@ pub fn b64u_encode(data: &[u8]) -> String {
 	out
 }
 
+/// Unpadded base64url to bytes. `None` if it isn't that.
 pub fn b64u_decode(s: &[u8]) -> Option<Vec<u8>> {
 	if s.len() % 4 == 1 {
 		return None;
@@ -82,6 +85,7 @@ fn push_hex(out: &mut String, b: u8) {
 	out.push(char::from(HEX[usize::from(b & 15)]));
 }
 
+/// Lower-case hex.
 pub fn hex(data: &[u8]) -> String {
 	let mut s = String::with_capacity(data.len() * 2);
 	for &b in data {
@@ -90,6 +94,7 @@ pub fn hex(data: &[u8]) -> String {
 	s
 }
 
+/// Hex to bytes. `None` if it isn't hex.
 pub fn unhex(s: &[u8]) -> Option<Vec<u8>> {
 	if !s.len().is_multiple_of(2) {
 		return None;
@@ -118,6 +123,7 @@ fn tm_of(us: i64) -> libc::tm {
 	tm
 }
 
+/// Local midnight at the start of that time's day.
 pub fn local_midnight_us(us: i64) -> i64 {
 	let mut tm = tm_of(us);
 	tm.tm_hour = 0;
@@ -148,6 +154,7 @@ pub fn parse_date(s: &str) -> Option<i64> {
 	(t != -1 && same_day).then_some(t as i64 * 1_000_000)
 }
 
+/// A time as local `YYYY-MM-DD HH:MM:SS`.
 pub fn fmt_local(us: i64) -> String {
 	let tm = tm_of(us);
 	format!(
@@ -161,6 +168,7 @@ pub fn fmt_local(us: i64) -> String {
 	)
 }
 
+/// A size in binary units, such as 1.5 GiB.
 pub fn human_bytes(n: u64) -> String {
 	const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
 	let mut v = n as f64;
@@ -205,6 +213,7 @@ pub fn escape_name(b: &[u8]) -> String {
 	out
 }
 
+/// A path escaped for showing.
 pub fn show_path(p: &Path) -> String {
 	escape_name(p.as_os_str().as_bytes())
 }

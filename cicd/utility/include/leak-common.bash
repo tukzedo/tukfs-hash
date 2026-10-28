@@ -38,7 +38,7 @@ in_image=0
 if [[ -n "${TUKFS_IN_IMAGE:-}" ]]; then in_image=1; fi
 source "${here}/utility/include/stop-descendants.bash"
 source "${here}/utility/include/scratch.bash"
-## shellcheck source=../../config.bash
+# shellcheck source=../../config.bash
 source "${here}/config.bash"
 
 ## Why it's on the host, for a caller that sets leak_host_note=0 and says

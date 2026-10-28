@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' PIN_CARGO_DENY comes from config.bash, through leak-common.bash.
-
 ##	Purpose:
 ##		Known advisories for the crates Cargo.lock names: vulnerable, unsound
 ##		and unmaintained ones, by RustSec's database, through cargo-deny and

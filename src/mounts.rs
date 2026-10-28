@@ -12,6 +12,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// One line of the mount table.
 #[derive(Debug, Clone)]
 pub struct Mount {
 	pub point: PathBuf,
@@ -63,7 +64,18 @@ pub fn parse_mountinfo(text: &[u8]) -> Vec<Mount> {
 	out
 }
 
+#[cfg(test)]
+thread_local! {
+	/// Reads past this many fail, so a test can lose the table partway.
+	pub static READS_LEFT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// The mount table, from `/proc/self/mountinfo`.
 pub fn read_mounts() -> Result<Vec<Mount>, String> {
+	#[cfg(test)]
+	if READS_LEFT.with(|n| n.replace(n.get().map(|v| v.saturating_sub(1)))) == Some(0) {
+		return Err("/proc/self/mountinfo: test fault".into());
+	}
 	let text =
 		fs::read("/proc/self/mountinfo").map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
 	Ok(parse_mountinfo(&text))
@@ -169,6 +181,7 @@ fn backing_path(mut s: Vec<u8>) -> PathBuf {
 	PathBuf::from(OsString::from_vec(s))
 }
 
+/// The disks a mount's data sits on.
 pub fn disks_for(m: &Mount, mounts: &[Mount]) -> Result<BTreeSet<String>, String> {
 	disks_under(m, mounts, 0)
 }
@@ -216,6 +229,7 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 	Ok(real)
 }
 
+/// Whether the kernel calls a disk rotational.
 pub fn rotational(disk: &str) -> bool {
 	fs::read_to_string(format!("/sys/block/{disk}/queue/rotational")).is_ok_and(|s| s.trim() == "1")
 }
@@ -256,6 +270,7 @@ pub fn group_roots(
 	groups
 }
 
+/// A group's name, from its disks.
 pub fn group_name(disks: &BTreeSet<String>) -> String {
 	disks
 		.iter()
@@ -283,6 +298,7 @@ pub fn hands_off(m: &Mount) -> bool {
 	}
 }
 
+/// The filesystem type, where a path is on one that's never written to.
 pub fn hands_off_at(mounts: &[Mount], path: &Path) -> Option<String> {
 	mount_for(mounts, path)
 		.filter(|m| hands_off(m))

@@ -28,6 +28,7 @@ mod soak;
 mod util;
 mod xattr;
 
+use rusqlite::OptionalExtension;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
@@ -252,11 +253,17 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 						.map_err(|_| "--run takes a number")?,
 				);
 			}
-			"--kind" => kind = Some(take_text(&mut it, a)?),
+			"--kind" => {
+				let name = take_text(&mut it, a)?;
+				kind = Some(db::Kind::parse(&name).ok_or_else(|| {
+					let names: Vec<_> = db::Kind::ALL.iter().map(|k| k.name()).collect();
+					format!("unknown kind {name}; kinds are {}", names.join(", "))
+				})?);
+			}
 			"--limit" => {
 				limit = take_text(&mut it, a)?
 					.parse()
-					.map_err(|_| "--limit takes a number")?;
+					.map_err(|_| "--limit takes a count")?;
 			}
 			"--old" => old = Some(p(take_value(&mut it, a)?)),
 			"--new" => new = Some(p(take_value(&mut it, a)?)),
@@ -270,6 +277,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	}
 	let need_db = || db.as_deref().ok_or("--db is required");
 
+	let arg_line = || argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" ");
 	match cmd {
 		"scan" => {
 			if roots.is_empty() {
@@ -305,7 +313,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
-					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
+					args: arg_line(),
 				},
 				&stop,
 			)
@@ -315,23 +323,19 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			for d in &plan.dropped {
 				out!("skip {d}");
 			}
-			for (name, rs, n) in &plan.groups {
-				out!("group {name}, {n} worker(s)");
-				for r in rs {
+			for g in &plan.groups {
+				out!("group {}, {} worker(s)", g.name, g.threads);
+				for r in &g.roots {
 					out!("\t{}", util::show_path(r));
 				}
 			}
 			Ok(0)
 		}
 		"runs" => runs(need_db()?),
-		"report" => report(need_db()?, run_id, kind.as_deref(), limit),
+		"report" => report(need_db()?, run_id, kind, limit),
 		"gone" => gone::run(need_db()?, run_id, limit),
 		"prune" => prune(need_db()?),
-		"accept" => accept::run(
-			need_db()?,
-			&files,
-			&argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
-		),
+		"accept" => accept::run(need_db()?, &files, &arg_line()),
 		"snapdiff" => {
 			let (Some(old), Some(new)) = (old, new) else {
 				return Err("snapdiff needs --old and --new".into());
@@ -355,7 +359,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 
 fn runs(db: &std::path::Path) -> Result<i32, String> {
 	let conn = db::open_ro(db)?;
-	let e = |e: rusqlite::Error| e.to_string();
+	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Until a newer version has opened it for writing.
 	let verify = if db::has_column(&conn, "runs", "verify").map_err(e)? {
 		"verify"
@@ -416,7 +420,7 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", util::show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path)?;
+	let _lock = scan::lock(&db_path, &mounts::read_mounts()?)?;
 	let conn = db::open_rw(&db_path)?;
 	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
 	if let Err(x) = db::close_rw(conn) {
@@ -450,16 +454,24 @@ fn damage_first(k: db::Kind) -> u8 {
 fn report(
 	db: &std::path::Path,
 	run: Option<i64>,
-	kind: Option<&str>,
-	limit: i64,
+	kind: Option<db::Kind>,
+	limit: u64,
 ) -> Result<i32, String> {
+	let limit = i64::try_from(limit).unwrap_or(i64::MAX);
 	let conn = db::open_ro(db)?;
-	let e = |e: rusqlite::Error| e.to_string();
+	let e = |e: rusqlite::Error| format!("database: {e}");
 	let run: i64 = match run {
-		Some(r) => r,
+		Some(r) => conn
+			.query_row("SELECT id FROM runs WHERE id = ?1", [r], |r| r.get(0))
+			.optional()
+			.map_err(e)?
+			.ok_or_else(|| format!("no run {r}"))?,
 		None => conn
-			.query_row("SELECT max(id) FROM runs", [], |r| r.get(0))
-			.map_err(|_| "no runs yet".to_string())?,
+			.query_row("SELECT max(id) FROM runs", [], |r| {
+				r.get::<_, Option<i64>>(0)
+			})
+			.map_err(e)?
+			.ok_or("no runs yet")?,
 	};
 	out!("run {run}");
 	let mut st = conn

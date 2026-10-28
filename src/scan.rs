@@ -43,6 +43,7 @@ impl Mode {
 	}
 }
 
+/// What `scan` was asked to do.
 #[derive(Debug)]
 pub struct Opts {
 	pub db: PathBuf,
@@ -92,10 +93,10 @@ fn events_line(counts: Option<&[(String, i64)]>) -> String {
 }
 
 // Roots as plan() kept them, sorted, so 2 runs over the same folders match.
-fn roots_key(groups: &[(String, Vec<PathBuf>, usize)]) -> Vec<u8> {
+fn roots_key(groups: &[Planned]) -> Vec<u8> {
 	let mut roots: Vec<&[u8]> = groups
 		.iter()
-		.flat_map(|(_, rs, _)| rs.iter().map(|r| r.as_os_str().as_bytes()))
+		.flat_map(|g| g.roots.iter().map(|r| r.as_os_str().as_bytes()))
 		.collect();
 	roots.sort_unstable();
 	roots.join(&0u8)
@@ -135,10 +136,7 @@ struct Resumed {
 	summary: Option<String>,
 }
 
-// Only the newest scan, only if it didn't finish, and only over the same
-// roots and in the same mode. An older stopped run would bring back an old
-// skip date, and the other wrapper's run would be finished over the wrong
-// roots.
+// Only the newest unfinished scan, same roots and mode. See design.md, Runs and exit codes.
 fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<Resumed, String> {
 	let row = conn
 		.query_row(
@@ -254,9 +252,7 @@ impl Stats {
 	}
 }
 
-// What ended a run early other than a stop: the writer failed, or a worker
-// couldn't open the database or panicked. The others stop, and the run is
-// marked failed.
+// Why a run failed, other than a stop. See design.md, Runs and exit codes.
 #[derive(Default)]
 struct Faults {
 	any: AtomicBool,
@@ -314,10 +310,20 @@ struct Job {
 	root: Arc<Root>,
 }
 
+/// Roots that share disks, read by one pool of workers.
+#[derive(Debug, Clone)]
+pub struct Planned {
+	pub name: String,
+	pub roots: Vec<PathBuf>,
+	pub threads: usize,
+}
+
+/// What `plan` makes of the roots given.
 #[derive(Debug)]
 pub struct Plan {
-	pub groups: Vec<(String, Vec<PathBuf>, usize)>,
+	pub groups: Vec<Planned>,
 	pub dropped: Vec<String>,
+	pub mounts: Vec<mounts::Mount>,
 }
 
 /// Roots that resolve to the same place, or sit inside another root on the same
@@ -373,13 +379,22 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 				n = *t;
 			}
 		}
-		groups.push((mounts::group_name(&disks), rs, n.max(1)));
+		groups.push(Planned {
+			name: mounts::group_name(&disks),
+			roots: rs,
+			threads: n.max(1),
+		});
 	}
-	Ok(Plan { groups, dropped })
+	Ok(Plan {
+		groups,
+		dropped,
+		mounts,
+	})
 }
 
-pub fn lock(db: &Path) -> Result<File, String> {
-	if let Some(t) = mounts::hands_off_at(&mounts::read_mounts()?, db) {
+/// Takes the database's lock file, so 2 scans can't share it.
+pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
+	if let Some(t) = mounts::hands_off_at(mounts, db) {
 		return Err(format!(
 			"{} is on {t}, which isn't written to from Linux; put the database elsewhere",
 			db.display()
@@ -394,14 +409,19 @@ pub fn lock(db: &Path) -> Result<File, String> {
 		.map_err(|e| format!("{}: {e}", p.display()))?;
 	// SAFETY: f is open for the length of the call.
 	if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-		return Err(format!(
-			"{} is locked; another scan is using this database",
-			p.display()
-		));
+		let e = io::Error::last_os_error();
+		if e.kind() == io::ErrorKind::WouldBlock {
+			return Err(format!(
+				"{} is locked; another scan is using this database",
+				p.display()
+			));
+		}
+		return Err(format!("{}: can't lock: {e}", p.display()));
 	}
 	Ok(f)
 }
 
+/// This box's hostname, or empty.
 pub fn host() -> String {
 	fs::read_to_string("/proc/sys/kernel/hostname")
 		.map(|s| s.trim().to_string())
@@ -416,29 +436,57 @@ pub fn give_back(db: &Path) {
 	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
 		return;
 	};
+	for (p, e) in hand_over(db, uid, gid) {
+		err!(
+			"warning: can't give {} back to uid {uid}: {e}",
+			crate::util::show_path(&p)
+		);
+	}
+}
+
+// The files that couldn't be handed over. The WAL files are usually gone, so a
+// missing one doesn't count.
+fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let with = |sfx: &str| {
 		let mut s = db.as_os_str().to_owned();
 		s.push(sfx);
 		PathBuf::from(s)
 	};
+	let mut failed = Vec::new();
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
-		if let Ok(c) = crate::util::cpath(&p) {
-			// SAFETY: c is NUL-terminated and outlives the call.
-			unsafe { libc::chown(c.as_ptr(), uid, gid) };
+		let Ok(c) = crate::util::cpath(&p) else {
+			continue;
+		};
+		// SAFETY: c is NUL-terminated and outlives the call.
+		if unsafe { libc::chown(c.as_ptr(), uid, gid) } == 0 {
+			continue;
+		}
+		let e = io::Error::last_os_error();
+		if e.kind() != io::ErrorKind::NotFound {
+			failed.push((p, e));
 		}
 	}
+	failed
 }
 
+/// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
-	let plan = plan(&o.roots, &o.threads)?;
-	for d in &plan.dropped {
+	let Plan {
+		groups: planned,
+		dropped,
+		mounts,
+	} = plan(&o.roots, &o.threads)?;
+	for d in &dropped {
 		err!("skipping root {d}");
 	}
-	if plan.groups.is_empty() {
+	if planned.is_empty() {
 		return Err("nothing to scan".into());
 	}
+	// Anything that can fail goes before begin(), or the run stays marked
+	// running (backlog ...852).
+	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
-	let _lock = lock(&db_path)?;
+	let _lock = lock(&db_path, &mounts)?;
 	let conn = db::open_rw(&db_path)?;
 
 	let started = now_us();
@@ -447,7 +495,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		cutoff_us,
 		started_us: run_started,
 		summary: earlier,
-	} = begin(&conn, o, &roots_key(&plan.groups), started)?;
+	} = begin(&conn, o, &roots_key(&planned), started)?;
 
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
@@ -456,8 +504,6 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		std::thread::spawn(move || db::writer(conn, run_id, &rx, move || faults.halt(&stop)))
 	};
 
-	let mounts = mounts::read_mounts()?;
-	let hands_off = hands_off(&mounts, &plan.groups)?;
 	let shared = Arc::new(Shared {
 		stop: stop.clone(),
 		faults: faults.clone(),
@@ -484,7 +530,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mode: o.mode,
 		tx,
 	});
-	let groups = groups(plan.groups, &hands_off);
+	let groups = groups(planned, &hands_off);
 
 	let mut handles = Vec::new();
 	for g in &groups {
@@ -529,8 +575,7 @@ fn begin(
 	let r = if o.resume {
 		pick_resume(conn, roots, o.mode)?
 	} else {
-		// The lock is held, so a run still marked running died without a
-		// word. A new run means it won't be resumed.
+		// Killed, since the lock is held. See design.md, Runs and exit codes.
 		conn.execute(
 			"UPDATE runs SET status = ?1 WHERE status = ?2",
 			[RunStatus::Killed, RunStatus::Running],
@@ -581,10 +626,10 @@ fn begin(
 // Roots on NTFS, APFS or HFS+, with their device and filesystem type.
 fn hands_off(
 	mounts: &[mounts::Mount],
-	groups: &[(String, Vec<PathBuf>, usize)],
+	groups: &[Planned],
 ) -> Result<BTreeMap<PathBuf, (u64, String)>, String> {
 	let mut out = BTreeMap::new();
-	for r in groups.iter().flat_map(|g| &g.1) {
+	for r in groups.iter().flat_map(|g| &g.roots) {
 		if let Some(t) = mounts::hands_off_at(mounts, r) {
 			let dev = fs::metadata(r)
 				.map_err(|e| format!("{}: {e}", r.display()))?
@@ -595,17 +640,14 @@ fn hands_off(
 	Ok(out)
 }
 
-fn groups(
-	planned: Vec<(String, Vec<PathBuf>, usize)>,
-	hands_off: &BTreeMap<PathBuf, (u64, String)>,
-) -> Vec<Arc<Group>> {
+fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -> Vec<Arc<Group>> {
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
-		.map(|(name, roots, threads)| {
+		.map(|p| {
 			Arc::new(Group {
-				name,
-				roots,
-				threads,
+				name: p.name,
+				roots: p.roots,
+				threads: p.threads,
 				stats: Stats::default(),
 				done: AtomicBool::new(false),
 			})
@@ -792,7 +834,7 @@ fn send(sh: &Shared, m: Msg) -> bool {
 	true
 }
 
-pub fn lock_path(db: &Path) -> PathBuf {
+fn lock_path(db: &Path) -> PathBuf {
 	let mut s = db.as_os_str().to_owned();
 	s.push(".lock");
 	PathBuf::from(s)
@@ -905,20 +947,19 @@ fn list_dir(
 				continue;
 			}
 		};
-		if kind == beneath::Kind::Other {
-			continue;
-		}
-		if kind == beneath::Kind::Dir
-			&& &*ent.name == ".zfs"
-			&& sh.mount_points.get(&dir).is_some_and(|t| t == "zfs")
-		{
+		let is_dir = match kind {
+			beneath::Kind::Dir => true,
+			beneath::Kind::File => false,
+			beneath::Kind::Other => continue,
+		};
+		if is_dir && &*ent.name == ".zfs" && sh.mount_points.get(&dir).is_some_and(|t| t == "zfs") {
 			continue;
 		}
 		let p = dir.join(&*ent.name);
 		if sh.mount_points.contains_key(&p) || excluded(sh, &p) {
 			continue;
 		}
-		if kind == beneath::Kind::Dir {
+		if is_dir {
 			subdirs.push(ent.name);
 			continue;
 		}
@@ -954,7 +995,13 @@ fn queue(
 	Ok(())
 }
 
-type LinkVal = (i64, i64, Sums);
+// A size and time other than the claimant's mean the file changed between names.
+#[derive(Clone, Copy)]
+struct LinkVal {
+	bytes: i64,
+	mtime_us: i64,
+	sums: Sums,
+}
 
 // Each entry counts down the names still to come and goes when it hits zero,
 // so a backup tree full of hard links doesn't keep every inode in memory.
@@ -964,10 +1011,8 @@ type LinkEntry = Option<(LinkVal, u64)>;
 // newest results are kept. A later name of an older one is read again.
 const LINKS_KEPT: usize = 1 << 18;
 
-// Hard links to one file. The first worker to reach an inode claims it, and
-// any other name for it waits for that result rather than reading the file a
-// second time. Reading it alongside would also see the first worker's xattr
-// write move the ctime, and call the file unstable.
+// One read per hard-linked inode, or one name's xattr write moves the ctime
+// under another's read. See design.md, Reading files.
 #[derive(Default)]
 struct Links {
 	map: Mutex<LinkMap>,
@@ -1039,7 +1084,7 @@ impl Links {
 		let mut m = locked(&self.map);
 		loop {
 			match m.entries.get(&key) {
-				Some(Some((v, _))) if v.0 == bytes && v.1 == mt => {
+				Some(Some((v, _))) if v.bytes == bytes && v.mtime_us == mt => {
 					let v = *v;
 					m.count_down(key);
 					return Claim::Done(v);
@@ -1100,6 +1145,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 	}
 }
 
+/// The mtime in microseconds, as stored.
 pub fn mtime_us(md: &fs::Metadata) -> i64 {
 	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
 }
@@ -1109,19 +1155,15 @@ pub fn mtime_s(md: &fs::Metadata) -> f64 {
 	md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9
 }
 
+/// Opens a path to read, without following a link or moving its atime.
 pub fn open_noatime(p: &Path) -> io::Result<File> {
 	let base = libc::O_NOFOLLOW | libc::O_NONBLOCK;
-	match OpenOptions::new()
-		.read(true)
-		.custom_flags(base | libc::O_NOATIME)
-		.open(p)
-	{
-		// O_NOATIME needs ownership or root.
-		Err(e) if e.raw_os_error() == Some(libc::EPERM) => {
-			OpenOptions::new().read(true).custom_flags(base).open(p)
-		}
-		r => r,
-	}
+	beneath::with_noatime(|extra| {
+		OpenOptions::new()
+			.read(true)
+			.custom_flags(base | extra)
+			.open(p)
+	})
 }
 
 /// What one read of a file came to.
@@ -1131,15 +1173,19 @@ pub struct Sums {
 	pub b2b: Option<[u8; 64]>,
 }
 
+/// Why a read of a file gave no sums.
 #[derive(Debug)]
 pub enum ReadFail {
 	Stopped,
-	Io(io::Error, u64),
+	Io { err: io::Error, at: u64 },
 	Unstable,
 }
 
 /// `O_DIRECT` wants the buffer, offset and length on the device's block size.
 const DIRECT_ALIGN: usize = 4096;
+// Below this a plain read and its drops cost less sys CPU than going direct
+// (2026102809554675).
+const DIRECT_MIN: u64 = 64 << 10;
 
 /// Turns `O_DIRECT` on or off for an open fd. False if the filesystem won't.
 fn set_direct(fd: RawFd, on: bool) -> bool {
@@ -1178,10 +1224,12 @@ pub fn read_sums(
 	}
 	// Reading around the page cache costs a fraction of filling it and then
 	// dropping it again (2026102316421705). Where the filesystem won't, or
-	// balks mid-file, it's a plain read and the drops above and below do it.
+	// balks mid-file, or the file is small, it's a plain read and the drops
+	// above and below do it.
 	let lead = buf.as_ptr().align_offset(DIRECT_ALIGN).min(buf.len());
 	let aligned_len = (buf.len() - lead) & !(DIRECT_ALIGN - 1);
-	let mut direct = !cfg!(miri) && aligned_len > 0 && set_direct(fd, true);
+	let mut direct =
+		!cfg!(miri) && aligned_len > 0 && before.len() >= DIRECT_MIN && set_direct(fd, true);
 	let mut b3 = blake3::Hasher::new();
 	let mut b2b = want_b2b.then(blake2b_simd::State::new);
 	let mut total: u64 = 0;
@@ -1202,6 +1250,8 @@ pub fn read_sums(
 					h.update(&chunk[..n]);
 				}
 				total += n as u64;
+				// Per block, so progress moves through a big file.
+				read_bytes.fetch_add(n as u64, Relaxed);
 			}
 			Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
 			Err(e)
@@ -1210,7 +1260,7 @@ pub fn read_sums(
 				set_direct(fd, false);
 				direct = false;
 			}
-			Err(e) => break Err(ReadFail::Io(e, total)),
+			Err(err) => break Err(ReadFail::Io { err, at: total }),
 		}
 	};
 	if direct {
@@ -1218,11 +1268,10 @@ pub fn read_sums(
 	}
 	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
-	if !matches!(outcome, Err(ReadFail::Stopped)) {
-		read_bytes.fetch_add(total, Relaxed);
-	}
 	outcome?;
-	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;
+	let after = file
+		.metadata()
+		.map_err(|err| ReadFail::Io { err, at: total })?;
 	if after.len() != before.len()
 		|| mtime_us(&after) != mtime_us(before)
 		|| after.ctime() != before.ctime()
@@ -1242,15 +1291,15 @@ fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 		ReadFail::Stopped => {}
 		// The driver can't decode it, like ntfs3 with a Windows-compressed
 		// or EFS file. Nothing was read, so nothing's known.
-		ReadFail::Io(e, at) if e.raw_os_error() == Some(libc::EOPNOTSUPP) => {
+		ReadFail::Io { err, at } if err.raw_os_error() == Some(libc::EOPNOTSUPP) => {
 			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::Unsupported, path, format!("{e} at byte {at}"));
+			event(sh, Kind::Unsupported, path, format!("{err} at byte {at}"));
 		}
 		// On ZFS an EIO here is a block that failed its checksum with no
 		// good copy left. That is the same news as a mismatch.
-		ReadFail::Io(e, at) => {
+		ReadFail::Io { err, at } => {
 			st.read_err.fetch_add(1, Relaxed);
-			event(sh, Kind::ReadError, path, format!("{e} at byte {at}"));
+			event(sh, Kind::ReadError, path, format!("{err} at byte {at}"));
 		}
 		ReadFail::Unstable => {
 			st.unstable.fetch_add(1, Relaxed);
@@ -1438,7 +1487,11 @@ impl<'a> Worker<'a> {
 		let sh = self.sh;
 		let hashed_us = now_us();
 		if let Some(c) = claim {
-			c.fill((before.len() as i64, mtime_us(&before), sums));
+			c.fill(LinkVal {
+				bytes: before.len() as i64,
+				mtime_us: mtime_us(&before),
+				sums,
+			});
 		}
 		// Once nothing more can be recorded, an attribute would vouch for a read
 		// the database never got.
@@ -1574,7 +1627,7 @@ impl<'a> Worker<'a> {
 		if before.nlink() > 1 {
 			match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
 				// Read once, but each name is held to its own records.
-				Claim::Done((_, _, sums)) => {
+				Claim::Done(LinkVal { sums, .. }) => {
 					st.links.fetch_add(1, Relaxed);
 					let misses = refs.misses(&sums);
 					if !misses.is_empty() {
@@ -1624,7 +1677,11 @@ impl<'a> Worker<'a> {
 			}
 			Ok(Verdict::Changed { sums, misses, note }) => {
 				if let Some(c) = claim {
-					c.fill((bytes, mt, sums));
+					c.fill(LinkVal {
+						bytes,
+						mtime_us: mt,
+						sums,
+					});
 				}
 				keep(sh, st, path, prior, misses, &note);
 				None
@@ -1642,9 +1699,7 @@ impl<'a> Worker<'a> {
 		hashed_us: i64,
 	) {
 		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
-		// Not inside a git checkout: the files come and go with every checkout,
-		// git already checksums what it keeps, and a ctime change makes git
-		// look at each file again.
+		// No xattrs in git work trees. See design.md, Attributes.
 		if !sh.write_xattrs
 			|| job.in_git
 			|| sh.no_write_devs.contains(&before.dev())
@@ -1652,10 +1707,14 @@ impl<'a> Worker<'a> {
 		{
 			return;
 		}
-		let only_date = refs.xattr == Some(sums.b3);
+		let what = if refs.xattr == Some(sums.b3) {
+			xattr::B3Write::DateOnly
+		} else {
+			xattr::B3Write::All
+		};
 		let id = (before.dev(), before.ino());
 		let (bytes, mt) = (before.len() as i64, mtime_us(before));
-		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date);
+		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, what);
 		// A current rmlint set got this far only by matching, so this is a
 		// missing or stale one.
 		if let (Ok(()), Some(b2b), None) = (&wrote, sums.b2b, refs.b2b) {
@@ -1866,8 +1925,8 @@ mod tests {
 		};
 		let eio = io::Error::from_raw_os_error(libc::EIO);
 		let nope = io::Error::from_raw_os_error(libc::EOPNOTSUPP);
-		assert_eq!(kind(ReadFail::Io(eio, 4096)), Kind::ReadError);
-		assert_eq!(kind(ReadFail::Io(nope, 0)), Kind::Unsupported);
+		assert_eq!(kind(ReadFail::Io { err: eio, at: 4096 }), Kind::ReadError);
+		assert_eq!(kind(ReadFail::Io { err: nope, at: 0 }), Kind::Unsupported);
 		assert_eq!(
 			(st.read_err.load(Relaxed), st.other_err.load(Relaxed)),
 			(1, 1)
@@ -1937,7 +1996,13 @@ mod tests {
 	#[test]
 	fn roots_key_ignores_order() {
 		let _id = test_id("ddy6n");
-		let g = |rs: &[&str]| vec![("g".to_string(), rs.iter().map(PathBuf::from).collect(), 1)];
+		let g = |rs: &[&str]| {
+			vec![Planned {
+				name: "g".into(),
+				roots: rs.iter().map(PathBuf::from).collect(),
+				threads: 1,
+			}]
+		};
 		let a = roots_key(&[g(&["/b", "/a"]), g(&["/c"])].concat());
 		let b = roots_key(&[g(&["/c"]), g(&["/a", "/b"])].concat());
 		assert_eq!(a, b);
@@ -2067,6 +2132,171 @@ mod tests {
 		drain.join().unwrap();
 	}
 
+	// Whichever read of the mount table fails, no run is left running, and a
+	// run reads it once (backlog ...852).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_lost_mount_table_leaves_no_run_running() {
+		let _id = test_id("dehzd");
+		let d = scratch("scan_mountfail");
+		let root = d.join("r");
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("a"), "x").unwrap();
+		let db = d.join("t.sqlite");
+		let o = Opts {
+			db: db.clone(),
+			roots: vec![root],
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			threads: Vec::new(),
+			since: None,
+			resume: false,
+			mode: Mode::Full,
+			write_xattrs: false,
+			rmlint: false,
+			progress_secs: 3600,
+			args: "test".into(),
+		};
+		// A container may not see the disk under its folders.
+		if let Err(e) = run(&o, &Arc::new(AtomicBool::new(false))) {
+			eprintln!("a plain scan fails here ({e}); skipped");
+			return;
+		}
+		for n in 0..4 {
+			mounts::READS_LEFT.set(Some(n));
+			let r = run(&o, &Arc::new(AtomicBool::new(false)));
+			mounts::READS_LEFT.set(None);
+			assert_eq!(r.is_ok(), n > 0, "{n} good read(s): {r:?}");
+			let c = rusqlite::Connection::open(&db).unwrap();
+			let running: i64 = c
+				.query_row(
+					"SELECT count(*) FROM runs WHERE status = ?1",
+					[RunStatus::Running],
+					|r| r.get(0),
+				)
+				.unwrap();
+			assert_eq!(running, 0, "{n} good read(s): {r:?}");
+		}
+	}
+
+	// A panic in the database writer still closes the run (backlog ...002).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_writer_panic_leaves_no_run_running() {
+		let _id = test_id("dehzq");
+		let d = scratch("scan_writerpanic");
+		let root = d.join("r");
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("a"), "x").unwrap();
+		let db = d.join("t.sqlite");
+		let o = Opts {
+			db: db.clone(),
+			roots: vec![root.clone()],
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			threads: Vec::new(),
+			since: None,
+			resume: false,
+			mode: Mode::Full,
+			write_xattrs: false,
+			rmlint: false,
+			progress_secs: 3600,
+			args: "test".into(),
+		};
+		if let Err(e) = run(&o, &Arc::new(AtomicBool::new(false))) {
+			eprintln!("a plain scan fails here ({e}); skipped");
+			return;
+		}
+		// Something new, so the writer gets a batch.
+		fs::write(root.join("b"), "y").unwrap();
+		let key = canonical_db(&db).unwrap().to_str().unwrap().to_owned();
+		db::PANIC_ON.lock().unwrap().push(key.clone());
+		let r = run(&o, &Arc::new(AtomicBool::new(false)));
+		db::PANIC_ON.lock().unwrap().retain(|k| *k != key);
+		assert!(
+			r.as_ref().is_err_and(|e| e.contains("writer panicked")),
+			"{r:?}"
+		);
+		let c = rusqlite::Connection::open(&db).unwrap();
+		let status: String = c
+			.query_row(
+				"SELECT status FROM runs ORDER BY id DESC LIMIT 1",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(status, RunStatus::Failed.text());
+	}
+
+	// Progress counts a file as it's read, not all at the end (backlog ...779).
+	#[test]
+	#[cfg_attr(miri, ignore = "4096 reads")]
+	fn bytes_count_as_they_are_read() {
+		let _id = test_id("dehzr");
+		let d = scratch("scan_readprogress");
+		let p = d.join("big");
+		let len = 16u64 << 20;
+		fs::write(&p, vec![7u8; usize::try_from(len).unwrap()]).unwrap();
+		let file = File::open(&p).unwrap();
+		let before = file.metadata().unwrap();
+		let stop = AtomicBool::new(false);
+		let counted = AtomicU64::new(0);
+		let mut buf = vec![0u8; 4096];
+		let (r, seen) = std::thread::scope(|s| {
+			let t = s.spawn(|| read_sums(&file, &before, false, &mut buf, &stop, &counted));
+			let mut seen = 0;
+			while !t.is_finished() {
+				let n = counted.load(Relaxed);
+				if n > 0 && n < len {
+					seen = n;
+					stop.store(true, Relaxed);
+					break;
+				}
+			}
+			(t.join().unwrap(), seen)
+		});
+		assert!(seen > 0, "nothing counted until the end");
+		assert!(matches!(r, Err(ReadFail::Stopped)), "not stopped part way");
+		// Only what was read, the stopped part included.
+		assert!(counted.load(Relaxed) < len);
+	}
+
+	// Only a lock held elsewhere reads as another scan (backlog ...819).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no flock")]
+	fn a_held_lock_says_so() {
+		let _id = test_id("dehzf");
+		let d = scratch("scan_heldlock");
+		let db = d.join("t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let held = lock(&db, &mounts).unwrap();
+		let again = lock(&db, &mounts).unwrap_err();
+		assert!(again.ends_with("is locked; another scan is using this database"));
+		drop(held);
+		lock(&db, &mounts).unwrap();
+	}
+
+	// A database left owned by root is named; a missing WAL file isn't
+	// (backlog ...819).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no chown")]
+	fn a_failed_hand_over_is_named() {
+		let _id = test_id("dehze");
+		// SAFETY: geteuid only reads.
+		if unsafe { libc::geteuid() } == 0 {
+			eprintln!("root can give anything away; skipped");
+			return;
+		}
+		let d = scratch("scan_handover");
+		let db = d.join("t.sqlite");
+		fs::write(&db, "").unwrap();
+		fs::write(lock_path(&db), "").unwrap();
+		let me = fs::metadata(&db).unwrap();
+		assert!(hand_over(&db, me.uid(), me.gid()).is_empty());
+		let failed: Vec<PathBuf> = hand_over(&db, 0, 0).into_iter().map(|f| f.0).collect();
+		assert_eq!(failed, [db.clone(), lock_path(&db)]);
+	}
+
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn nothing_written_on_a_hands_off_device() {
@@ -2095,7 +2325,7 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// Dropbox files get ours too (backlog ...29), and Dropbox's own is left be.
+	// Dropbox files get ours too (backlog ...929), and Dropbox's own is left be.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn dropbox_files_get_attributes() {
@@ -2232,7 +2462,21 @@ mod tests {
 			(lead + 1, store.len()),
 			(lead, lead + 1000),
 		];
-		for len in [0usize, 1, 4095, 4096, 4097, 3 * 4096 + 123, (1 << 20) + 7] {
+		let min = usize::try_from(DIRECT_MIN).unwrap();
+		// Both sides of DIRECT_MIN, so each path gets odd tails.
+		let sizes = [
+			0,
+			1,
+			4095,
+			4096,
+			4097,
+			3 * 4096 + 123,
+			min - 1,
+			min,
+			min + 4097,
+			(1 << 20) + 7,
+		];
+		for len in sizes {
 			let bytes: Vec<u8> = (0..len).map(|i| (i % 253) as u8).collect();
 			let p = d.join(format!("d{len}"));
 			fs::write(&p, &bytes).unwrap();
@@ -2258,7 +2502,11 @@ mod tests {
 	fn the_link_map_is_capped() {
 		let _id = test_id("ddy97");
 		let mut m = LinkMap::default();
-		let v = (1, 1, sums(1));
+		let v = LinkVal {
+			bytes: 1,
+			mtime_us: 1,
+			sums: sums(1),
+		};
 		for i in 0..LINKS_KEPT as u64 + 10 {
 			m.fill((1, i), v, 5);
 		}

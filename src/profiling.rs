@@ -194,14 +194,8 @@ fn draw(dir: &Path) -> Result<(), String> {
 	fs::rename(&tmp, dir.join("flame.svg")).map_err(|e| format!("{}: {e}", tmp.display()))
 }
 
-/// The sampler's attribution against a workload whose answer is known, so a
-/// graph isn't trusted on faith. 2 threads busy for the same time: one runs
-/// two loops inlined into one function at 3 to 1, and the other reads a file
-/// that's in the page cache, so its samples end inside libc. The loops have
-/// to split about 3 to 1, which they don't when one name takes a whole
-/// function. The reader would get half in fairness, but a thread in the
-/// kernel gets fewer signals, about 35% at this rate. With libc dropped it
-/// gets none.
+/// Checks the sampler's attribution against a workload whose answer is
+/// known. See design.md, Profiling.
 fn check() -> i32 {
 	let exe = std::env::current_exe().and_then(File::open);
 	let Ok(exe) = exe else {
