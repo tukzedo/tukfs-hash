@@ -73,7 +73,8 @@
 	- Opened: 20261028-082157
 	- Opened by: style and performance review
 	- Note: The copyright line in `utility/dogfood_tukfs-hash.ps1:36` and `cicd/utility/lint-ps1.ps1:14` has the symbol and CryptogID. PowerShell scripts stay ASCII, and the PSScriptAnalyzer BOM rule is turned off to let these pass.
-	- Note: shcl's scripts use `Copyright (C) <year> Jim Collier` with no ID. Confirm the matching form for t00mietum before changing.
+	- Decisions:
+		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
 	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
 
 - cicd scripts start a process per item in several loops.
