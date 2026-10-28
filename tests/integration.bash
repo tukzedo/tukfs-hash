@@ -553,6 +553,11 @@ last="$(gq 'SELECT max(id) FROM runs')"
 gq "UPDATE runs SET status = 'stopped' WHERE id = ${last}"
 check ddya4 "gone: a stopped run refused" "$(gone --run "${last}")" 1
 check ddya5 "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gone.txt") $(grep -c '^gone' "${work}/gone.txt")" "0 run $((last - 1)) 0"
+# A typo or a run that isn't there is an error, not an empty list.
+rep() { local rc=0; "${bin}" report --db "${gdb}" "${@}" > "${work}/rep.txt" 2>&1 || rc=$?; echo "${rc}"; }
+check dehzs "report: an unknown kind refused" "$(rep --kind read-eror) $(grep -c 'unknown kind read-eror; kinds are b3-xattr-mismatch' "${work}/rep.txt") $(rep --kind dir-error)" "1 1 0"
+check dehzt "report and gone: an unknown run refused" "$(rep --run 999) $(grep -c '^tukfs-hash: no run 999$' "${work}/rep.txt") $(gone --run 999)" "1 1 1"
+check dehzv "report and gone: a negative limit refused" "$(rep --limit -1) $(gone --limit -1) $(rep --limit 0) $(grep -c $'^dir-error\t' "${work}/rep.txt")" "1 1 0 0"
 
 # 19. prune removes only contents no name points at.
 orphans="$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)')"

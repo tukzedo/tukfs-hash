@@ -468,13 +468,34 @@ fn commit(conn: &mut Connection, run_id: i64, msgs: &mut Vec<Msg>) -> rusqlite::
 /// among the rest can't take a mismatch down with it.
 ///
 /// After a failure the rest are dropped, but events are still kept, until one
-/// of those fails too. `halt` is called once, to stop the workers.
+/// of those fails too. `halt` stops the workers. A panic is a failure too, and
+/// the connection still comes back, so the run can be marked failed.
 pub fn writer(
 	mut conn: Connection,
 	run_id: i64,
 	rx: &Receiver<Msg>,
 	halt: impl Fn(),
 ) -> (Connection, Result<(), String>) {
+	let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		batches(&mut conn, run_id, rx, &halt)
+	}))
+	.unwrap_or_else(|_| {
+		halt();
+		Err("the database writer panicked".into())
+	});
+	(conn, r)
+}
+
+#[cfg(test)]
+// Writers on these databases panic at their first batch.
+pub static PANIC_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn batches(
+	conn: &mut Connection,
+	run_id: i64,
+	rx: &Receiver<Msg>,
+	halt: &impl Fn(),
+) -> Result<(), String> {
 	let mut events: Vec<Msg> = Vec::new();
 	let mut rest: Vec<Msg> = Vec::with_capacity(4096);
 	let mut failed: Option<String> = None;
@@ -499,11 +520,18 @@ pub fn writer(
 		};
 		let n = events.len() + rest.len();
 		if n > 0 && (done || n >= 20000 || last.elapsed() >= Duration::from_secs(1)) {
-			let r = commit(&mut conn, run_id, &mut events);
+			#[cfg(test)]
+			if conn
+				.path()
+				.is_some_and(|p| PANIC_ON.lock().unwrap().iter().any(|q| q == p))
+			{
+				panic!("test fault");
+			}
+			let r = commit(conn, run_id, &mut events);
 			if r.is_err() {
 				events_ok = false;
 			}
-			if let Err(x) = r.and_then(|()| commit(&mut conn, run_id, &mut rest)) {
+			if let Err(x) = r.and_then(|()| commit(conn, run_id, &mut rest)) {
 				events.clear();
 				rest.clear();
 				if failed.is_none() {
@@ -514,7 +542,7 @@ pub fn writer(
 			last = Instant::now();
 		}
 		if done {
-			return (conn, failed.map_or(Ok(()), Err));
+			return failed.map_or(Ok(()), Err);
 		}
 	}
 }

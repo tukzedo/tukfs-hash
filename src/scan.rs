@@ -1236,6 +1236,8 @@ pub fn read_sums(
 					h.update(&chunk[..n]);
 				}
 				total += n as u64;
+				// Per block, so progress moves through a big file.
+				read_bytes.fetch_add(n as u64, Relaxed);
 			}
 			Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
 			Err(e)
@@ -1252,9 +1254,6 @@ pub fn read_sums(
 	}
 	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
-	if !matches!(outcome, Err(ReadFail::Stopped)) {
-		read_bytes.fetch_add(total, Relaxed);
-	}
 	outcome?;
 	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;
 	if after.len() != before.len()
@@ -2146,6 +2145,88 @@ mod tests {
 				.unwrap();
 			assert_eq!(running, 0, "{n} good read(s): {r:?}");
 		}
+	}
+
+	// A panic in the database writer still closes the run (backlog ...002).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_writer_panic_leaves_no_run_running() {
+		let _id = test_id("dehzq");
+		let d = scratch("scan_writerpanic");
+		let root = d.join("r");
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("a"), "x").unwrap();
+		let db = d.join("t.sqlite");
+		let o = Opts {
+			db: db.clone(),
+			roots: vec![root.clone()],
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			threads: Vec::new(),
+			since: None,
+			resume: false,
+			mode: Mode::Full,
+			write_xattrs: false,
+			rmlint: false,
+			progress_secs: 3600,
+			args: "test".into(),
+		};
+		if let Err(e) = run(&o, &Arc::new(AtomicBool::new(false))) {
+			eprintln!("a plain scan fails here ({e}); skipped");
+			return;
+		}
+		// Something new, so the writer gets a batch.
+		fs::write(root.join("b"), "y").unwrap();
+		let key = canonical_db(&db).unwrap().to_str().unwrap().to_owned();
+		db::PANIC_ON.lock().unwrap().push(key.clone());
+		let r = run(&o, &Arc::new(AtomicBool::new(false)));
+		db::PANIC_ON.lock().unwrap().retain(|k| *k != key);
+		assert!(
+			r.as_ref().is_err_and(|e| e.contains("writer panicked")),
+			"{r:?}"
+		);
+		let c = rusqlite::Connection::open(&db).unwrap();
+		let status: String = c
+			.query_row(
+				"SELECT status FROM runs ORDER BY id DESC LIMIT 1",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(status, RunStatus::Failed.text());
+	}
+
+	// Progress counts a file as it's read, not all at the end (backlog ...779).
+	#[test]
+	#[cfg_attr(miri, ignore = "4096 reads")]
+	fn bytes_count_as_they_are_read() {
+		let _id = test_id("dehzr");
+		let d = scratch("scan_readprogress");
+		let p = d.join("big");
+		let len = 16u64 << 20;
+		fs::write(&p, vec![7u8; usize::try_from(len).unwrap()]).unwrap();
+		let file = File::open(&p).unwrap();
+		let before = file.metadata().unwrap();
+		let stop = AtomicBool::new(false);
+		let counted = AtomicU64::new(0);
+		let mut buf = vec![0u8; 4096];
+		let (r, seen) = std::thread::scope(|s| {
+			let t = s.spawn(|| read_sums(&file, &before, false, &mut buf, &stop, &counted));
+			let mut seen = 0;
+			while !t.is_finished() {
+				let n = counted.load(Relaxed);
+				if n > 0 && n < len {
+					seen = n;
+					stop.store(true, Relaxed);
+					break;
+				}
+			}
+			(t.join().unwrap(), seen)
+		});
+		assert!(seen > 0, "nothing counted until the end");
+		assert!(matches!(r, Err(ReadFail::Stopped)), "not stopped part way");
+		// Only what was read, the stopped part included.
+		assert!(counted.load(Relaxed) < len);
 	}
 
 	// Only a lock held elsewhere reads as another scan (backlog ...819).

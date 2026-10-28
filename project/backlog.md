@@ -29,15 +29,6 @@
 
 ## Issues
 
-- A writer-thread panic in a scan can still leave its run marked running.
-	- ID: 2026102809213002
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-092130
-	- Opened by: style and performance review
-	- Found 2026-10-28 while fixing 2026102808215852. A panic between begin() and finish() in scan::run returns without closing the run row. Not reproduced.
-
 - The demo gif shows a scan's real time, so a slow run redraws it.
 	- ID: 2026102808415586
 	- Type: Bug
@@ -83,20 +74,6 @@
 	- Decisions:
 		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
 	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
-
-- `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
-	- ID: 2026102808215831
-	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `cede460`. Plausible, read only.
-	- Note: `report --run 999` prints no events, while `gone --run 999` says there's no such run.
-	- Note: `--limit -1` means no limit in `report` and shows nothing in `gone`.
-	- Note: `runs`, `report` and `gone` print database errors bare, while `accept` and `scan` prefix them.
-	- Note: Parse `--kind` with `db::Kind::parse`, check the run exists, and parse `--limit` as unsigned.
 
 - cicd scripts start a process per item in several loops.
 	- ID: 2026102808215748
@@ -207,17 +184,6 @@
 	- Branch: round-20261028
 	- Test case: none with an ID. `private/claude_simple/tools/dogfood-launcher-check.bash REPO [LAUNCHER]` checks the link chain.
 	- Closed: 20261028-091400
-
-- Scan progress shows no growth while a large file is read, then a jump.
-	- ID: 2026102808215779
-	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `32f27bd`. Plausible, read only.
-	- Note: `read_sums` adds a file's bytes to the progress count once, after the last block. Add them per block.
 
 - Per-file allocations and syscalls in the scan's read path haven't been measured.
 	- ID: 2026102808215738
@@ -341,6 +307,67 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
+	- ID: 2026102808215831
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's integration test covers it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `cede460`. Plausible, read only.
+	- Note: `report --run 999` prints no events, while `gone --run 999` says there's no such run.
+	- Note: `--limit -1` means no limit in `report` and shows nothing in `gone`.
+	- Note: `runs`, `report` and `gone` print database errors bare, while `accept` and `scan` prefix them.
+	- Note: Parse `--kind` with `db::Kind::parse`, check the run exists, and parse `--limit` as unsigned.
+	- Reproduced [Bug]: Yes. Before the fix, it exits 0 for `report --kind read-eror`, `report --run 999`, and `--limit -1` in both.
+	- Actual fix [Bug]:
+		- `--kind` takes only a known kind, and the error lists them. `report --run N` says `no run N` as `gone` does. `--limit` takes a count, 0 or more.
+		- `runs`, `report` and `gone` prefix database errors with `database:`. `report` with no runs said "no runs yet" for any error; now only when there are none.
+	- Decisions:
+		- `--kind b2-rmlint-mismatch`, the name before schema 4, is refused like any other unknown kind. The first write by this version renames those events.
+	- Swept: `--run`, `--kind` and `--limit` in `main.rs` and `gone.rs`, and every database error closure in `main.rs`, `gone.rs`, `accept.rs` and `scan.rs`.
+	- Branch: round-20261028
+	- Test case: `dehzs`, `dehzt` and `dehzv` in `tests/integration.bash`. Each failed before the fix and passes after.
+	- Closed: 20261028-092936
+
+- Scan progress shows no growth while a large file is read, then a jump.
+	- ID: 2026102808215779
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `32f27bd`. Plausible, read only.
+	- Note: `read_sums` adds a file's bytes to the progress count once, after the last block. Add them per block.
+	- Reproduced [Bug]: Yes. Read in 4 KiB blocks, a 16 MiB file's count stayed 0 until the read ended.
+	- Actual fix [Bug]: `read_sums` adds each block's bytes as it reads it.
+	- Decisions:
+		- A read cut short by a stop now counts the bytes it got, as a read error already did. The count is bytes read, not bytes hashed.
+	- Swept: `read_sums` is the only place that adds to the byte count. `accept` passes its own counter.
+	- Branch: round-20261028
+	- Test case: `dehzr`, `scan::tests::bytes_count_as_they_are_read`. It failed before the fix and passes after.
+	- Closed: 20261028-092936
+
+- A writer-thread panic in a scan can still leave its run marked running.
+	- ID: 2026102809213002
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-092130
+	- Opened by: style and performance review
+	- Found 2026-10-28 while fixing 2026102808215852. A panic between begin() and finish() in scan::run returns without closing the run row. Not reproduced.
+	- Reproduced [Bug]: Yes. With the writer made to panic at its first batch, the scan returned an error and left its run marked running.
+	- Actual fix [Bug]: `db::writer` catches a panic in its batches, stops the workers, and hands back the connection with an error, so `finish()` marks the run failed and puts the database back out of WAL mode.
+	- Decisions:
+		- The catch is in `db::writer`, so its signature and its callers stay as they were. A panic inside a batch rolls its transaction back as it unwinds.
+	- Swept: `accept` writes its run row as `accept` and never as running, and has no writer thread. Worker and group panics were already caught.
+	- Branch: round-20261028
+	- Test case: `dehzq`, `scan::tests::a_writer_panic_leaves_no_run_running`. It failed before the fix and passes after.
+	- Closed: 20261028-092936
 
 - A scan that fails reading the mount table after it starts leaves its run marked running.
 	- ID: 2026102808215852
