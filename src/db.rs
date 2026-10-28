@@ -201,15 +201,11 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	Ok(conn)
 }
 
-/// Puts the file back in rollback mode, so a user without write access to the
-/// folder can still open it read-only after a run as root. Leaving WAL mode
-/// checkpoints on its own; an explicit TRUNCATE checkpoint after `quick_check`
-/// fails with "table is locked" on SQLite 3.46 to 3.50.
-///
-/// It needs the file to itself, so another reader makes it fail, at once or
-/// after the busy wait. Everything is committed by then, so the caller only
-/// warns, and a long wait would only hold up the result.
+/// Puts the file back in rollback mode. See design.md, Database. Leaving WAL
+/// mode checkpoints on its own, and an explicit TRUNCATE checkpoint after
+/// `quick_check` fails with "table is locked" on SQLite 3.46 to 3.50.
 pub fn close_rw(conn: Connection) -> Result<(), String> {
+	// Short, since a failure here only warns.
 	conn.busy_timeout(Duration::from_secs(5)).ok();
 	let mode = conn
 		.pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get::<_, String>(0))

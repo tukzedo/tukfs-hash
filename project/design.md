@@ -206,7 +206,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Miri skips what it can't run: SQLite, which is C, xattrs, `openat2` and `mktime`. 2 tests of safe code that take it over 15 minutes are skipped too. Each says why in its `#[cfg_attr(miri, ignore = ...)]`.
 
-- CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the shipped binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
+- CodeQL runs over a copy with every crate vendored, their full source extracted. A crate's finding counts only from a security or correctness query, and only in code the release binary builds. Ones looked at and found not to be bugs are in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there wouldn't last. A crate update leaves its lines stale, which fails until they're looked at again.
 
 ## Profiling
 

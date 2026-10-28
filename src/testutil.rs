@@ -33,7 +33,7 @@ impl Drop for TestId {
 		};
 		// libtest names each test's thread after the test, and captures only
 		// the print macros, so this goes past it. One write, so another
-		// test's line can't land in the middle of it.
+		// test's line can't end up in the middle of it.
 		let thread = std::thread::current();
 		let line = format!("{status} {} {}\n", self.0, thread.name().unwrap_or("?"));
 		let _ = io::stderr().write_all(line.as_bytes());

@@ -23,8 +23,9 @@
 ##	- Turned on per clone by pointing git at this directory:
 ##		git config core.hooksPath cicd/hooks
 ##	- git opens the ssh session before this runs and sends after it returns.
-##	  The gate takes most of an hour, which can outlast an idle session, and the push then dies
-##	  with exit 141 after a green gate. ssh's ServerAliveInterval keeps it up.
+##	  The gate takes most of an hour, which can outlast an idle session, and
+##	  the push then dies with exit 141 after a green gate. ssh's
+##	  ServerAliveInterval keeps it up.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)

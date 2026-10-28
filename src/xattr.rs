@@ -182,7 +182,7 @@ impl OnFile {
 
 	/// Good enough to skip reading: current, read by us from this very inode,
 	/// and dated between the cutoff and now. A copy made with `cp -a` or
-	/// `rsync -aX` brings the set along but lands on another inode. Returns
+	/// `rsync -aX` brings the set along but is on another inode. Returns
 	/// the digest and its date.
 	pub fn b3_fresh(
 		&self,

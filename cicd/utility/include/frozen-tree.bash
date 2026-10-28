@@ -30,8 +30,8 @@ fFrozenAdd(){
 		return 0
 	fi
 	out="$(git -C "${repo}" worktree add --detach --lock --reason "frozen run tree" --no-checkout "${dest}" "${rev}" 2>&1)" || { echo "${out}" >&2; return 1; }
-	## The index then holds TREE too, so git status in there shows what was
-	## carried over from the checkout as staged.
+	## The index then has TREE too, so git status in there shows what was
+	## copied from the checkout as staged.
 	out="$(git -C "${dest}" read-tree --reset -u "${tree}" 2>&1)" || { echo "${out}" >&2; fFrozenRemove "${repo}" "${dest}"; return 1; }
 }
 

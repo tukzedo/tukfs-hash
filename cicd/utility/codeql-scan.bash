@@ -68,7 +68,7 @@ work="${scratch}"; src="${work}/src"; db="${work}/db"
 mkdir -p -- "${src}/tests" "${src}/.cargo" "${work}/rtarget" "${work}/tmp"
 export TMPDIR="${work}/tmp"
 cp -a -- Cargo.toml Cargo.lock build.rs src "${src}/"
-## The profiling build never ships, and uuid's Display, which comes in with
+## The profiling build isn't released, and uuid's Display, which comes in with
 ## pprof, reads to CodeQL as a secret that every format! in the tree could
 ## log. So the copy has no profiling feature, pprof or src/profiling.rs, and
 ## its lock loses their crates, which only removes lines.
@@ -144,7 +144,7 @@ jq -r --arg pre "file://${src}/" '.suppressions.tuples[] | select(.[1] | test("(
 	[(.[3].url.uri | ltrimstr($pre)), (.[3].url.startLine | tostring), (.[0].url.startLine | tostring),
 	(.[2] | sub("^lgtm\\["; "") | sub("\\]$"; "")), (.[1] | sub("^[^\\]]*\\]\\s*"; ""))] | @tsv' \
 	"${work}/sup.json" > "${work}/sup.tsv"
-## Of the crates, what the shipped binary builds: crates the Linux build
+## Of the crates, what the release binary builds: crates the Linux build
 ## takes, without dev-dependencies, so not the soak's dhat, and files in a
 ## module tree, so not a crate's benches or its Windows code.
 for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
@@ -207,7 +207,7 @@ while IFS=$'\t' read -r state uri line rule msg; do
 		stalereview) echo "codeql-scan: cicd/codeql/vendored-reviewed.tsv: ${uri} ${line} has no such finding now"; suppressOk=0 ;;
 	esac
 done < "${work}/judged.tsv"
-echo "codeql-scan: of the crates' findings, ${nReviewed} were reviewed, ${nNotBuilt} are in files the build leaves out, and ${nUnshipped} in crates the shipped binary doesn't link"
+echo "codeql-scan: of the crates' findings, ${nReviewed} were reviewed, ${nNotBuilt} are in files the build leaves out, and ${nUnshipped} in crates the release binary doesn't link"
 bad=0
 if ((! baitSeen)); then echo "codeql-scan: nothing reported in the planted ${bait}"; bad=1; fi
 if ((! full)); then bad=1; fi

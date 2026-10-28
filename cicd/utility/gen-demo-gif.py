@@ -604,9 +604,10 @@ def frame_delays(gif: bytes) -> list[int]:
 
 class Movie:
     ##	Frames with their times. A frame the same as the one before makes that
-    ##	one longer. Times round to whole 50 fps frames, the rest carried, so typing
-    ##	keeps its pace. Encoded 32 at a time, each batch behind the last frame
-    ##	of the one before, since held raw they ran to over a GB.
+    ##	one longer. Times round to whole 50 fps frames, with the rest added to
+    ##	the next, so typing keeps its pace. Encoded 32 at a time, each batch
+    ##	behind the last frame of the one before, since held raw they ran to
+    ##	over a GB.
     BATCH = 32
 
     def __init__(self) -> None:

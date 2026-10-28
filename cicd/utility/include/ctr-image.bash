@@ -22,9 +22,9 @@
 ##			                    run SCRIPT in the image, with no network, as
 ##			                    the caller's uid, on CPU_CAP cores, at nice 19
 ##			                    and idle I/O. The repo goes in read only at
-##			                    its own path. WORK,
-##			                    CTR_CARGO_HOME and RW, dirs joined by ':', are
-##			                    all it writes, each at its own real path.
+##			                    its own path. WORK, CTR_CARGO_HOME and RW,
+##			                    dirs joined by ':', are all it writes, each
+##			                    at its own real path.
 ##			                    TMPDIR and HOME are in WORK, so on the host's
 ##			                    filesystem, with its user xattrs.
 ##			                    TUKFS_IN_IMAGE=1 tells the script where it is.

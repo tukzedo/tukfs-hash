@@ -136,10 +136,7 @@ struct Resumed {
 	summary: Option<String>,
 }
 
-// Only the newest scan, only if it didn't finish, and only over the same
-// roots and in the same mode. An older stopped run would bring back an old
-// skip date, and the other wrapper's run would be finished over the wrong
-// roots.
+// Only the newest unfinished scan, same roots and mode. See design.md, Runs and exit codes.
 fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<Resumed, String> {
 	let row = conn
 		.query_row(
@@ -255,9 +252,7 @@ impl Stats {
 	}
 }
 
-// What ended a run early other than a stop: the writer failed, or a worker
-// couldn't open the database or panicked. The others stop, and the run is
-// marked failed.
+// Why a run failed, other than a stop. See design.md, Runs and exit codes.
 #[derive(Default)]
 struct Faults {
 	any: AtomicBool,
@@ -580,8 +575,7 @@ fn begin(
 	let r = if o.resume {
 		pick_resume(conn, roots, o.mode)?
 	} else {
-		// The lock is held, so a run still marked running died without a
-		// word. A new run means it won't be resumed.
+		// Killed, since the lock is held. See design.md, Runs and exit codes.
 		conn.execute(
 			"UPDATE runs SET status = ?1 WHERE status = ?2",
 			[RunStatus::Killed, RunStatus::Running],
@@ -1017,10 +1011,8 @@ type LinkEntry = Option<(LinkVal, u64)>;
 // newest results are kept. A later name of an older one is read again.
 const LINKS_KEPT: usize = 1 << 18;
 
-// Hard links to one file. The first worker to reach an inode claims it, and
-// any other name for it waits for that result rather than reading the file a
-// second time. Reading it alongside would also see the first worker's xattr
-// write move the ctime, and call the file unstable.
+// One read per hard-linked inode, or one name's xattr write moves the ctime
+// under another's read. See design.md, Reading files.
 #[derive(Default)]
 struct Links {
 	map: Mutex<LinkMap>,
@@ -1707,9 +1699,7 @@ impl<'a> Worker<'a> {
 		hashed_us: i64,
 	) {
 		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
-		// Not inside a git checkout: the files come and go with every checkout,
-		// git already checksums what it keeps, and a ctime change makes git
-		// look at each file again.
+		// No xattrs in git work trees. See design.md, Attributes.
 		if !sh.write_xattrs
 			|| job.in_git
 			|| sh.no_write_devs.contains(&before.dev())
@@ -2335,7 +2325,7 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// Dropbox files get ours too (backlog ...29), and Dropbox's own is left be.
+	// Dropbox files get ours too (backlog ...929), and Dropbox's own is left be.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn dropbox_files_get_attributes() {

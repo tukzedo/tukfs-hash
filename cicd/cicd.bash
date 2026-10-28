@@ -450,7 +450,7 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
-## Temp dirs, and the only rm -rf this script does
+## Temp dirs and their rm -rf. fSafeRmCache has the only other one.
 
 ## Every dir the run makes is <root>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, with
 ## the run's PID in run.pid and its token in the mark file: the run's own, and
@@ -566,7 +566,7 @@ done
 [[ "${run_tmp_root}" == /* ]] || fDie "no temp root: HOST_TEMP, RUN_TMP_ROOT, TMPDIR and /tmp aren't there"
 fRunDirMake "${run_tmp_root}"
 run_tmp="${made_dir}"
-## So what the steps write, and the runs they start, land in it.
+## So what the steps write, and the runs they start, go in it.
 export TMPDIR="${run_tmp}" TEMP="${run_tmp}" TMP="${run_tmp}" HOST_TEMP="${run_tmp}"
 ## Every container of the run is labeled with this, the outer run's name.
 if ((! inner_run)) || [[ ! "${TUKFS_RUN_NAME:-}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then export TUKFS_RUN_NAME="${run_tmp##*/}"; fi
@@ -870,8 +870,8 @@ if ((! assume_yes && ! inner_run)) && ((${#GIT_PUBLISH[@]})) && [[ -z "${publish
 fi
 
 ## The whole run into a rotated log, for lint-report.bash. Not under
-## --backlog-run-quick, which writes nothing, and not in the run on the frozen copy, whose output
-## already goes through this one.
+## --backlog-run-quick, which writes nothing, and not in the run on the
+## frozen copy, whose output already goes through this one.
 if [[ "${mode}" != bq ]] && ((! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
 	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C

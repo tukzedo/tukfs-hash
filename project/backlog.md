@@ -246,7 +246,7 @@
 - Comments run long, repeat design.md, or use words the house rules avoid.
 	- ID: 2026102808215668
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
@@ -257,6 +257,22 @@
 	- Note: `cicd.bash:456` says it has the only `rm -rf`, but `fSafeRmCache` has one too.
 	- Note: `config.bash:25` prints its error to stdout through a `basename` call.
 	- Note: Check who wrote each line with `git log -S` before rewording it.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-10-28: The 5 `scan.rs` comments are a line or 2 each, with a design.md section. The hard-link one keeps its ctime reason. The Dropbox test cites `...929`. `profiling::check`, `db::close_rw` and the 5 `config.bash` blocks are cut to what the code needs, with a section name. The wraps are fixed, and `cicd.bash` names `fSafeRmCache` as the other `rm -rf`.
+		- 2026-10-28: "ships", "lands", "land", "holds" and "carried" are reworded. codeql-scan's summary says "the release binary", and so does design.md's CodeQL bullet.
+		- 2026-10-28: `config.bash`'s sourced-only error goes to stderr, without `basename`.
+		- 2026-10-28: Verified: `cicd/cicd.bash --backlog-run-quick` passed, and `cargo doc --no-deps --document-private-items` gives no warnings. Running `config.bash` directly prints the error on stderr only, and exits 1.
+		- Unverified in a run: codeql-scan's summary line, which only the full run's CodeQL step prints.
+	- Decisions:
+		- Every line here came from a round commit, per `git log -S`, so all were reworded.
+		- `db::close_rw` keeps the "table is locked" reason, since design.md doesn't have it. The short busy wait got its own line.
+		- The `shipped.txt` and `nUnshipped` names in codeql-scan stay, since only text was in scope.
+	- Swept: the same words over `src`, `cicd`, `tests`, `deny.toml`, design.md and README.md. `n8git_backup-and-publish` and `gfs-rotate.bash`, which has the same sourced-only line, are shared scripts and were left. `mypy.ini`'s "Pillow ships its types" is about a package, and was left.
+	- Branch: round-20261028
+	- Test case: none, comments and one message only.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261028-102704
 
 - The Python scripts in cicd/utility depart from the Python style rules.
 	- ID: 2026102808215658
@@ -284,7 +300,8 @@
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
-	- Status: Queued
+	- Status: Stalled
+		- Held for: the repo going public.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
