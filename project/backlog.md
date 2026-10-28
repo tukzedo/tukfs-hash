@@ -29,28 +29,6 @@
 
 ## Issues
 
-- The demo gif shows a scan's real time, so a slow run redraws it.
-	- ID: 2026102808415586
-	- Type: Bug
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: The full run's demo gif stage.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-084155
-	- Opened by: testing 2026102808215658
-	- Related IDs: 2026102309501605
-	- Steps to reproduce [Bug]: Draw `cicd/demo/scenario.toml` twice with `gen-demo-gif.py`, once with the box under load.
-	- Incorrect behavior [Bug]: One render says "run 2 done after 1s" and the other "0s", so 165 frames differ, and the full run rotates a new gif and updates `assets/demo.gif`.
-	- Expected behavior [Bug]: The same bytes every run, as design.md "Demo gif" says, unless the output or the script changes.
-	- Reproduced [Bug]: 2026-10-28 on b23, at load 10 to 16, 1 of 3 renders.
-	- Actual cause [Bug]:
-		- The scenario pinned dates and times with `[[map]]`, but not the scan's "run N done after Ns" line, which `scan.rs` prints from its own clock.
-	- Actual fix [Bug]: A `[[map]]` in `scenario.toml` pins the seconds to 1. design.md "Demo gif" names the run time as pinned.
-	- Progress log:
-		- 2026-10-28: Verified: with the binary's output rewritten to "after 3s", the old scenario drew different bytes than with the real time, and the new one drew the same. 3 renders of the new scenario gave the same bytes, one with 2 busy loops running.
-	- Swept: every `[[map]]` in the scenario and every run-time print in `src/`. Only the "run N ... after Ns" line shows a duration, and the other lines in the gif have none.
-	- Branch: round-20261028
-	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
-
 - snapdiff allocates and zeroes 2 MiB for every file pair it compares.
 	- ID: 2026102808215768
 	- Type: Enhancement
@@ -95,6 +73,28 @@
 	- Swept: `seq` polls and `$(printf` and `$(date` in loops across the cicd scripts and the integration test. A third `seq` poll in `integration.bash` was changed too. `green-tree.bash` and `cicd.bash` call `date` once per run, and were left.
 	- Branch: round-20261028
 	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/prune-cache-parity.bash OLD_CICD NEW_CICD WORKDIR [STALE_COUNT]` compares the old and new `fPruneCache`.
+
+- The demo gif shows a scan's real time, so a slow run redraws it.
+	- ID: 2026102808415586
+	- Type: Bug
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The full run's demo gif stage.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-084155
+	- Opened by: testing 2026102808215658
+	- Related IDs: 2026102309501605
+	- Steps to reproduce [Bug]: Draw `cicd/demo/scenario.toml` twice with `gen-demo-gif.py`, once with the box under load.
+	- Incorrect behavior [Bug]: One render says "run 2 done after 1s" and the other "0s", so 165 frames differ, and the full run rotates a new gif and updates `assets/demo.gif`.
+	- Expected behavior [Bug]: The same bytes every run, as design.md "Demo gif" says, unless the output or the script changes.
+	- Reproduced [Bug]: 2026-10-28 on b23, at load 10 to 16, 1 of 3 renders.
+	- Actual cause [Bug]:
+		- The scenario pinned dates and times with `[[map]]`, but not the scan's "run N done after Ns" line, which `scan.rs` prints from its own clock.
+	- Actual fix [Bug]: A `[[map]]` in `scenario.toml` pins the seconds to 1. design.md "Demo gif" names the run time as pinned.
+	- Progress log:
+		- 2026-10-28: Verified: with the binary's output rewritten to "after 3s", the old scenario drew different bytes than with the real time, and the new one drew the same. 3 renders of the new scenario gave the same bytes, one with 2 busy loops running.
+	- Swept: every `[[map]]` in the scenario and every run-time print in `src/`. Only the "run N ... after Ns" line shows a duration, and the other lines in the gif have none.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
 
 - The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
 	- ID: 2026102808215799
@@ -181,108 +181,6 @@
 	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) now reads sizes on both sides of the 64 KiB floor, with odd tails on each path. It can't see which path was taken, so the CPU timing above is the check.
 	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
 
-- The dogfood launcher loops forever on a cyclic link to itself.
-	- ID: 2026102808215789
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No, the launcher runs only in the default run's dogfood step.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `4a1977a`. Plausible, read only.
-	- Note: `utility/dogfood_tukfs-hash` walks links one hop at a time with `readlink` and `dirname`, and has no end on a loop. One `readlink -f` does it.
-	- Progress log:
-		- 2026-10-28: The launcher resolves its path with one `readlink -f`, and exits 1 with a message when that gives nothing. Verified: a chain of relative and absolute links reaches the .ps1 beside the target and passes arguments on. The quick gate passed.
-	- Decisions:
-		- No test for the loop itself: bash can't open a script path that is a loop, so the launcher never runs on one. The change is a simplification, and the check covers the chain, which old and new code both pass.
-	- Swept: `grep readlink` over `utility/`, and the `.ps1` twin has no link walk.
-	- Branch: round-20261028
-	- Test case: none with an ID. `private/claude_simple/tools/dogfood-launcher-check.bash REPO [LAUNCHER]` checks the link chain.
-	- Closed: 20261028-091400
-
-- Per-file allocations and syscalls in the scan's read path haven't been measured.
-	- ID: 2026102808215738
-	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: `db::Prior.b3` is a `Vec<u8>`, so every lookup allocates. `[u8; 32]` reads directly.
-	- Note: `read_sums` makes 7 syscalls per file before any data, 3 `posix_fadvise` and 4 `fcntl`, even for an empty file.
-	- Note: `excluded()` and the `no_xattr` check run for every entry, where once per folder would do, as `in_git` is.
-	- Note: `hashed_msg` copies a path the job already owns. `xattr::fget` allocates per call and `text_of` copies again, and `write_b3` encodes the digest twice. `beneath` builds a CString for a name that's already NUL-terminated.
-	- Note: Each file gets its own `SELECT`. A query per folder is a redesign, worth it only if `lookup` shows near the top on many small files.
-	- Note: Keep only the changes that move the small-files numbers.
-	- Progress log:
-		- 2026-10-28: On 20,000 files of 1 to 4 KB, a scan took about 0.4 to 0.5 s user and 1.8 to 2.2 s sys CPU, at load 6. Without the 3 `posix_fadvise` calls it was the same. Without `O_DIRECT`, sys fell by about 0.7 s, which child 2026102809554675 takes up. The rest of the notes are in child 2026102809554785.
-		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
-
-- Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
-	- ID: 2026102810135573
-	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-101355
-	- Opened by: style and performance review
-	- Related IDs: 2026102808215738, 2026102809554785
-	- Note: On 20,000 files of 1 to 4 KB, over 5 rounds at load 5, a build with the lookup taken out used about 0.07 s less user CPU on a first scan, from 0.40 s, and 0.08 s less on a `--rmlint` rescan, from 0.51 s. That's about 4 us per file, and it costs as much on an empty database. Sys CPU fell by up to 0.1 s, and wall time didn't move.
-	- Note: A query per folder is the redesign the parent named. A read transaction held across many lookups might do it cheaper, but it would hold back the writer's checkpoints and hide rows written since it began, which a resumed run reads.
-
-- PSScriptAnalyzer's Information level and its constant-string rule are off.
-	- ID: 2026102809033225
-	- Type: Task
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check ran it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-090332
-	- Opened by: split from 2026102808215708
-	- Parent ID: 2026102808215708
-	- Prereq IDs: 2026102808215717
-	- Note: `PSAvoidUsingDoubleQuotesForConstantString` is an Information rule, so it reports nothing while `Severity` is Error and Warning. Turn both on together.
-	- Note: The Information level adds 14 `PSUseOutputTypeCorrectly` hits in `utility/dogfood_tukfs-hash.ps1` until its functions get OutputType lines, in 2026102808215717. The constant-string rule finds nothing today.
-	- Progress log:
-		- 2026-10-28: `PSScriptAnalyzerSettings.psd1` reports Information too, with `PSAvoidUsingDoubleQuotesForConstantString` on. The 4 `return , $x` lines in `dogfood_tukfs-hash.ps1` use `Write-Output -NoEnumerate`, so the analyzer is clean.
-		- 2026-10-28: Verified: a planted constant double-quoted string is flagged. `dogfood-check.bash REPO` passed all cases, and `--backlog-run-quick` passed.
-	- Decisions:
-		- `Write-Output -NoEnumerate -InputObject` over a second OutputType, since the real types are a set and arrays and the rule reads `return , $x` as `object[]`. It keeps an empty array, a HashSet and a string[] whole.
-	- Swept: `return ,` in both `.ps1` files, and a repo-wide analyzer run.
-	- Branch: round-20261028
-	- Test case: none with an ID. The PowerShell lint in the quick gate, and `dogfood-check.bash REPO` in the private tools folder.
-	- Closed: 20261028-103213
-
-- Comments run long, repeat design.md, or use words the house rules avoid.
-	- ID: 2026102808215668
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: `src/scan.rs` comments at 138-141, 257-259, 532-533, 967-970 and 1645-1647 repeat design.md. Cut each to a line and a section name. `scan.rs:2098` cites a cut-off item ID.
-	- Note: Long blocks in `cicd/config.bash` at 123-131, 165-176, 198-204, 208-220 and 257-266, plus `profiling.rs:197-204` and `db.rs:200-207`.
-	- Note: Bad wraps at `config.bash:73`, `config.bash:109-110`, `cicd.bash:876-877`, `hooks/pre-push:24` and `include/ctr-image.bash:26-27`.
-	- Note: Avoided words at `deny.toml:12`, `codeql-scan.bash:75,149,212`, `config.bash:329`, `cicd.bash:572`, `include/frozen-tree.bash:34`, `gen-demo-gif.py:587`, `xattr.rs:181` and `testutil.rs:35`. Line 212 of codeql-scan is a message users see.
-	- Note: `cicd.bash:456` says it has the only `rm -rf`, but `fSafeRmCache` has one too.
-	- Note: `config.bash:25` prints its error to stdout through a `basename` call.
-	- Note: Check who wrote each line with `git log -S` before rewording it.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-10-28: The 5 `scan.rs` comments are a line or 2 each, with a design.md section. The hard-link one keeps its ctime reason. The Dropbox test cites `...929`. `profiling::check`, `db::close_rw` and the 5 `config.bash` blocks are cut to what the code needs, with a section name. The wraps are fixed, and `cicd.bash` names `fSafeRmCache` as the other `rm -rf`.
-		- 2026-10-28: "ships", "lands", "land", "holds" and "carried" are reworded. codeql-scan's summary says "the release binary", and so does design.md's CodeQL bullet.
-		- 2026-10-28: `config.bash`'s sourced-only error goes to stderr, without `basename`.
-		- 2026-10-28: Verified: `cicd/cicd.bash --backlog-run-quick` passed, and `cargo doc --no-deps --document-private-items` gives no warnings. Running `config.bash` directly prints the error on stderr only, and exits 1.
-		- Unverified in a run: codeql-scan's summary line, which only the full run's CodeQL step prints.
-	- Decisions:
-		- Every line here came from a round commit, per `git log -S`, so all were reworded.
-		- `db::close_rw` keeps the "table is locked" reason, since design.md doesn't have it. The short busy wait got its own line.
-		- The `shipped.txt` and `nUnshipped` names in codeql-scan stay, since only text was in scope.
-	- Swept: the same words over `src`, `cicd`, `tests`, `deny.toml`, design.md and README.md. `n8git_backup-and-publish` and `gfs-rotate.bash`, which has the same sourced-only line, are shared scripts and were left. `mypy.ini`'s "Pillow ships its types" is about a package, and was left.
-	- Branch: round-20261028
-	- Test case: none, comments and one message only.
-	- Acceptance signoff: Self-closed: comments only.
-	- Closed: 20261028-102704
-
 - The Python scripts in cicd/utility depart from the Python style rules.
 	- ID: 2026102808215658
 	- Type: Task
@@ -316,239 +214,35 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
-- Some Rust types and helpers hide what their parts mean.
-	- ID: 2026102808215688
-	- Type: Task
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: Plain tuples where a small struct would name the fields: the planned groups, read as `g.1`, `LinkVal`, read as `v.0` and `v.1`, and the byte offset in `ReadFail::Io`.
-	- Note: `xattr::write_b3` takes a bare `bool` that reads as `false` at the call site. A two-variant enum fits.
-	- Note: `scan::open_noatime` repeats the fallback in `Root::open_read`. Keep one.
-	- Note: `scan::lock_path` is `pub` but used only in `scan.rs`. The argument line in `main.rs` is joined twice. `build.rs:110` has an `unwrap` with no word on why it can't fail. The public test types in `testutil.rs` don't derive Debug.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-10-28: The planned groups are `scan::Planned`, with name, roots and threads. `LinkVal` is a struct of bytes, mtime and sums. `ReadFail::Io` names its offset `at`. `write_b3` takes `B3Write::All` or `DateOnly`.
-		- 2026-10-28: The `O_NOATIME` fallback is in `beneath::with_noatime` only, which `open_read` and `open_noatime` both call. `lock_path` is private. main.rs joins the argument line in one closure. The `unwrap` in build.rs says why it can't fail, at line 36, not 110. The 4 test types derive Debug.
-		- 2026-10-28: Verified: clippy with all targets and all features, and `cicd/cicd.bash --backlog-run-quick` passed.
-	- Decisions:
-		- `open_noatime` stays, since `accept` opens a path given by name, outside any scan root. Only the fallback is shared.
-		- `Planned` derives Clone, for the `roots_key` test's `concat`.
-	- Swept: every `.0`, `.1` and tuple pattern on the groups and `LinkVal`, every `ReadFail::Io` match, both `write_b3` callers, and `lock_path` and `open_noatime` users, flame-report.py's frame list included.
-	- Branch: round-20261028
-	- Test case: none new, a refactor. `ddy6n` and `ddy97` cover the changed types, and the read-fail kinds test covers `ReadFail::Io`.
-	- Acceptance signoff: Self-closed: mechanical, per the notes.
-	- Closed: 20261028-102100
-
-- About 50 public Rust items have no doc comment.
-	- ID: 2026102808215678
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: Most are in `db.rs`, `util.rs`, `xattr.rs`, `mounts.rs`, `beneath.rs` and `snapdiff.rs`, plus `accept::run`, `gone::run` and 9 in `scan.rs`. The `Source` variants in `snapdiff.rs` use `//` where `///` belongs.
-	- Note: One line each. No Args or Returns blocks.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-10-28: About 60 `pub` items got a one-line `///`, `Source`'s variants, `PANIC_ON`, `READS_LEFT` and `Msg::Seen` went from `//` to `///`, and `open_read`'s `//` became a doc line.
-		- 2026-10-28: Verified: `cargo doc --no-deps --document-private-items` gives no warnings, and clippy and the quick gate passed.
-	- Decisions:
-		- The `B3_*` and `RM_B2B_*` names keep one comment on the first of each set, as 2026101916404113 did.
-	- Swept: every `pub` fn, struct, enum, const, static, type, trait and mod in `src`, attributes skipped. Fields are left as they are.
-	- Branch: round-20261028
-	- Test case: none, comments only.
-	- Acceptance signoff: Self-closed: comments only.
-	- Closed: 20261028-102100
-
-- Per-entry checks and copies in the scan's walk and record path haven't been measured.
-	- ID: 2026102809554785
+- Per-file allocations and syscalls in the scan's read path haven't been measured.
+	- ID: 2026102808215738
 	- Type: Enhancement
-	- Status: Done
-	- Needs local test suite run?: No, nothing was kept.
+	- Status: Queued
+	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-095547
+	- Opened: 20261028-082157
 	- Opened by: style and performance review
-	- Parent ID: 2026102808215738
-	- Note: The parent's notes on `Prior.b3`, `excluded()` and `no_xattr`, the copies in `hashed_msg`, `xattr::fget`, `text_of`, `write_b3` and `beneath`, and the `SELECT` per file.
-	- Note: User CPU is about 0.4 to 0.5 s of a 20,000-small-file scan, so these can win only a part of that. Time each with `profile-ab.bash` and `AB_SMALL_FILES`, and keep only what moves it.
+	- Note: `db::Prior.b3` is a `Vec<u8>`, so every lookup allocates. `[u8; 32]` reads directly.
+	- Note: `read_sums` makes 7 syscalls per file before any data, 3 `posix_fadvise` and 4 `fcntl`, even for an empty file.
+	- Note: `excluded()` and the `no_xattr` check run for every entry, where once per folder would do, as `in_git` is.
+	- Note: `hashed_msg` copies a path the job already owns. `xattr::fget` allocates per call and `text_of` copies again, and `write_b3` encodes the digest twice. `beneath` builds a CString for a name that's already NUL-terminated.
+	- Note: Each file gets its own `SELECT`. A query per folder is a redesign, worth it only if `lookup` shows near the top on many small files.
+	- Note: Keep only the changes that move the small-files numbers.
 	- Progress log:
-		- 2026-10-28: `Prior.b3` as `[u8; 32]`, one reused buffer for all of a file's attributes with no `text_of` copies, and one digest encode in `write_b3`, timed together on 20,000 files of 1 to 4 KB, over 5 rounds at load 7 to 9: user CPU 0.36 to 0.52 s against 0.37 to 0.46 s on a first scan, and 0.52 to 0.60 s against 0.54 to 0.63 s on a rescan. Within the noise, so none was kept.
-		- 2026-10-28: The lookup, taken out to bound it, was about 4 us of user CPU per file, a sixth of the total. Filed as 2026102810135573.
-	- Decisions:
-		- `excluded()`, `no_xattr`, the `hashed_msg` copy and the `beneath` name weren't timed one by one. Each is a compare or a copy per file, smaller than the allocations above, which didn't show.
-		- The per-folder query is a redesign of its own, so it went to a new item rather than into this one's time cap.
-	- Test case: None, no change was kept.
-	- Closed: 20261028-101355
+		- 2026-10-28: On 20,000 files of 1 to 4 KB, a scan took about 0.4 to 0.5 s user and 1.8 to 2.2 s sys CPU, at load 6. Without the 3 `posix_fadvise` calls it was the same. Without `O_DIRECT`, sys fell by about 0.7 s, which child 2026102809554675 takes up. The rest of the notes are in child 2026102809554785.
+		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
 
-- The directory walk would treat a new entry kind as a file.
-	- ID: 2026102808215728
+- Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
+	- ID: 2026102810135573
 	- Type: Enhancement
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's build, lint, unit and integration steps cover it.
+	- Status: Queued
+	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
+	- Opened: 20261028-101355
 	- Opened by: style and performance review
-	- Origin: `9120949`. Plausible, read only.
-	- Note: `list_dir` in `src/scan.rs` tests `beneath::Kind` with `if ==` and queues anything else as a file. An exhaustive match makes a new kind a compile error.
-	- Progress log:
-		- 2026-10-28: `list_dir` matches all 3 kinds once, so a new one fails to build. Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
-	- Swept: `beneath::Kind` is matched nowhere else outside `beneath.rs`, which builds it with its own match.
-	- Branch: round-20261028
-	- Test case: None. No behavior change, and the compiler is the check. The integration test walks the trees.
-	- Closed: 20261028-101355
-
-- The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
-	- ID: 2026102808215758
-	- Type: Task
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate lints both scripts.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: The copyright line in `utility/dogfood_tukfs-hash.ps1:36` and `cicd/utility/lint-ps1.ps1:14` has the symbol and CryptogID. PowerShell scripts stay ASCII, and the PSScriptAnalyzer BOM rule is turned off to let these pass.
-	- Decisions:
-		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
-	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
-	- Progress log:
-		- 2026-10-28: Both scripts have the plain copyright line, no `#====` lines or section titles, and PSScriptAnalyzer's BOM rule is on again.
-		- 2026-10-28: Verified: the BOM rule flags both old scripts, and passes both new ones. The quick gate passed.
-	- Swept: every `.ps1` and `.psd1` in the repo for non-ASCII and `#===`. The bash launcher `utility/dogfood_tukfs-hash` keeps its line, since the rule is for PowerShell.
-	- Branch: round-20261028
-	- Test case: none with an ID. The PowerShell lint in the quick gate fails on a non-ASCII script now.
-	- Closed: 20261028-093507
-
-- dogfood_tukfs-hash.ps1 departs from the PowerShell style rules.
-	- ID: 2026102808215717
-	- Type: Task
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check below runs it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: `Write-Note` and `Exit-Launcher` are called with a positional message. `param($Source)` and `param($Item)` are untyped, and nothing uses Mandatory or validation attributes.
-	- Note: `-contains` tests every running process path inside a loop. A HashSet fits.
-	- Note: The same regex runs twice per file at lines 134-135. A suppression at line 335 has an empty reason. OutputType is on 3 functions only, and the functions have no comment-based help.
-	- Note: The 32-line header repeats the synopsis and holds the whole rotation policy, which belongs in design.md.
-	- Note: `lint-ps1.ps1:37` joins `../..` as one path piece.
-	- Progress log:
-		- 2026-10-28: Typed parameters, with Mandatory and validation where they fit, and OutputType and help on every function. Named `-Message` at each call. Running paths go in a HashSet, the pool regex runs once per file, and the suppression has a reason. The rotation policy moved to design.md, "Build and release", and `lint-ps1.ps1` finds the repo root with `Split-Path`.
-		- 2026-10-28: Verified: `dogfood-check.bash REPO` passed all 24 cases. PSScriptAnalyzer is clean, and the quick gate passed.
-	- Decisions:
-		- Running paths now match case-sensitively, as Linux paths do. `-contains` matched case-insensitively.
-		- `Get-SourceBuild` returns only a file, so a dir at the build's name is passed over.
-		- At the Information level, 4 `PSUseOutputTypeCorrectly` hits are left, down from 14. They're on `return , $x`, which keeps a set or array whole, and the rule reads it as `object[]`. That's for 2026102809033225.
-	- Swept: `-contains` and positional calls in both `.ps1` files.
-	- Branch: round-20261028
-	- Test case: none with an ID. `dogfood-check.bash REPO`, in the private tools folder.
-	- Closed: 20261028-093507
-
-- `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
-	- ID: 2026102808215831
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's integration test covers it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `cede460`. Plausible, read only.
-	- Note: `report --run 999` prints no events, while `gone --run 999` says there's no such run.
-	- Note: `--limit -1` means no limit in `report` and shows nothing in `gone`.
-	- Note: `runs`, `report` and `gone` print database errors bare, while `accept` and `scan` prefix them.
-	- Note: Parse `--kind` with `db::Kind::parse`, check the run exists, and parse `--limit` as unsigned.
-	- Reproduced [Bug]: Yes. Before the fix, it exits 0 for `report --kind read-eror`, `report --run 999`, and `--limit -1` in both.
-	- Actual fix [Bug]:
-		- `--kind` takes only a known kind, and the error lists them. `report --run N` says `no run N` as `gone` does. `--limit` takes a count, 0 or more.
-		- `runs`, `report` and `gone` prefix database errors with `database:`. `report` with no runs said "no runs yet" for any error; now only when there are none.
-	- Decisions:
-		- `--kind b2-rmlint-mismatch`, the name before schema 4, is refused like any other unknown kind. The first write by this version renames those events.
-	- Swept: `--run`, `--kind` and `--limit` in `main.rs` and `gone.rs`, and every database error closure in `main.rs`, `gone.rs`, `accept.rs` and `scan.rs`.
-	- Branch: round-20261028
-	- Test case: `dehzs`, `dehzt` and `dehzv` in `tests/integration.bash`. Each failed before the fix and passes after.
-	- Closed: 20261028-092936
-
-- Scan progress shows no growth while a large file is read, then a jump.
-	- ID: 2026102808215779
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's unit tests cover it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `32f27bd`. Plausible, read only.
-	- Note: `read_sums` adds a file's bytes to the progress count once, after the last block. Add them per block.
-	- Reproduced [Bug]: Yes. Read in 4 KiB blocks, a 16 MiB file's count stayed 0 until the read ended.
-	- Actual fix [Bug]: `read_sums` adds each block's bytes as it reads it.
-	- Decisions:
-		- A read cut short by a stop now counts the bytes it got, as a read error already did. The count is bytes read, not bytes hashed.
-	- Swept: `read_sums` is the only place that adds to the byte count. `accept` passes its own counter.
-	- Branch: round-20261028
-	- Test case: `dehzr`, `scan::tests::bytes_count_as_they_are_read`. It failed before the fix and passes after.
-	- Closed: 20261028-092936
-
-- A writer-thread panic in a scan can still leave its run marked running.
-	- ID: 2026102809213002
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's unit tests cover it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-092130
-	- Opened by: style and performance review
-	- Found 2026-10-28 while fixing 2026102808215852. A panic between begin() and finish() in scan::run returns without closing the run row. Not reproduced.
-	- Reproduced [Bug]: Yes. With the writer made to panic at its first batch, the scan returned an error and left its run marked running.
-	- Actual fix [Bug]: `db::writer` catches a panic in its batches, stops the workers, and hands back the connection with an error, so `finish()` marks the run failed and puts the database back out of WAL mode.
-	- Decisions:
-		- The catch is in `db::writer`, so its signature and its callers stay as they were. A panic inside a batch rolls its transaction back as it unwinds.
-	- Swept: `accept` writes its run row as `accept` and never as running, and has no writer thread. Worker and group panics were already caught.
-	- Branch: round-20261028
-	- Test case: `dehzq`, `scan::tests::a_writer_panic_leaves_no_run_running`. It failed before the fix and passes after.
-	- Closed: 20261028-092936
-
-- A scan that fails reading the mount table after it starts leaves its run marked running.
-	- ID: 2026102808215852
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `562a451`. Plausible, read only.
-	- Note: `scan::run` reads the mounts after `begin()` has written the run row. An error there returns before `finish()`, so the run stays running, the database stays in WAL mode, and a sudo run leaves files owned by root.
-	- Note: Move both calls above `begin()`, and reuse the mount table `plan()` read. A run reads it 3 times now.
-	- Reproduced [Bug]: Yes. With the third mount table read made to fail, the scan returned an error and left its run marked running.
-	- Actual fix [Bug]:
-		- `plan()` hands back the mount table it read, and `scan::run` uses it for the lock and the hands-off check, so a run reads it once.
-		- The hands-off check moved above the lock and `begin()`.
-		- `accept` had the same shape, reading the mounts after its run row went in. It reads them before the lock now.
-	- Decisions:
-		- `scan::lock` takes the mount table, so `prune` reads it itself.
-	- Swept: every `read_mounts` and `lock` caller, in `scan.rs`, `accept.rs` and `main.rs`. Between `begin()` and `finish()` only a writer thread panic can still return early.
-	- Branch: round-20261028
-	- Test case: `dehzd`, `scan::tests::a_lost_mount_table_leaves_no_run_running`. It fails each mount read in turn and checks no run is left running. It failed before the fix and passes after. A container that can't plan a real root skips it.
-	- Closed: 20261028-092033
-
-- Lock and ownership errors on the database are misreported or dropped.
-	- ID: 2026102808215819
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `f05c368` and `422efff`. Plausible, read only.
-	- Note: `scan::lock` reports any `flock` failure as another scan holding the lock, so ENOLCK or EOPNOTSUPP reads wrong. Say locked only for EWOULDBLOCK.
-	- Note: `give_back` ignores a failed `chown`. That's fine for the WAL files, which are often gone, but a failure on the database itself leaves it owned by root with no warning.
-	- Actual fix [Bug]:
-		- The lock says "is locked; another scan is using this database" only for EWOULDBLOCK. Any other `flock` error is shown as "can't lock" with its reason.
-		- `give_back` warns for each file it can't hand back, except a missing one, so the database and lock file are named and absent WAL files aren't.
-	- Decisions:
-		- The lock file gets the same warning as the database, since a root-owned one blocks the next scan without sudo.
-	- Swept: `chown` and `flock` appear only in `scan.rs`.
-	- Branch: round-20261028
-	- Test case: `dehzf`, `scan::tests::a_held_lock_says_so`, and `dehze`, `scan::tests::a_failed_hand_over_is_named`. Each fails with its check reversed. ENOLCK can't be made to happen here, so the other branch is untested.
-	- Closed: 20261028-092033
+	- Related IDs: 2026102808215738, 2026102809554785
+	- Note: On 20,000 files of 1 to 4 KB, over 5 rounds at load 5, a build with the lookup taken out used about 0.07 s less user CPU on a first scan, from 0.40 s, and 0.08 s less on a `--rmlint` rescan, from 0.51 s. That's about 4 us per file, and it costs as much on an empty database. Sys CPU fell by up to 0.1 s, and wall time didn't move.
+	- Note: A query per folder is the redesign the parent named. A read transaction held across many lookups might do it cheaper, but it would hold back the writer's checkpoints and hide rows written since it began, which a resumed run reads.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1276,6 +970,29 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 
+- A scan that fails reading the mount table after it starts leaves its run marked running.
+	- ID: 2026102808215852
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `562a451`. Plausible, read only.
+	- Note: `scan::run` reads the mounts after `begin()` has written the run row. An error there returns before `finish()`, so the run stays running, the database stays in WAL mode, and a sudo run leaves files owned by root.
+	- Note: Move both calls above `begin()`, and reuse the mount table `plan()` read. A run reads it 3 times now.
+	- Reproduced [Bug]: Yes. With the third mount table read made to fail, the scan returned an error and left its run marked running.
+	- Actual fix [Bug]:
+		- `plan()` hands back the mount table it read, and `scan::run` uses it for the lock and the hands-off check, so a run reads it once.
+		- The hands-off check moved above the lock and `begin()`.
+		- `accept` had the same shape, reading the mounts after its run row went in. It reads them before the lock now.
+	- Decisions:
+		- `scan::lock` takes the mount table, so `prune` reads it itself.
+	- Swept: every `read_mounts` and `lock` caller, in `scan.rs`, `accept.rs` and `main.rs`. Between `begin()` and `finish()` only a writer thread panic can still return early.
+	- Branch: round-20261028
+	- Test case: `dehzd`, `scan::tests::a_lost_mount_table_leaves_no_run_running`. It fails each mount read in turn and checks no run is left running. It failed before the fix and passes after. A container that can't plan a real root skips it.
+	- Closed: 20261028-092033
+
 - The integration test stops with no FAIL line when 2 of its checks find nothing.
 	- ID: 2026102808215842
 	- Type: Bug
@@ -1520,6 +1237,26 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+
+- The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
+	- ID: 2026102808215758
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints both scripts.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: The copyright line in `utility/dogfood_tukfs-hash.ps1:36` and `cicd/utility/lint-ps1.ps1:14` has the symbol and CryptogID. PowerShell scripts stay ASCII, and the PSScriptAnalyzer BOM rule is turned off to let these pass.
+	- Decisions:
+		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
+	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
+	- Progress log:
+		- 2026-10-28: Both scripts have the plain copyright line, no `#====` lines or section titles, and PSScriptAnalyzer's BOM rule is on again.
+		- 2026-10-28: Verified: the BOM rule flags both old scripts, and passes both new ones. The quick gate passed.
+	- Swept: every `.ps1` and `.psd1` in the repo for non-ASCII and `#===`. The bash launcher `utility/dogfood_tukfs-hash` keeps its line, since the rule is for PowerShell.
+	- Branch: round-20261028
+	- Test case: none with an ID. The PowerShell lint in the quick gate fails on a non-ASCII script now.
+	- Closed: 20261028-093507
 
 - CICD reset: CICD process gaps
 	- ID: 2026102416215935
@@ -2037,30 +1774,106 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
-- Shellcheck lines that do nothing hide later warnings.
-	- ID: 2026102808215698
-	- Type: Task
+- The dogfood launcher loops forever on a cyclic link to itself.
+	- ID: 2026102808215789
+	- Type: Bug
 	- Status: Done
-	- Needs local test suite run?: Yes
+	- Needs local test suite run?: No, the launcher runs only in the default run's dogfood step.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
+	- Opened: 20261028-082157
 	- Opened by: style and performance review
-	- Note: The `## shellcheck source=` hints at `cicd.bash:170`, `config.bash:46`, `in-image.bash:32` and `include/leak-common.bash:41` aren't read as directives. They need a single `#`, and the lint stage would need `-x` to use them.
-	- Note: Top-of-file disables that suppress nothing: `cicd.bash:6,8,9`, `advisories.bash:4`, `in-image.bash:4`, `include/ctr-image.bash:3`, `lint-report.bash:3,4` and `remote-tests.bash:4`.
-	- Note: `hooks/pre-push:51` has a disable mid-file.
-	- Note: `include/gfs-rotate.bash` repeats 2 of its top disables mid-file, and `git-auto-msg.bash` has unbraced expansions. Both are copies from shcl, so fix them there.
+	- Origin: `4a1977a`. Plausible, read only.
+	- Note: `utility/dogfood_tukfs-hash` walks links one hop at a time with `readlink` and `dirname`, and has no end on a loop. One `readlink -f` does it.
 	- Progress log:
-		- 2026-10-28: A repo-root `.shellcheckrc` turns on `external-sources` with `source-path=SCRIPTDIR`, so the pipeline, a hand run and an editor all follow sources. The 4 source hints take one `#`.
-		- 2026-10-28: With sources followed, 28 top-of-file disables suppressed nothing, the 9 noted included, and are gone. The `pre-push` disable is at the top now.
-		- 2026-10-28: Verified: shellcheck is clean on all 32 files. Without `.shellcheckrc` it reports 15 SC1091, 17 SC2154 and 1 SC2034. `--backlog-run-quick` and the hook cases in `cicd-flags-check.bash` passed.
+		- 2026-10-28: The launcher resolves its path with one `readlink -f`, and exits 1 with a message when that gives nothing. Verified: a chain of relative and absolute links reaches the .ps1 beside the target and passes arguments on. The quick gate passed.
 	- Decisions:
-		- An rc file, not `-x` on the command line, so a hand run gives the pipeline's answer, as `PSScriptAnalyzerSettings.psd1` does.
-		- `gfs-rotate.bash`, `git-auto-msg.bash` and `n8git_backup-and-publish` are shcl's copies, and were left for shcl, per the note. Their `##` lines aren't directives, and `n8git_backup-and-publish` has 10 unused disables too.
-	- Swept: every `shellcheck disable` and `source=` line in the 32 files the lint stage takes, each disable taken out alone and checked with and without sources followed.
+		- No test for the loop itself: bash can't open a script path that is a loop, so the launcher never runs on one. The change is a simplification, and the check covers the chain, which old and new code both pass.
+	- Swept: `grep readlink` over `utility/`, and the `.ps1` twin has no link walk.
 	- Branch: round-20261028
-	- Test case: none with an ID, since the cicd scripts have none. The lint stage's shellcheck step is the check.
-	- Acceptance signoff: Self-closed: the lint gate passes, and goes red without the rc file.
-	- Closed: 20261028-090352
+	- Test case: none with an ID. `private/claude_simple/tools/dogfood-launcher-check.bash REPO [LAUNCHER]` checks the link chain.
+	- Closed: 20261028-091400
+
+- `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
+	- ID: 2026102808215831
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's integration test covers it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `cede460`. Plausible, read only.
+	- Note: `report --run 999` prints no events, while `gone --run 999` says there's no such run.
+	- Note: `--limit -1` means no limit in `report` and shows nothing in `gone`.
+	- Note: `runs`, `report` and `gone` print database errors bare, while `accept` and `scan` prefix them.
+	- Note: Parse `--kind` with `db::Kind::parse`, check the run exists, and parse `--limit` as unsigned.
+	- Reproduced [Bug]: Yes. Before the fix, it exits 0 for `report --kind read-eror`, `report --run 999`, and `--limit -1` in both.
+	- Actual fix [Bug]:
+		- `--kind` takes only a known kind, and the error lists them. `report --run N` says `no run N` as `gone` does. `--limit` takes a count, 0 or more.
+		- `runs`, `report` and `gone` prefix database errors with `database:`. `report` with no runs said "no runs yet" for any error; now only when there are none.
+	- Decisions:
+		- `--kind b2-rmlint-mismatch`, the name before schema 4, is refused like any other unknown kind. The first write by this version renames those events.
+	- Swept: `--run`, `--kind` and `--limit` in `main.rs` and `gone.rs`, and every database error closure in `main.rs`, `gone.rs`, `accept.rs` and `scan.rs`.
+	- Branch: round-20261028
+	- Test case: `dehzs`, `dehzt` and `dehzv` in `tests/integration.bash`. Each failed before the fix and passes after.
+	- Closed: 20261028-092936
+
+- Scan progress shows no growth while a large file is read, then a jump.
+	- ID: 2026102808215779
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `32f27bd`. Plausible, read only.
+	- Note: `read_sums` adds a file's bytes to the progress count once, after the last block. Add them per block.
+	- Reproduced [Bug]: Yes. Read in 4 KiB blocks, a 16 MiB file's count stayed 0 until the read ended.
+	- Actual fix [Bug]: `read_sums` adds each block's bytes as it reads it.
+	- Decisions:
+		- A read cut short by a stop now counts the bytes it got, as a read error already did. The count is bytes read, not bytes hashed.
+	- Swept: `read_sums` is the only place that adds to the byte count. `accept` passes its own counter.
+	- Branch: round-20261028
+	- Test case: `dehzr`, `scan::tests::bytes_count_as_they_are_read`. It failed before the fix and passes after.
+	- Closed: 20261028-092936
+
+- A writer-thread panic in a scan can still leave its run marked running.
+	- ID: 2026102809213002
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-092130
+	- Opened by: style and performance review
+	- Found 2026-10-28 while fixing 2026102808215852. A panic between begin() and finish() in scan::run returns without closing the run row. Not reproduced.
+	- Reproduced [Bug]: Yes. With the writer made to panic at its first batch, the scan returned an error and left its run marked running.
+	- Actual fix [Bug]: `db::writer` catches a panic in its batches, stops the workers, and hands back the connection with an error, so `finish()` marks the run failed and puts the database back out of WAL mode.
+	- Decisions:
+		- The catch is in `db::writer`, so its signature and its callers stay as they were. A panic inside a batch rolls its transaction back as it unwinds.
+	- Swept: `accept` writes its run row as `accept` and never as running, and has no writer thread. Worker and group panics were already caught.
+	- Branch: round-20261028
+	- Test case: `dehzq`, `scan::tests::a_writer_panic_leaves_no_run_running`. It failed before the fix and passes after.
+	- Closed: 20261028-092936
+
+- Lock and ownership errors on the database are misreported or dropped.
+	- ID: 2026102808215819
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `f05c368` and `422efff`. Plausible, read only.
+	- Note: `scan::lock` reports any `flock` failure as another scan holding the lock, so ENOLCK or EOPNOTSUPP reads wrong. Say locked only for EWOULDBLOCK.
+	- Note: `give_back` ignores a failed `chown`. That's fine for the WAL files, which are often gone, but a failure on the database itself leaves it owned by root with no warning.
+	- Actual fix [Bug]:
+		- The lock says "is locked; another scan is using this database" only for EWOULDBLOCK. Any other `flock` error is shown as "can't lock" with its reason.
+		- `give_back` warns for each file it can't hand back, except a missing one, so the database and lock file are named and absent WAL files aren't.
+	- Decisions:
+		- The lock file gets the same warning as the database, since a root-owned one blocks the next scan without sudo.
+	- Swept: `chown` and `flock` appear only in `scan.rs`.
+	- Branch: round-20261028
+	- Test case: `dehzf`, `scan::tests::a_held_lock_says_so`, and `dehze`, `scan::tests::a_failed_hand_over_is_named`. Each fails with its check reversed. ENOLCK can't be made to happen here, so the other branch is untested.
+	- Closed: 20261028-092033
 
 - Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
 	- ID: 2026102519331112
@@ -2496,6 +2309,193 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- PSScriptAnalyzer's Information level and its constant-string rule are off.
+	- ID: 2026102809033225
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check ran it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-090332
+	- Opened by: split from 2026102808215708
+	- Parent ID: 2026102808215708
+	- Prereq IDs: 2026102808215717
+	- Note: `PSAvoidUsingDoubleQuotesForConstantString` is an Information rule, so it reports nothing while `Severity` is Error and Warning. Turn both on together.
+	- Note: The Information level adds 14 `PSUseOutputTypeCorrectly` hits in `utility/dogfood_tukfs-hash.ps1` until its functions get OutputType lines, in 2026102808215717. The constant-string rule finds nothing today.
+	- Progress log:
+		- 2026-10-28: `PSScriptAnalyzerSettings.psd1` reports Information too, with `PSAvoidUsingDoubleQuotesForConstantString` on. The 4 `return , $x` lines in `dogfood_tukfs-hash.ps1` use `Write-Output -NoEnumerate`, so the analyzer is clean.
+		- 2026-10-28: Verified: a planted constant double-quoted string is flagged. `dogfood-check.bash REPO` passed all cases, and `--backlog-run-quick` passed.
+	- Decisions:
+		- `Write-Output -NoEnumerate -InputObject` over a second OutputType, since the real types are a set and arrays and the rule reads `return , $x` as `object[]`. It keeps an empty array, a HashSet and a string[] whole.
+	- Swept: `return ,` in both `.ps1` files, and a repo-wide analyzer run.
+	- Branch: round-20261028
+	- Test case: none with an ID. The PowerShell lint in the quick gate, and `dogfood-check.bash REPO` in the private tools folder.
+	- Closed: 20261028-103213
+
+- Comments run long, repeat design.md, or use words the house rules avoid.
+	- ID: 2026102808215668
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: `src/scan.rs` comments at 138-141, 257-259, 532-533, 967-970 and 1645-1647 repeat design.md. Cut each to a line and a section name. `scan.rs:2098` cites a cut-off item ID.
+	- Note: Long blocks in `cicd/config.bash` at 123-131, 165-176, 198-204, 208-220 and 257-266, plus `profiling.rs:197-204` and `db.rs:200-207`.
+	- Note: Bad wraps at `config.bash:73`, `config.bash:109-110`, `cicd.bash:876-877`, `hooks/pre-push:24` and `include/ctr-image.bash:26-27`.
+	- Note: Avoided words at `deny.toml:12`, `codeql-scan.bash:75,149,212`, `config.bash:329`, `cicd.bash:572`, `include/frozen-tree.bash:34`, `gen-demo-gif.py:587`, `xattr.rs:181` and `testutil.rs:35`. Line 212 of codeql-scan is a message users see.
+	- Note: `cicd.bash:456` says it has the only `rm -rf`, but `fSafeRmCache` has one too.
+	- Note: `config.bash:25` prints its error to stdout through a `basename` call.
+	- Note: Check who wrote each line with `git log -S` before rewording it.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-10-28: The 5 `scan.rs` comments are a line or 2 each, with a design.md section. The hard-link one keeps its ctime reason. The Dropbox test cites `...929`. `profiling::check`, `db::close_rw` and the 5 `config.bash` blocks are cut to what the code needs, with a section name. The wraps are fixed, and `cicd.bash` names `fSafeRmCache` as the other `rm -rf`.
+		- 2026-10-28: "ships", "lands", "land", "holds" and "carried" are reworded. codeql-scan's summary says "the release binary", and so does design.md's CodeQL bullet.
+		- 2026-10-28: `config.bash`'s sourced-only error goes to stderr, without `basename`.
+		- 2026-10-28: Verified: `cicd/cicd.bash --backlog-run-quick` passed, and `cargo doc --no-deps --document-private-items` gives no warnings. Running `config.bash` directly prints the error on stderr only, and exits 1.
+		- Unverified in a run: codeql-scan's summary line, which only the full run's CodeQL step prints.
+	- Decisions:
+		- Every line here came from a round commit, per `git log -S`, so all were reworded.
+		- `db::close_rw` keeps the "table is locked" reason, since design.md doesn't have it. The short busy wait got its own line.
+		- The `shipped.txt` and `nUnshipped` names in codeql-scan stay, since only text was in scope.
+	- Swept: the same words over `src`, `cicd`, `tests`, `deny.toml`, design.md and README.md. `n8git_backup-and-publish` and `gfs-rotate.bash`, which has the same sourced-only line, are shared scripts and were left. `mypy.ini`'s "Pillow ships its types" is about a package, and was left.
+	- Branch: round-20261028
+	- Test case: none, comments and one message only.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261028-102704
+
+- Some Rust types and helpers hide what their parts mean.
+	- ID: 2026102808215688
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Plain tuples where a small struct would name the fields: the planned groups, read as `g.1`, `LinkVal`, read as `v.0` and `v.1`, and the byte offset in `ReadFail::Io`.
+	- Note: `xattr::write_b3` takes a bare `bool` that reads as `false` at the call site. A two-variant enum fits.
+	- Note: `scan::open_noatime` repeats the fallback in `Root::open_read`. Keep one.
+	- Note: `scan::lock_path` is `pub` but used only in `scan.rs`. The argument line in `main.rs` is joined twice. `build.rs:110` has an `unwrap` with no word on why it can't fail. The public test types in `testutil.rs` don't derive Debug.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-10-28: The planned groups are `scan::Planned`, with name, roots and threads. `LinkVal` is a struct of bytes, mtime and sums. `ReadFail::Io` names its offset `at`. `write_b3` takes `B3Write::All` or `DateOnly`.
+		- 2026-10-28: The `O_NOATIME` fallback is in `beneath::with_noatime` only, which `open_read` and `open_noatime` both call. `lock_path` is private. main.rs joins the argument line in one closure. The `unwrap` in build.rs says why it can't fail, at line 36, not 110. The 4 test types derive Debug.
+		- 2026-10-28: Verified: clippy with all targets and all features, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- `open_noatime` stays, since `accept` opens a path given by name, outside any scan root. Only the fallback is shared.
+		- `Planned` derives Clone, for the `roots_key` test's `concat`.
+	- Swept: every `.0`, `.1` and tuple pattern on the groups and `LinkVal`, every `ReadFail::Io` match, both `write_b3` callers, and `lock_path` and `open_noatime` users, flame-report.py's frame list included.
+	- Branch: round-20261028
+	- Test case: none new, a refactor. `ddy6n` and `ddy97` cover the changed types, and the read-fail kinds test covers `ReadFail::Io`.
+	- Acceptance signoff: Self-closed: mechanical, per the notes.
+	- Closed: 20261028-102100
+
+- About 50 public Rust items have no doc comment.
+	- ID: 2026102808215678
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Most are in `db.rs`, `util.rs`, `xattr.rs`, `mounts.rs`, `beneath.rs` and `snapdiff.rs`, plus `accept::run`, `gone::run` and 9 in `scan.rs`. The `Source` variants in `snapdiff.rs` use `//` where `///` belongs.
+	- Note: One line each. No Args or Returns blocks.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-10-28: About 60 `pub` items got a one-line `///`, `Source`'s variants, `PANIC_ON`, `READS_LEFT` and `Msg::Seen` went from `//` to `///`, and `open_read`'s `//` became a doc line.
+		- 2026-10-28: Verified: `cargo doc --no-deps --document-private-items` gives no warnings, and clippy and the quick gate passed.
+	- Decisions:
+		- The `B3_*` and `RM_B2B_*` names keep one comment on the first of each set, as 2026101916404113 did.
+	- Swept: every `pub` fn, struct, enum, const, static, type, trait and mod in `src`, attributes skipped. Fields are left as they are.
+	- Branch: round-20261028
+	- Test case: none, comments only.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261028-102100
+
+- Per-entry checks and copies in the scan's walk and record path haven't been measured.
+	- ID: 2026102809554785
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No, nothing was kept.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-095547
+	- Opened by: style and performance review
+	- Parent ID: 2026102808215738
+	- Note: The parent's notes on `Prior.b3`, `excluded()` and `no_xattr`, the copies in `hashed_msg`, `xattr::fget`, `text_of`, `write_b3` and `beneath`, and the `SELECT` per file.
+	- Note: User CPU is about 0.4 to 0.5 s of a 20,000-small-file scan, so these can win only a part of that. Time each with `profile-ab.bash` and `AB_SMALL_FILES`, and keep only what moves it.
+	- Progress log:
+		- 2026-10-28: `Prior.b3` as `[u8; 32]`, one reused buffer for all of a file's attributes with no `text_of` copies, and one digest encode in `write_b3`, timed together on 20,000 files of 1 to 4 KB, over 5 rounds at load 7 to 9: user CPU 0.36 to 0.52 s against 0.37 to 0.46 s on a first scan, and 0.52 to 0.60 s against 0.54 to 0.63 s on a rescan. Within the noise, so none was kept.
+		- 2026-10-28: The lookup, taken out to bound it, was about 4 us of user CPU per file, a sixth of the total. Filed as 2026102810135573.
+	- Decisions:
+		- `excluded()`, `no_xattr`, the `hashed_msg` copy and the `beneath` name weren't timed one by one. Each is a compare or a copy per file, smaller than the allocations above, which didn't show.
+		- The per-folder query is a redesign of its own, so it went to a new item rather than into this one's time cap.
+	- Test case: None, no change was kept.
+	- Closed: 20261028-101355
+
+- The directory walk would treat a new entry kind as a file.
+	- ID: 2026102808215728
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's build, lint, unit and integration steps cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `9120949`. Plausible, read only.
+	- Note: `list_dir` in `src/scan.rs` tests `beneath::Kind` with `if ==` and queues anything else as a file. An exhaustive match makes a new kind a compile error.
+	- Progress log:
+		- 2026-10-28: `list_dir` matches all 3 kinds once, so a new one fails to build. Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
+	- Swept: `beneath::Kind` is matched nowhere else outside `beneath.rs`, which builds it with its own match.
+	- Branch: round-20261028
+	- Test case: None. No behavior change, and the compiler is the check. The integration test walks the trees.
+	- Closed: 20261028-101355
+
+- dogfood_tukfs-hash.ps1 departs from the PowerShell style rules.
+	- ID: 2026102808215717
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check below runs it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `Write-Note` and `Exit-Launcher` are called with a positional message. `param($Source)` and `param($Item)` are untyped, and nothing uses Mandatory or validation attributes.
+	- Note: `-contains` tests every running process path inside a loop. A HashSet fits.
+	- Note: The same regex runs twice per file at lines 134-135. A suppression at line 335 has an empty reason. OutputType is on 3 functions only, and the functions have no comment-based help.
+	- Note: The 32-line header repeats the synopsis and holds the whole rotation policy, which belongs in design.md.
+	- Note: `lint-ps1.ps1:37` joins `../..` as one path piece.
+	- Progress log:
+		- 2026-10-28: Typed parameters, with Mandatory and validation where they fit, and OutputType and help on every function. Named `-Message` at each call. Running paths go in a HashSet, the pool regex runs once per file, and the suppression has a reason. The rotation policy moved to design.md, "Build and release", and `lint-ps1.ps1` finds the repo root with `Split-Path`.
+		- 2026-10-28: Verified: `dogfood-check.bash REPO` passed all 24 cases. PSScriptAnalyzer is clean, and the quick gate passed.
+	- Decisions:
+		- Running paths now match case-sensitively, as Linux paths do. `-contains` matched case-insensitively.
+		- `Get-SourceBuild` returns only a file, so a dir at the build's name is passed over.
+		- At the Information level, 4 `PSUseOutputTypeCorrectly` hits are left, down from 14. They're on `return , $x`, which keeps a set or array whole, and the rule reads it as `object[]`. That's for 2026102809033225.
+	- Swept: `-contains` and positional calls in both `.ps1` files.
+	- Branch: round-20261028
+	- Test case: none with an ID. `dogfood-check.bash REPO`, in the private tools folder.
+	- Closed: 20261028-093507
+
+- Shellcheck lines that do nothing hide later warnings.
+	- ID: 2026102808215698
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: The `## shellcheck source=` hints at `cicd.bash:170`, `config.bash:46`, `in-image.bash:32` and `include/leak-common.bash:41` aren't read as directives. They need a single `#`, and the lint stage would need `-x` to use them.
+	- Note: Top-of-file disables that suppress nothing: `cicd.bash:6,8,9`, `advisories.bash:4`, `in-image.bash:4`, `include/ctr-image.bash:3`, `lint-report.bash:3,4` and `remote-tests.bash:4`.
+	- Note: `hooks/pre-push:51` has a disable mid-file.
+	- Note: `include/gfs-rotate.bash` repeats 2 of its top disables mid-file, and `git-auto-msg.bash` has unbraced expansions. Both are copies from shcl, so fix them there.
+	- Progress log:
+		- 2026-10-28: A repo-root `.shellcheckrc` turns on `external-sources` with `source-path=SCRIPTDIR`, so the pipeline, a hand run and an editor all follow sources. The 4 source hints take one `#`.
+		- 2026-10-28: With sources followed, 28 top-of-file disables suppressed nothing, the 9 noted included, and are gone. The `pre-push` disable is at the top now.
+		- 2026-10-28: Verified: shellcheck is clean on all 32 files. Without `.shellcheckrc` it reports 15 SC1091, 17 SC2154 and 1 SC2034. `--backlog-run-quick` and the hook cases in `cicd-flags-check.bash` passed.
+	- Decisions:
+		- An rc file, not `-x` on the command line, so a hand run gives the pipeline's answer, as `PSScriptAnalyzerSettings.psd1` does.
+		- `gfs-rotate.bash`, `git-auto-msg.bash` and `n8git_backup-and-publish` are shcl's copies, and were left for shcl, per the note. Their `##` lines aren't directives, and `n8git_backup-and-publish` has 10 unused disables too.
+	- Swept: every `shellcheck disable` and `source=` line in the 32 files the lint stage takes, each disable taken out alone and checked with and without sources followed.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have none. The lint stage's shellcheck step is the check.
+	- Acceptance signoff: Self-closed: the lint gate passes, and goes red without the rc file.
+	- Closed: 20261028-090352
 
 - The integration test has a duplicate helper name, an odd header, and 2 hard-to-read one-liners.
 	- ID: 2026102808215647
