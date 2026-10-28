@@ -250,6 +250,27 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Resu
 	.optional()
 }
 
+/// `lookup` for each path, in one read transaction. A transaction of its own
+/// took most of each lookup's time (2026102810135573). Errors stay per path.
+pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prior>, String>> {
+	let opened = conn
+		.unchecked_transaction()
+		.and_then(|txn| Ok((txn, conn.prepare_cached(LOOKUP)?)));
+	match opened {
+		Ok((txn, mut st)) => {
+			let found = paths
+				.iter()
+				.map(|p| lookup(&mut st, p).map_err(|e| e.to_string()))
+				.collect();
+			drop(st);
+			// Only read, so nothing is lost if the end fails.
+			_ = txn.finish();
+			found
+		}
+		Err(e) => vec![Err(e.to_string()); paths.len()],
+	}
+}
+
 /// A file's sums and stat, as read, for the writer to store.
 #[derive(Debug)]
 pub struct Hashed {
@@ -805,6 +826,10 @@ mod tests {
 		assert!(lookup(&mut st, b"/x/none").unwrap().is_none());
 		assert!(lookup(&mut st, b"/x/junk").is_err());
 		drop(st);
+		let got = lookup_each(&conn, &[b"/x/none", b"/x/junk", b"/x/none"]);
+		assert!(matches!(got[..], [Ok(None), Err(_), Ok(None)]), "{got:?}");
+		// Each batch's transaction ends, so the writer isn't held back.
+		assert!(conn.is_autocommit());
 		close_rw(conn).unwrap();
 	}
 
