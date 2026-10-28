@@ -250,7 +250,7 @@
 	- Swept: `return ,` in both `.ps1` files, and a repo-wide analyzer run.
 	- Branch: round-20261028
 	- Test case: none with an ID. The PowerShell lint in the quick gate, and `dogfood-check.bash REPO` in the private tools folder.
-	- Closed: 20261028-100000
+	- Closed: 20261028-103213
 
 - Comments run long, repeat design.md, or use words the house rules avoid.
 	- ID: 2026102808215668
