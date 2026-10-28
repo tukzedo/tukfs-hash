@@ -39,50 +39,6 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
-- A database row with a read date in the future skips its file on every scan, `--verify` included, and the scan exits 0.
-	- ID: 2026102814341401
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 1
-	- Origin: `f05c368`. 2026101406340902 named this case, but its fix bounded only the attribute date. Its "Swept:" line said the DB skip already checks the inode, which doesn't cover the date. Regression of that item. Confirmed.
-	- Steps to reproduce [Bug]:
-		- Scan a file with `--no-xattrs`. Move its `paths.hashed_us` a year ahead.
-		- Flip a byte and put the mtime back with `touch -r`.
-		- Scan again with `--verify`, or with `--since` tomorrow.
-	- Incorrect behavior [Bug]: "hashed 0 skipped 1", no events, exit 0.
-	- Expected behavior [Bug]: design.md, "Skipping": a date later than now never skips. Exit 4.
-	- Reproduced [Bug]: Yes, on ext4, with and without attributes.
-	- Probable fix [Bug]: `Worker::judged_already` in `src/scan.rs` also needs `hashed_us` no later than now.
-	- Sweep: every place that compares `hashed_us` or the attribute date with the cutoff.
-	- Note: This is the third skip-rule defect, after 2026101406340902 and item 2 of this review. The rules are now a table in design.md, "Skipping", and each fix in this class names its row.
-	- Note: design.md, "Skipping", row `db-future`.
-	- Note: A unit test beside `a_match_is_not_read_again` can set a future `hashed_us` on the prior row and expect a read. An integration check can repeat the repro and expect exit 4.
-
-- After `--verify` or `--since` reports a damaged file, a plain scan later that day skips it and exits 0.
-	- ID: 2026102814341402
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 2
-	- Origin: the skip rule is from `f05c368`, and keeping the old row on a mismatch from `eb111ff` (2026101406340901). That item's test used `--since` tomorrow on both runs, so it never had a same-day plain run. Confirmed.
-	- Steps to reproduce [Bug]:
-		- Scan a tree. Flip a byte in a file and put its mtime back.
-		- `scan --verify` exits 4.
-		- A plain scan right after exits 0, "skipped 1", no events. The same after `--since` tomorrow, and for hard-linked names.
-	- Incorrect behavior [Bug]: The row still has the earlier good read's `hashed_us`, after midnight, so it skips. The attribute set has the same digest and date, so `b3_fresh` passes too.
-	- Expected behavior [Bug]: design.md, "Mismatches", and `--help`: the next run reads the file again and reports it again.
-	- Reproduced [Bug]: Yes, on ext4.
-	- Probable fix [Bug]: Mark a path with an open mismatch, set by `keep` and cleared by a clean read or `accept`, and never skip a marked path.
-	- Sweep: `Worker::judged_already` and `Worker::skip_unread` in `src/scan.rs`.
-	- Related IDs: 2026102814341401
-	- Note: design.md, "Skipping", rows `db-mismatch` and `x-mismatch`.
-	- Against: 2026101406340901, "Keep the stored xattr and DB digest on any mismatch". The fix has to keep both digests as they are. Only what skips may change.
-	- Note: A new column means table version 5, so an older binary then refuses the database. The house rule to derive state rather than store a second copy points the other way: an open mismatch is already in `events`, as a mismatch for the path with no clean read or `accepted` after it. Measure the lookup cost of that on the small-files workload before picking.
-	- Note: Step 3 of `tests/integration.bash` is the place for a test: after its mismatch run, a plain run the same day has to exit 4 again.
-
 - `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
 	- ID: 2026102814341403
 	- Type: Bug
@@ -808,6 +764,63 @@
 	- Swept: The zfs names already use the full dataset name. In `vm-scan`, the mount folder and fsck log use the image's base name within its dataset, so 2 images of one name in different subfolders would share them. No dataset has 2 such images today.
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- A database row with a read date in the future skips its file on every scan, `--verify` included, and the scan exits 0.
+	- ID: 2026102814341401
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 1
+	- Origin: `f05c368`. 2026101406340902 named this case, but its fix bounded only the attribute date. Its "Swept:" line said the DB skip already checks the inode, which doesn't cover the date. Regression of that item. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Scan a file with `--no-xattrs`. Move its `paths.hashed_us` a year ahead.
+		- Flip a byte and put the mtime back with `touch -r`.
+		- Scan again with `--verify`, or with `--since` tomorrow.
+	- Incorrect behavior [Bug]: "hashed 0 skipped 1", no events, exit 0.
+	- Expected behavior [Bug]: design.md, "Skipping": a date later than now never skips. Exit 4.
+	- Reproduced [Bug]: Yes, on ext4, with and without attributes.
+	- Probable fix [Bug]: `Worker::judged_already` in `src/scan.rs` also needs `hashed_us` no later than now.
+	- Sweep: every place that compares `hashed_us` or the attribute date with the cutoff.
+	- Note: This is the third skip-rule defect, after 2026101406340902 and item 2 of this review. The rules are now a table in design.md, "Skipping", and each fix in this class names its row.
+	- Note: design.md, "Skipping", row `db-future`.
+	- Note: A unit test beside `a_match_is_not_read_again` can set a future `hashed_us` on the prior row and expect a read. An integration check can repeat the repro and expect exit 4.
+	- Actual cause: `judged_already` took any read date on or after the skip date as fresh, with no upper bound.
+	- Fix: The row skips only when its read date is between the skip date and now.
+	- Test case: dejdh, then dejdj, in step 3 of `tests/integration.bash`. Without the fix dejdh got "0 0".
+	- Swept: Every comparison of `hashed_us` or the attribute date with the cutoff. `OnFile::b3_fresh` already stops at now, and `main.rs` only prints the cutoff.
+	- Closed: 20261028-171500
+
+- After `--verify` or `--since` reports a damaged file, a plain scan later that day skips it and exits 0.
+	- ID: 2026102814341402
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 2
+	- Origin: the skip rule is from `f05c368`, and keeping the old row on a mismatch from `eb111ff` (2026101406340901). That item's test used `--since` tomorrow on both runs, so it never had a same-day plain run. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Scan a tree. Flip a byte in a file and put its mtime back.
+		- `scan --verify` exits 4.
+		- A plain scan right after exits 0, "skipped 1", no events. The same after `--since` tomorrow, and for hard-linked names.
+	- Incorrect behavior [Bug]: The row still has the earlier good read's `hashed_us`, after midnight, so it skips. The attribute set has the same digest and date, so `b3_fresh` passes too.
+	- Expected behavior [Bug]: design.md, "Mismatches", and `--help`: the next run reads the file again and reports it again.
+	- Reproduced [Bug]: Yes, on ext4.
+	- Probable fix [Bug]: Mark a path with an open mismatch, set by `keep` and cleared by a clean read or `accept`, and never skip a marked path.
+	- Sweep: `Worker::judged_already` and `Worker::skip_unread` in `src/scan.rs`.
+	- Related IDs: 2026102814341401
+	- Note: design.md, "Skipping", rows `db-mismatch` and `x-mismatch`.
+	- Against: 2026101406340901, "Keep the stored xattr and DB digest on any mismatch". The fix has to keep both digests as they are. Only what skips may change.
+	- Note: A new column means table version 5, so an older binary then refuses the database. The house rule to derive state rather than store a second copy points the other way: an open mismatch is already in `events`, as a mismatch for the path with no clean read or `accepted` after it. Measure the lookup cost of that on the small-files workload before picking.
+	- Note: Step 3 of `tests/integration.bash` is the place for a test: after its mismatch run, a plain run the same day has to exit 4 again.
+	- Actual cause: `keep` leaves the row's read date as the earlier good read, so the next run's skip date passes it.
+	- Fix: No new column. `db::open_misses` loads, once per run, the paths whose last xattr, rmlint or database mismatch came after the row's read date, or that have no row. `judged_already` and `skip_unread` never skip one, except for a path this run already reached. A clean read or `accept` writes a later read date, which closes it. Cache mismatches end in a clean read, so they don't count.
+	- Note: The load is one query over `events` at the start, before `begin()`. Per file it adds a set lookup, only for a row that would have skipped.
+	- Test case: dejdg in step 3 of `tests/integration.bash`, and dejdf, `open_misses_are_the_unread_ones`. Without the fix dejdg got "0 0".
+	- Swept: `Worker::judged_already` and `Worker::skip_unread`, the only two skips. The link-done path compares each name with its own row and set, so it reports again already.
+	- Closed: 20261028-171500
 
 - `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
 	- ID: 2026101406340913

@@ -217,6 +217,9 @@ last_run() { q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM 
 rc="$(scan --since "${tomorrow}")"
 check ddy6r "reported again on the next run" "${rc} $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
 check ddy6s "attribute still kept" "$(xget "${tree}/big.bin" user.blake3.b64u)" "${x_before}"
+# The row still has the earlier good read's date, so a plain run would skip.
+rc="$(scan)"
+check dejdg "reported again on a plain run the same day" "${rc} $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
 rc=0; (cd "${tree}" && "${bin}" accept --db "${db}" ./big.bin "sub dir/big-link.bin" rm.txt) > "${work}/accept.txt" 2>&1 || rc=$?
 check ddy6t "accept exit" "${rc}" 0
 check ddy6v "accept logged" "$(last_run "AND kind = 'accepted'")" 3
@@ -227,6 +230,14 @@ rc=0; "${bin}" accept --db "${db}" "${tree}/sub dir" "${tree}/small.txt" > /dev/
 check ddy6z "accept of a folder fails" "${rc}" 1
 rc="$(scan --since "${tomorrow}")"
 check ddy70 "clean after accept" "${rc} $(last_run "")" "0 0"
+# A read date later than now never skips, or a wrong clock would hide damage.
+ob="${tree}/sub dir/one byte"
+q "UPDATE paths SET hashed_us = hashed_us + 31536000000000 WHERE path = '${ob}'"
+fFlipByte "${ob}" 0 1
+rc="$(scan --since "${tomorrow}")"
+check dejdh "future read date: read and reported" "${rc} $(last_run "AND kind = 'b3-db-mismatch'")" "4 1"
+rc=0; "${bin}" accept --db "${db}" "${ob}" > /dev/null 2>&1 || rc=$?
+check dejdj "future read date: accepted" "${rc} $(scan --since "${tomorrow}")" "0 0"
 
 # 4. A real edit moves the time and is not a mismatch.
 sleep 0.01

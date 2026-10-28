@@ -14,7 +14,7 @@ use crate::util::{
 };
 use crate::xattr::{self, OnFile};
 use rusqlite::OptionalExtension;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -293,6 +293,8 @@ struct Shared {
 	// blake2b for every file read, not only ones with a current rmlint set.
 	rmlint: bool,
 	mode: Mode,
+	// Never skipped until read clean or accepted.
+	open_misses: HashSet<Vec<u8>>,
 	tx: SyncSender<Msg>,
 }
 
@@ -489,6 +491,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let db_path = canonical_db(&o.db)?;
 	let _lock = lock(&db_path, &mounts)?;
 	let conn = db::open_rw(&db_path)?;
+	let open_misses = db::open_misses(&conn)?;
 
 	let started = now_us();
 	let Resumed {
@@ -529,6 +532,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
 		mode: o.mode,
+		open_misses,
 		tx,
 	});
 	let groups = groups(planned, &hands_off);
@@ -1487,7 +1491,7 @@ impl<'a> Worker<'a> {
 		let Some(md) = self.stat(job, rel) else {
 			return;
 		};
-		if self.judged_already(prior, &md) {
+		if self.judged_already(job, prior, &md) {
 			return;
 		}
 		let Some((file, before)) = self.open(job, rel) else {
@@ -1541,14 +1545,20 @@ impl<'a> Worker<'a> {
 		Some(md)
 	}
 
-	fn judged_already(&self, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
+	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch` and
+	// `resume-seen`.
+	fn judged_already(&self, job: &Job, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
 		let Some(p) = prior else {
 			return false;
 		};
+		let fresh = || {
+			(sh.cutoff_us..=now_us()).contains(&p.hashed_us)
+				&& !sh.open_misses.contains(job.path.as_os_str().as_bytes())
+		};
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
-		if (p.hashed_us >= sh.cutoff_us || p.seen_run == sh.run_id)
+		if (p.seen_run == sh.run_id || fresh())
 			&& p.bytes == md.len() as i64
 			&& p.mtime_us == mtime_us(md)
 			&& p.ino == md.ino() as i64
@@ -1620,9 +1630,13 @@ impl<'a> Worker<'a> {
 		else {
 			return false;
 		};
+		// Row `x-mismatch`.
+		let pbytes = job.path.as_os_str().as_bytes();
+		if sh.open_misses.contains(pbytes) {
+			return false;
+		}
 		st.skip_xattr.fetch_add(1, Relaxed);
 		self.links.passed(before);
-		let pbytes = job.path.as_os_str().as_bytes();
 		send(
 			sh,
 			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, before, date),
@@ -1893,6 +1907,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			mode: Mode::Full,
+			open_misses: HashSet::new(),
 			tx,
 		};
 		(sh, rx)
