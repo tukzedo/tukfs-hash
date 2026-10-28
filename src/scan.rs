@@ -1174,6 +1174,9 @@ pub enum ReadFail {
 
 /// `O_DIRECT` wants the buffer, offset and length on the device's block size.
 const DIRECT_ALIGN: usize = 4096;
+// Below this a plain read and its drops cost less sys CPU than going direct
+// (2026102809554675).
+const DIRECT_MIN: u64 = 64 << 10;
 
 /// Turns `O_DIRECT` on or off for an open fd. False if the filesystem won't.
 fn set_direct(fd: RawFd, on: bool) -> bool {
@@ -1212,10 +1215,12 @@ pub fn read_sums(
 	}
 	// Reading around the page cache costs a fraction of filling it and then
 	// dropping it again (2026102316421705). Where the filesystem won't, or
-	// balks mid-file, it's a plain read and the drops above and below do it.
+	// balks mid-file, or the file is small, it's a plain read and the drops
+	// above and below do it.
 	let lead = buf.as_ptr().align_offset(DIRECT_ALIGN).min(buf.len());
 	let aligned_len = (buf.len() - lead) & !(DIRECT_ALIGN - 1);
-	let mut direct = !cfg!(miri) && aligned_len > 0 && set_direct(fd, true);
+	let mut direct =
+		!cfg!(miri) && aligned_len > 0 && before.len() >= DIRECT_MIN && set_direct(fd, true);
 	let mut b3 = blake3::Hasher::new();
 	let mut b2b = want_b2b.then(blake2b_simd::State::new);
 	let mut total: u64 = 0;
@@ -2430,7 +2435,21 @@ mod tests {
 			(lead + 1, store.len()),
 			(lead, lead + 1000),
 		];
-		for len in [0usize, 1, 4095, 4096, 4097, 3 * 4096 + 123, (1 << 20) + 7] {
+		let min = usize::try_from(DIRECT_MIN).unwrap();
+		// Both sides of DIRECT_MIN, so each path gets odd tails.
+		let sizes = [
+			0,
+			1,
+			4095,
+			4096,
+			4097,
+			3 * 4096 + 123,
+			min - 1,
+			min,
+			min + 4097,
+			(1 << 20) + 7,
+		];
+		for len in sizes {
 			let bytes: Vec<u8> = (0..len).map(|i| (i % 253) as u8).collect();
 			let p = d.join(format!("d{len}"));
 			fs::write(&p, &bytes).unwrap();

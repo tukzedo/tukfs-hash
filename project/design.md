@@ -47,6 +47,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A file's cached pages are dropped before it's read, so a scribble in the page cache isn't hashed as if it were on disk. ZFS ignores that advice and answers from the ARC, so there a second read can't tell memory from disk.
 	- The read itself is `O_DIRECT` where the filesystem takes it, so the bytes go from the disk to the read buffer and nothing is cached. Filling the page cache and then dropping it cost about as much CPU as blake3 did.
+	- Files under 64 KiB are read plain. Going direct costs about 35 us of sys CPU per file, more than the drops cost on a file that small.
 	- Where `O_DIRECT` is refused, at the start or partway through, it's a plain read, and the drops before and after it still apply. ZFS 2.3 takes it with `direct=standard`, but whether a block already in the ARC is still served from there hasn't been checked, so the line above stands.
 
 - An EIO on ZFS means a block failed its checksum with no good copy left. It's reported the same as a mismatch.

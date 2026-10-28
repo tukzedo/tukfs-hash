@@ -161,6 +161,26 @@
 	- Branch: round-20261028
 	- Test case: none with an ID, since the cicd scripts have none. The lint stage's ruff and mypy steps are the check.
 
+- Small files cost more sys CPU read direct than read plain.
+	- ID: 2026102809554675
+	- Type: Enhancement
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-quick leak`, for the sanitizers over `debte`.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-095546
+	- Opened by: style and performance review
+	- Parent ID: 2026102808215738
+	- Note: On 20,000 files of 1 to 4 KB, a read without `O_DIRECT` cut about 0.7 s of sys CPU, about 35 us per file.
+	- Progress log:
+		- 2026-10-28: Verified: on 20,000 files of 1 to 4 KB, over 4 rounds at load 8 to 9, a first scan's sys CPU fell from 1.77 to 2.14 s to 1.15 to 1.28 s, and a `--rmlint` rescan's from 1.73 to 2.07 s to 0.97 to 1.17 s. User CPU didn't change.
+	- Decisions:
+		- Files under 64 KiB are read plain, with the drops before and after as for any plain read. Direct saved 0.4 to 0.9 s per GB in 2026102316421705, so it pays for its 35 us at about 40 to 90 KB. Files between 4 and 64 KB weren't timed.
+		- The 3 `posix_fadvise` calls stay. Taking them out changed nothing measurable.
+	- Swept: `read_sums` is the only place that turns on `O_DIRECT`. design.md's read section says so now.
+	- Branch: round-20261028
+	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) now reads sizes on both sides of the 64 KiB floor, with odd tails on each path. It can't see which path was taken, so the CPU timing above is the check.
+	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
+
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789
 	- Type: Bug
@@ -194,6 +214,21 @@
 	- Note: `hashed_msg` copies a path the job already owns. `xattr::fget` allocates per call and `text_of` copies again, and `write_b3` encodes the digest twice. `beneath` builds a CString for a name that's already NUL-terminated.
 	- Note: Each file gets its own `SELECT`. A query per folder is a redesign, worth it only if `lookup` shows near the top on many small files.
 	- Note: Keep only the changes that move the small-files numbers.
+	- Progress log:
+		- 2026-10-28: On 20,000 files of 1 to 4 KB, a scan took about 0.4 to 0.5 s user and 1.8 to 2.2 s sys CPU, at load 6. Without the 3 `posix_fadvise` calls it was the same. Without `O_DIRECT`, sys fell by about 0.7 s, which child 2026102809554675 takes up. The rest of the notes are in child 2026102809554785.
+		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
+
+- Per-entry checks and copies in the scan's walk and record path haven't been measured.
+	- ID: 2026102809554785
+	- Type: Enhancement
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-095547
+	- Opened by: style and performance review
+	- Parent ID: 2026102808215738
+	- Note: The parent's notes on `Prior.b3`, `excluded()` and `no_xattr`, the copies in `hashed_msg`, `xattr::fget`, `text_of`, `write_b3` and `beneath`, and the `SELECT` per file.
+	- Note: User CPU is about 0.4 to 0.5 s of a 20,000-small-file scan, so these can win only a part of that. Time each with `profile-ab.bash` and `AB_SMALL_FILES`, and keep only what moves it.
 
 - The directory walk would treat a new entry kind as a file.
 	- ID: 2026102808215728
