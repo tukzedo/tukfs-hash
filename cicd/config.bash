@@ -2,7 +2,6 @@
 
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes.' On purpose: the eval'd strings expand in the engine.
 #  shellcheck disable=2034  ## 'variable appears unused.' Everything here is read by cicd.bash.
-#  shellcheck disable=1091  ## 'Not following.' The pins file is checked on its own.
 #  shellcheck disable=2154  ## 'referenced but not assigned.' here, root and CPU_CAP come from cicd.bash.
 
 ##	Purpose:
@@ -43,7 +42,7 @@ RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
 ## Tool pins. The engine warns, without failing, when a tool has drifted.
 ## "name|version|command": the version has to show up in the command's output.
-## shellcheck source=tool-pins.env
+# shellcheck source=tool-pins.env
 source "${here}/tool-pins.env"
 ## nfpm is go-installed, and ~/.go/bin isn't always on PATH. package.bash
 ## reads NFPM.
@@ -59,6 +58,7 @@ TOOL_PINS=(
 	"nfpm|${PIN_NFPM}|go version -m \"${NFPM}\""
 	"PSScriptAnalyzer|${PIN_PSSA}|pwsh -NoProfile -Command \"(Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1).Version.ToString()\""
 	"ruff|${PIN_RUFF}|ruff --version"
+	"mypy|${PIN_MYPY}|mypy --version"
 )
 
 ## Paths into cargo's home end up in panic messages, so they're mapped to one
@@ -92,10 +92,12 @@ MARKDOWNLINT_CMD=(markdownlint --disable MD013 --)
 MARKDOWN_SKIP=(license.md)
 ## Every tracked .ps1, with PSScriptAnalyzerSettings.psd1 at the repo root.
 PS_LINT_CMD=(pwsh -NoProfile -File cicd/utility/lint-ps1.ps1)
-## Every tracked .py, by cicd/ruff.toml's rules, then its format. A box
-## without ruff skips them with a note, even under the merge gate.
+## Every tracked .py, by cicd/ruff.toml's rules, then its format, then mypy by
+## cicd/mypy.ini. A box without ruff or mypy skips that one with a note, even
+## under the merge gate.
 PY_LINT_CMD=(ruff check --config cicd/ruff.toml --)
 PY_FMT_CHECK_CMD=(ruff format --check --config cicd/ruff.toml --)
+PY_TYPE_CMD=(mypy --config-file cicd/mypy.ini --)
 ## "label|command", eval'd after the rest. Every test prints its status line
 ## with its test ID, and a test with none, or 2 that share one, fails here
 ## rather than going by unseen.
@@ -303,7 +305,7 @@ GIF_CMD='cicd/utility/demo-gif.bash "${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}
 BACKLOG_AREAS=(
 	"fmt||the format check"
 	"build||the debug build"
-	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff and the test IDs"
+	"lint||clippy, shellcheck, markdownlint, PSScriptAnalyzer, ruff, mypy and the test IDs"
 	"unit||the unit tests"
 	"it||the integration test, on a release build, once per test root"
 	"leak|cicd/utility/|every leak check but the long ones"
@@ -371,3 +373,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  a counter.
 ##		- 2026-10-25: A length on each leak check.
 ##		- 2026-10-26: The parser fuzz tests, fast and long.
+##		- 2026-10-28: mypy over the pipeline's Python.

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The include is checked on its own.
-
 ##	Purpose:
 ##		- The demo gif stage: gen-demo-gif.py draws the scenario against the
 ##		  release binary into the run's temp dir. The gif is GFS-rotated into

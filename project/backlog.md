@@ -173,6 +173,29 @@
 	- Branch: round-20261028
 	- Test case: none with an ID, since the pipeline's Python has no test IDs. `private/claude_simple/tools/gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
 
+- Lint configs don't enforce all of the style rules.
+	- ID: 2026102808215708
+	- Type: Task
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, for the new mypy pin's check and the leak check image, which the `tool-pins.env` edit rebuilds.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `cicd/ruff.toml` lacks `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF`. There's no mypy config.
+	- Note: PSScriptAnalyzer could turn on `PSAvoidUsingDoubleQuotesForConstantString` and the Information level, once the OutputType lines are in.
+	- Note: No `.gitattributes` pins line endings for the scripts.
+	- Progress log:
+		- 2026-10-28: ruff selects `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF` too. The 3 `PERF401` hits in `gen-demo-gif.py` use `extend` now.
+		- 2026-10-28: `cicd/mypy.ini` is strict mypy, and the lint stage runs it after ruff, with a pin in `tool-pins.env`. A box without mypy skips it with a note, as with ruff.
+		- 2026-10-28: `.gitattributes` keeps every text file LF, in the repo and in checkouts. All 76 were LF already.
+		- 2026-10-28: The PSScriptAnalyzer part is in child 2026102809033225. Its quote rule is an Information one, so it waits with the level for the OutputType lines.
+		- 2026-10-28: Verified: `gen-demo-gif.py`'s typing events and palette are the same as before over 1,200 seeded cases. The new ruff rules and mypy each flag a planted case. `--backlog-run-quick` passed.
+	- Decisions:
+		- mypy is strict, since the 3 scripts already pass it. PIL's imports are ignored, since mypy's own install often can't see the interpreter's packages.
+		- mypy is pinned like ruff, though the pins file's edit rebuilds the leak check image once.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have none. The lint stage's ruff and mypy steps are the check.
+
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789
 	- Type: Bug
@@ -235,30 +258,18 @@
 	- Note: The 32-line header repeats the synopsis and holds the whole rotation policy, which belongs in design.md.
 	- Note: `lint-ps1.ps1:37` joins `../..` as one path piece.
 
-- Lint configs don't enforce all of the style rules.
-	- ID: 2026102808215708
+- PSScriptAnalyzer's Information level and its constant-string rule are off.
+	- ID: 2026102809033225
 	- Type: Task
 	- Status: Queued
 	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: `cicd/ruff.toml` lacks `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF`. There's no mypy config.
-	- Note: PSScriptAnalyzer could turn on `PSAvoidUsingDoubleQuotesForConstantString` and the Information level, once the OutputType lines are in.
-	- Note: No `.gitattributes` pins line endings for the scripts.
-
-- Shellcheck lines that do nothing hide later warnings.
-	- ID: 2026102808215698
-	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: The `## shellcheck source=` hints at `cicd.bash:170`, `config.bash:46`, `in-image.bash:32` and `include/leak-common.bash:41` aren't read as directives. They need a single `#`, and the lint stage would need `-x` to use them.
-	- Note: Top-of-file disables that suppress nothing: `cicd.bash:6,8,9`, `advisories.bash:4`, `in-image.bash:4`, `include/ctr-image.bash:3`, `lint-report.bash:3,4` and `remote-tests.bash:4`.
-	- Note: `hooks/pre-push:51` has a disable mid-file.
-	- Note: `include/gfs-rotate.bash` repeats 2 of its top disables mid-file, and `git-auto-msg.bash` has unbraced expansions. Both are copies from shcl, so fix them there.
+	- Opened: 20261028-090332
+	- Opened by: split from 2026102808215708
+	- Parent ID: 2026102808215708
+	- Prereq IDs: 2026102808215717
+	- Note: `PSAvoidUsingDoubleQuotesForConstantString` is an Information rule, so it reports nothing while `Severity` is Error and Warning. Turn both on together.
+	- Note: The Information level adds 14 `PSUseOutputTypeCorrectly` hits in `utility/dogfood_tukfs-hash.ps1` until its functions get OutputType lines, in 2026102808215717. The constant-string rule finds nothing today.
 
 - Some Rust types and helpers hide what their parts mean.
 	- ID: 2026102808215688
@@ -1816,6 +1827,31 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- Shellcheck lines that do nothing hide later warnings.
+	- ID: 2026102808215698
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: The `## shellcheck source=` hints at `cicd.bash:170`, `config.bash:46`, `in-image.bash:32` and `include/leak-common.bash:41` aren't read as directives. They need a single `#`, and the lint stage would need `-x` to use them.
+	- Note: Top-of-file disables that suppress nothing: `cicd.bash:6,8,9`, `advisories.bash:4`, `in-image.bash:4`, `include/ctr-image.bash:3`, `lint-report.bash:3,4` and `remote-tests.bash:4`.
+	- Note: `hooks/pre-push:51` has a disable mid-file.
+	- Note: `include/gfs-rotate.bash` repeats 2 of its top disables mid-file, and `git-auto-msg.bash` has unbraced expansions. Both are copies from shcl, so fix them there.
+	- Progress log:
+		- 2026-10-28: A repo-root `.shellcheckrc` turns on `external-sources` with `source-path=SCRIPTDIR`, so the pipeline, a hand run and an editor all follow sources. The 4 source hints take one `#`.
+		- 2026-10-28: With sources followed, 28 top-of-file disables suppressed nothing, the 9 noted included, and are gone. The `pre-push` disable is at the top now.
+		- 2026-10-28: Verified: shellcheck is clean on all 32 files. Without `.shellcheckrc` it reports 15 SC1091, 17 SC2154 and 1 SC2034. `--backlog-run-quick` and the hook cases in `cicd-flags-check.bash` passed.
+	- Decisions:
+		- An rc file, not `-x` on the command line, so a hand run gives the pipeline's answer, as `PSScriptAnalyzerSettings.psd1` does.
+		- `gfs-rotate.bash`, `git-auto-msg.bash` and `n8git_backup-and-publish` are shcl's copies, and were left for shcl, per the note. Their `##` lines aren't directives, and `n8git_backup-and-publish` has 10 unused disables too.
+	- Swept: every `shellcheck disable` and `source=` line in the 32 files the lint stage takes, each disable taken out alone and checked with and without sources followed.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have none. The lint stage's shellcheck step is the check.
+	- Acceptance signoff: Self-closed: the lint gate passes, and goes red without the rc file.
+	- Closed: 20261028-090352
 
 - Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
 	- ID: 2026102519331112

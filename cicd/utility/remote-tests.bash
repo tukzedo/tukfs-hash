@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2029  ## 'Expands on the client side.' Meant: the work folder's path is made here.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' scratch and the REMOTE_ settings come from leak-common.bash.
-
 ##	Purpose:
 ##		The unit tests and the integration test on a test box of another arch,
 ##		such as vmDebARM64, on the release build of it. The box is held through

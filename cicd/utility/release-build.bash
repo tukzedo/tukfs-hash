@@ -2,7 +2,6 @@
 
 #  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
 #  shellcheck disable=2034  ## 'variable appears unused.' ctr_step is read by ctr-image.bash.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' The REL_ settings and in_image come from config.bash, through leak-common.bash.
 
 ##	Purpose:
 ##		The release builds, in the release image from cicd/container-release,

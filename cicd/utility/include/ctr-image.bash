@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=2034  ## 'variable appears unused.' stop_cidfiles is read by stop-descendants.bash.
 #  shellcheck disable=2154  ## 'referenced but not assigned.' root, APP_NAME, CPU_CAP, the CTR_ settings, the PINs and stop_cidfile come from config.bash and stop-descendants.bash, sourced first.
 
 ##	Purpose:

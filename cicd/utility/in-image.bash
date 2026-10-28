@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 #  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' TESTS_CTR_TARGET_DIR comes from config.bash.
 
 ##	Purpose:
 ##		Run by cicd.bash in the release image, through ctr-image.bash's
@@ -29,7 +28,7 @@ here="${root}/cicd"
 cd "${root}"
 source "${here}/utility/include/cpu-cap.bash"
 fCpuCap
-## shellcheck source=../config.bash
+# shellcheck source=../config.bash
 source "${here}/config.bash"
 export CARGO_TARGET_DIR="${TESTS_CTR_TARGET_DIR}"
 exec "$@"

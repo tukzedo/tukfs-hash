@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'source is valid here, but shellcheck doesn't know the path to it.'
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes, use double quotes for that.' I know, and I often want an explicit '$'.
 #  shellcheck disable=2034  ## 'variable appears unused.' Complains about valid use of variable indirection.
-#  shellcheck disable=2153  ## 'Possible misspelling.' False hit on vars assigned in the sourced config.bash.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' False hit on trap strings that assign the var they use (rc=$?).
-#  shellcheck disable=2155  ## 'Declare and assign separately to avoid masking return values.' Cumbersome and unnecessary.
-#  shellcheck disable=2317  ## 'Can't reach.' False hits on functions that only run from a trap.
-#  shellcheck disable=2329  ## 'This function is never invoked.' The same, for the EXIT trap's function.
+#  shellcheck disable=2329  ## 'This function is never invoked.' False hit on the EXIT trap's function.
 
 ##	- Purpose: Local CI/CD pipeline. Generic engine; the project's settings
 ##	  are in config.bash.
@@ -17,7 +12,7 @@
 ##	   2. build (debug)
 ##	   3. lint (clippy, shellcheck over every tracked *.bash, markdownlint over
 ##	      every tracked .md, PSScriptAnalyzer over every tracked .ps1, ruff
-##	      over every tracked .py, then LINT_EXTRA, such as the test ID check)
+##	      and mypy over every tracked .py, then LINT_EXTRA, such as the test ID check)
 ##	   4. tests (cargo test, then the integration test once per test root),
 ##	      then the slow leak checks
 ##	   5. profiler (a flamegraph of a scan, from an in-process sampler, into
@@ -159,7 +154,7 @@ fCpuCap
 
 ## Settings config.bash may leave out.
 LEAKCHECK_STEPS=(); CROSS_TARGETS=(); QUICK_SKIP=(); FROZEN_LINKS=(); CACHE_DIRS=(); SHELLCHECK_EXTRA=(); MARKDOWN_SKIP=()
-RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); LINT_EXTRA=()
+RELEASE_CHECKS=(); DOGFOOD_DESTS=(); DOGFOOD_RUNNERS=(); PS_LINT_CMD=(); PY_LINT_CMD=(); PY_FMT_CHECK_CMD=(); PY_TYPE_CMD=(); LINT_EXTRA=()
 TEST_ID_LIST_CMD=(); REMOTE_HOSTS=(); REMOTE_VM_WRAP=''; REMOTE_LOCK_WAIT=900
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
@@ -167,7 +162,7 @@ PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
-## shellcheck source=config.bash
+# shellcheck source=config.bash
 source "${here}/config.bash"
 
 ## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs
@@ -775,7 +770,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
 	fEcho_Clean "Build (debug) ..: $( ((debug_off)) && echo '(skipped)' || echo "${BUILD_CMD[*]}")"
-	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
+	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff, mypy$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
 	_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*} (${_r#*|}), "; done
 	fEcho_Clean "Tests ..........: $( ((tests_off || unit_off)) && echo '(skipped)' || echo "${TEST_CMD[*]}")"
 	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }")"
@@ -1066,7 +1061,8 @@ fStageLint(){
 		fEcho_Clean "PSScriptAnalyzer: ${#psFiles[@]} file(s)"
 		if fLintRun "${PS_LINT_CMD[@]}" "${psFiles[@]}"; then fEcho "OK: PSScriptAnalyzer clean"; else failed+=(PSScriptAnalyzer); fi
 	fi
-	## Not through fLintTool: a box without ruff skips it even in the merge gate.
+	## Not through fLintTool: a box without ruff or mypy skips it even in the
+	## merge gate.
 	if ((${#pyFiles[@]})) && ((${#PY_LINT_CMD[@]})); then
 		if ! command -v "${PY_LINT_CMD[0]}" >/dev/null 2>&1; then
 			fEcho "NOTE: ${PY_LINT_CMD[0]} isn't installed; ${#pyFiles[@]} Python file(s) not linted"
@@ -1078,6 +1074,15 @@ fStageLint(){
 			else
 				failed+=(ruff)
 			fi
+		fi
+	fi
+	if ((${#pyFiles[@]})) && ((${#PY_TYPE_CMD[@]})); then
+		if ! command -v "${PY_TYPE_CMD[0]}" >/dev/null 2>&1; then
+			fEcho "NOTE: ${PY_TYPE_CMD[0]} isn't installed; ${#pyFiles[@]} Python file(s) not type-checked"
+			echo "${PY_TYPE_CMD[0]}" >> "${gate_skips}"
+		else
+			fEcho_Clean "mypy: ${#pyFiles[@]} file(s)"
+			if fLintRun "${PY_TYPE_CMD[@]}" "${pyFiles[@]}"; then fEcho "OK: mypy clean"; else failed+=(mypy); fi
 		fi
 	fi
 	for c in "${LINT_EXTRA[@]}"; do
@@ -1733,3 +1738,5 @@ exit 0
 ##		  too, and long ones only in --long, which the frozen copy now gets.
 ##		- 2026-10-25: A killed run's dir and frozen copy go at the next run
 ##		  again. Only a kept dir waits 2 days.
+##		- 2026-10-28: mypy in the lint stage. shellcheck follows sources, per
+##		  .shellcheckrc, so the disables that only covered for that are gone.

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+#  shellcheck disable=2053  ## 'Quote the right-hand side of == in [[ ]].' fIsDoc's glob match is meant.
+
 ##	- Purpose: Run the merge gate, cicd.bash --merge-gate, before a push moves
 ##	  main, since dev into main is a release. A push of dev or any other
 ##	  branch goes straight through.
@@ -48,7 +50,6 @@ if [[ -f "${root}/cicd/docs-paths" ]]; then
 		[[ -z "${line}" || "${line}" == '#'* ]] || docGlobs+=("${line}")
 	done < "${root}/cicd/docs-paths"
 fi
-# shellcheck disable=2053  ## The glob is meant.
 fIsDoc(){ local g; for g in "${docGlobs[@]}"; do [[ "$1" == ${g} ]] && return 0; done; return 1; }
 
 ## True when every file that differs between the two commits is a doc. A

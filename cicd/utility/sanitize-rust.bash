@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' PIN_NIGHTLY and LEAK_DIR come from config.bash, through leak-common.bash.
-
 ##	Purpose:
 ##		The unit tests again under a sanitizer or Miri, on the dated nightly
 ##		in cicd/tool-pins.env, each in a build dir of its own under

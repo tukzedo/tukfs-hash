@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' LEAK_DIR comes from config.bash, through leak-common.bash.
-
 ##	Purpose:
 ##		The soak test, src/soak.rs: scan a small tree, change a file, scan
 ##		again, then status and accept, 20 rounds in one process, failing when

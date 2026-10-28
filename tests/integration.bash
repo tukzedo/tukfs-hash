@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#  shellcheck disable=1091  ## 'Not following.' The stop include is checked on its own.
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
 ##		root, and no mounts but step 23's in a user namespace, so mount

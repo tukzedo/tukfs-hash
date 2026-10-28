@@ -405,8 +405,8 @@ def type_events(
                 overshoot = text[i + 1]
                 events.append(KeyEvent(KeyAction.TYPE, overshoot, 60000.0 / (wpm * 5)))
             events.append(KeyEvent(KeyAction.PAUSE, None, rng.uniform(320, 640)))
-            for _ in range(2 if overshoot else 1):
-                events.append(KeyEvent(KeyAction.BACKSPACE, None, rng.uniform(95, 150)))
+            backs = 2 if overshoot else 1
+            events.extend(KeyEvent(KeyAction.BACKSPACE, None, rng.uniform(95, 150)) for _ in range(backs))
             events.append(KeyEvent(KeyAction.TYPE, ch, rng.uniform(140, 260)))
             fixes += 1
             continue
@@ -433,11 +433,9 @@ def build_palette(user_tint: Rgb, host_tint: Rgb) -> Image.Image:
 
     t = THEME
     colors = [*t.values(), user_tint, host_tint, *TRAFFIC_LIGHTS]
-    for c in (t["fg"], t["gray"], t["dim"], user_tint, host_tint):
-        for k in (0.22, 0.45, 0.68, 0.86):
-            colors.append(blend(t["bg"], c, k))
-    for k in (0.35, 0.7):
-        colors.append(blend(t["titlebar"], t["titletxt"], k))
+    ramps = (t["fg"], t["gray"], t["dim"], user_tint, host_tint)
+    colors.extend(blend(t["bg"], c, k) for c in ramps for k in (0.22, 0.45, 0.68, 0.86))
+    colors.extend(blend(t["titlebar"], t["titletxt"], k) for k in (0.35, 0.7))
     colors = list(dict.fromkeys(colors))
     colors = (colors + [(0, 0, 0)] * 256)[:256]
     pal = Image.new("P", (1, 1))

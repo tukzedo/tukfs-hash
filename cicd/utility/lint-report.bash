@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=2155  ## 'Declare and assign separately.' Cumbersome and unnecessary here.
-#  shellcheck disable=2086  ## 'Double quote to prevent word splitting.' OK for integer flags.
-
 ##	Purpose:
 ##		Show the warnings and errors from the newest cicd run log. cicd tees each
 ##		run to cicd/artifacts/lint/run_<ts>.log (gitignored, GFS-rotated); this

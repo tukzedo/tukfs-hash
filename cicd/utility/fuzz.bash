@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' scratch and CPU_CAP come from the includes.
-
 ##	Purpose:
 ##		The parser fuzz tests, each unit test named fuzz_*, for SECS of wall
 ##		time each: the mount table, zfs diff and btrfs find-new output, lists,

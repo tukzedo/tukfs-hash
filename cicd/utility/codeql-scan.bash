@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The includes are checked on their own.
-#  shellcheck disable=2034  ## 'variable appears unused.' leak_host_note is read by leak-common.bash.
-#  shellcheck disable=2154  ## 'referenced but not assigned.' PIN_ and LEAK_ settings come from config.bash, through leak-common.bash.
-
 ##	Purpose:
 ##		CodeQL's Rust security-and-quality suite over a copy of the crate with
 ##		every dependency vendored into it (cargo vendor), so the crates are

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=1091  ## 'Not following.' The include is checked on its own.
 #  shellcheck disable=2016  ## 'Expressions don't expand in single quotes.' On purpose: the writer's script expands in its own bash.
 
 ##	Purpose:
