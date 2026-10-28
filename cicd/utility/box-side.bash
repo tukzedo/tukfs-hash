@@ -67,11 +67,12 @@ fMake(){
 		if [[ "${pid}" =~ ^[0-9]+$ && -d "/proc/${pid}" ]]; then continue; fi
 		fSafeRm "${d}" || true
 	done
-	stamp="$(date +%Y%m%d-%H%M%S)"
-	while ! mkdir -- "${base}/${stamp}_$(printf '%03d' "${n}")" 2> /dev/null; do
+	printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
+	printf -v d '%s/%s_%03d' "${base}" "${stamp}" "${n}"
+	while ! mkdir -- "${d}" 2> /dev/null; do
 		n=$((n + 1)); ((n < 1000)) || { echo "box-side: no free run folder in ${base}" >&2; return 2; }
+		printf -v d '%s/%s_%03d' "${base}" "${stamp}" "${n}"
 	done
-	d="${base}/${stamp}_$(printf '%03d' "${n}")"
 	echo "$$" > "${d}/run.pid"
 	echo "dir=${d}"
 }

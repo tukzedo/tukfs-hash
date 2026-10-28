@@ -79,20 +79,6 @@
 		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
 	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
 
-- cicd scripts start a process per item in several loops.
-	- ID: 2026102808215748
-	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `1282504` and `4a1977a`. Plausible, read only.
-	- Note: `fPruneCache` in `cicd.bash` runs `du`, `cut`, `realpath` and `rm` for each stale cache entry. After a toolchain update every entry is stale, which is thousands of processes.
-	- Note: `fInUse` runs `readlink` for every process on the box, about 1,400.
-	- Note: `profile-workload.bash` runs `printf` and an unguarded `mkdir -p` per generated file, about 1,600 in all.
-	- Note: Smaller ones: `codeql-scan.bash` greps the whole listing per file, `lint-report.bash` calls `basename` per log, `include/scratch.bash` calls `date`, `box-side.bash` and `integration.bash` call `printf` 3 times for one number, and `integration.bash` polls with `seq`.
-
 - `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
 	- ID: 2026102808215831
 	- Type: Bug
@@ -119,6 +105,52 @@
 	- Note: `scan::lock` reports any `flock` failure as another scan holding the lock, so ENOLCK or EOPNOTSUPP reads wrong. Say locked only for EWOULDBLOCK.
 	- Note: `give_back` ignores a failed `chown`. That's fine for the WAL files, which are often gone, but a failure on the database itself leaves it owned by root with no warning.
 
+- cicd scripts start a process per item in several loops.
+	- ID: 2026102808215748
+	- Type: Enhancement
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, for its profile, CodeQL, other hosts and leak check stages, which run `profile-workload.bash`, `codeql-scan.bash`, `box-side.bash` and `include/scratch.bash`.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `1282504` and `4a1977a`. Plausible, read only.
+	- Note: `fPruneCache` in `cicd.bash` runs `du`, `cut`, `realpath` and `rm` for each stale cache entry. After a toolchain update every entry is stale, which is thousands of processes.
+	- Note: `fInUse` runs `readlink` for every process on the box, about 1,400.
+	- Note: `profile-workload.bash` runs `printf` and an unguarded `mkdir -p` per generated file, about 1,600 in all.
+	- Note: Smaller ones: `codeql-scan.bash` greps the whole listing per file, `lint-report.bash` calls `basename` per log, `include/scratch.bash` calls `date`, `box-side.bash` and `integration.bash` call `printf` 3 times for one number, and `integration.bash` polls with `seq`.
+	- Progress log:
+		- 2026-10-28: `fPruneCache` makes one `du` and one `rm` per cache area, and resolves the area once rather than each entry. `fInUse` compares inodes with `-ef`, with no process per entry. The rest use `printf -v`, `${f##*/}`, a lookup table, a guarded `mkdir` and a counted loop.
+		- 2026-10-28: Verified: on the same made-up cache, the old and new `fPruneCache` printed the same count and size and left the same entries, links and refused names included. With 4,016 stale entries, 13.1 s became 1.0 s at load 10.
+		- 2026-10-28: Verified: `fInUse` gave the same answer as before for a running file, a link to it, an idle file, a missing one and a running file replaced by a rename. 4.2 s became 35 ms over 1,435 processes.
+		- 2026-10-28: Verified: `profile-workload.bash gen` made the same 3,313 files, with the same names, sizes and mtimes, as before. `box-side.bash make` twice in a second gave `_001` and `_002`. The quick gate passed, the integration test included.
+		- Unverified in a real run: `fPruneCache` and `fInUse` run only in the default run's cleanup and dogfood, which a round doesn't run.
+	- Decisions:
+		- `du -l` keeps counting a hard link in each name, as the old per-entry `du` did, so the freed size reads the same.
+		- The `basename` calls in `lint-report.bash` that run once, on the way out, were left.
+	- Swept: `seq` polls and `$(printf` and `$(date` in loops across the cicd scripts and the integration test. A third `seq` poll in `integration.bash` was changed too. `green-tree.bash` and `cicd.bash` call `date` once per run, and were left.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/prune-cache-parity.bash OLD_CICD NEW_CICD WORKDIR [STALE_COUNT]` compares the old and new `fPruneCache`.
+
+- The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
+	- ID: 2026102808215799
+	- Type: Bug
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, for its profile and demo gif stages.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `c4eacb8` and `d9a4f9d`. Plausible, read only.
+	- Note: `${EPOCHREALTIME/./}` at `cicd.bash:1154` and `demo-gif.bash:55` leaves the comma in. `fNow` already handles both.
+	- Reproduced [Bug]: 2026-10-28 on b23, in a locale with a comma for its point. A 1.25 s wait read as 0.62 s in `fSecsSince` and 0.4 s in `demo-gif.bash`, with no error.
+	- Actual cause [Bug]:
+		- Only a point was taken out, and bash's arithmetic reads the comma left in as its comma operator.
+	- Actual fix [Bug]: Both take out a point or a comma, as `fNow` does.
+	- Progress log:
+		- 2026-10-28: Verified: both lines gave the wrong time before the fix and 1.25 s and 1.2 s after, in that locale and in C.UTF-8.
+	- Swept: every `EPOCHREALTIME` in the repo. The other 3 only make a token, where a comma does no harm.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/comma-locale.bash WORKDIR` builds the locale to rerun it.
+
 - gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
 	- ID: 2026102808215809
 	- Type: Bug
@@ -140,17 +172,6 @@
 	- Actual fix [Bug]: `optimize_gif` returns None once gifsicle has run, or why it didn't. FileNotFoundError is the only "no gifsicle", and anything else goes to stderr.
 	- Branch: round-20261028
 	- Test case: none with an ID, since the pipeline's Python has no test IDs. `private/claude_simple/tools/gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
-
-- The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
-	- ID: 2026102808215799
-	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `c4eacb8` and `d9a4f9d`. Plausible, read only.
-	- Note: `${EPOCHREALTIME/./}` at `cicd.bash:1154` and `demo-gif.bash:55` leaves the comma in. `fNow` already handles both.
 
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789

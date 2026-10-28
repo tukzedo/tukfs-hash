@@ -22,10 +22,11 @@ scratch_mark=".leak-run"
 scratch_token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 
 fScratchMake(){   ## fScratchMake KIND
-	local base="" d=""
+	local base="" d="" stamp=""
 	[[ "${1:-}" =~ ^[a-z0-9]+$ ]] || { echo "fScratchMake: bad kind: ${1:-}" >&2; return 1; }
 	base="$(realpath -e -- "${TMPDIR:-/tmp}")" || return 1
-	d="${base}/tukfs-hash-leak_$1_$(date +%Y%m%d-%H%M%S)_$$"
+	printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
+	d="${base}/tukfs-hash-leak_$1_${stamp}_$$"
 	mkdir -- "${d}" || return 1
 	printf '%s\n' "${scratch_token}" > "${d}/${scratch_mark}" || return 1
 	scratch="${d}"

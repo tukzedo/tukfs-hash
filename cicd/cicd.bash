@@ -429,12 +429,14 @@ fGitRemote(){ if command -v gitsby >/dev/null 2>&1; then gitsby raw git "$@"; el
 ## Dogfood helpers, from shcl's engine.
 ## First existing and writable dir from the list; nothing when there's none.
 fFirstWritableDir(){ local d; for d in "$@"; do if [[ -d "${d}" && -w "${d}" ]]; then echo "${d}"; break; fi; done; return 0; }
-## 0 when a running process was started from this file.
+## 0 when a running process was started from this file. -ef compares the
+## inode the exe link points at, with no process per entry. A replaced file's
+## old inode doesn't match, the same as its "(deleted)" name didn't.
 fInUse(){   ## fInUse PATH
-	local path exe
-	path="$(readlink -f -- "$1" 2>/dev/null)" || return 1
+	local exe
+	[[ -e "$1" ]] || return 1
 	for exe in /proc/[0-9]*/exe; do
-		if [[ "$(readlink -- "${exe}" 2>/dev/null || true)" == "${path}" ]]; then return 0; fi
+		if [[ "${exe}" -ef "$1" ]]; then return 0; fi
 	done
 	return 1
 }
@@ -1150,8 +1152,9 @@ fRecordGreen(){
 	return 0
 }
 
-## Seconds since an EPOCHREALTIME, to 2 places, with no fork.
-fSecsSince(){ local us=$(( ${EPOCHREALTIME/./} - ${1/./} )); printf '%d.%02d s' $((us / 1000000)) $((us % 1000000 / 10000)); }
+## Seconds since an EPOCHREALTIME, to 2 places, with no fork. Its point
+## follows the locale, so a comma goes too.
+fSecsSince(){ local us=$(( ${EPOCHREALTIME/[.,]/} - ${1/[.,]/} )); printf '%d.%02d s' $((us / 1000000)) $((us % 1000000 / 10000)); }
 
 ## Stage 5: profiler. The attribution check comes before any graph is drawn,
 ## since a graph that names the wrong code is worse than none. A failed build,
@@ -1468,17 +1471,26 @@ fRunFrozen(){
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
 ## Cleanup
 
-## rm -rf for a build cache entry: TARGET/<profile>/<area>/<name>, or the same
-## under a target triple, no links, and ours. The profiles are debug, release
-## and profiling.
-fSafeRmCache(){   ## fSafeRmCache CACHE_REAL PATH
-	local cache="$1" p="$2" real=""
+## rm -rf for build cache entries in one area: TARGET/<profile>/<area>/<name>,
+## or the same under a target triple, no links, and ours. The profiles are
+## debug, release and profiling. The area is resolved once, so a name in it
+## that isn't a link can't lead anywhere else. One rm for the lot, since after
+## a toolchain update every entry is stale. A name that fails a check is left.
+fSafeRmCache(){   ## fSafeRmCache CACHE_REAL AREA NAME...
+	local cache="$1" area="$2" real="" name="" p=""
+	local -a ok=()
+	shift 2
 	[[ "${cache}" == /* && "${cache}" != *//* && "${cache}" != *..* ]] || return 1
-	[[ "${p}" == "${cache}/"* && "${p}" != *..* && "${p}" != *$'\n'* ]] || return 1
-	[[ "${p#"${cache}/"}" =~ ^([a-z0-9_-]+/)?(debug|release|profiling)/(deps|build|\.fingerprint|incremental)/[A-Za-z0-9_.+-]+$ ]] || return 1
-	real="$(realpath -e -- "${p}" 2>/dev/null || true)"
-	[[ "${real}" == "${p}" && ! -L "${p}" && -O "${p}" ]] || return 1
-	rm -rf --one-file-system -- "${p}"
+	[[ "${area}" == "${cache}/"* && "${area}" != *..* && "${area}" != *$'\n'* ]] || return 1
+	[[ "${area#"${cache}/"}" =~ ^([a-z0-9_-]+/)?(debug|release|profiling)/(deps|build|\.fingerprint|incremental)$ ]] || return 1
+	real="$(realpath -e -- "${area}" 2>/dev/null || true)"
+	[[ "${real}" == "${area}" && ! -L "${area}" ]] || return 1
+	for name in "$@"; do
+		p="${area}/${name}"
+		if [[ "${name}" =~ ^[A-Za-z0-9_.+-]+$ && "${name}" != *..* && ! -L "${p}" && -O "${p}" ]]; then ok+=("${p}"); fi
+	done
+	((${#ok[@]})) || return 0
+	printf '%s\0' "${ok[@]}" | xargs -0 rm -rf --one-file-system --
 }
 
 ## Build cache entries that are dead for sure: made before the pinned
@@ -1487,7 +1499,8 @@ fSafeRmCache(){   ## fSafeRmCache CACHE_REAL PATH
 ## stays. Prints "COUNT KB".
 fPruneCache(){   ## fPruneCache DIR
 	local dir="${root}/$1" cache="" sysroot="" toolTime=0 mt=0 kb=0 n=0 name="" crate="" e="" area="" size="" stale=0
-	local -A crates=()
+	local -a names=()
+	local -A crates=() sizes=()
 	[[ -d "${dir}" ]] || { echo "0 0"; return 0; }
 	cache="$(realpath -e -- "${dir}")" || { echo "0 0"; return 0; }
 	sysroot="$(rustc --print sysroot 2>/dev/null || true)"
@@ -1497,6 +1510,7 @@ fPruneCache(){   ## fPruneCache DIR
 	## and build_script_build-<hash> beside its package's dir.
 	for area in "${cache}"/{,*/}{debug,release,profiling}/{deps,build,.fingerprint,incremental}; do
 		[[ -d "${area}" && ! -L "${area}" ]] || continue
+		names=()
 		while IFS=$'\t' read -r -d '' mt e; do
 			[[ "${mt}" =~ ^[0-9]{1,15}$ ]] || continue
 			name="${e##*/}"
@@ -1507,13 +1521,20 @@ fPruneCache(){   ## fPruneCache DIR
 				crate="${name%-*}"; crate="${crate//-/_}"
 				if [[ -z "${crates[${crate}]:-}" && -z "${crates[${crate#lib}]:-}" && "${crate}" != build_script_* ]]; then stale=1; fi
 			fi
-			((stale)) || continue
-			size="$(du -sk -- "${e}" 2>/dev/null | cut -f1 || true)"
-			if fSafeRmCache "${cache}" "${e}"; then
-				n=$((n + 1))
-				if [[ "${size}" =~ ^[0-9]{1,15}$ ]]; then kb=$((kb + size)); fi
-			fi
+			if ((stale)); then names+=("${name}"); fi
 		done < <(find "${area}" -mindepth 1 -maxdepth 1 -printf '%Ts\t%p\0' 2>/dev/null)
+		((${#names[@]})) || continue
+		## Sizes first, all in one du, a hard link counted in each name as
+		## before. A name is counted once it's gone.
+		sizes=()
+		while IFS=$'\t' read -r -d '' size e; do
+			if [[ "${size}" =~ ^[0-9]{1,15}$ ]]; then sizes["${e##*/}"]="${size}"; fi
+		done < <(printf '%s\0' "${names[@]/#/"${area}/"}" | du -skl -0 --files0-from=- 2>/dev/null)
+		fSafeRmCache "${cache}" "${area}" "${names[@]}" || true
+		for name in "${names[@]}"; do
+			[[ -e "${area}/${name}" || -L "${area}/${name}" ]] && continue
+			n=$((n + 1)); kb=$((kb + ${sizes["${name}"]:-0}))
+		done
 	done
 	echo "${n} ${kb}"
 }

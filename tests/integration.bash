@@ -64,12 +64,13 @@ while IFS= read -r -d '' old; do
 done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
 
 n=1
-stamp="$(date +%Y%m%d-%H%M%S)"
-until mkdir -- "${base}/${stamp}_$(printf '%03d' "${n}")" 2> /dev/null; do
-	[[ -e "${base}/${stamp}_$(printf '%03d' "${n}")" ]] || { echo "could not make a work folder in ${base}" >&2; exit 2; }
+printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
+printf -v work '%s/%s_%03d' "${base}" "${stamp}" "${n}"
+until mkdir -- "${work}" 2> /dev/null; do
+	[[ -e "${work}" ]] || { echo "could not make a work folder in ${base}" >&2; exit 2; }
 	n=$((n + 1)); [[ "${n}" -lt 1000 ]] || { echo "no free work folder name in ${base}" >&2; exit 2; }
+	printf -v work '%s/%s_%03d' "${base}" "${stamp}" "${n}"
 done
-work="${base}/${stamp}_$(printf '%03d' "${n}")"
 printf '%s\n' "${token}" > "${work}/.test-run"
 printf '%s\n' "$$" > "${work}/run.pid"
 if [[ -n "${keep}" ]]; then : > "${work}/.test-kept"; fi
@@ -123,7 +124,8 @@ tomorrow="$(date -d tomorrow +%Y-%m-%d)"
 # Waits up to 10 s for a scan to say it has started, rather than guessing.
 # Up to 60 s, since a loaded box has taken more than 10 to get going.
 wait_started() {
-	for _ in $(seq 1 1200); do
+	local i
+	for ((i = 0; i < 1200; i++)); do
 		grep -q '^group ' "${1}" 2> /dev/null && return 0
 		sleep 0.05
 	done
@@ -132,7 +134,8 @@ wait_started() {
 # wait_reached PID DIR: up to 60 s for a scan to have a file under DIR open.
 # Fails at once if it has ended, since a zombie has no fds.
 wait_reached() {
-	for _ in $(seq 1 1200); do
+	local i
+	for ((i = 0; i < 1200; i++)); do
 		[[ -e "/proc/${1}/fd/1" ]] || return 1
 		[[ -n "$(find "/proc/${1}/fd" -lname "${2}/*" -print -quit 2> /dev/null)" ]] && return 0
 		sleep 0.05
@@ -465,7 +468,7 @@ wscan > /dev/null
 sqlite3 "${wdb}" 'PRAGMA journal_mode=WAL' > /dev/null
 python3 -I -c 'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute("SELECT count(*) FROM runs").fetchall(); print("open", flush=True); time.sleep(120)' "${wdb}" > "${work}/holder.txt" &
 holder=$!
-for _ in $(seq 1 200); do grep -q open "${work}/holder.txt" && break; sleep 0.05; done
+for ((i = 0; i < 200; i++)); do grep -q open "${work}/holder.txt" && break; sleep 0.05; done
 fFlipByte "${wl}/f" 0 1
 rc="$(wscan --since "${tomorrow}")"
 kill "${holder}"; wait "${holder}" 2> /dev/null || true

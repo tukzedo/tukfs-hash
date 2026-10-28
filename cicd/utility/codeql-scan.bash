@@ -106,8 +106,10 @@ fi
 ## what the database kept.
 full=1
 listed="$(unzip -Z1 "${db}/src.zip")"
+declare -A inDb=()
+while IFS= read -r f; do [[ -z "${f}" ]] || inDb["${f}"]=1; done <<<"${listed}"
 while IFS= read -r -d '' f; do
-	if ! grep -qxF -- "${f#/}" <<<"${listed}"; then echo "codeql-scan: the database left out ${f#"${src}/"}"; full=0; fi
+	if [[ -z "${inDb["${f#/}"]:-}" ]]; then echo "codeql-scan: the database left out ${f#"${src}/"}"; full=0; fi
 done < <(find "${src}/src" "${src}/tests" -name '*.rs' -print0)
 roots="$(cd "${src}" && cargo metadata --format-version 1 --locked --offline --all-features --filter-platform x86_64-unknown-linux-gnu \
 	| jq -r '[.resolve.nodes[].id] as $ids | .packages[] | select(.id as $i | $ids | index($i)) | select(.source != null)
@@ -116,7 +118,7 @@ nRoots=0
 while IFS= read -r f; do
 	[[ -n "${f}" ]] || continue
 	nRoots=$((nRoots + 1))
-	if ! grep -qxF -- "${f#/}" <<<"${listed}"; then echo "codeql-scan: the database left out the crate root ${f#"${src}/"}"; full=0; fi
+	if [[ -z "${inDb["${f#/}"]:-}" ]]; then echo "codeql-scan: the database left out the crate root ${f#"${src}/"}"; full=0; fi
 done <<<"${roots}"
 ## A file outside every module tree says "semantic analyzer unavailable" too,
 ## which a crate's benches and Windows code do, so only ours count.
