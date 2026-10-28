@@ -29,20 +29,11 @@
 
 ## Issues
 
-- No public code style guide or contributing.md, and README points to neither.
-	- ID: 2026102808215637
-	- Type: Task
-	- Status: Stalled
-		- Held for: the repo going public.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: The repo is private, so this can wait until it goes public.
-
 - `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
 	- ID: 2026102814341403
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on UAT
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 3
@@ -57,6 +48,22 @@
 	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
 	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
 	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
+	- Actual cause: The lock was opened with no `O_NOFOLLOW`, the database by name with SQLite following a link at it, and the handover used `chown`, which follows links.
+	- Fix: The lock opens with `O_NOFOLLOW` and must be a regular file. Both database opens pass `SQLITE_OPEN_NOFOLLOW`. `hand_over` opens each name with `O_NOFOLLOW`, checks it's a regular file, and uses `fchown` on that fd. A link at a name is reported as one.
+	- Note: SQLite already opens `-wal` and `-shm` with `O_NOFOLLOW`, so dejds and dejdt passed before the fix too. They stay as guards. The refusal there reads "unable to open database file", which doesn't name the link.
+	- Note: A link in a parent folder of the database is still followed. The parent is resolved once at the start, and the folder is the user's own choice.
+	- Test case: dejdp to dejdt, step 24 of `tests/integration.bash`, with the own ids as `SUDO_UID` and `SUDO_GID`. Before the fix dejdq got "0 none" and dejdr "0 made". And dejdv, `a_link_is_not_handed_over`, not run before the fix.
+	- Swept: `scan::lock`, `scan::hand_over`, `db::open_rw` and `db::open_ro`, which every command uses. The callers in `scan::run`, `accept::run` and `prune` all go through these. The root case wasn't run.
+
+- No public code style guide or contributing.md, and README points to neither.
+	- ID: 2026102808215637
+	- Type: Task
+	- Status: Stalled
+		- Held for: the repo going public.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: The repo is private, so this can wait until it goes public.
 
 - A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
 	- ID: 2026102814341404

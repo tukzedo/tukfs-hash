@@ -23,6 +23,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The folder walk looks up each file's row before it queues the file, 256 at a time in one read transaction. A transaction per lookup cost most of the lookup, about a sixth of the CPU on small files. Each batch ends before it waits on the queue, so it doesn't hold back the writer's checkpoints for long.
 
+- Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
+
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
 
 - Pages are 16 KiB, to match the dataset's recordsize.

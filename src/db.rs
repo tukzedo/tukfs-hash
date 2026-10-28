@@ -106,7 +106,11 @@ pub fn init() {
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
 	let fresh = !path.exists();
-	let conn = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+	// A link at the name is refused. SQLite opens `-wal` and `-shm` with
+	// O_NOFOLLOW already, so under sudo nothing is made through a link.
+	let conn =
+		Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
+			.map_err(|e| format!("{}: {e}", path.display()))?;
 	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
 	if fresh {
@@ -195,7 +199,9 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	init();
 	let conn = Connection::open_with_flags(
 		path,
-		OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+		OpenFlags::SQLITE_OPEN_READ_ONLY
+			| OpenFlags::SQLITE_OPEN_NO_MUTEX
+			| OpenFlags::SQLITE_OPEN_NOFOLLOW,
 	)
 	.map_err(|e| format!("{}: {e}", path.display()))?;
 	conn.busy_timeout(Duration::from_secs(30)).ok();

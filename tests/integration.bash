@@ -661,6 +661,28 @@ else
 	skip deeby "scan with a mount point that isn't UTF-8 (no user namespace here)"
 fi
 
+# 24. Run through sudo, a link at the database or one of its 3 other names
+# would be followed as root and the target made or chowned (2026102814341403).
+# The own ids stand in for sudo's, so no root is needed.
+ln_case() {
+	local d="${work}/ln${1:-db}" rc=0
+	mkdir -p "${d}"
+	cp "${db}" "${d}/real.sqlite"
+	if [[ "${2}" == db ]]; then
+		ln -s "${d}/real.sqlite" "${d}/t.sqlite"
+	else
+		cp "${db}" "${d}/t.sqlite"
+		[[ "${2}" == none ]] || ln -s "${d}/target" "${d}/t.sqlite${1}"
+	fi
+	SUDO_UID="$(id -u)" SUDO_GID="$(id -g)" "${bin}" prune --db "${d}/t.sqlite" > "${d}/out.txt" 2>&1 || rc=$?
+	echo "${rc} $([[ -e "${d}/target" ]] && echo made || echo none)"
+}
+check dejdp "sudo prune, no links" "$(ln_case .none none)" "0 none"
+check dejdq "sudo prune, database name a link" "$(ln_case "" db)" "1 none"
+check dejdr "sudo prune, lock a link" "$(ln_case .lock link)" "1 none"
+check dejds "sudo prune, -wal a link" "$(ln_case -wal link)" "1 none"
+check dejdt "sudo prune, -shm a link" "$(ln_case -shm link)" "1 none"
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
