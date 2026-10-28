@@ -240,11 +240,26 @@ pub struct Diff {
 	pub runs: Vec<(u64, u64)>,
 }
 
+/// Read buffers for `compare`, made once per run rather than per file.
+#[derive(Debug)]
+pub struct CompareBufs {
+	a: Vec<u8>,
+	b: Vec<u8>,
+}
+
+impl Default for CompareBufs {
+	fn default() -> Self {
+		Self {
+			a: vec![0u8; 1 << 20],
+			b: vec![0u8; 1 << 20],
+		}
+	}
+}
+
 /// Byte runs that differ. Runs a few bytes apart are merged, since a scribble
 /// rarely changes every byte it touches.
-pub fn compare(mut fa: File, mut fb: File) -> io::Result<Diff> {
-	let mut ba = vec![0u8; 1 << 20];
-	let mut bb = vec![0u8; 1 << 20];
+pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result<Diff> {
+	let CompareBufs { a: ba, b: bb } = bufs;
 	let mut off: u64 = 0;
 	let mut d = Diff {
 		differing: 0,
@@ -252,8 +267,8 @@ pub fn compare(mut fa: File, mut fb: File) -> io::Result<Diff> {
 	};
 	let (la, lb) = (fa.metadata()?.len(), fb.metadata()?.len());
 	while off < la.min(lb) {
-		let na = read_full(&mut fa, &mut ba)?;
-		let nb = read_full(&mut fb, &mut bb)?;
+		let na = read_full(&mut fa, ba)?;
+		let nb = read_full(&mut fb, bb)?;
 		let n = na.min(nb);
 		if n == 0 {
 			break;
@@ -496,6 +511,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 		find_by_inode(old, &mut wanted, &mut jobs, &mut tally);
 	}
 
+	let mut bufs = CompareBufs::default();
 	for job in &jobs {
 		let name = &job.name;
 		let Some((old_path, mo)) = &job.old else {
@@ -534,7 +550,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 				continue;
 			}
 		};
-		match compare(fa, fb) {
+		match compare(fa, fb, &mut bufs) {
 			Ok(d) if d.differing == 0 => {
 				if show_all {
 					out!("same\t{name}\tmetadata only");
@@ -724,10 +740,12 @@ transid marker was 12\n";
 	fn finds_a_scribble() {
 		let _id = test_id("ddx01");
 		let dir = scratch("snapdiff_cmp");
-		let cmp = |a: &str, b: &str| {
+		let mut bufs = CompareBufs::default();
+		let mut cmp = |a: &str, b: &str| {
 			compare(
 				File::open(dir.join(a)).unwrap(),
 				File::open(dir.join(b)).unwrap(),
+				&mut bufs,
 			)
 			.unwrap()
 		};
@@ -746,6 +764,30 @@ transid marker was 12\n";
 		fs::write(dir.join("b"), &a[..100]).unwrap();
 		let d = cmp("a", "b");
 		assert_eq!(d.differing, a.len() as u64 - 100);
+	}
+
+	#[test]
+	fn buffers_carry_nothing_between_pairs() {
+		let _id = test_id("dej04");
+		let dir = scratch("snapdiff_bufs");
+		let mut bufs = CompareBufs::default();
+		let mut cmp = |a: &[u8], b: &[u8]| {
+			fs::write(dir.join("a"), a).unwrap();
+			fs::write(dir.join("b"), b).unwrap();
+			compare(
+				File::open(dir.join("a")).unwrap(),
+				File::open(dir.join("b")).unwrap(),
+				&mut bufs,
+			)
+			.unwrap()
+		};
+		let big: Vec<u8> = (0..5000u32).map(|i| (i * 13) as u8).collect();
+		let other: Vec<u8> = big.iter().map(|x| !x).collect();
+		assert_eq!(cmp(&big, &other).differing, 5000);
+		assert_eq!(cmp(b"same", b"same").differing, 0);
+		let d = cmp(b"0123456789", b"0123456780");
+		assert_eq!((d.differing, d.runs), (1, vec![(9, 1)]));
+		assert_eq!(cmp(b"", b"").differing, 0);
 	}
 
 	// zfs diff's own escape: all but printable ASCII, and space and backslash.

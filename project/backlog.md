@@ -54,13 +54,21 @@
 - snapdiff allocates and zeroes 2 MiB for every file pair it compares.
 	- ID: 2026102808215768
 	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-quick leak`, for Miri and the sanitizers over `dej04`.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-082157
 	- Opened by: style and performance review
 	- Origin: `f05c368`. Plausible, read only.
 	- Note: `compare` in `src/snapdiff.rs` makes both 1 MiB buffers on each call. Make them once in `run()` and pass them in, as `accept.rs` does.
+	- Progress log:
+		- 2026-10-28: Verified: on 20,000 matching files of 1 to 4 KB, user plus sys CPU fell from 1.17 to 1.25 s to 0.21 to 0.29 s over 5 rounds, at load 11 to 12. Wall time fell from about 1.2 s to 0.25 s.
+	- Decisions:
+		- `run()` makes one `CompareBufs` and passes it to every `compare`. A type of its own, not two slices, so the two buffers can't differ in length.
+	- Swept: `compare` has one caller in `run()` and one in the tests. `accept` already reuses its buffer, and `read_sums` takes the caller's.
+	- Branch: round-20261028
+	- Test case: `dej04` (`snapdiff::tests::buffers_carry_nothing_between_pairs`), one set of buffers over 4 pairs, the first leaving 5,000 bytes behind. `ddx01` reuses them too.
+	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
 
 - cicd scripts start a process per item in several loops.
 	- ID: 2026102808215748
