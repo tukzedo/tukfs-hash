@@ -29,181 +29,6 @@
 
 ## Issues
 
-- snapdiff allocates and zeroes 2 MiB for every file pair it compares.
-	- ID: 2026102808215768
-	- Type: Enhancement
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-quick leak`, for Miri and the sanitizers over `dej04`.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `f05c368`. Plausible, read only.
-	- Note: `compare` in `src/snapdiff.rs` makes both 1 MiB buffers on each call. Make them once in `run()` and pass them in, as `accept.rs` does.
-	- Progress log:
-		- 2026-10-28: Verified: on 20,000 matching files of 1 to 4 KB, user plus sys CPU fell from 1.17 to 1.25 s to 0.21 to 0.29 s over 5 rounds, at load 11 to 12. Wall time fell from about 1.2 s to 0.25 s.
-	- Decisions:
-		- `run()` makes one `CompareBufs` and passes it to every `compare`. A type of its own, not two slices, so the two buffers can't differ in length.
-	- Swept: `compare` has one caller in `run()` and one in the tests. `accept` already reuses its buffer, and `read_sums` takes the caller's.
-	- Branch: round-20261028
-	- Test case: `dej04` (`snapdiff::tests::buffers_carry_nothing_between_pairs`), one set of buffers over 4 pairs, the first leaving 5,000 bytes behind. `ddx01` reuses them too.
-	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
-
-- cicd scripts start a process per item in several loops.
-	- ID: 2026102808215748
-	- Type: Enhancement
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, for its profile, CodeQL, other hosts and leak check stages, which run `profile-workload.bash`, `codeql-scan.bash`, `box-side.bash` and `include/scratch.bash`.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `1282504` and `4a1977a`. Plausible, read only.
-	- Note: `fPruneCache` in `cicd.bash` runs `du`, `cut`, `realpath` and `rm` for each stale cache entry. After a toolchain update every entry is stale, which is thousands of processes.
-	- Note: `fInUse` runs `readlink` for every process on the box, about 1,400.
-	- Note: `profile-workload.bash` runs `printf` and an unguarded `mkdir -p` per generated file, about 1,600 in all.
-	- Note: Smaller ones: `codeql-scan.bash` greps the whole listing per file, `lint-report.bash` calls `basename` per log, `include/scratch.bash` calls `date`, `box-side.bash` and `integration.bash` call `printf` 3 times for one number, and `integration.bash` polls with `seq`.
-	- Progress log:
-		- 2026-10-28: `fPruneCache` makes one `du` and one `rm` per cache area, and resolves the area once rather than each entry. `fInUse` compares inodes with `-ef`, with no process per entry. The rest use `printf -v`, `${f##*/}`, a lookup table, a guarded `mkdir` and a counted loop.
-		- 2026-10-28: Verified: on the same made-up cache, the old and new `fPruneCache` printed the same count and size and left the same entries, links and refused names included. With 4,016 stale entries, 13.1 s became 1.0 s at load 10.
-		- 2026-10-28: Verified: `fInUse` gave the same answer as before for a running file, a link to it, an idle file, a missing one and a running file replaced by a rename. 4.2 s became 35 ms over 1,435 processes.
-		- 2026-10-28: Verified: `profile-workload.bash gen` made the same 3,313 files, with the same names, sizes and mtimes, as before. `box-side.bash make` twice in a second gave `_001` and `_002`. The quick gate passed, the integration test included.
-		- Unverified in a real run: `fPruneCache` and `fInUse` run only in the default run's cleanup and dogfood, which a round doesn't run.
-	- Decisions:
-		- `du -l` keeps counting a hard link in each name, as the old per-entry `du` did, so the freed size reads the same.
-		- The `basename` calls in `lint-report.bash` that run once, on the way out, were left.
-	- Swept: `seq` polls and `$(printf` and `$(date` in loops across the cicd scripts and the integration test. A third `seq` poll in `integration.bash` was changed too. `green-tree.bash` and `cicd.bash` call `date` once per run, and were left.
-	- Branch: round-20261028
-	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/prune-cache-parity.bash OLD_CICD NEW_CICD WORKDIR [STALE_COUNT]` compares the old and new `fPruneCache`.
-
-- The demo gif shows a scan's real time, so a slow run redraws it.
-	- ID: 2026102808415586
-	- Type: Bug
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: The full run's demo gif stage.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-084155
-	- Opened by: testing 2026102808215658
-	- Related IDs: 2026102309501605
-	- Steps to reproduce [Bug]: Draw `cicd/demo/scenario.toml` twice with `gen-demo-gif.py`, once with the box under load.
-	- Incorrect behavior [Bug]: One render says "run 2 done after 1s" and the other "0s", so 165 frames differ, and the full run rotates a new gif and updates `assets/demo.gif`.
-	- Expected behavior [Bug]: The same bytes every run, as design.md "Demo gif" says, unless the output or the script changes.
-	- Reproduced [Bug]: 2026-10-28 on b23, at load 10 to 16, 1 of 3 renders.
-	- Actual cause [Bug]:
-		- The scenario pinned dates and times with `[[map]]`, but not the scan's "run N done after Ns" line, which `scan.rs` prints from its own clock.
-	- Actual fix [Bug]: A `[[map]]` in `scenario.toml` pins the seconds to 1. design.md "Demo gif" names the run time as pinned.
-	- Progress log:
-		- 2026-10-28: Verified: with the binary's output rewritten to "after 3s", the old scenario drew different bytes than with the real time, and the new one drew the same. 3 renders of the new scenario gave the same bytes, one with 2 busy loops running.
-	- Swept: every `[[map]]` in the scenario and every run-time print in `src/`. Only the "run N ... after Ns" line shows a duration, and the other lines in the gif have none.
-	- Branch: round-20261028
-	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
-
-- The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
-	- ID: 2026102808215799
-	- Type: Bug
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, for its profile and demo gif stages.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Origin: `c4eacb8` and `d9a4f9d`. Plausible, read only.
-	- Note: `${EPOCHREALTIME/./}` at `cicd.bash:1154` and `demo-gif.bash:55` leaves the comma in. `fNow` already handles both.
-	- Reproduced [Bug]: 2026-10-28 on b23, in a locale with a comma for its point. A 1.25 s wait read as 0.62 s in `fSecsSince` and 0.4 s in `demo-gif.bash`, with no error.
-	- Actual cause [Bug]:
-		- Only a point was taken out, and bash's arithmetic reads the comma left in as its comma operator.
-	- Actual fix [Bug]: Both take out a point or a comma, as `fNow` does.
-	- Progress log:
-		- 2026-10-28: Verified: both lines gave the wrong time before the fix and 1.25 s and 1.2 s after, in that locale and in C.UTF-8.
-	- Swept: every `EPOCHREALTIME` in the repo. The other 3 only make a token, where a comma does no harm.
-	- Branch: round-20261028
-	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/comma-locale.bash WORKDIR` builds the locale to rerun it.
-
-- gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
-	- ID: 2026102808215809
-	- Type: Bug
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: The full run's demo gif stage.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `d9a4f9d`. Plausible, read only.
-	- Note: The error and a non-zero exit are both dropped. Print them, and word the message as gifsicle not running.
-	- Reproduced [Bug]: 2026-10-28 on b23, with a gifsicle that exits 3: `optimize_gif` returned the same False as with none installed, and printed nothing.
-	- Actual cause [Bug]:
-		- `optimize_gif` caught every failure and returned a bare False, which the summary always read as no gifsicle.
-	- Progress log:
-		- 2026-10-28: Verified: before the fix, a missing and a failing gifsicle both gave False with nothing on stderr. After, missing says "no gifsicle", a failure or timeout prints gifsicle's exit code and error, or the time limit, and the summary says "gifsicle didn't run, so bigger". A working gifsicle still squeezes the gif.
-		- 2026-10-28: Verified: the scenario drew the same bytes as the old script on the same box, 496 frames.
-	- Decisions:
-		- A gifsicle that fails is a warning, and the stage still passes, as a missing one is. It only changes the gif's size.
-	- Actual fix [Bug]: `optimize_gif` returns None once gifsicle has run, or why it didn't. FileNotFoundError is the only "no gifsicle", and anything else goes to stderr.
-	- Branch: round-20261028
-	- Test case: none with an ID, since the pipeline's Python has no test IDs. `private/claude_simple/tools/gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
-
-- Lint configs don't enforce all of the style rules.
-	- ID: 2026102808215708
-	- Type: Task
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, for the new mypy pin's check and the leak check image, which the `tool-pins.env` edit rebuilds.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: `cicd/ruff.toml` lacks `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF`. There's no mypy config.
-	- Note: PSScriptAnalyzer could turn on `PSAvoidUsingDoubleQuotesForConstantString` and the Information level, once the OutputType lines are in.
-	- Note: No `.gitattributes` pins line endings for the scripts.
-	- Progress log:
-		- 2026-10-28: ruff selects `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF` too. The 3 `PERF401` hits in `gen-demo-gif.py` use `extend` now.
-		- 2026-10-28: `cicd/mypy.ini` is strict mypy, and the lint stage runs it after ruff, with a pin in `tool-pins.env`. A box without mypy skips it with a note, as with ruff.
-		- 2026-10-28: `.gitattributes` keeps every text file LF, in the repo and in checkouts. All 76 were LF already.
-		- 2026-10-28: The PSScriptAnalyzer part is in child 2026102809033225. Its quote rule is an Information one, so it waits with the level for the OutputType lines. Done in that child.
-		- 2026-10-28: Verified: `gen-demo-gif.py`'s typing events and palette are the same as before over 1,200 seeded cases. The new ruff rules and mypy each flag a planted case. `--backlog-run-quick` passed.
-	- Decisions:
-		- mypy is strict, since the 3 scripts already pass it. PIL's imports are ignored, since mypy's own install often can't see the interpreter's packages.
-		- mypy is pinned like ruff, though the pins file's edit rebuilds the leak check image once.
-	- Branch: round-20261028
-	- Test case: none with an ID, since the cicd scripts have none. The lint stage's ruff and mypy steps are the check.
-
-- Small files cost more sys CPU read direct than read plain.
-	- ID: 2026102809554675
-	- Type: Enhancement
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-quick leak`, for the sanitizers over `debte`.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-095546
-	- Opened by: style and performance review
-	- Parent ID: 2026102808215738
-	- Note: On 20,000 files of 1 to 4 KB, a read without `O_DIRECT` cut about 0.7 s of sys CPU, about 35 us per file.
-	- Progress log:
-		- 2026-10-28: Verified: on 20,000 files of 1 to 4 KB, over 4 rounds at load 8 to 9, a first scan's sys CPU fell from 1.77 to 2.14 s to 1.15 to 1.28 s, and a `--rmlint` rescan's from 1.73 to 2.07 s to 0.97 to 1.17 s. User CPU didn't change.
-	- Decisions:
-		- Files under 64 KiB are read plain, with the drops before and after as for any plain read. Direct saved 0.4 to 0.9 s per GB in 2026102316421705, so it pays for its 35 us at about 40 to 90 KB. Files between 4 and 64 KB weren't timed.
-		- The 3 `posix_fadvise` calls stay. Taking them out changed nothing measurable.
-	- Swept: `read_sums` is the only place that turns on `O_DIRECT`. design.md's read section says so now.
-	- Branch: round-20261028
-	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) now reads sizes on both sides of the 64 KiB floor, with odd tails on each path. It can't see which path was taken, so the CPU timing above is the check.
-	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
-
-- The Python scripts in cicd/utility depart from the Python style rules.
-	- ID: 2026102808215658
-	- Type: Task
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: The full run's demo gif and profile stages.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: `flame-report.py` reassigns the constant `STEP` at run time through `global`. Return the row height from `fParse` and pass it along.
-	- Note: `flame-report.py` reads `Frame` tuples by index, tests membership in a list inside a comprehension, and uses `zip(ys, ys[1:])` where `itertools.pairwise` fits.
-	- Note: `gen-demo-gif.py` keeps key actions as strings where an Enum fits, has a 215-line `main()` with 5 closures, pops from the front of a list in a loop, uses `open()` over `Path.open()`, and checks each character with `ord` in Python.
-	- Note: `test-ids.py` reuses `line` as a str and then an int, which strict mypy refuses. Some of its patterns are compiled and some aren't.
-	- Note: `flame-report.py` came from silkterm, so a fix may belong there too.
-	- Decided against: renaming the mix of PEP 8 and fCamelCase names in `test-ids.py`. New names follow the majority.
-	- Progress log:
-		- 2026-10-28: Done as noted. `gen-demo-gif.py`'s playback is a `Player` class, `main()` is 68 lines, and the action is a `KeyAction` Enum. `test-ids.py`'s int is `line_no`. strict mypy and ruff pass on all 3.
-		- 2026-10-28: Verified: `gen-demo-gif.py` drew the same bytes as the old script, run back to back. `flame-report.py` printed the same over all 12 flamegraphs in `cicd/artifacts/profiling`. `test-ids.py` gave the same `list`, `check` and `find` on the repo, and the same 6 problems on a made-up repo with one of each kind.
-		- Swept: `flame-report.py` names `shcl` as its source in its header, so the same `global STEP` may be in shcl's and silkterm's copies. Not changed here, since they're other repos.
-	- Decisions:
-		- `STEP` stays as the row height for a graph with one row, where there's no gap to measure. It was the fallback before too.
-	- Branch: round-20261028
-	- Test case: none with an ID. The check is the same output from the old and new scripts, above.
-
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
@@ -213,24 +38,6 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
-
-- Per-file allocations and syscalls in the scan's read path haven't been measured.
-	- ID: 2026102808215738
-	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: `db::Prior.b3` is a `Vec<u8>`, so every lookup allocates. `[u8; 32]` reads directly.
-	- Note: `read_sums` makes 7 syscalls per file before any data, 3 `posix_fadvise` and 4 `fcntl`, even for an empty file.
-	- Note: `excluded()` and the `no_xattr` check run for every entry, where once per folder would do, as `in_git` is.
-	- Note: `hashed_msg` copies a path the job already owns. `xattr::fget` allocates per call and `text_of` copies again, and `write_b3` encodes the digest twice. `beneath` builds a CString for a name that's already NUL-terminated.
-	- Note: Each file gets its own `SELECT`. A query per folder is a redesign, worth it only if `lookup` shows near the top on many small files.
-	- Note: Keep only the changes that move the small-files numbers.
-	- Progress log:
-		- 2026-10-28: On 20,000 files of 1 to 4 KB, a scan took about 0.4 to 0.5 s user and 1.8 to 2.2 s sys CPU, at load 6. Without the 3 `posix_fadvise` calls it was the same. Without `O_DIRECT`, sys fell by about 0.7 s, which child 2026102809554675 takes up. The rest of the notes are in child 2026102809554785.
-		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
 
 - Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
 	- ID: 2026102810135573
@@ -1238,6 +1045,53 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 
+- snapdiff allocates and zeroes 2 MiB for every file pair it compares.
+	- ID: 2026102808215768
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `f05c368`. Plausible, read only.
+	- Note: `compare` in `src/snapdiff.rs` makes both 1 MiB buffers on each call. Make them once in `run()` and pass them in, as `accept.rs` does.
+	- Progress log:
+		- 2026-10-28: Verified: on 20,000 matching files of 1 to 4 KB, user plus sys CPU fell from 1.17 to 1.25 s to 0.21 to 0.29 s over 5 rounds, at load 11 to 12. Wall time fell from about 1.2 s to 0.25 s.
+	- Decisions:
+		- `run()` makes one `CompareBufs` and passes it to every `compare`. A type of its own, not two slices, so the two buffers can't differ in length.
+	- Swept: `compare` has one caller in `run()` and one in the tests. `accept` already reuses its buffer, and `read_sums` takes the caller's.
+	- Branch: round-20261028
+	- Test case: `dej04` (`snapdiff::tests::buffers_carry_nothing_between_pairs`), one set of buffers over 4 pairs, the first leaving 5,000 bytes behind. `ddx01` reuses them too.
+	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, dej04 passed under asan, tsan and Miri in the Tests step.
+
+- cicd scripts start a process per item in several loops.
+	- ID: 2026102808215748
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `1282504` and `4a1977a`. Plausible, read only.
+	- Note: `fPruneCache` in `cicd.bash` runs `du`, `cut`, `realpath` and `rm` for each stale cache entry. After a toolchain update every entry is stale, which is thousands of processes.
+	- Note: `fInUse` runs `readlink` for every process on the box, about 1,400.
+	- Note: `profile-workload.bash` runs `printf` and an unguarded `mkdir -p` per generated file, about 1,600 in all.
+	- Note: Smaller ones: `codeql-scan.bash` greps the whole listing per file, `lint-report.bash` calls `basename` per log, `include/scratch.bash` calls `date`, `box-side.bash` and `integration.bash` call `printf` 3 times for one number, and `integration.bash` polls with `seq`.
+	- Progress log:
+		- 2026-10-28: `fPruneCache` makes one `du` and one `rm` per cache area, and resolves the area once rather than each entry. `fInUse` compares inodes with `-ef`, with no process per entry. The rest use `printf -v`, `${f##*/}`, a lookup table, a guarded `mkdir` and a counted loop.
+		- 2026-10-28: Verified: on the same made-up cache, the old and new `fPruneCache` printed the same count and size and left the same entries, links and refused names included. With 4,016 stale entries, 13.1 s became 1.0 s at load 10.
+		- 2026-10-28: Verified: `fInUse` gave the same answer as before for a running file, a link to it, an idle file, a missing one and a running file replaced by a rename. 4.2 s became 35 ms over 1,435 processes.
+		- 2026-10-28: Verified: `profile-workload.bash gen` made the same 3,313 files, with the same names, sizes and mtimes, as before. `box-side.bash make` twice in a second gave `_001` and `_002`. The quick gate passed, the integration test included.
+		- Unverified in a real run: `fPruneCache` and `fInUse` run only in the default run's cleanup and dogfood, which a round doesn't run.
+	- Decisions:
+		- `du -l` keeps counting a hard link in each name, as the old per-entry `du` did, so the freed size reads the same.
+		- The `basename` calls in `lint-report.bash` that run once, on the way out, were left.
+	- Swept: `seq` polls and `$(printf` and `$(date` in loops across the cicd scripts and the integration test. A third `seq` poll in `integration.bash` was changed too. `green-tree.bash` and `cicd.bash` call `date` once per run, and were left.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/prune-cache-parity.bash OLD_CICD NEW_CICD WORKDIR [STALE_COUNT]` compares the old and new `fPruneCache`.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Profiler, codeql-scan OK, PASS Other hosts, and the leak checks OK.
+
 - The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
 	- ID: 2026102808215758
 	- Type: Task
@@ -1774,6 +1628,73 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- The demo gif shows a scan's real time, so a slow run redraws it.
+	- ID: 2026102808415586
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-084155
+	- Opened by: testing 2026102808215658
+	- Related IDs: 2026102309501605
+	- Steps to reproduce [Bug]: Draw `cicd/demo/scenario.toml` twice with `gen-demo-gif.py`, once with the box under load.
+	- Incorrect behavior [Bug]: One render says "run 2 done after 1s" and the other "0s", so 165 frames differ, and the full run rotates a new gif and updates `assets/demo.gif`.
+	- Expected behavior [Bug]: The same bytes every run, as design.md "Demo gif" says, unless the output or the script changes.
+	- Reproduced [Bug]: 2026-10-28 on b23, at load 10 to 16, 1 of 3 renders.
+	- Actual cause [Bug]:
+		- The scenario pinned dates and times with `[[map]]`, but not the scan's "run N done after Ns" line, which `scan.rs` prints from its own clock.
+	- Actual fix [Bug]: A `[[map]]` in `scenario.toml` pins the seconds to 1. design.md "Demo gif" names the run time as pinned.
+	- Progress log:
+		- 2026-10-28: Verified: with the binary's output rewritten to "after 3s", the old scenario drew different bytes than with the real time, and the new one drew the same. 3 renders of the new scenario gave the same bytes, one with 2 busy loops running.
+	- Swept: every `[[map]]` in the scenario and every run-time print in `src/`. Only the "run N ... after Ns" line shows a duration, and the other lines in the gif have none.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Demo gif.
+
+- The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
+	- ID: 2026102808215799
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `c4eacb8` and `d9a4f9d`. Plausible, read only.
+	- Note: `${EPOCHREALTIME/./}` at `cicd.bash:1154` and `demo-gif.bash:55` leaves the comma in. `fNow` already handles both.
+	- Reproduced [Bug]: 2026-10-28 on b23, in a locale with a comma for its point. A 1.25 s wait read as 0.62 s in `fSecsSince` and 0.4 s in `demo-gif.bash`, with no error.
+	- Actual cause [Bug]:
+		- Only a point was taken out, and bash's arithmetic reads the comma left in as its comma operator.
+	- Actual fix [Bug]: Both take out a point or a comma, as `fNow` does.
+	- Progress log:
+		- 2026-10-28: Verified: both lines gave the wrong time before the fix and 1.25 s and 1.2 s after, in that locale and in C.UTF-8.
+	- Swept: every `EPOCHREALTIME` in the repo. The other 3 only make a token, where a comma does no harm.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/comma-locale.bash WORKDIR` builds the locale to rerun it.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Profiler and PASS Demo gif.
+
+- gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
+	- ID: 2026102808215809
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `d9a4f9d`. Plausible, read only.
+	- Note: The error and a non-zero exit are both dropped. Print them, and word the message as gifsicle not running.
+	- Reproduced [Bug]: 2026-10-28 on b23, with a gifsicle that exits 3: `optimize_gif` returned the same False as with none installed, and printed nothing.
+	- Actual cause [Bug]:
+		- `optimize_gif` caught every failure and returned a bare False, which the summary always read as no gifsicle.
+	- Progress log:
+		- 2026-10-28: Verified: before the fix, a missing and a failing gifsicle both gave False with nothing on stderr. After, missing says "no gifsicle", a failure or timeout prints gifsicle's exit code and error, or the time limit, and the summary says "gifsicle didn't run, so bigger". A working gifsicle still squeezes the gif.
+		- 2026-10-28: Verified: the scenario drew the same bytes as the old script on the same box, 496 frames.
+	- Decisions:
+		- A gifsicle that fails is a warning, and the stage still passes, as a missing one is. It only changes the gif's size.
+	- Actual fix [Bug]: `optimize_gif` returns None once gifsicle has run, or why it didn't. FileNotFoundError is the only "no gifsicle", and anything else goes to stderr.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the pipeline's Python has no test IDs. `private/claude_simple/tools/gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Demo gif.
+
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789
 	- Type: Bug
@@ -2309,6 +2230,95 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- Lint configs don't enforce all of the style rules.
+	- ID: 2026102808215708
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `cicd/ruff.toml` lacks `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF`. There's no mypy config.
+	- Note: PSScriptAnalyzer could turn on `PSAvoidUsingDoubleQuotesForConstantString` and the Information level, once the OutputType lines are in.
+	- Note: No `.gitattributes` pins line endings for the scripts.
+	- Progress log:
+		- 2026-10-28: ruff selects `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF` too. The 3 `PERF401` hits in `gen-demo-gif.py` use `extend` now.
+		- 2026-10-28: `cicd/mypy.ini` is strict mypy, and the lint stage runs it after ruff, with a pin in `tool-pins.env`. A box without mypy skips it with a note, as with ruff.
+		- 2026-10-28: `.gitattributes` keeps every text file LF, in the repo and in checkouts. All 76 were LF already.
+		- 2026-10-28: The PSScriptAnalyzer part is in child 2026102809033225. Its quote rule is an Information one, so it waits with the level for the OutputType lines. Done in that child.
+		- 2026-10-28: Verified: `gen-demo-gif.py`'s typing events and palette are the same as before over 1,200 seeded cases. The new ruff rules and mypy each flag a planted case. `--backlog-run-quick` passed.
+	- Decisions:
+		- mypy is strict, since the 3 scripts already pass it. PIL's imports are ignored, since mypy's own install often can't see the interpreter's packages.
+		- mypy is pinned like ruff, though the pins file's edit rebuilds the leak check image once.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the cicd scripts have none. The lint stage's ruff and mypy steps are the check.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, mypy clean in PASS Lint, and the leak checks ran on the rebuilt image.
+
+- Small files cost more sys CPU read direct than read plain.
+	- ID: 2026102809554675
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-095546
+	- Opened by: style and performance review
+	- Parent ID: 2026102808215738
+	- Note: On 20,000 files of 1 to 4 KB, a read without `O_DIRECT` cut about 0.7 s of sys CPU, about 35 us per file.
+	- Progress log:
+		- 2026-10-28: Verified: on 20,000 files of 1 to 4 KB, over 4 rounds at load 8 to 9, a first scan's sys CPU fell from 1.77 to 2.14 s to 1.15 to 1.28 s, and a `--rmlint` rescan's from 1.73 to 2.07 s to 0.97 to 1.17 s. User CPU didn't change.
+	- Decisions:
+		- Files under 64 KiB are read plain, with the drops before and after as for any plain read. Direct saved 0.4 to 0.9 s per GB in 2026102316421705, so it pays for its 35 us at about 40 to 90 KB. Files between 4 and 64 KB weren't timed.
+		- The 3 `posix_fadvise` calls stay. Taking them out changed nothing measurable.
+	- Swept: `read_sums` is the only place that turns on `O_DIRECT`. design.md's read section says so now.
+	- Branch: round-20261028
+	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) now reads sizes on both sides of the 64 KiB floor, with odd tails on each path. It can't see which path was taken, so the CPU timing above is the check.
+	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, debte passed under asan, tsan and Miri in the Tests step.
+
+- The Python scripts in cicd/utility depart from the Python style rules.
+	- ID: 2026102808215658
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: `flame-report.py` reassigns the constant `STEP` at run time through `global`. Return the row height from `fParse` and pass it along.
+	- Note: `flame-report.py` reads `Frame` tuples by index, tests membership in a list inside a comprehension, and uses `zip(ys, ys[1:])` where `itertools.pairwise` fits.
+	- Note: `gen-demo-gif.py` keeps key actions as strings where an Enum fits, has a 215-line `main()` with 5 closures, pops from the front of a list in a loop, uses `open()` over `Path.open()`, and checks each character with `ord` in Python.
+	- Note: `test-ids.py` reuses `line` as a str and then an int, which strict mypy refuses. Some of its patterns are compiled and some aren't.
+	- Note: `flame-report.py` came from silkterm, so a fix may belong there too.
+	- Decided against: renaming the mix of PEP 8 and fCamelCase names in `test-ids.py`. New names follow the majority.
+	- Progress log:
+		- 2026-10-28: Done as noted. `gen-demo-gif.py`'s playback is a `Player` class, `main()` is 68 lines, and the action is a `KeyAction` Enum. `test-ids.py`'s int is `line_no`. strict mypy and ruff pass on all 3.
+		- 2026-10-28: Verified: `gen-demo-gif.py` drew the same bytes as the old script, run back to back. `flame-report.py` printed the same over all 12 flamegraphs in `cicd/artifacts/profiling`. `test-ids.py` gave the same `list`, `check` and `find` on the repo, and the same 6 problems on a made-up repo with one of each kind.
+		- Swept: `flame-report.py` names `shcl` as its source in its header, so the same `global STEP` may be in shcl's and silkterm's copies. Not changed here, since they're other repos.
+	- Decisions:
+		- `STEP` stays as the row height for a graph with one row, where there's no gap to measure. It was the fallback before too.
+	- Branch: round-20261028
+	- Test case: none with an ID. The check is the same output from the old and new scripts, above.
+	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Profiler and PASS Demo gif.
+
+- Per-file allocations and syscalls in the scan's read path haven't been measured.
+	- ID: 2026102808215738
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `db::Prior.b3` is a `Vec<u8>`, so every lookup allocates. `[u8; 32]` reads directly.
+	- Note: `read_sums` makes 7 syscalls per file before any data, 3 `posix_fadvise` and 4 `fcntl`, even for an empty file.
+	- Note: `excluded()` and the `no_xattr` check run for every entry, where once per folder would do, as `in_git` is.
+	- Note: `hashed_msg` copies a path the job already owns. `xattr::fget` allocates per call and `text_of` copies again, and `write_b3` encodes the digest twice. `beneath` builds a CString for a name that's already NUL-terminated.
+	- Note: Each file gets its own `SELECT`. A query per folder is a redesign, worth it only if `lookup` shows near the top on many small files.
+	- Note: Keep only the changes that move the small-files numbers.
+	- Progress log:
+		- 2026-10-28: On 20,000 files of 1 to 4 KB, a scan took about 0.4 to 0.5 s user and 1.8 to 2.2 s sys CPU, at load 6. Without the 3 `posix_fadvise` calls it was the same. Without `O_DIRECT`, sys fell by about 0.7 s, which child 2026102809554675 takes up. The rest of the notes are in child 2026102809554785.
+		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
+	- Test case: its children's tests, debte (2026102809554675) and the profile-ab timings on 2026102809554785
+	- Closed 2026-10-28 with its children. The per-file lookup cost went to 2026102810135573.
 
 - PSScriptAnalyzer's Information level and its constant-string rule are off.
 	- ID: 2026102809033225
