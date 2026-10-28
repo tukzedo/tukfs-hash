@@ -274,7 +274,7 @@ function Select-Budget {
 	)
 	$keep = [Collections.Generic.HashSet[string]]::new()
 	$ranked = @($Versions | Sort-Object -Property Stamp, Name -Descending)
-	if ($ranked.Count -eq 0) { return , $keep }
+	if ($ranked.Count -eq 0) { return Write-Output -NoEnumerate -InputObject $keep }
 	$order = [Collections.Generic.List[object]]::new()
 	$order.Add($ranked[0])
 	if ($ranked.Count -gt 1) { $order.Add($ranked[-1]) }
@@ -290,7 +290,7 @@ function Select-Budget {
 		$null = $keep.Add($v.Name)
 		$bytes += $v.File.Length
 	}
-	return , $keep
+	return Write-Output -NoEnumerate -InputObject $keep
 }
 
 function Resolve-RealPath {
@@ -336,7 +336,7 @@ function Get-RunningPath {
 		$image = try { $proc.Path } catch { $null }
 		if ($image) { $null = $paths.Add($image) }
 	}
-	return , $paths
+	return Write-Output -NoEnumerate -InputObject $paths
 }
 
 function Invoke-Rotation {
@@ -465,7 +465,7 @@ function Get-FileArgument {
 	$argv = [Environment]::GetCommandLineArgs()
 	$leaf = Split-Path -Path $Self -Leaf
 	for ($i = 1; $i -lt $argv.Count; $i++) {
-		if ((Split-Path -Path $argv[$i] -Leaf) -ceq $leaf) { return , [string[]]@($argv | Select-Object -Skip ($i + 1)) }
+		if ((Split-Path -Path $argv[$i] -Leaf) -ceq $leaf) { return Write-Output -NoEnumerate -InputObject ([string[]]@($argv | Select-Object -Skip ($i + 1))) }
 	}
 	return $null
 }

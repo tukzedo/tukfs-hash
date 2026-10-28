@@ -153,7 +153,7 @@
 		- 2026-10-28: ruff selects `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF` too. The 3 `PERF401` hits in `gen-demo-gif.py` use `extend` now.
 		- 2026-10-28: `cicd/mypy.ini` is strict mypy, and the lint stage runs it after ruff, with a pin in `tool-pins.env`. A box without mypy skips it with a note, as with ruff.
 		- 2026-10-28: `.gitattributes` keeps every text file LF, in the repo and in checkouts. All 76 were LF already.
-		- 2026-10-28: The PSScriptAnalyzer part is in child 2026102809033225. Its quote rule is an Information one, so it waits with the level for the OutputType lines.
+		- 2026-10-28: The PSScriptAnalyzer part is in child 2026102809033225. Its quote rule is an Information one, so it waits with the level for the OutputType lines. Done in that child.
 		- 2026-10-28: Verified: `gen-demo-gif.py`'s typing events and palette are the same as before over 1,200 seeded cases. The new ruff rules and mypy each flag a planted case. `--backlog-run-quick` passed.
 	- Decisions:
 		- mypy is strict, since the 3 scripts already pass it. PIL's imports are ignored, since mypy's own install often can't see the interpreter's packages.
@@ -233,8 +233,8 @@
 - PSScriptAnalyzer's Information level and its constant-string rule are off.
 	- ID: 2026102809033225
 	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check ran it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-090332
 	- Opened by: split from 2026102808215708
@@ -242,6 +242,15 @@
 	- Prereq IDs: 2026102808215717
 	- Note: `PSAvoidUsingDoubleQuotesForConstantString` is an Information rule, so it reports nothing while `Severity` is Error and Warning. Turn both on together.
 	- Note: The Information level adds 14 `PSUseOutputTypeCorrectly` hits in `utility/dogfood_tukfs-hash.ps1` until its functions get OutputType lines, in 2026102808215717. The constant-string rule finds nothing today.
+	- Progress log:
+		- 2026-10-28: `PSScriptAnalyzerSettings.psd1` reports Information too, with `PSAvoidUsingDoubleQuotesForConstantString` on. The 4 `return , $x` lines in `dogfood_tukfs-hash.ps1` use `Write-Output -NoEnumerate`, so the analyzer is clean.
+		- 2026-10-28: Verified: a planted constant double-quoted string is flagged. `dogfood-check.bash REPO` passed all cases, and `--backlog-run-quick` passed.
+	- Decisions:
+		- `Write-Output -NoEnumerate -InputObject` over a second OutputType, since the real types are a set and arrays and the rule reads `return , $x` as `object[]`. It keeps an empty array, a HashSet and a string[] whole.
+	- Swept: `return ,` in both `.ps1` files, and a repo-wide analyzer run.
+	- Branch: round-20261028
+	- Test case: none with an ID. The PowerShell lint in the quick gate, and `dogfood-check.bash REPO` in the private tools folder.
+	- Closed: 20261028-100000
 
 - Comments run long, repeat design.md, or use words the house rules avoid.
 	- ID: 2026102808215668

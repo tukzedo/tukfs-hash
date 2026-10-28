@@ -4,9 +4,13 @@
 	pipeline's answer.
 #>
 @{
-	Severity = @('Error', 'Warning')
+	Severity = @('Error', 'Warning', 'Information')
 
 	Rules = @{
+		PSAvoidUsingDoubleQuotesForConstantString = @{
+			Enable = $true
+		}
+
 		PSUseConsistentIndentation = @{
 			Enable              = $true
 			Kind                = 'tab'
