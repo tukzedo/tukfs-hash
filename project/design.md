@@ -177,6 +177,10 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	- Every container is named `tukfs-hash-<run folder name>-<step>-<n>`, and containers and images are labeled `dev.project=tukfs-hash` and `dev.run=<run folder name>`. Nothing uses a volume. The run removes its containers by that label at the end, once a stop has killed the running ones by ID, and says what that freed. `--keep-temp` keeps them. A new image keeps the tag before it, and the build cache prune keeps a week of every project's cache (2026102416215928).
 
 - The dogfood copy goes to `~/synced/0-0/common/exec/util/linux/bin/tukfs-hash`, where the scan wrappers look, rather than the `app/linux/` dir. `utility/dogfood_tukfs-hash` keeps up to 10 dated versions in `~/.local/bin/tukfs-hash_versions/`, with a link to the newest at `~/.local/bin/tukfs-hash`.
+	- It copies a new build in, rotates the pool, points the fixed name at the newest, and runs that with every argument passed through. A copy that's running is never deleted, so a long scan keeps going while a newer build arrives.
+	- Anything at the fixed name that isn't a link into the pool is left alone, and the newest version runs from the pool instead.
+	- The pool keeps at most 10 versions and at least 5, and between those only as many as fit in 1 GB. Which ones stay is a GFS rotation: the oldest, the newest, the last of each recent hour, day, week, month and year, and the few most recent. Under 10 and 1 GB, versions with none of those roles stay too, as spares.
+	- Each is named `tukfs-hash_<yyyyMMdd-HHmmss>_<role>`, from the build's write time in local time. Old versions go one file at a time, matched by that name, and never one that's running.
 
 ## Leak and memory checks
 

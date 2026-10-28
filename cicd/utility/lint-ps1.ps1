@@ -1,4 +1,3 @@
-#==============================================================================
 ## lint-ps1.ps1
 ##
 ##	PSScriptAnalyzer over each file given, with the repo's
@@ -9,9 +8,8 @@
 ##		pwsh -NoProfile -File cicd/utility/lint-ps1.ps1 FILE...
 ##
 ##	History: At bottom of script.
-#==============================================================================
 
-##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+##	Copyright (C) 2026 t00mietum
 ##	Licensed under The MIT License (MIT). Full text at:
 ##		https://mit-license.org/
 ##	SPDX-License-Identifier: MIT
@@ -34,7 +32,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$settings = Join-Path -Path $PSScriptRoot -ChildPath '../../PSScriptAnalyzerSettings.psd1'
+$repoRoot = Split-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -Parent
+$settings = Join-Path -Path $repoRoot -ChildPath 'PSScriptAnalyzerSettings.psd1'
 $found = 0
 foreach ($file in $Path) {
 	$errors = $null
@@ -54,3 +53,4 @@ exit 0
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-10-28: Plain ASCII header, and the BOM rule is back on.

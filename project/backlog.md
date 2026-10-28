@@ -62,19 +62,6 @@
 	- Origin: `f05c368`. Plausible, read only.
 	- Note: `compare` in `src/snapdiff.rs` makes both 1 MiB buffers on each call. Make them once in `run()` and pass them in, as `accept.rs` does.
 
-- The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
-	- ID: 2026102808215758
-	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: The copyright line in `utility/dogfood_tukfs-hash.ps1:36` and `cicd/utility/lint-ps1.ps1:14` has the symbol and CryptogID. PowerShell scripts stay ASCII, and the PSScriptAnalyzer BOM rule is turned off to let these pass.
-	- Decisions:
-		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
-	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
-
 - cicd scripts start a process per item in several loops.
 	- ID: 2026102808215748
 	- Type: Enhancement
@@ -211,20 +198,6 @@
 	- Origin: `9120949`. Plausible, read only.
 	- Note: `list_dir` in `src/scan.rs` tests `beneath::Kind` with `if ==` and queues anything else as a file. An exhaustive match makes a new kind a compile error.
 
-- dogfood_tukfs-hash.ps1 departs from the PowerShell style rules.
-	- ID: 2026102808215717
-	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082157
-	- Opened by: style and performance review
-	- Note: `Write-Note` and `Exit-Launcher` are called with a positional message. `param($Source)` and `param($Item)` are untyped, and nothing uses Mandatory or validation attributes.
-	- Note: `-contains` tests every running process path inside a loop. A HashSet fits.
-	- Note: The same regex runs twice per file at lines 134-135. A suppression at line 335 has an empty reason. OutputType is on 3 functions only, and the functions have no comment-based help.
-	- Note: The 32-line header repeats the synopsis and holds the whole rotation policy, which belongs in design.md.
-	- Note: `lint-ps1.ps1:37` joins `../..` as one path piece.
-
 - PSScriptAnalyzer's Information level and its constant-string rule are off.
 	- ID: 2026102809033225
 	- Type: Task
@@ -307,6 +280,51 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
+	- ID: 2026102808215758
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints both scripts.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: The copyright line in `utility/dogfood_tukfs-hash.ps1:36` and `cicd/utility/lint-ps1.ps1:14` has the symbol and CryptogID. PowerShell scripts stay ASCII, and the PSScriptAnalyzer BOM rule is turned off to let these pass.
+	- Decisions:
+		- PowerShell scripts use `Copyright (C) 2026 t00mietum`, with no ID, as shcl's scripts do (2026-10-28).
+	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
+	- Progress log:
+		- 2026-10-28: Both scripts have the plain copyright line, no `#====` lines or section titles, and PSScriptAnalyzer's BOM rule is on again.
+		- 2026-10-28: Verified: the BOM rule flags both old scripts, and passes both new ones. The quick gate passed.
+	- Swept: every `.ps1` and `.psd1` in the repo for non-ASCII and `#===`. The bash launcher `utility/dogfood_tukfs-hash` keeps its line, since the rule is for PowerShell.
+	- Branch: round-20261028
+	- Test case: none with an ID. The PowerShell lint in the quick gate fails on a non-ASCII script now.
+	- Closed: 20261028-093507
+
+- dogfood_tukfs-hash.ps1 departs from the PowerShell style rules.
+	- ID: 2026102808215717
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check below runs it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `Write-Note` and `Exit-Launcher` are called with a positional message. `param($Source)` and `param($Item)` are untyped, and nothing uses Mandatory or validation attributes.
+	- Note: `-contains` tests every running process path inside a loop. A HashSet fits.
+	- Note: The same regex runs twice per file at lines 134-135. A suppression at line 335 has an empty reason. OutputType is on 3 functions only, and the functions have no comment-based help.
+	- Note: The 32-line header repeats the synopsis and holds the whole rotation policy, which belongs in design.md.
+	- Note: `lint-ps1.ps1:37` joins `../..` as one path piece.
+	- Progress log:
+		- 2026-10-28: Typed parameters, with Mandatory and validation where they fit, and OutputType and help on every function. Named `-Message` at each call. Running paths go in a HashSet, the pool regex runs once per file, and the suppression has a reason. The rotation policy moved to design.md, "Build and release", and `lint-ps1.ps1` finds the repo root with `Split-Path`.
+		- 2026-10-28: Verified: `dogfood-check.bash REPO` passed all 24 cases. PSScriptAnalyzer is clean, and the quick gate passed.
+	- Decisions:
+		- Running paths now match case-sensitively, as Linux paths do. `-contains` matched case-insensitively.
+		- `Get-SourceBuild` returns only a file, so a dir at the build's name is passed over.
+		- At the Information level, 4 `PSUseOutputTypeCorrectly` hits are left, down from 14. They're on `return , $x`, which keeps a set or array whole, and the rule reads it as `object[]`. That's for 2026102809033225.
+	- Swept: `-contains` and positional calls in both `.ps1` files.
+	- Branch: round-20261028
+	- Test case: none with an ID. `dogfood-check.bash REPO`, in the private tools folder.
+	- Closed: 20261028-093507
 
 - `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
 	- ID: 2026102808215831

@@ -6,10 +6,6 @@
 @{
 	Severity = @('Error', 'Warning')
 
-	## Only Windows PowerShell 5.1 reads a file with no BOM as ANSI. These
-	## scripts are Linux only, on pwsh 7, which reads UTF-8.
-	ExcludeRules = @('PSUseBOMForUnicodeEncodedFile')
-
 	Rules = @{
 		PSUseConsistentIndentation = @{
 			Enable              = $true
