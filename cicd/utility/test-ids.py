@@ -36,6 +36,7 @@ DIGITS = "0123456789abcdefghjkmnpqrstvwxyz"
 EPOCH_2000 = 946684800
 WIDTH = 5
 ID = r"[0-9a-hjkmnp-tv-z]{5}"
+ID_RE = re.compile(ID)
 repo = Path(__file__).resolve().parents[2]
 
 
@@ -62,18 +63,18 @@ def fWhen(tid: str) -> str:
 ##	A Rust test's ID is the first line of its body, the line after its fn
 ##	line, past any attributes.
 RUST_GLOB = "src/*.rs"
-RUST_TEST = r"^\s*#\[test\]$"
-RUST_ID = rf'^\s*let _id = test_id\("({ID})"\);$'
+RUST_TEST = re.compile(r"^\s*#\[test\]$")
+RUST_ID = re.compile(rf'^\s*let _id = test_id\("({ID})"\);$')
 ##	Every #[test] in a tracked file. One outside RUST_GLOB would run with no
 ##	ID and nothing here saying so.
-STRAY = r"^\s*#\[test\]"
+STRAY = re.compile(r"^\s*#\[test\]")
 ##	The integration test's checks: check, expect and skip calls, each with its
 ##	ID as the first word. A skip stands for a check that didn't run, so its
 ##	ID has to be one a check has. A word that's a positional parameter is a
 ##	helper passing it on.
 IT_FILE = "tests/integration.bash"
 IT_CALL = re.compile(r"(?:^|;|&&|\|\||\bthen\b|\belse\b|\bdo\b|\{)\s*(check|expect|skip|ok|bad)\s+(\S+)")
-IT_HELPER = r'^"\$\{[1-9]\}"$'
+IT_HELPER = re.compile(r'^"\$\{[1-9]\}"$')
 IT_NAME = re.compile(r'\s+("(?:[^"\\]|\\.)*"|\'[^\']*\'|\S+)')
 SUITES = ("unit", "it")
 ##	A module behind a feature, such as the soak test, isn't in a plain cargo
@@ -116,12 +117,12 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
         suite = "" if path.stem in gated else "unit"
         lines = path.read_text(encoding="utf-8").splitlines()
         for n, line in enumerate(lines):
-            if not re.match(RUST_TEST, line):
+            if not RUST_TEST.match(line):
                 continue
             m = n + 1
             while m < len(lines) and (not lines[m].strip() or lines[m].lstrip().startswith("#[")):
                 m += 1
-            hit = re.match(RUST_ID, lines[m + 1]) if m + 1 < len(lines) else None
+            hit = RUST_ID.match(lines[m + 1]) if m + 1 < len(lines) else None
             if hit is None:
                 bad.append(f"{rel}:{n + 1}: a test with no ID line under its fn line")
                 continue
@@ -134,18 +135,18 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
     )
     for rel in sorted(t for t in tracked if fnmatch.fnmatch(t, "*.rs") and t not in placed):
         for n, line in enumerate((repo / rel).read_text(encoding="utf-8").splitlines()):
-            if re.match(STRAY, line):
+            if STRAY.match(line):
                 bad.append(f"{rel}:{n + 1}: a test outside {RUST_GLOB}, where nothing here looks")
 
     skips: list[tuple[str, str, int]] = []
     for n, line in enumerate(fLiveLines(repo / IT_FILE)):
         for hit in IT_CALL.finditer(line):
             word, first = hit.group(1), hit.group(2)
-            if re.match(IT_HELPER, first):
+            if IT_HELPER.match(first):
                 continue
             if word in ("ok", "bad"):
                 bad.append(f"{IT_FILE}:{n + 1}: {word} called outside check and expect")
-            elif not re.fullmatch(ID, first):
+            elif not ID_RE.fullmatch(first):
                 bad.append(f"{IT_FILE}:{n + 1}: a {word} with no ID first")
             elif word == "skip":
                 skips.append((first, IT_FILE, n + 1))
@@ -156,9 +157,9 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
                     text = text[1:-1]
                 found.append((first, IT_FILE, n + 1, "it", text))
     have = {tid for tid, *_ in found}
-    for tid, file, line in skips:
+    for tid, file, line_no in skips:
         if tid not in have:
-            bad.append(f"{file}:{line}: skip {tid} is no check's ID")
+            bad.append(f"{file}:{line_no}: skip {tid} is no check's ID")
     return found, bad
 
 
@@ -166,8 +167,8 @@ def fCheck() -> int:
     found, bad = fScan()
     now = (time.time() - EPOCH_2000 + 86400) // 60
     first: dict[str, str] = {}
-    for tid, file, line, *_ in found:
-        at = f"{file}:{line}"
+    for tid, file, line_no, *_ in found:
+        at = f"{file}:{line_no}"
         if tid in first:
             bad.append(f"{at}: ID {tid} is already used at {first[tid]}")
             continue
@@ -212,7 +213,7 @@ def main() -> int:
     cmd, rest = args[0], args[1:]
     if cmd == "new" and len(rest) <= 1 and all(a.isdigit() and int(a) > 0 for a in rest):
         return fNew(int(rest[0]) if rest else 1)
-    if cmd == "when" and rest and all(re.fullmatch(ID, a) for a in rest):
+    if cmd == "when" and rest and all(ID_RE.fullmatch(a) for a in rest):
         for tid in rest:
             print(f"{tid}  {fWhen(tid)}")
         return 0
@@ -220,7 +221,7 @@ def main() -> int:
         found = fScan()[0]
         rc = 0
         for tid in rest:
-            hits = [f"{file}:{line}" for t, file, line, *_ in found if t == tid]
+            hits = [f"{file}:{line_no}" for t, file, line_no, *_ in found if t == tid]
             if not hits:
                 print(f"{tid}  not found", file=sys.stderr)
                 rc = 1
@@ -248,3 +249,4 @@ if __name__ == "__main__":
 ##		2026-10-25  Whole minutes in Crockford base 32, converted once from the
 ##		            same times.
 ##		2026-10-25  list, for cicd.bash --list.
+##		2026-10-28  Every pattern compiled.

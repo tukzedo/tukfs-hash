@@ -29,6 +29,20 @@
 
 ## Issues
 
+- The demo gif shows a scan's real time, so a slow run redraws it.
+	- ID: 2026102808415586
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-084155
+	- Opened by: testing 2026102808215658
+	- Related IDs: 2026102309501605
+	- Steps to reproduce [Bug]: Draw `cicd/demo/scenario.toml` twice with `gen-demo-gif.py`, once with the box under load.
+	- Incorrect behavior [Bug]: One render says "run 2 done after 1s" and the other "0s", so 165 frames differ, and the full run rotates a new gif and updates `assets/demo.gif`.
+	- Expected behavior [Bug]: The same bytes every run, as design.md "Demo gif" says, unless the output or the script changes.
+	- Reproduced [Bug]: 2026-10-28 on b23, at load 10 to 16, 1 of 3 renders.
+	- Possible cause [Bug]: The scenario pins dates and times with `[[map]]`, but not the "done after Ns" line.
+
 - A scan that fails reading the mount table after it starts leaves its run marked running.
 	- ID: 2026102808215852
 	- Type: Bug
@@ -108,13 +122,24 @@
 - gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
 	- ID: 2026102808215809
 	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The full run's demo gif stage.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082158
 	- Opened by: style and performance review
 	- Origin: `d9a4f9d`. Plausible, read only.
 	- Note: The error and a non-zero exit are both dropped. Print them, and word the message as gifsicle not running.
+	- Reproduced [Bug]: 2026-10-28 on b23, with a gifsicle that exits 3: `optimize_gif` returned the same False as with none installed, and printed nothing.
+	- Actual cause [Bug]:
+		- `optimize_gif` caught every failure and returned a bare False, which the summary always read as no gifsicle.
+	- Progress log:
+		- 2026-10-28: Verified: before the fix, a missing and a failing gifsicle both gave False with nothing on stderr. After, missing says "no gifsicle", a failure or timeout prints gifsicle's exit code and error, or the time limit, and the summary says "gifsicle didn't run, so bigger". A working gifsicle still squeezes the gif.
+		- 2026-10-28: Verified: the scenario drew the same bytes as the old script on the same box, 496 frames.
+	- Decisions:
+		- A gifsicle that fails is a warning, and the stage still passes, as a missing one is. It only changes the gif's size.
+	- Actual fix [Bug]: `optimize_gif` returns None once gifsicle has run, or why it didn't. FileNotFoundError is the only "no gifsicle", and anything else goes to stderr.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the pipeline's Python has no test IDs. `private/claude_simple/tools/gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
 
 - The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
 	- ID: 2026102808215799
@@ -255,8 +280,8 @@
 - The Python scripts in cicd/utility depart from the Python style rules.
 	- ID: 2026102808215658
 	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The full run's demo gif and profile stages.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
@@ -266,6 +291,14 @@
 	- Note: `test-ids.py` reuses `line` as a str and then an int, which strict mypy refuses. Some of its patterns are compiled and some aren't.
 	- Note: `flame-report.py` came from silkterm, so a fix may belong there too.
 	- Decided against: renaming the mix of PEP 8 and fCamelCase names in `test-ids.py`. New names follow the majority.
+	- Progress log:
+		- 2026-10-28: Done as noted. `gen-demo-gif.py`'s playback is a `Player` class, `main()` is 68 lines, and the action is a `KeyAction` Enum. `test-ids.py`'s int is `line_no`. strict mypy and ruff pass on all 3.
+		- 2026-10-28: Verified: `gen-demo-gif.py` drew the same bytes as the old script, run back to back. `flame-report.py` printed the same over all 12 flamegraphs in `cicd/artifacts/profiling`. `test-ids.py` gave the same `list`, `check` and `find` on the repo, and the same 6 problems on a made-up repo with one of each kind.
+		- Swept: `flame-report.py` names `shcl` as its source in its header, so the same `global STEP` may be in shcl's and silkterm's copies. Not changed here, since they're other repos.
+	- Decisions:
+		- `STEP` stays as the row height for a graph with one row, where there's no gap to measure. It was the fallback before too.
+	- Branch: round-20261028
+	- Test case: none with an ID. The check is the same output from the old and new scripts, above.
 
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
