@@ -74,6 +74,30 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Device numbers can change at a reboot or remount, as `sdX` names do. That only costs a second read.
 
+- The skip date is the start of today, or `--since`, but never later than the run's start. `--verify`'s is its own start.
+
+- Each case has one answer. This table is the rule, and a fix to how a file is skipped names its row. Rows whose item is still open aren't met yet.
+
+	| Row              | Case                                                                                                                                                                | Answer                                                        | Item
+	| :---             | :---                                                                                                                                                                | :---                                                          | :---
+	| `db-fresh`       | A row at the file's size, time and inode, read between the skip date and now                                                                                        | skip                                                          | -
+	| `db-old`         | The same, read before the skip date                                                                                                                                 | read                                                          | -
+	| `db-future`      | A row read later than now                                                                                                                                           | read                                                          | 2026102814341401
+	| `db-changed`     | A row at another size, time or inode                                                                                                                                | read                                                          | -
+	| `db-mismatch`    | The last read disagreed with what's stored, and nothing has accepted it since, whatever the dates                                                                   | read                                                          | 2026102814341402
+	| `resume-seen`    | A resumed run, where an earlier part reached the path at its current size, time and inode, mismatch or not                                                          | skip, and not reported again                                  | 2026101406340909, 2026102814341415
+	| `x-fresh`        | No row disagrees, the set is current at the size and time, `user.blake3.inode` names this device, inode and checksum, and its date is between the skip date and now | skip                                                          | 2026101406340902
+	| `x-copy`         | The inode name is missing or names another inode, as after `cp -a`                                                                                                  | read                                                          | 2026101406340902
+	| `x-future`       | The set's date is later than now                                                                                                                                    | read                                                          | 2026101406340902
+	| `x-row-differs`  | The set is fresh, but the row at that size and time has another checksum                                                                                            | read                                                          | 2026101406340902
+	| `x-mismatch`     | The set is fresh, but the path is a `db-mismatch`                                                                                                                   | read                                                          | 2026102814341402
+	| `x-dev`          | The device number changed since, at a reboot or remount                                                                                                             | read                                                          | -
+	| `link-done`      | Another name of the inode was read in this run at the same size and time                                                                                            | not read again, but compared with this name's own row and set | 2026101406340906
+	| `link-dropped`   | That result was dropped as older than the newest 262,144                                                                                                            | read                                                          | 2026101406340921
+	| `link-writing`   | The name that claimed the inode is still writing its set                                                                                                            | judged only after the claim is done                           | 2026102814341429
+	| `verify-known`   | `--verify`, with a blake3 stored at the current size and time, not read in this run                                                                                 | read                                                          | -
+	| `verify-unknown` | `--verify`, with nothing stored at the current size and time                                                                                                        | skip, with nothing written                                    | 2026101406340931
+
 - A resumed run keeps its original skip date. Anything it already read counts as fresh even when `--since` is later than when it began.
 
 ## Runs and exit codes

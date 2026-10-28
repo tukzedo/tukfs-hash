@@ -56,7 +56,9 @@
 	- Reproduced [Bug]: Yes, on ext4, with and without attributes.
 	- Probable fix [Bug]: `Worker::judged_already` in `src/scan.rs` also needs `hashed_us` no later than now.
 	- Sweep: every place that compares `hashed_us` or the attribute date with the cutoff.
-	- Note: This is the third skip-rule defect, after 2026101406340902 and item 2 of this review. The skip rules want a table in design.md, one row per case.
+	- Note: This is the third skip-rule defect, after 2026101406340902 and item 2 of this review. The rules are now a table in design.md, "Skipping", and each fix in this class names its row.
+	- Note: design.md, "Skipping", row `db-future`.
+	- Note: A unit test beside `a_match_is_not_read_again` can set a future `hashed_us` on the prior row and expect a read. An integration check can repeat the repro and expect exit 4.
 
 - After `--verify` or `--since` reports a damaged file, a plain scan later that day skips it and exits 0.
 	- ID: 2026102814341402
@@ -76,6 +78,10 @@
 	- Probable fix [Bug]: Mark a path with an open mismatch, set by `keep` and cleared by a clean read or `accept`, and never skip a marked path.
 	- Sweep: `Worker::judged_already` and `Worker::skip_unread` in `src/scan.rs`.
 	- Related IDs: 2026102814341401
+	- Note: design.md, "Skipping", rows `db-mismatch` and `x-mismatch`.
+	- Against: 2026101406340901, "Keep the stored xattr and DB digest on any mismatch". The fix has to keep both digests as they are. Only what skips may change.
+	- Note: A new column means table version 5, so an older binary then refuses the database. The house rule to derive state rather than store a second copy points the other way: an open mismatch is already in `events`, as a mismatch for the path with no clean read or `accepted` after it. Measure the lookup cost of that on the small-files workload before picking.
+	- Note: Step 3 of `tests/integration.bash` is the place for a test: after its mismatch run, a plain run the same day has to exit 4 again.
 
 - `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
 	- ID: 2026102814341403
@@ -93,6 +99,8 @@
 	- Reproduced [Bug]: Yes, as a normal user with strace. The root case wasn't run.
 	- Probable fix [Bug]: Open the lock with `O_NOFOLLOW` from the folder's fd, refuse a database that's a link, and hand back with `fchown` on those fds, regular files only.
 	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
+	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
+	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
 
 - A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
 	- ID: 2026102814341404
@@ -108,6 +116,7 @@
 	- Expected behavior [Bug]: design.md, "Build and release": a run records its tree only when it's at least as thorough as the merge gate, and passed.
 	- Probable fix [Bug]: Record from the outer run after `fStageGif` passes, and have `--no-gif` set `gate_partial`.
 	- Sweep: every stage that runs after `fRecordGreen` in `cicd/cicd.bash`.
+	- Note: No harness runs the engine's stage order with a stage made to fail. Adding one, such as a stand-in gif step under a test flag, is part of the fix. Watch it go red with the record moved back.
 
 - The check-only modes pass when the advisory scan, a sanitizer or CodeQL skips for a missing tool, and still record the tree.
 	- ID: 2026102814341405
@@ -122,6 +131,7 @@
 	- Expected behavior [Bug]: The recorded decision that the 3 check-only modes stay strict, and `--help`: a missing tool keeps a run from recording.
 	- Probable fix [Bug]: Export `TUKFS_GATE_STRICT=1` when `gate_strict` is set. Have each child skip either fail under it or add its name to the run's skip list.
 	- Sweep: `advisories.bash`, `sanitize-rust.bash` with no nightly, `codeql-scan.bash` with no image or CodeQL, `demo-gif.bash` with no Pillow or font, `fRunIt`'s wrong-filesystem warning, and a `TUKFS_NO_IMAGE` left in the caller's environment.
+	- Note: A test can run each child script with its tool hidden from PATH and `TUKFS_GATE_STRICT=1`, and expect exit 1. A second one checks the engine exports the variable in all 3 check-only modes.
 
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
@@ -136,6 +146,8 @@
 	- Expected behavior [Bug]: README: exit 8 when some files or folders couldn't be checked. A mistyped root shouldn't read as clean.
 	- Probable fix [Bug]: Log a `dir-error` event for each dropped root, with the real error text.
 	- Sweep: `scan::plan`, and `walk`'s NotFound branch for a root that goes away after the plan.
+	- Note: The exit code a user sees changes, so it waits on UAT. The b23 scan wrapper takes 8 as a normal finish, so it needs no change.
+	- Note: An integration check with a missing root, expecting 8 and a `dir-error` that names it.
 
 - A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
 	- ID: 2026102814341407
@@ -152,8 +164,10 @@
 	- Expected behavior [Bug]: design.md, "Reading files" and "Attributes": the walk stops only at real mount points, and nothing is written to NTFS, APFS or HFS+.
 	- Probable fix [Bug]: Compare mount IDs from `statx` `STATX_MNT_ID` on the open folder fds, kernel 5.8 and up, with mountinfo's first field. Keep the table rule as the fallback.
 	- Sweep: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, and `accept.rs`'s `hands_off_at` call.
+	- Note: `STATX_MNT_ID` needs kernel 5.8. The release builds run on Debian 10, whose 4.19 kernel has neither it nor `openat2`, so the table fallback stays and keeps this gap there.
+	- Note: Integration check `deeby` already runs a scan under `unshare --user --map-root-user --mount`. Both repros fit there, with the same skip on ZFS and where user namespaces are off.
 
-- Any file or folder whose name starts with the database's file name is skipped with no event.
+- A file or folder beside the database whose name starts with the database's file name is skipped with no event.
 	- ID: 2026102814341408
 	- Type: Bug
 	- Status: Queued
@@ -165,6 +179,8 @@
 	- Incorrect behavior [Bug]: All 3 are skipped, the whole folder included, and `gone` lists none of them.
 	- Expected behavior [Bug]: Only the database, its `-wal`, `-shm`, `-journal` and `.lock` are left out, as the comment at `scan::excluded` says.
 	- Probable fix [Bug]: Match those 5 names exactly.
+	- Note: Only names in the database's own folder are hit, since `scan::excluded` also checks the parent.
+	- Note: A unit test of `excluded` over the 5 names and a few lookalikes, plus the integration repro.
 
 - The dogfood launcher expands wildcards and `~` in its arguments, and exits 0 on Ctrl+C whatever tukfs-hash exited.
 	- ID: 2026102814341409
@@ -184,6 +200,8 @@
 	- Expected behavior [Bug]: Arguments and exit code pass through unchanged.
 	- Probable fix [Bug]: Have pwsh only rotate and print the target path, and have the bash launcher `exec "$target" "$@"`.
 	- Sweep: `& $exe @passArgs` in `utility/dogfood_tukfs-hash.ps1`, and the same line in shcl's copy.
+	- Note: shcl's `dogfood_shcl.ps1` is outside this tree. Fix the copy here, and the same line in shcl needs a go-ahead.
+	- Note: A test can run the launcher with a stand-in binary that prints its arguments and exits 6 on INT, under a fake `HOME`, as the review did.
 
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
@@ -195,8 +213,9 @@
 	- Origin: `234b09f`. Not seen before. Confirmed.
 	- Steps to reproduce [Bug]: Make `<temp>/tukfs-hash/20260101-000000_001/notes.txt`, set its mtime 4 weeks back, and run `HOST_TEMP=<temp> bash cicd/utility/box-side.bash make`.
 	- Incorrect behavior [Bug]: The folder and its file are removed. It also takes a folder the integration test kept with `--keep-temp`, ignoring its `.test-kept` mark.
-	- Expected behavior [Bug]: The tree root's rule: a recursive removal only takes a path the script made and proves it owns. `fSweepStale` and the integration test's sweep both need their mark.
+	- Expected behavior [Bug]: The house rule: a recursive removal only takes a path the script made and proves it owns. `fSweepStale` and the integration test's sweep both need their mark.
 	- Probable fix [Bug]: Have `make` write a mark, and have the sweep need the mark and `-O`.
+	- Note: `box-side.bash make` can be run here with `HOST_TEMP` pointed at a temp folder, so the test needs no test box.
 
 - The publish stage fails on a box with no rar, though cicd turns the backup off for that case.
 	- ID: 2026102814341411
@@ -210,6 +229,8 @@
 	- Incorrect behavior [Bug]: "Not found in path: rar", exit 1.
 	- Expected behavior [Bug]: The comment at the publish stage in `cicd/cicd.bash`: no backup, then publish.
 	- Probable fix [Bug]: Check for rar only when the backup is on. The fix belongs in shcl, then copied here.
+	- Note: The canonical copy is in the synced common bash folder, outside this tree, and several projects have their own copies. Patch the block here, per the n8git-backup skill, and the canonical fix needs a go-ahead.
+	- Note: The repro above is the test: no rar on PATH, the backup off, expect it to get past the rar check.
 
 - A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
 	- ID: 2026102814341412
@@ -222,6 +243,7 @@
 	- Incorrect behavior [Bug]: `scan::plan` finds the parent's mount for the subvolume and drops it as "inside" the parent root. The parent's walk then sees another device and stops there, with no event. Its files are never read, at exit 0.
 	- Expected behavior [Bug]: design.md, "Reading files": each root is walked on its own.
 	- Probable fix [Bug]: The "inside" check also needs both folders on the same device.
+	- Note: To reproduce, `btrfs subvolume create` works for a normal user on b23's btrfs `/tmp`. Removing it needs kernel 5.7 or later, where the owner can `rmdir` an empty subvolume, or root.
 
 - The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
 	- ID: 2026102814341423
@@ -236,6 +258,8 @@
 		- Build SQLite without FTS3, FTS5, RTREE and extension loading, none of which are used.
 		- Refuse a schema with anything but the known tables and indexes before `quick_check`, and set `trusted_schema` off.
 	- Note: CVE-2025-7709 reads a tombstone size from the file with no bound. `give_back` hands the database to the user, so a planted FTS5 table runs that code as root on the next `sudo` scan. cargo-deny only checks RustSec, which doesn't list C CVEs in bundled code.
+	- Note: A newer rusqlite has to keep `rust-version = "1.88"` and build in the Debian 10 release image for both targets. `LIBSQLITE3_FLAGS` has to reach the release, leak check and host builds alike.
+	- Note: The release build should shrink with FTS and RTREE out. Check the size against the release set before and after.
 
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
@@ -248,6 +272,7 @@
 	- Requirements [Feature]:
 		- When find-new gives an inode and the old name has another inode, look the inode up first. Fall back to the name only when it isn't found.
 	- Note: `mv c a` over an existing `a`, plus damage that keeps the mtime, gives "edited a mtime moved" and exit 0. Old `c` is never read.
+	- Note: `src/snapdiff.rs` has unit tests of its parsers. The pairing needs a fixture with 2 folders and a made-up find-new list, as the review used.
 
 - Every command takes every other command's flags without a word, and `scan --help` is an error.
 	- ID: 2026102814341425
@@ -261,6 +286,7 @@
 		- Each command refuses, by name, a flag it doesn't use.
 		- `-h` and `--help` after a command print the help.
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
+	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
 
 - The publish stage commits and pushes the live checkout, not the tree the run tested.
 	- ID: 2026102814341426
@@ -273,6 +299,7 @@
 	- Requirements [Feature]:
 		- Before publishing, compare the checkout's tree with the frozen one, and refuse when they differ or the pull brought in commits.
 	- Note: The publisher pulls, then adds everything the checkout has by then, another session's edits included. A push to `dev` isn't gated.
+	- Note: The publisher is the shcl copy. The check belongs in `fStagePublish` in `cicd/cicd.bash`, so shcl needn't change.
 
 - `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
 	- ID: 2026102814341427
@@ -281,9 +308,10 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 17
-	- Origin: `feb7806` and `1282504`. memory.md had it only as a pitfall with a hand workaround. Plausible, read only.
+	- Origin: `feb7806` and `1282504`. Private notes had it only as a pitfall with a hand workaround. Plausible, read only.
 	- Requirements [Feature]:
 		- In the check-only modes, build the set into the run's temp folder, as the `TUKFS_GATE_REV` path does, and leave `cicd/artifacts/release` alone.
+	- Note: Once fixed, the private note about saving the release set before such a run can go.
 
 - Attributes are written when a root is inside a git work tree.
 	- ID: 2026102814341413
@@ -297,6 +325,7 @@
 	- Incorrect behavior [Bug]: `repo/src/a.c` gets the full `user.blake3.*` set. `--root repo` writes none.
 	- Expected behavior [Bug]: design.md, "Attributes": none are written in git work trees.
 	- Probable fix [Bug]: Before walking a root, look for `.git` in the folders above it, up to its mount point.
+	- Note: An integration check: a root below a folder with `.git`, expecting no `user.blake3.*` on its files.
 
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414
@@ -310,6 +339,8 @@
 	- Incorrect behavior [Bug]: Of 40 files, 20 were read and 18 skipped by the other name's attributes. One name's attribute write moved the ctime under the other's read, which gave 2 `unstable` events and left 2 names unstored. The database has 38 path rows for 20 files.
 	- Expected behavior [Bug]: design.md and `plan`'s doc comment: bind mounts are dropped so nothing is read twice.
 	- Probable fix [Bug]: Keep mountinfo's mount root in `mounts::Mount`, and drop a root whose device and mount root fall inside another root on the same device.
+	- Note: The repro runs without root under `unshare -rm`, the same as check `deeby`.
+	- Related IDs: 2026102814341407
 
 - A resumed run reads and reports again a mismatch an earlier part found, when the file has no current database row.
 	- ID: 2026102814341415
@@ -324,6 +355,8 @@
 	- Expected behavior [Bug]: design.md, "Runs and exit codes": a resumed run doesn't read again what an earlier part judged, mismatches included.
 	- Probable fix [Bug]: On resume, load the paths with a mismatch event in this run and skip them.
 	- Sweep: a row at an older size or time with a current attribute set goes the same way.
+	- Note: design.md, "Skipping", row `resume-seen`.
+	- Note: Step 5 of `tests/integration.bash` does a stop and resume with a damaged file that has a row. The same with a file known only by its attributes is the test.
 
 - A `fuseblk` mount with a subtype isn't treated as hands-off.
 	- ID: 2026102814341416
@@ -336,6 +369,7 @@
 	- Incorrect behavior [Bug]: The kernel shows such a mount as `fuseblk.<name>`. `mounts::hands_off` strips only a leading `fuse.`, so `fuseblk.ntfs-3g` gets attributes and can hold the database. It takes an explicit `-o subtype=` or an fstab type of `fuseblk.X`.
 	- Expected behavior [Bug]: design.md, "Attributes": `fuseblk` counts.
 	- Probable fix [Bug]: Take `fuseblk` and anything starting `fuseblk.` as hands-off, before the `fuse.` strip.
+	- Note: A unit test beside the `hands_off` cases in `src/mounts.rs`, with `fuseblk.ntfs-3g` and `fuseblk.exfat`.
 
 - The dogfood stage's check for a running copy can't see a scan run through sudo.
 	- ID: 2026102814341417
@@ -348,6 +382,7 @@
 	- Incorrect behavior [Bug]: `fInUse` in `cicd/cicd.bash` compares `/proc/<pid>/exe`, which a normal user can't read for root's processes. The copy goes in anyway. The install is a rename, so the running scan isn't hurt.
 	- Expected behavior [Bug]: config.bash and design.md: no copy while that copy is running.
 	- Probable fix [Bug]: Drop the check and say why the rename is safe, or match by inode through what `/proc` lets a user read.
+	- Note: Dropping the check changes design.md's "A copy that's running is never deleted" for the stage, so that choice waits on UAT.
 
 - The demo gif still shows the box's real disk name and worker count, so it's drawn again after a reboot or on another box.
 	- ID: 2026102814341418
@@ -360,6 +395,7 @@
 	- Incorrect behavior [Bug]: The output says `group sda with 2 worker(s):` and then `sdc: files 6 hashed 6`. A render here differs from `assets/demo.gif`.
 	- Expected behavior [Bug]: design.md, "Demo gif": a render only changes when the output or the script does.
 	- Probable fix [Bug]: Add `[[map]]` rows in `cicd/demo/scenario.toml` for the summary line's disk name and for the worker count.
+	- Note: The test is the existing one: 2 renders on 2 boxes, or with the disk name changed by hand, give the same bytes.
 
 - The demo gif's leak check misses the host name next to `-`, `_` or `.`.
 	- ID: 2026102814341419
@@ -373,6 +409,7 @@
 	- Incorrect behavior [Bug]: The gif renders with exit 0, and `b23` is neither replaced nor caught. `token_re` in `gen-demo-gif.py` only matches the host as a whole token.
 	- Expected behavior [Bug]: design.md, "Demo gif": a line with the real host fails the stage.
 	- Probable fix [Bug]: Match the host as a substring bounded only by letters and digits.
+	- Note: A test can feed `gen-demo-gif.py`'s leak check lines with the host next to `-`, `_` and `.`, and expect each to fail.
 
 - 3 integration checks pass whether or not what they check holds.
 	- ID: 2026102814341420
@@ -388,6 +425,7 @@
 		- Step 22 says the bare command exits 1, but `|| true; echo x` throws the code away, and so does the help loop.
 	- Expected behavior [Bug]: Each fails when its claim is false.
 	- Probable fix [Bug]: Check `PRAGMA journal_mode` is `delete`, as ddy8n does. Skip ddx0s when not root. Record and check each code in step 22.
+	- Note: Each changed check has to be watched to fail: a database left in WAL mode, a file owned by someone else, and a binary that exits 0 bare.
 
 - Ctrl+C in the integration test stops only the running scan, and the test goes on.
 	- ID: 2026102814341421
@@ -401,6 +439,7 @@
 	- Expected behavior [Bug]: One Ctrl+C stops the test and cleans up.
 	- Probable fix [Bug]: Call `fStopOnSignals` after the `source` line.
 	- Sweep: step 9's `chmod 000` has no trap to undo it, unlike steps 13 and 18, so a stop there leaves a folder the cleanup can't empty. Plausible.
+	- Note: A test can start the integration test under a stand-in binary, send INT to its group, and expect it to stop with the work folder gone.
 
 - Docs disagree with the code in 3 places.
 	- ID: 2026102814341422
@@ -415,6 +454,7 @@
 		- README's "Building" leaves python3 out of what the integration test needs.
 		- design.md and the header of `src/soak.rs` say the soak runs `status`. It runs `runs`, `report` and `gone`.
 	- Expected behavior [Bug]: They match.
+	- Note: No code changes, so it closes on reading.
 
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
@@ -439,6 +479,8 @@
 	- Requirements [Feature]:
 		- For a file with more than one link, take the claim before reading the attributes, or read them again after a `Claim::Done`.
 	- Note: Read and write orders differ, so after an edit a name can see the new size, time and date with the old inode value. That stores the old checksum for the new content, a false `b3-db-mismatch` from then on.
+	- Note: design.md, "Skipping", row `link-writing`.
+	- Note: Hard to hit by chance. A test-only pause between the claimant's attribute writes, in the style of `db::PANIC_ON`, can make it happen every time.
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
@@ -453,6 +495,7 @@
 		- Take a 0-byte file as new.
 		- Print the version as a number or "none", not `Some(99)`.
 	- Note: A full disk during the first scan left a 0-byte file, and every run after said "no such table: meta" and exited 1.
+	- Note: The repro needs a tiny full filesystem, which `unshare -rm` and an 8 KiB tmpfs give without root.
 
 - `accept` says "accepted" with no note when the database has no row under that name.
 	- ID: 2026102814341431
@@ -575,6 +618,7 @@
 	- Requirements [Feature]:
 		- In `src/*.rs`, flag any test attribute `RUST_TEST` doesn't take, such as `#[test] // note`.
 		- In the integration test, flag any `check`, `expect` or `skip` call `IT_CALL` missed, such as after `if`, `(`, `!` or `$(`.
+	- Note: `test-ids.py` already takes a tree to check. A made-up tree with each missed form is its test.
 
 - A burst of dogfood builds pushes the week and day versions out of the pool before the newer hour ones.
 	- ID: 2026102814341441
