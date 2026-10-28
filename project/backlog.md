@@ -243,29 +243,6 @@
 	- Note: `PSAvoidUsingDoubleQuotesForConstantString` is an Information rule, so it reports nothing while `Severity` is Error and Warning. Turn both on together.
 	- Note: The Information level adds 14 `PSUseOutputTypeCorrectly` hits in `utility/dogfood_tukfs-hash.ps1` until its functions get OutputType lines, in 2026102808215717. The constant-string rule finds nothing today.
 
-- Some Rust types and helpers hide what their parts mean.
-	- ID: 2026102808215688
-	- Type: Task
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: Plain tuples where a small struct would name the fields: the planned groups, read as `g.1`, `LinkVal`, read as `v.0` and `v.1`, and the byte offset in `ReadFail::Io`.
-	- Note: `xattr::write_b3` takes a bare `bool` that reads as `false` at the call site. A two-variant enum fits.
-	- Note: `scan::open_noatime` repeats the fallback in `Root::open_read`. Keep one.
-	- Note: `scan::lock_path` is `pub` but used only in `scan.rs`. The argument line in `main.rs` is joined twice. `build.rs:110` has an `unwrap` with no word on why it can't fail. The public test types in `testutil.rs` don't derive Debug.
-
-- About 50 public Rust items have no doc comment.
-	- ID: 2026102808215678
-	- Type: Task
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: Most are in `db.rs`, `util.rs`, `xattr.rs`, `mounts.rs`, `beneath.rs` and `snapdiff.rs`, plus `accept::run`, `gone::run` and 9 in `scan.rs`. The `Source` variants in `snapdiff.rs` use `//` where `///` belongs.
-	- Note: One line each. No Args or Returns blocks.
-
 - Comments run long, repeat design.md, or use words the house rules avoid.
 	- ID: 2026102808215668
 	- Type: Task
@@ -312,6 +289,53 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- Some Rust types and helpers hide what their parts mean.
+	- ID: 2026102808215688
+	- Type: Task
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Plain tuples where a small struct would name the fields: the planned groups, read as `g.1`, `LinkVal`, read as `v.0` and `v.1`, and the byte offset in `ReadFail::Io`.
+	- Note: `xattr::write_b3` takes a bare `bool` that reads as `false` at the call site. A two-variant enum fits.
+	- Note: `scan::open_noatime` repeats the fallback in `Root::open_read`. Keep one.
+	- Note: `scan::lock_path` is `pub` but used only in `scan.rs`. The argument line in `main.rs` is joined twice. `build.rs:110` has an `unwrap` with no word on why it can't fail. The public test types in `testutil.rs` don't derive Debug.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-10-28: The planned groups are `scan::Planned`, with name, roots and threads. `LinkVal` is a struct of bytes, mtime and sums. `ReadFail::Io` names its offset `at`. `write_b3` takes `B3Write::All` or `DateOnly`.
+		- 2026-10-28: The `O_NOATIME` fallback is in `beneath::with_noatime` only, which `open_read` and `open_noatime` both call. `lock_path` is private. main.rs joins the argument line in one closure. The `unwrap` in build.rs says why it can't fail, at line 36, not 110. The 4 test types derive Debug.
+		- 2026-10-28: Verified: clippy with all targets and all features, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- `open_noatime` stays, since `accept` opens a path given by name, outside any scan root. Only the fallback is shared.
+		- `Planned` derives Clone, for the `roots_key` test's `concat`.
+	- Swept: every `.0`, `.1` and tuple pattern on the groups and `LinkVal`, every `ReadFail::Io` match, both `write_b3` callers, and `lock_path` and `open_noatime` users, flame-report.py's frame list included.
+	- Branch: round-20261028
+	- Test case: none new, a refactor. `ddy6n` and `ddy97` cover the changed types, and the read-fail kinds test covers `ReadFail::Io`.
+	- Acceptance signoff: Self-closed: mechanical, per the notes.
+	- Closed: 20261028-102100
+
+- About 50 public Rust items have no doc comment.
+	- ID: 2026102808215678
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Most are in `db.rs`, `util.rs`, `xattr.rs`, `mounts.rs`, `beneath.rs` and `snapdiff.rs`, plus `accept::run`, `gone::run` and 9 in `scan.rs`. The `Source` variants in `snapdiff.rs` use `//` where `///` belongs.
+	- Note: One line each. No Args or Returns blocks.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-10-28: About 60 `pub` items got a one-line `///`, `Source`'s variants, `PANIC_ON`, `READS_LEFT` and `Msg::Seen` went from `//` to `///`, and `open_read`'s `//` became a doc line.
+		- 2026-10-28: Verified: `cargo doc --no-deps --document-private-items` gives no warnings, and clippy and the quick gate passed.
+	- Decisions:
+		- The `B3_*` and `RM_B2B_*` names keep one comment on the first of each set, as 2026101916404113 did.
+	- Swept: every `pub` fn, struct, enum, const, static, type, trait and mod in `src`, attributes skipped. Fields are left as they are.
+	- Branch: round-20261028
+	- Test case: none, comments only.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261028-102100
 
 - Per-entry checks and copies in the scan's walk and record path haven't been measured.
 	- ID: 2026102809554785

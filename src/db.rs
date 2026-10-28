@@ -14,6 +14,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+/// The table version this binary writes.
 pub const SCHEMA: i64 = 4;
 
 // Matches the dataset's recordsize, so a page write is one record write.
@@ -75,6 +76,7 @@ impl ToSql for PathKey<'_> {
 	}
 }
 
+/// A stored path, escaped for showing.
 pub fn path_text(v: ValueRef<'_>) -> String {
 	match v {
 		ValueRef::Text(t) | ValueRef::Blob(t) => crate::util::escape_name(t),
@@ -99,6 +101,7 @@ pub fn init() {
 	});
 }
 
+/// Opens the database to write, creating it if needed.
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
 	let fresh = !path.exists();
@@ -186,6 +189,7 @@ pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 	)
 }
 
+/// Opens the database read only, for a worker's lookups.
 pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	init();
 	let conn = Connection::open_with_flags(
@@ -217,6 +221,7 @@ pub fn close_rw(conn: Connection) -> Result<(), String> {
 	}
 }
 
+/// What the database holds for a path.
 #[derive(Debug, Clone)]
 pub struct Prior {
 	pub id: i64,
@@ -228,6 +233,7 @@ pub struct Prior {
 	pub b3: Vec<u8>,
 }
 
+/// The query `lookup` runs.
 pub const LOOKUP: &str = "SELECT p.id, p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
@@ -248,6 +254,7 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Resu
 	.optional()
 }
 
+/// A file's sums and stat, as read, for the writer to store.
 #[derive(Debug)]
 pub struct Hashed {
 	pub path: Vec<u8>,
@@ -279,6 +286,7 @@ pub enum Kind {
 }
 
 impl Kind {
+	/// Every kind.
 	pub const ALL: [Kind; 13] = [
 		Kind::XattrMismatch,
 		Kind::RmlintMismatch,
@@ -295,6 +303,7 @@ impl Kind {
 		Kind::Accepted,
 	];
 
+	/// The name stored and shown.
 	pub fn name(self) -> &'static str {
 		match self {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
@@ -313,6 +322,7 @@ impl Kind {
 		}
 	}
 
+	/// The kind with that name.
 	pub fn parse(name: &str) -> Option<Kind> {
 		Kind::ALL.into_iter().find(|k| k.name() == name)
 	}
@@ -358,6 +368,7 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
+	/// Every status.
 	pub const ALL: [RunStatus; 6] = [
 		RunStatus::Running,
 		RunStatus::Stopped,
@@ -367,6 +378,7 @@ impl RunStatus {
 		RunStatus::Accept,
 	];
 
+	/// The text stored and shown.
 	pub fn text(self) -> &'static str {
 		match self {
 			RunStatus::Running => "running",
@@ -378,6 +390,7 @@ impl RunStatus {
 		}
 	}
 
+	/// The status with that text.
 	pub fn parse(text: &str) -> Option<RunStatus> {
 		RunStatus::ALL.into_iter().find(|s| s.text() == text)
 	}
@@ -391,10 +404,11 @@ impl ToSql for RunStatus {
 	}
 }
 
+/// What workers send the database writer.
 #[derive(Debug)]
 pub enum Msg {
 	Hashed(Box<Hashed>),
-	// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
+	/// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
 	Seen(i64),
 	Event {
 		kind: Kind,
@@ -487,7 +501,7 @@ pub fn writer(
 }
 
 #[cfg(test)]
-// Writers on these databases panic at their first batch.
+/// Writers on these databases panic at their first batch.
 pub static PANIC_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 fn batches(

@@ -17,13 +17,14 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::util::{escape_name, show_path};
 
+/// Where the list of changed files comes from.
 #[derive(Debug)]
 pub enum Source {
-	// `zfs diff` output, with the dataset's mount point to strip.
+	/// `zfs diff` output, with the dataset's mount point to strip.
 	ZfsDiff(PathBuf, PathBuf),
-	// `btrfs subvolume find-new` output; paths are already relative.
+	/// `btrfs subvolume find-new` output; paths are already relative.
 	FindNew(PathBuf),
-	// One relative path per line.
+	/// One relative path per line.
 	List(PathBuf),
 }
 
@@ -47,6 +48,7 @@ impl Pair {
 	}
 }
 
+/// A change list, as parsed.
 #[derive(Debug, Default, PartialEq)]
 pub struct Parsed {
 	pub pairs: Vec<Pair>,
@@ -192,6 +194,7 @@ fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
+/// Parses `btrfs subvolume find-new` output.
 pub fn parse_find_new(text: &[u8]) -> Parsed {
 	let mut parsed = Parsed::default();
 	let mut seen = BTreeMap::new();
@@ -216,6 +219,7 @@ pub fn parse_find_new(text: &[u8]) -> Parsed {
 	parsed
 }
 
+/// Parses one relative path per line.
 pub fn parse_list(text: &[u8]) -> Parsed {
 	Parsed {
 		pairs: text
@@ -234,6 +238,7 @@ fn stays_inside(p: &Path) -> bool {
 		.all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
+/// Bytes that differ, and where, as runs of start and length.
 #[derive(Debug)]
 pub struct Diff {
 	pub differing: u64,
@@ -416,6 +421,7 @@ fn find_by_inode(
 	}
 }
 
+/// The `snapdiff` command.
 #[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, String> {
 	for dir in [old, new] {

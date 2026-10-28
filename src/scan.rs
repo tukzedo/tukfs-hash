@@ -43,6 +43,7 @@ impl Mode {
 	}
 }
 
+/// What `scan` was asked to do.
 #[derive(Debug)]
 pub struct Opts {
 	pub db: PathBuf,
@@ -92,10 +93,10 @@ fn events_line(counts: Option<&[(String, i64)]>) -> String {
 }
 
 // Roots as plan() kept them, sorted, so 2 runs over the same folders match.
-fn roots_key(groups: &[(String, Vec<PathBuf>, usize)]) -> Vec<u8> {
+fn roots_key(groups: &[Planned]) -> Vec<u8> {
 	let mut roots: Vec<&[u8]> = groups
 		.iter()
-		.flat_map(|(_, rs, _)| rs.iter().map(|r| r.as_os_str().as_bytes()))
+		.flat_map(|g| g.roots.iter().map(|r| r.as_os_str().as_bytes()))
 		.collect();
 	roots.sort_unstable();
 	roots.join(&0u8)
@@ -314,9 +315,18 @@ struct Job {
 	root: Arc<Root>,
 }
 
+/// Roots that share disks, read by one pool of workers.
+#[derive(Debug, Clone)]
+pub struct Planned {
+	pub name: String,
+	pub roots: Vec<PathBuf>,
+	pub threads: usize,
+}
+
+/// What `plan` makes of the roots given.
 #[derive(Debug)]
 pub struct Plan {
-	pub groups: Vec<(String, Vec<PathBuf>, usize)>,
+	pub groups: Vec<Planned>,
 	pub dropped: Vec<String>,
 	pub mounts: Vec<mounts::Mount>,
 }
@@ -374,7 +384,11 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 				n = *t;
 			}
 		}
-		groups.push((mounts::group_name(&disks), rs, n.max(1)));
+		groups.push(Planned {
+			name: mounts::group_name(&disks),
+			roots: rs,
+			threads: n.max(1),
+		});
 	}
 	Ok(Plan {
 		groups,
@@ -383,6 +397,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 	})
 }
 
+/// Takes the database's lock file, so 2 scans can't share it.
 pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	if let Some(t) = mounts::hands_off_at(mounts, db) {
 		return Err(format!(
@@ -411,6 +426,7 @@ pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	Ok(f)
 }
 
+/// This box's hostname, or empty.
 pub fn host() -> String {
 	fs::read_to_string("/proc/sys/kernel/hostname")
 		.map(|s| s.trim().to_string())
@@ -458,6 +474,7 @@ fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	failed
 }
 
+/// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let Plan {
 		groups: planned,
@@ -615,10 +632,10 @@ fn begin(
 // Roots on NTFS, APFS or HFS+, with their device and filesystem type.
 fn hands_off(
 	mounts: &[mounts::Mount],
-	groups: &[(String, Vec<PathBuf>, usize)],
+	groups: &[Planned],
 ) -> Result<BTreeMap<PathBuf, (u64, String)>, String> {
 	let mut out = BTreeMap::new();
-	for r in groups.iter().flat_map(|g| &g.1) {
+	for r in groups.iter().flat_map(|g| &g.roots) {
 		if let Some(t) = mounts::hands_off_at(mounts, r) {
 			let dev = fs::metadata(r)
 				.map_err(|e| format!("{}: {e}", r.display()))?
@@ -629,17 +646,14 @@ fn hands_off(
 	Ok(out)
 }
 
-fn groups(
-	planned: Vec<(String, Vec<PathBuf>, usize)>,
-	hands_off: &BTreeMap<PathBuf, (u64, String)>,
-) -> Vec<Arc<Group>> {
+fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -> Vec<Arc<Group>> {
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
-		.map(|(name, roots, threads)| {
+		.map(|p| {
 			Arc::new(Group {
-				name,
-				roots,
-				threads,
+				name: p.name,
+				roots: p.roots,
+				threads: p.threads,
 				stats: Stats::default(),
 				done: AtomicBool::new(false),
 			})
@@ -826,7 +840,7 @@ fn send(sh: &Shared, m: Msg) -> bool {
 	true
 }
 
-pub fn lock_path(db: &Path) -> PathBuf {
+fn lock_path(db: &Path) -> PathBuf {
 	let mut s = db.as_os_str().to_owned();
 	s.push(".lock");
 	PathBuf::from(s)
@@ -987,7 +1001,13 @@ fn queue(
 	Ok(())
 }
 
-type LinkVal = (i64, i64, Sums);
+// A size and time other than the claimant's mean the file changed between names.
+#[derive(Clone, Copy)]
+struct LinkVal {
+	bytes: i64,
+	mtime_us: i64,
+	sums: Sums,
+}
 
 // Each entry counts down the names still to come and goes when it hits zero,
 // so a backup tree full of hard links doesn't keep every inode in memory.
@@ -1072,7 +1092,7 @@ impl Links {
 		let mut m = locked(&self.map);
 		loop {
 			match m.entries.get(&key) {
-				Some(Some((v, _))) if v.0 == bytes && v.1 == mt => {
+				Some(Some((v, _))) if v.bytes == bytes && v.mtime_us == mt => {
 					let v = *v;
 					m.count_down(key);
 					return Claim::Done(v);
@@ -1133,6 +1153,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 	}
 }
 
+/// The mtime in microseconds, as stored.
 pub fn mtime_us(md: &fs::Metadata) -> i64 {
 	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
 }
@@ -1142,19 +1163,15 @@ pub fn mtime_s(md: &fs::Metadata) -> f64 {
 	md.mtime() as f64 + md.mtime_nsec() as f64 / 1e9
 }
 
+/// Opens a path to read, without following a link or moving its atime.
 pub fn open_noatime(p: &Path) -> io::Result<File> {
 	let base = libc::O_NOFOLLOW | libc::O_NONBLOCK;
-	match OpenOptions::new()
-		.read(true)
-		.custom_flags(base | libc::O_NOATIME)
-		.open(p)
-	{
-		// O_NOATIME needs ownership or root.
-		Err(e) if e.raw_os_error() == Some(libc::EPERM) => {
-			OpenOptions::new().read(true).custom_flags(base).open(p)
-		}
-		r => r,
-	}
+	beneath::with_noatime(|extra| {
+		OpenOptions::new()
+			.read(true)
+			.custom_flags(base | extra)
+			.open(p)
+	})
 }
 
 /// What one read of a file came to.
@@ -1164,10 +1181,11 @@ pub struct Sums {
 	pub b2b: Option<[u8; 64]>,
 }
 
+/// Why a read of a file gave no sums.
 #[derive(Debug)]
 pub enum ReadFail {
 	Stopped,
-	Io(io::Error, u64),
+	Io { err: io::Error, at: u64 },
 	Unstable,
 }
 
@@ -1250,7 +1268,7 @@ pub fn read_sums(
 				set_direct(fd, false);
 				direct = false;
 			}
-			Err(e) => break Err(ReadFail::Io(e, total)),
+			Err(err) => break Err(ReadFail::Io { err, at: total }),
 		}
 	};
 	if direct {
@@ -1259,7 +1277,9 @@ pub fn read_sums(
 	// SAFETY: fd is open, and fadvise only changes cache hints.
 	unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED) };
 	outcome?;
-	let after = file.metadata().map_err(|e| ReadFail::Io(e, total))?;
+	let after = file
+		.metadata()
+		.map_err(|err| ReadFail::Io { err, at: total })?;
 	if after.len() != before.len()
 		|| mtime_us(&after) != mtime_us(before)
 		|| after.ctime() != before.ctime()
@@ -1279,15 +1299,15 @@ fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 		ReadFail::Stopped => {}
 		// The driver can't decode it, like ntfs3 with a Windows-compressed
 		// or EFS file. Nothing was read, so nothing's known.
-		ReadFail::Io(e, at) if e.raw_os_error() == Some(libc::EOPNOTSUPP) => {
+		ReadFail::Io { err, at } if err.raw_os_error() == Some(libc::EOPNOTSUPP) => {
 			st.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::Unsupported, path, format!("{e} at byte {at}"));
+			event(sh, Kind::Unsupported, path, format!("{err} at byte {at}"));
 		}
 		// On ZFS an EIO here is a block that failed its checksum with no
 		// good copy left. That is the same news as a mismatch.
-		ReadFail::Io(e, at) => {
+		ReadFail::Io { err, at } => {
 			st.read_err.fetch_add(1, Relaxed);
-			event(sh, Kind::ReadError, path, format!("{e} at byte {at}"));
+			event(sh, Kind::ReadError, path, format!("{err} at byte {at}"));
 		}
 		ReadFail::Unstable => {
 			st.unstable.fetch_add(1, Relaxed);
@@ -1475,7 +1495,11 @@ impl<'a> Worker<'a> {
 		let sh = self.sh;
 		let hashed_us = now_us();
 		if let Some(c) = claim {
-			c.fill((before.len() as i64, mtime_us(&before), sums));
+			c.fill(LinkVal {
+				bytes: before.len() as i64,
+				mtime_us: mtime_us(&before),
+				sums,
+			});
 		}
 		// Once nothing more can be recorded, an attribute would vouch for a read
 		// the database never got.
@@ -1611,7 +1635,7 @@ impl<'a> Worker<'a> {
 		if before.nlink() > 1 {
 			match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
 				// Read once, but each name is held to its own records.
-				Claim::Done((_, _, sums)) => {
+				Claim::Done(LinkVal { sums, .. }) => {
 					st.links.fetch_add(1, Relaxed);
 					let misses = refs.misses(&sums);
 					if !misses.is_empty() {
@@ -1661,7 +1685,11 @@ impl<'a> Worker<'a> {
 			}
 			Ok(Verdict::Changed { sums, misses, note }) => {
 				if let Some(c) = claim {
-					c.fill((bytes, mt, sums));
+					c.fill(LinkVal {
+						bytes,
+						mtime_us: mt,
+						sums,
+					});
 				}
 				keep(sh, st, path, prior, misses, &note);
 				None
@@ -1689,10 +1717,14 @@ impl<'a> Worker<'a> {
 		{
 			return;
 		}
-		let only_date = refs.xattr == Some(sums.b3);
+		let what = if refs.xattr == Some(sums.b3) {
+			xattr::B3Write::DateOnly
+		} else {
+			xattr::B3Write::All
+		};
 		let id = (before.dev(), before.ino());
 		let (bytes, mt) = (before.len() as i64, mtime_us(before));
-		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, only_date);
+		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, what);
 		// A current rmlint set got this far only by matching, so this is a
 		// missing or stale one.
 		if let (Ok(()), Some(b2b), None) = (&wrote, sums.b2b, refs.b2b) {
@@ -1903,8 +1935,8 @@ mod tests {
 		};
 		let eio = io::Error::from_raw_os_error(libc::EIO);
 		let nope = io::Error::from_raw_os_error(libc::EOPNOTSUPP);
-		assert_eq!(kind(ReadFail::Io(eio, 4096)), Kind::ReadError);
-		assert_eq!(kind(ReadFail::Io(nope, 0)), Kind::Unsupported);
+		assert_eq!(kind(ReadFail::Io { err: eio, at: 4096 }), Kind::ReadError);
+		assert_eq!(kind(ReadFail::Io { err: nope, at: 0 }), Kind::Unsupported);
 		assert_eq!(
 			(st.read_err.load(Relaxed), st.other_err.load(Relaxed)),
 			(1, 1)
@@ -1974,7 +2006,13 @@ mod tests {
 	#[test]
 	fn roots_key_ignores_order() {
 		let _id = test_id("ddy6n");
-		let g = |rs: &[&str]| vec![("g".to_string(), rs.iter().map(PathBuf::from).collect(), 1)];
+		let g = |rs: &[&str]| {
+			vec![Planned {
+				name: "g".into(),
+				roots: rs.iter().map(PathBuf::from).collect(),
+				threads: 1,
+			}]
+		};
 		let a = roots_key(&[g(&["/b", "/a"]), g(&["/c"])].concat());
 		let b = roots_key(&[g(&["/c"]), g(&["/a", "/b"])].concat());
 		assert_eq!(a, b);
@@ -2474,7 +2512,11 @@ mod tests {
 	fn the_link_map_is_capped() {
 		let _id = test_id("ddy97");
 		let mut m = LinkMap::default();
-		let v = (1, 1, sums(1));
+		let v = LinkVal {
+			bytes: 1,
+			mtime_us: 1,
+			sums: sums(1),
+		};
 		for i in 0..LINKS_KEPT as u64 + 10 {
 			m.fill((1, i), v, 5);
 		}

@@ -10,6 +10,7 @@ use std::ffi::CStr;
 use std::io;
 use std::os::fd::RawFd;
 
+/// The blake3 set this writes, matching nemo-anywhere's names.
 pub const B3_DIGEST: &CStr = c"user.blake3.b64u";
 pub const B3_BYTES: &CStr = c"user.blake3.bytes";
 pub const B3_MTIME: &CStr = c"user.blake3.mtime";
@@ -23,6 +24,7 @@ pub const B3_INODE: &CStr = c"user.blake3.inode";
 pub const RM_B2B_CKSUM: &CStr = c"user.rmlint.blake2b.cksum";
 pub const RM_B2B_MTIME: &CStr = c"user.rmlint.blake2b.mtime";
 
+/// An attribute's value. `None` where it's missing or not supported.
 pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 	let mut buf = vec![0u8; 256];
 	loop {
@@ -48,6 +50,7 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 	}
 }
 
+/// Sets an attribute.
 pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
 	// SAFETY: value is value.len() bytes, and name is NUL-terminated.
 	let r = unsafe { libc::fsetxattr(fd, name.as_ptr(), value.as_ptr().cast(), value.len(), 0) };
@@ -108,6 +111,7 @@ pub fn remove_rmlint(fd: RawFd) -> io::Result<()> {
 	fremove(fd, RM_B2B_MTIME)
 }
 
+/// The checksum attributes a file has.
 #[derive(Default, Debug, Clone)]
 pub struct OnFile {
 	pub b3: Option<[u8; 32]>,
@@ -204,6 +208,14 @@ impl OnFile {
 	}
 }
 
+/// What `write_b3` writes: the whole set, or only the date on a set that
+/// still matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum B3Write {
+	All,
+	DateOnly,
+}
+
 /// The time goes after the checksum, since a reader needs the time to match,
 /// and the inode goes last, since a skip needs its digest to match. A write
 /// that stops part way leaves an old value next to the new checksum and gets
@@ -215,14 +227,15 @@ pub fn write_b3(
 	mtime_us: i64,
 	date_us: i64,
 	(dev, ino): (u64, u64),
-	only_date: bool,
+	what: B3Write,
 ) -> io::Result<()> {
-	if !only_date {
+	let all = what == B3Write::All;
+	if all {
 		fset(fd, B3_DIGEST, b64u_encode(digest).as_bytes())?;
 		fset(fd, B3_BYTES, bytes.to_string().as_bytes())?;
 	}
 	fset(fd, B3_DATE, date_us.to_string().as_bytes())?;
-	if !only_date {
+	if all {
 		fset(fd, B3_MTIME, mtime_us.to_string().as_bytes())?;
 	}
 	fset(fd, B3_INODE, inode_text(dev, ino, digest).as_bytes())?;

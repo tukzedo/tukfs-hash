@@ -18,6 +18,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
+/// The `accept` command: takes each file's current content as good.
 pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> {
 	if paths.is_empty() {
 		return Err("accept needs at least one file".into());
@@ -69,7 +70,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 fn fail_text(f: ReadFail) -> String {
 	match f {
 		ReadFail::Stopped => "stopped".into(),
-		ReadFail::Io(e, at) => format!("{e} at byte {at}"),
+		ReadFail::Io { err, at } => format!("{err} at byte {at}"),
 		ReadFail::Unstable => "changed while being read".into(),
 	}
 }
@@ -174,7 +175,7 @@ fn one(
 	let mut written = Ok(());
 	if onfile.b3.is_some() && hands_off.is_none() {
 		let id = (before.dev(), before.ino());
-		written = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, false);
+		written = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, xattr::B3Write::All);
 	}
 	if drop_rmlint && written.is_ok() {
 		written = xattr::remove_rmlint(fd);

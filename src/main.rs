@@ -277,6 +277,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	}
 	let need_db = || db.as_deref().ok_or("--db is required");
 
+	let arg_line = || argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" ");
 	match cmd {
 		"scan" => {
 			if roots.is_empty() {
@@ -312,7 +313,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
-					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
+					args: arg_line(),
 				},
 				&stop,
 			)
@@ -322,9 +323,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			for d in &plan.dropped {
 				out!("skip {d}");
 			}
-			for (name, rs, n) in &plan.groups {
-				out!("group {name}, {n} worker(s)");
-				for r in rs {
+			for g in &plan.groups {
+				out!("group {}, {} worker(s)", g.name, g.threads);
+				for r in &g.roots {
 					out!("\t{}", util::show_path(r));
 				}
 			}
@@ -334,11 +335,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		"report" => report(need_db()?, run_id, kind, limit),
 		"gone" => gone::run(need_db()?, run_id, limit),
 		"prune" => prune(need_db()?),
-		"accept" => accept::run(
-			need_db()?,
-			&files,
-			&argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
-		),
+		"accept" => accept::run(need_db()?, &files, &arg_line()),
 		"snapdiff" => {
 			let (Some(old), Some(new)) = (old, new) else {
 				return Err("snapdiff needs --old and --new".into());

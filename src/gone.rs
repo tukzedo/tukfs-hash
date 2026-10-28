@@ -47,6 +47,7 @@ fn bytes_of(v: ValueRef<'_>) -> Vec<u8> {
 	}
 }
 
+/// The `gone` command: lists recorded files no longer found.
 #[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> {
 	let conn = db::open_ro(db_path)?;
