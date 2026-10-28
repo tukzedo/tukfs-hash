@@ -51,18 +51,6 @@
 	- Branch: round-20261028
 	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
 
-- A scan that fails reading the mount table after it starts leaves its run marked running.
-	- ID: 2026102808215852
-	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `562a451`. Plausible, read only.
-	- Note: `scan::run` reads the mounts after `begin()` has written the run row. An error there returns before `finish()`, so the run stays running, the database stays in WAL mode, and a sudo run leaves files owned by root.
-	- Note: Move both calls above `begin()`, and reuse the mount table `plan()` read. A run reads it 3 times now.
-
 - snapdiff allocates and zeroes 2 MiB for every file pair it compares.
 	- ID: 2026102808215768
 	- Type: Enhancement
@@ -100,18 +88,6 @@
 	- Note: `--limit -1` means no limit in `report` and shows nothing in `gone`.
 	- Note: `runs`, `report` and `gone` print database errors bare, while `accept` and `scan` prefix them.
 	- Note: Parse `--kind` with `db::Kind::parse`, check the run exists, and parse `--limit` as unsigned.
-
-- Lock and ownership errors on the database are misreported or dropped.
-	- ID: 2026102808215819
-	- Type: Bug
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082158
-	- Opened by: style and performance review
-	- Origin: `f05c368` and `422efff`. Plausible, read only.
-	- Note: `scan::lock` reports any `flock` failure as another scan holding the lock, so ENOLCK or EOPNOTSUPP reads wrong. Say locked only for EWOULDBLOCK.
-	- Note: `give_back` ignores a failed `chown`. That's fine for the WAL files, which are often gone, but a failure on the database itself leaves it owned by root with no warning.
 
 - cicd scripts start a process per item in several loops.
 	- ID: 2026102808215748
@@ -356,6 +332,50 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- A scan that fails reading the mount table after it starts leaves its run marked running.
+	- ID: 2026102808215852
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `562a451`. Plausible, read only.
+	- Note: `scan::run` reads the mounts after `begin()` has written the run row. An error there returns before `finish()`, so the run stays running, the database stays in WAL mode, and a sudo run leaves files owned by root.
+	- Note: Move both calls above `begin()`, and reuse the mount table `plan()` read. A run reads it 3 times now.
+	- Reproduced [Bug]: Yes. With the third mount table read made to fail, the scan returned an error and left its run marked running.
+	- Actual fix [Bug]:
+		- `plan()` hands back the mount table it read, and `scan::run` uses it for the lock and the hands-off check, so a run reads it once.
+		- The hands-off check moved above the lock and `begin()`.
+		- `accept` had the same shape, reading the mounts after its run row went in. It reads them before the lock now.
+	- Decisions:
+		- `scan::lock` takes the mount table, so `prune` reads it itself.
+	- Swept: every `read_mounts` and `lock` caller, in `scan.rs`, `accept.rs` and `main.rs`. Between `begin()` and `finish()` only a writer thread panic can still return early.
+	- Branch: round-20261028
+	- Test case: `dehzd`, `scan::tests::a_lost_mount_table_leaves_no_run_running`. It fails each mount read in turn and checks no run is left running. It failed before the fix and passes after. A container that can't plan a real root skips it.
+	- Closed: 20261028-092033
+
+- Lock and ownership errors on the database are misreported or dropped.
+	- ID: 2026102808215819
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `f05c368` and `422efff`. Plausible, read only.
+	- Note: `scan::lock` reports any `flock` failure as another scan holding the lock, so ENOLCK or EOPNOTSUPP reads wrong. Say locked only for EWOULDBLOCK.
+	- Note: `give_back` ignores a failed `chown`. That's fine for the WAL files, which are often gone, but a failure on the database itself leaves it owned by root with no warning.
+	- Actual fix [Bug]:
+		- The lock says "is locked; another scan is using this database" only for EWOULDBLOCK. Any other `flock` error is shown as "can't lock" with its reason.
+		- `give_back` warns for each file it can't hand back, except a missing one, so the database and lock file are named and absent WAL files aren't.
+	- Decisions:
+		- The lock file gets the same warning as the database, since a root-owned one blocks the next scan without sudo.
+	- Swept: `chown` and `flock` appear only in `scan.rs`.
+	- Branch: round-20261028
+	- Test case: `dehzf`, `scan::tests::a_held_lock_says_so`, and `dehze`, `scan::tests::a_failed_hand_over_is_named`. Each fails with its check reversed. ENOLCK can't be made to happen here, so the other branch is untested.
+	- Closed: 20261028-092033
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902

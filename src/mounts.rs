@@ -63,7 +63,17 @@ pub fn parse_mountinfo(text: &[u8]) -> Vec<Mount> {
 	out
 }
 
+#[cfg(test)]
+thread_local! {
+	// Reads past this many fail, so a test can lose the table partway.
+	pub static READS_LEFT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
 pub fn read_mounts() -> Result<Vec<Mount>, String> {
+	#[cfg(test)]
+	if READS_LEFT.with(|n| n.replace(n.get().map(|v| v.saturating_sub(1)))) == Some(0) {
+		return Err("/proc/self/mountinfo: test fault".into());
+	}
 	let text =
 		fs::read("/proc/self/mountinfo").map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
 	Ok(parse_mountinfo(&text))

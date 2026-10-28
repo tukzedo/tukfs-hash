@@ -318,6 +318,7 @@ struct Job {
 pub struct Plan {
 	pub groups: Vec<(String, Vec<PathBuf>, usize)>,
 	pub dropped: Vec<String>,
+	pub mounts: Vec<mounts::Mount>,
 }
 
 /// Roots that resolve to the same place, or sit inside another root on the same
@@ -375,11 +376,15 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		}
 		groups.push((mounts::group_name(&disks), rs, n.max(1)));
 	}
-	Ok(Plan { groups, dropped })
+	Ok(Plan {
+		groups,
+		dropped,
+		mounts,
+	})
 }
 
-pub fn lock(db: &Path) -> Result<File, String> {
-	if let Some(t) = mounts::hands_off_at(&mounts::read_mounts()?, db) {
+pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
+	if let Some(t) = mounts::hands_off_at(mounts, db) {
 		return Err(format!(
 			"{} is on {t}, which isn't written to from Linux; put the database elsewhere",
 			db.display()
@@ -394,10 +399,14 @@ pub fn lock(db: &Path) -> Result<File, String> {
 		.map_err(|e| format!("{}: {e}", p.display()))?;
 	// SAFETY: f is open for the length of the call.
 	if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-		return Err(format!(
-			"{} is locked; another scan is using this database",
-			p.display()
-		));
+		let e = io::Error::last_os_error();
+		if e.kind() == io::ErrorKind::WouldBlock {
+			return Err(format!(
+				"{} is locked; another scan is using this database",
+				p.display()
+			));
+		}
+		return Err(format!("{}: can't lock: {e}", p.display()));
 	}
 	Ok(f)
 }
@@ -416,29 +425,56 @@ pub fn give_back(db: &Path) {
 	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
 		return;
 	};
+	for (p, e) in hand_over(db, uid, gid) {
+		err!(
+			"warning: can't give {} back to uid {uid}: {e}",
+			crate::util::show_path(&p)
+		);
+	}
+}
+
+// The files that couldn't be handed over. The WAL files are usually gone, so a
+// missing one doesn't count.
+fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let with = |sfx: &str| {
 		let mut s = db.as_os_str().to_owned();
 		s.push(sfx);
 		PathBuf::from(s)
 	};
+	let mut failed = Vec::new();
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
-		if let Ok(c) = crate::util::cpath(&p) {
-			// SAFETY: c is NUL-terminated and outlives the call.
-			unsafe { libc::chown(c.as_ptr(), uid, gid) };
+		let Ok(c) = crate::util::cpath(&p) else {
+			continue;
+		};
+		// SAFETY: c is NUL-terminated and outlives the call.
+		if unsafe { libc::chown(c.as_ptr(), uid, gid) } == 0 {
+			continue;
+		}
+		let e = io::Error::last_os_error();
+		if e.kind() != io::ErrorKind::NotFound {
+			failed.push((p, e));
 		}
 	}
+	failed
 }
 
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
-	let plan = plan(&o.roots, &o.threads)?;
-	for d in &plan.dropped {
+	let Plan {
+		groups: planned,
+		dropped,
+		mounts,
+	} = plan(&o.roots, &o.threads)?;
+	for d in &dropped {
 		err!("skipping root {d}");
 	}
-	if plan.groups.is_empty() {
+	if planned.is_empty() {
 		return Err("nothing to scan".into());
 	}
+	// Anything that can fail goes before begin(), or the run stays marked
+	// running (backlog ...852).
+	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
-	let _lock = lock(&db_path)?;
+	let _lock = lock(&db_path, &mounts)?;
 	let conn = db::open_rw(&db_path)?;
 
 	let started = now_us();
@@ -447,7 +483,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		cutoff_us,
 		started_us: run_started,
 		summary: earlier,
-	} = begin(&conn, o, &roots_key(&plan.groups), started)?;
+	} = begin(&conn, o, &roots_key(&planned), started)?;
 
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
@@ -456,8 +492,6 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		std::thread::spawn(move || db::writer(conn, run_id, &rx, move || faults.halt(&stop)))
 	};
 
-	let mounts = mounts::read_mounts()?;
-	let hands_off = hands_off(&mounts, &plan.groups)?;
 	let shared = Arc::new(Shared {
 		stop: stop.clone(),
 		faults: faults.clone(),
@@ -484,7 +518,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mode: o.mode,
 		tx,
 	});
-	let groups = groups(plan.groups, &hands_off);
+	let groups = groups(planned, &hands_off);
 
 	let mut handles = Vec::new();
 	for g in &groups {
@@ -2065,6 +2099,89 @@ mod tests {
 		assert_eq!(left(&links), 0);
 		drop(sh);
 		drain.join().unwrap();
+	}
+
+	// Whichever read of the mount table fails, no run is left running, and a
+	// run reads it once (backlog ...852).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_lost_mount_table_leaves_no_run_running() {
+		let _id = test_id("dehzd");
+		let d = scratch("scan_mountfail");
+		let root = d.join("r");
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("a"), "x").unwrap();
+		let db = d.join("t.sqlite");
+		let o = Opts {
+			db: db.clone(),
+			roots: vec![root],
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			threads: Vec::new(),
+			since: None,
+			resume: false,
+			mode: Mode::Full,
+			write_xattrs: false,
+			rmlint: false,
+			progress_secs: 3600,
+			args: "test".into(),
+		};
+		// A container may not see the disk under its folders.
+		if let Err(e) = run(&o, &Arc::new(AtomicBool::new(false))) {
+			eprintln!("a plain scan fails here ({e}); skipped");
+			return;
+		}
+		for n in 0..4 {
+			mounts::READS_LEFT.set(Some(n));
+			let r = run(&o, &Arc::new(AtomicBool::new(false)));
+			mounts::READS_LEFT.set(None);
+			assert_eq!(r.is_ok(), n > 0, "{n} good read(s): {r:?}");
+			let c = rusqlite::Connection::open(&db).unwrap();
+			let running: i64 = c
+				.query_row(
+					"SELECT count(*) FROM runs WHERE status = ?1",
+					[RunStatus::Running],
+					|r| r.get(0),
+				)
+				.unwrap();
+			assert_eq!(running, 0, "{n} good read(s): {r:?}");
+		}
+	}
+
+	// Only a lock held elsewhere reads as another scan (backlog ...819).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no flock")]
+	fn a_held_lock_says_so() {
+		let _id = test_id("dehzf");
+		let d = scratch("scan_heldlock");
+		let db = d.join("t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let held = lock(&db, &mounts).unwrap();
+		let again = lock(&db, &mounts).unwrap_err();
+		assert!(again.ends_with("is locked; another scan is using this database"));
+		drop(held);
+		lock(&db, &mounts).unwrap();
+	}
+
+	// A database left owned by root is named; a missing WAL file isn't
+	// (backlog ...819).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no chown")]
+	fn a_failed_hand_over_is_named() {
+		let _id = test_id("dehze");
+		// SAFETY: geteuid only reads.
+		if unsafe { libc::geteuid() } == 0 {
+			eprintln!("root can give anything away; skipped");
+			return;
+		}
+		let d = scratch("scan_handover");
+		let db = d.join("t.sqlite");
+		fs::write(&db, "").unwrap();
+		fs::write(lock_path(&db), "").unwrap();
+		let me = fs::metadata(&db).unwrap();
+		assert!(hand_over(&db, me.uid(), me.gid()).is_empty());
+		let failed: Vec<PathBuf> = hand_over(&db, 0, 0).into_iter().map(|f| f.0).collect();
+		assert_eq!(failed, [db.clone(), lock_path(&db)]);
 	}
 
 	#[test]

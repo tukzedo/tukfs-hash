@@ -26,7 +26,9 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path)?;
+	// Read before the run row goes in, so a failure leaves none.
+	let mounts = crate::mounts::read_mounts()?;
+	let _lock = scan::lock(&db_path, &mounts)?;
 	let mut conn = db::open_rw(&db_path)?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Its own status, so `scan --resume` never takes it for a stopped scan.
@@ -36,7 +38,6 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	)
 	.map_err(e)?;
 	let run_id = conn.last_insert_rowid();
-	let mounts = crate::mounts::read_mounts()?;
 	let mut buf = vec![0u8; 1 << 20];
 	let mut taken = 0;
 	for p in paths {

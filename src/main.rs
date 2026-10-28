@@ -416,7 +416,7 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", util::show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path)?;
+	let _lock = scan::lock(&db_path, &mounts::read_mounts()?)?;
 	let conn = db::open_rw(&db_path)?;
 	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
 	if let Err(x) = db::close_rw(conn) {
