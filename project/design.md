@@ -21,6 +21,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - One writer thread commits at most a second apart. Events go in first, in their own transaction, so a row the database refuses can't take a mismatch with it.
 
+- The folder walk looks up each file's row before it queues the file, 256 at a time in one read transaction. A transaction per lookup cost most of the lookup, about a sixth of the CPU on small files. Each batch ends before it waits on the queue, so it doesn't hold back the writer's checkpoints for long.
+
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
 
 - Pages are 16 KiB, to match the dataset's recordsize.
@@ -80,7 +82,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A run still marked `running` when the next one starts was killed, since the lock is held. It's marked `killed`. If it's the newest, `--resume` takes it like a stopped one.
 
-- A run that can't go on is marked `failed` and exits 1. That's a write the database refused, a worker that couldn't open the database, or a panic. The other workers stop, the events so far are kept, and the summary is still written. `--resume` takes it like a stopped one once the cause is fixed.
+- A run that can't go on is marked `failed` and exits 1. That's a write the database refused, a folder walk that couldn't open the database, or a panic. The other workers stop, the events so far are kept, and the summary is still written. `--resume` takes it like a stopped one once the cause is fixed.
 
 - `scan --verify` reads every file that has a blake3 stored at its current size and time, in the database or on the file, and compares it the same way a scan does. Its skip date is its own start, so only what it already read in an earlier part is skipped. New and edited files aren't read. A clean read updates the database row, so a scan later that day skips it, but no attributes are written, so ctimes don't move.
 	- It's a scan flag rather than its own command, since it needs everything a scan has: the walk and its mount rules, workers per disk, the claim on hard links, stop and resume, events and exit codes. A command that went through the database's rows instead would read in name order, not disk order, and couldn't open files safely from their root.

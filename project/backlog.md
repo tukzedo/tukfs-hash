@@ -39,18 +39,6 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
-- Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
-	- ID: 2026102810135573
-	- Type: Enhancement
-	- Status: Queued
-	- Needs local test suite run?: Yes
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-101355
-	- Opened by: style and performance review
-	- Related IDs: 2026102808215738, 2026102809554785
-	- Note: On 20,000 files of 1 to 4 KB, over 5 rounds at load 5, a build with the lookup taken out used about 0.07 s less user CPU on a first scan, from 0.40 s, and 0.08 s less on a `--rmlint` rescan, from 0.51 s. That's about 4 us per file, and it costs as much on an empty database. Sys CPU fell by up to 0.1 s, and wall time didn't move.
-	- Note: A query per folder is the redesign the parent named. A read transaction held across many lookups might do it cheaper, but it would hold back the writer's checkpoints and hide rows written since it began, which a resumed run reads.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -2230,6 +2218,27 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
+	- ID: 2026102810135573
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-101355
+	- Opened by: style and performance review
+	- Related IDs: 2026102808215738, 2026102809554785
+	- Note: On 20,000 files of 1 to 4 KB, over 5 rounds at load 5, a build with the lookup taken out used about 0.07 s less user CPU on a first scan, from 0.40 s, and 0.08 s less on a `--rmlint` rescan, from 0.51 s. That's about 4 us per file, and it costs as much on an empty database. Sys CPU fell by up to 0.1 s, and wall time didn't move.
+	- Note: A query per folder is the redesign the parent named. A read transaction held across many lookups might do it cheaper, but it would hold back the writer's checkpoints and hide rows written since it began, which a resumed run reads.
+	- Actual cause: Each lookup was its own read transaction. Taking and dropping the WAL read lock cost 2 `fcntl` calls per file, and the writer's commits made each worker's page cache go stale. The query itself was cheap.
+	- Progress log:
+		- 2026-10-28: The walk now looks up a folder's files 256 to a read transaction, before it queues them, and each job takes its row along. Workers no longer open the database. A rescan of 20,000 files went from 37,466 `fcntl` calls to 488.
+		- Over 5 rounds at load 20 to 27, first-scan user CPU fell from 0.55 s to 0.43 s on 20,000 small files, and rescan from 0.66 s to 0.59 s. Wall time didn't move.
+	- Decisions:
+		- A short transaction per batch rather than a query per folder or a long-held one. It needs no new table or index, and it ends before the batch waits on the queue, so checkpoints aren't held back. A resumed run reads rows the stopped run committed, which every batch sees.
+		- `a_group_with_no_workers_ends` got its no workers from each worker failing to open a missing database. It now asks for 0 workers outright, and the missing database case expects the walk's 1 fault in place of 2.
+	- Test case: dej6m, `the_walk_hands_each_job_its_row`, and `lookup_error_is_not_no_row` covers `db::lookup_each`.
+	- Closed: 20261028-132000
 
 - Lint configs don't enforce all of the style rules.
 	- ID: 2026102808215708

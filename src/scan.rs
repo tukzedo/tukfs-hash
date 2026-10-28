@@ -308,6 +308,7 @@ struct Job {
 	path: PathBuf,
 	in_git: bool,
 	root: Arc<Root>,
+	prior: Option<Prior>,
 }
 
 /// Roots that share disks, read by one pool of workers.
@@ -793,11 +794,15 @@ fn run_group(g: &Group, sh: &Shared) {
 		}
 		drop(jrx);
 		guarded(sh, "a folder walk", || {
+			let look = match db::open_ro(&sh.db) {
+				Ok(c) => c,
+				Err(e) => return sh.faults.add(&sh.stop, e),
+			};
 			for r in &g.roots {
 				if sh.stop.load(Relaxed) {
 					break;
 				}
-				walk(r, sh, &g.stats, &jtx);
+				walk(r, sh, &g.stats, &look, &jtx);
 			}
 		});
 		drop(jtx);
@@ -861,7 +866,13 @@ struct Closed;
 
 // Depth first, files before folders. Folders go in name order; files go in
 // inode order, which on most filesystems is close to the order on disk.
-fn walk(root: &Path, sh: &Shared, stats: &Stats, jobs: &SyncSender<Job>) {
+fn walk(
+	root: &Path,
+	sh: &Shared,
+	stats: &Stats,
+	look: &rusqlite::Connection,
+	jobs: &SyncSender<Job>,
+) {
 	let root = match Root::open(root) {
 		Ok(r) => Arc::new(r),
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
@@ -875,7 +886,7 @@ fn walk(root: &Path, sh: &Shared, stats: &Stats, jobs: &SyncSender<Job>) {
 	let mut next = Some((root.path.clone(), false));
 	while !sh.stop.load(Relaxed) {
 		if let Some((dir, git_above)) = next.take() {
-			match list_dir(&root, dir, git_above, sh, stats, jobs) {
+			match list_dir(&root, dir, git_above, sh, stats, look, jobs) {
 				Ok(Some(f)) => stack.push(f),
 				Ok(None) => {}
 				Err(Closed) => return,
@@ -897,6 +908,7 @@ fn list_dir(
 	git_above: bool,
 	sh: &Shared,
 	stats: &Stats,
+	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) -> Result<Option<Frame>, Closed> {
 	let opened = root
@@ -965,10 +977,10 @@ fn list_dir(
 		}
 		files.push((ent.ino, p));
 		if files.len() >= FILES_BATCH {
-			queue(root, &mut files, in_git, jobs)?;
+			queue(root, &mut files, in_git, sh, stats, look, jobs)?;
 		}
 	}
-	queue(root, &mut files, in_git, jobs)?;
+	queue(root, &mut files, in_git, sh, stats, look, jobs)?;
 	subdirs.sort_unstable_by(|a, b| b.cmp(a));
 	Ok(Some(Frame {
 		dir,
@@ -977,22 +989,46 @@ fn list_dir(
 	}))
 }
 
+// Looked up a batch at a time, each in its own read transaction, which ends
+// before the batch waits on the queue so the writer can checkpoint.
+const LOOKUP_BATCH: usize = 256;
+
 fn queue(
 	root: &Arc<Root>,
 	files: &mut Vec<(u64, PathBuf)>,
 	in_git: bool,
+	sh: &Shared,
+	stats: &Stats,
+	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) -> Result<(), Closed> {
 	files.sort_unstable();
-	for (_, path) in files.drain(..) {
-		let job = Job {
-			path,
-			in_git,
-			root: root.clone(),
-		};
-		jobs.send(job).map_err(|_| Closed)?;
+	let mut rest = files.drain(..).map(|(_, p)| p);
+	loop {
+		let batch: Vec<PathBuf> = rest.by_ref().take(LOOKUP_BATCH).collect();
+		if batch.is_empty() {
+			return Ok(());
+		}
+		let keys: Vec<&[u8]> = batch.iter().map(|p| p.as_os_str().as_bytes()).collect();
+		let priors = db::lookup_each(look, &keys);
+		for (path, prior) in batch.into_iter().zip(priors) {
+			let prior = match prior {
+				Ok(p) => p,
+				Err(e) => {
+					stats.other_err.fetch_add(1, Relaxed);
+					event(sh, Kind::DbError, &path, e);
+					continue;
+				}
+			};
+			let job = Job {
+				path,
+				in_git,
+				root: root.clone(),
+				prior,
+			};
+			jobs.send(job).map_err(|_| Closed)?;
+		}
 	}
-	Ok(())
 }
 
 // A size and time other than the claimant's mean the file changed between names.
@@ -1111,14 +1147,6 @@ impl Links {
 }
 
 fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
-	let conn = match db::open_ro(&sh.db) {
-		Ok(c) => c,
-		Err(e) => return sh.faults.add(&sh.stop, e),
-	};
-	let mut stmt = match conn.prepare(db::LOOKUP) {
-		Ok(st) => st,
-		Err(e) => return sh.faults.add(&sh.stop, format!("{}: {e}", sh.db.display())),
-	};
 	let mut w = Worker {
 		g,
 		sh,
@@ -1133,15 +1161,7 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 		if sh.stop.load(Relaxed) {
 			continue;
 		}
-		let prior = match db::lookup(&mut stmt, job.path.as_os_str().as_bytes()) {
-			Ok(p) => p,
-			Err(e) => {
-				g.stats.other_err.fetch_add(1, Relaxed);
-				event(sh, Kind::DbError, &job.path, e.to_string());
-				continue;
-			}
-		};
-		w.one_file(&job, prior.as_ref());
+		w.one_file(&job, job.prior.as_ref());
 	}
 }
 
@@ -1878,35 +1898,44 @@ mod tests {
 		(sh, rx)
 	}
 
-	// More files than the job queue holds, and no worker to take them.
+	// More files than the job queue holds, and no worker to take them. Workers
+	// stopped opening the database in 2026102810135573, so a missing one now
+	// stops the walk alone, and no workers is asked for outright.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_group_with_no_workers_ends() {
 		let _id = test_id("ddy8f");
 		let dir = scratch("scan_noworkers");
+		let tree = dir.join("tree");
+		fs::create_dir(&tree).unwrap();
 		for i in 0..1500 {
-			File::create(dir.join(format!("f{i}"))).unwrap();
+			File::create(tree.join(format!("f{i}"))).unwrap();
 		}
-		let (sh, _rx) = test_shared(dir.join("not here/t.sqlite"));
-		let g = Group {
-			name: "g".into(),
-			roots: vec![dir.to_path_buf()],
-			threads: 2,
-			stats: Stats::default(),
-			done: AtomicBool::new(false),
+		drop(db::open_rw(&dir.join("t.sqlite")).unwrap());
+		let ends = |db: PathBuf, threads| {
+			let (sh, _rx) = test_shared(db);
+			let g = Group {
+				name: "g".into(),
+				roots: vec![tree.clone()],
+				threads,
+				stats: Stats::default(),
+				done: AtomicBool::new(false),
+			};
+			let (dtx, drx) = std::sync::mpsc::channel();
+			std::thread::spawn(move || {
+				run_group(&g, &sh);
+				let why = locked(&sh.faults.why).clone();
+				dtx.send((g.done.load(Relaxed), sh.stop.load(Relaxed), why))
+					.unwrap();
+			});
+			drx.recv_timeout(Duration::from_secs(20))
+				.expect("the group never ended")
 		};
-		let (dtx, drx) = std::sync::mpsc::channel();
-		std::thread::spawn(move || {
-			run_group(&g, &sh);
-			let why = locked(&sh.faults.why).clone();
-			dtx.send((g.done.load(Relaxed), sh.stop.load(Relaxed), why))
-				.unwrap();
-		});
-		let (done, stopped, why) = drx
-			.recv_timeout(Duration::from_secs(20))
-			.expect("the group never ended");
+		let (done, stopped, why) = ends(dir.join("t.sqlite"), 0);
+		assert!(done && !stopped && why.is_empty(), "{why:?}");
+		let (done, stopped, why) = ends(dir.join("not here/t.sqlite"), 2);
 		assert!(done && stopped);
-		assert_eq!(why.len(), 2, "{why:?}");
+		assert_eq!(why.len(), 1, "{why:?}");
 	}
 
 	// ntfs3 answers EOPNOTSUPP for compressed and EFS files. That's not damage.
@@ -2040,6 +2069,7 @@ mod tests {
 			path: root.path.join(rel),
 			in_git: false,
 			root: root.clone(),
+			prior: None,
 		}
 	}
 
@@ -2060,15 +2090,76 @@ mod tests {
 			std::process::id()
 		));
 		fs::write(&mine, "x").unwrap();
+		let d = scratch("scan_walkdev");
+		let look = db::open_rw(&d.join("t.sqlite")).unwrap();
 		let (sh, rx) = test_shared(PathBuf::from("/nowhere/t.sqlite"));
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let (jtx, jrx) = sync_channel(1 << 16);
-		walk(Path::new("/dev"), &sh, &Stats::default(), &jtx);
+		walk(Path::new("/dev"), &sh, &Stats::default(), &look, &jtx);
 		drop((jtx, sh));
 		drain.join().unwrap();
 		let jobs: Vec<PathBuf> = jrx.iter().map(|j| j.path).collect();
 		fs::remove_file(&mine).unwrap();
 		assert!(!jobs.iter().any(|p| p.starts_with("/dev/shm")), "{jobs:?}");
+	}
+
+	// The walk looks each file up, a batch to a transaction, and a row it
+	// can't read skips that file alone (2026102810135573).
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn the_walk_hands_each_job_its_row() {
+		let _id = test_id("dej6m");
+		let d = scratch("scan_walkrows");
+		let tree = fs::canonicalize(&*d).unwrap().join("tree");
+		fs::create_dir(&tree).unwrap();
+		let n = LOOKUP_BATCH + 3;
+		for i in 0..n {
+			fs::write(tree.join(format!("f{i:04}")), "x").unwrap();
+		}
+		let look = db::open_rw(&d.join("t.sqlite")).unwrap();
+		look.execute("INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 1)", [])
+			.unwrap();
+		let mut put = look
+			.prepare(
+				"INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run)
+				VALUES (?1, 1, ?2, 9, 1, 100, 1)",
+			)
+			.unwrap();
+		let row = |i: usize| tree.join(format!("f{i:04}")).to_str().unwrap().to_owned();
+		put.execute(rusqlite::params![row(1), 1]).unwrap();
+		put.execute(rusqlite::params![row(n - 1), 1]).unwrap();
+		put.execute(rusqlite::params![row(2), "junk"]).unwrap();
+		drop(put);
+		let (sh, rx) = test_shared(d.join("t.sqlite"));
+		let drain = std::thread::spawn(move || {
+			rx.iter()
+				.filter_map(|m| match m {
+					Msg::Event { kind, path, .. } => Some((kind, path)),
+					_ => None,
+				})
+				.collect::<Vec<_>>()
+		});
+		let (jtx, jrx) = sync_channel(1 << 16);
+		let stats = Stats::default();
+		walk(&tree, &sh, &stats, &look, &jtx);
+		drop((jtx, sh));
+		let events = drain.join().unwrap();
+		let jobs: BTreeMap<PathBuf, Option<i64>> = jrx
+			.iter()
+			.map(|j| (j.path, j.prior.map(|p| p.bytes)))
+			.collect();
+		assert_eq!(jobs.len(), n - 1, "the junk row's file is skipped");
+		assert_eq!(jobs[&PathBuf::from(row(1))], Some(1));
+		assert_eq!(
+			jobs[&PathBuf::from(row(n - 1))],
+			Some(1),
+			"past the first batch"
+		);
+		assert_eq!(jobs[&PathBuf::from(row(0))], None);
+		assert!(!jobs.contains_key(&PathBuf::from(row(2))));
+		assert_eq!(events, vec![(Kind::DbError, row(2).into_bytes())]);
+		assert_eq!(stats.other_err.load(Relaxed), 1);
+		assert!(look.is_autocommit());
 	}
 
 	// A folder swapped for a symlink after the walk listed it.
