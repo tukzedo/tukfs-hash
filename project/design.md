@@ -229,7 +229,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The output shows the home as `/home/<user>`, with the prompt's made-up user, and this box's host and user names as the prompt's. After that, a line with the real user, home, host or a temp path fails the stage rather than going into the README.
 
-- The demo files are the same bytes every run, and dates and times in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
+- The demo files are the same bytes every run, and dates, times and the scan's own run time in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
 
 - A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. No Pillow or font is a warning, and the run goes on.
 

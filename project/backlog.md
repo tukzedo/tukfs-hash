@@ -32,7 +32,8 @@
 - The demo gif shows a scan's real time, so a slow run redraws it.
 	- ID: 2026102808415586
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The full run's demo gif stage.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-084155
 	- Opened by: testing 2026102808215658
@@ -41,7 +42,14 @@
 	- Incorrect behavior [Bug]: One render says "run 2 done after 1s" and the other "0s", so 165 frames differ, and the full run rotates a new gif and updates `assets/demo.gif`.
 	- Expected behavior [Bug]: The same bytes every run, as design.md "Demo gif" says, unless the output or the script changes.
 	- Reproduced [Bug]: 2026-10-28 on b23, at load 10 to 16, 1 of 3 renders.
-	- Possible cause [Bug]: The scenario pins dates and times with `[[map]]`, but not the "done after Ns" line.
+	- Actual cause [Bug]:
+		- The scenario pinned dates and times with `[[map]]`, but not the scan's "run N done after Ns" line, which `scan.rs` prints from its own clock.
+	- Actual fix [Bug]: A `[[map]]` in `scenario.toml` pins the seconds to 1. design.md "Demo gif" names the run time as pinned.
+	- Progress log:
+		- 2026-10-28: Verified: with the binary's output rewritten to "after 3s", the old scenario drew different bytes than with the real time, and the new one drew the same. 3 renders of the new scenario gave the same bytes, one with 2 busy loops running.
+	- Swept: every `[[map]]` in the scenario and every run-time print in `src/`. Only the "run N ... after Ns" line shows a duration, and the other lines in the gif have none.
+	- Branch: round-20261028
+	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
 
 - A scan that fails reading the mount table after it starts leaves its run marked running.
 	- ID: 2026102808215852

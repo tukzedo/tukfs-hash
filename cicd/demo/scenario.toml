@@ -31,6 +31,10 @@ put  = '2026-06-12 09:41:07'
 [[map]]
 find = '(?<=^group )\S+(?= with \d+ worker)'
 put  = 'sda'
+# The scan's own run time, which moves with the box's load.
+[[map]]
+find = '(?<= after )\d+(?=s$)'
+put  = '1'
 
 [[step]]
 note  = "Checksum everything under ~/photos"
