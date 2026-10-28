@@ -29,6 +29,277 @@
 
 ## Issues
 
+- A scan that fails reading the mount table after it starts leaves its run marked running.
+	- ID: 2026102808215852
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `562a451`. Plausible, read only.
+	- Note: `scan::run` reads the mounts after `begin()` has written the run row. An error there returns before `finish()`, so the run stays running, the database stays in WAL mode, and a sudo run leaves files owned by root.
+	- Note: Move both calls above `begin()`, and reuse the mount table `plan()` read. A run reads it 3 times now.
+
+- The integration test stops with no FAIL line when 2 of its checks find nothing.
+	- ID: 2026102808215842
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `ef00124`. Plausible, read only.
+	- Note: Under `set -euo pipefail`, a `grep` with no match in ddx1e's `skipped=` line, or a missing attribute in `xhex` for de5gd, fails the assignment and ends the script. de5gd's own failure case is the one that trips it.
+	- Note: Add `|| true` inside both, as `xget` has.
+
+- snapdiff allocates and zeroes 2 MiB for every file pair it compares.
+	- ID: 2026102808215768
+	- Type: Enhancement
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `f05c368`. Plausible, read only.
+	- Note: `compare` in `src/snapdiff.rs` makes both 1 MiB buffers on each call. Make them once in `run()` and pass them in, as `accept.rs` does.
+
+- The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
+	- ID: 2026102808215758
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: The copyright line in `utility/dogfood_tukfs-hash.ps1:36` and `cicd/utility/lint-ps1.ps1:14` has the symbol and CryptogID. PowerShell scripts stay ASCII, and the PSScriptAnalyzer BOM rule is turned off to let these pass.
+	- Note: shcl's scripts use `Copyright (C) <year> Jim Collier` with no ID. Confirm the matching form for t00mietum before changing.
+	- Note: Drop the `#====` lines and section titles, then turn the BOM rule back on.
+
+- cicd scripts start a process per item in several loops.
+	- ID: 2026102808215748
+	- Type: Enhancement
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `1282504` and `4a1977a`. Plausible, read only.
+	- Note: `fPruneCache` in `cicd.bash` runs `du`, `cut`, `realpath` and `rm` for each stale cache entry. After a toolchain update every entry is stale, which is thousands of processes.
+	- Note: `fInUse` runs `readlink` for every process on the box, about 1,400.
+	- Note: `profile-workload.bash` runs `printf` and an unguarded `mkdir -p` per generated file, about 1,600 in all.
+	- Note: Smaller ones: `codeql-scan.bash` greps the whole listing per file, `lint-report.bash` calls `basename` per log, `include/scratch.bash` calls `date`, `box-side.bash` and `integration.bash` call `printf` 3 times for one number, and `integration.bash` polls with `seq`.
+
+- `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
+	- ID: 2026102808215831
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `cede460`. Plausible, read only.
+	- Note: `report --run 999` prints no events, while `gone --run 999` says there's no such run.
+	- Note: `--limit -1` means no limit in `report` and shows nothing in `gone`.
+	- Note: `runs`, `report` and `gone` print database errors bare, while `accept` and `scan` prefix them.
+	- Note: Parse `--kind` with `db::Kind::parse`, check the run exists, and parse `--limit` as unsigned.
+
+- Lock and ownership errors on the database are misreported or dropped.
+	- ID: 2026102808215819
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `f05c368` and `422efff`. Plausible, read only.
+	- Note: `scan::lock` reports any `flock` failure as another scan holding the lock, so ENOLCK or EOPNOTSUPP reads wrong. Say locked only for EWOULDBLOCK.
+	- Note: `give_back` ignores a failed `chown`. That's fine for the WAL files, which are often gone, but a failure on the database itself leaves it owned by root with no warning.
+
+- gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
+	- ID: 2026102808215809
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082158
+	- Opened by: style and performance review
+	- Origin: `d9a4f9d`. Plausible, read only.
+	- Note: The error and a non-zero exit are both dropped. Print them, and word the message as gifsicle not running.
+
+- The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
+	- ID: 2026102808215799
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `c4eacb8` and `d9a4f9d`. Plausible, read only.
+	- Note: `${EPOCHREALTIME/./}` at `cicd.bash:1154` and `demo-gif.bash:55` leaves the comma in. `fNow` already handles both.
+
+- The dogfood launcher loops forever on a cyclic link to itself.
+	- ID: 2026102808215789
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `4a1977a`. Plausible, read only.
+	- Note: `utility/dogfood_tukfs-hash` walks links one hop at a time with `readlink` and `dirname`, and has no end on a loop. One `readlink -f` does it.
+
+- Scan progress shows no growth while a large file is read, then a jump.
+	- ID: 2026102808215779
+	- Type: Bug
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `32f27bd`. Plausible, read only.
+	- Note: `read_sums` adds a file's bytes to the progress count once, after the last block. Add them per block.
+
+- Per-file allocations and syscalls in the scan's read path haven't been measured.
+	- ID: 2026102808215738
+	- Type: Enhancement
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `db::Prior.b3` is a `Vec<u8>`, so every lookup allocates. `[u8; 32]` reads directly.
+	- Note: `read_sums` makes 7 syscalls per file before any data, 3 `posix_fadvise` and 4 `fcntl`, even for an empty file.
+	- Note: `excluded()` and the `no_xattr` check run for every entry, where once per folder would do, as `in_git` is.
+	- Note: `hashed_msg` copies a path the job already owns. `xattr::fget` allocates per call and `text_of` copies again, and `write_b3` encodes the digest twice. `beneath` builds a CString for a name that's already NUL-terminated.
+	- Note: Each file gets its own `SELECT`. A query per folder is a redesign, worth it only if `lookup` shows near the top on many small files.
+	- Note: Keep only the changes that move the small-files numbers.
+
+- The directory walk would treat a new entry kind as a file.
+	- ID: 2026102808215728
+	- Type: Enhancement
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Origin: `9120949`. Plausible, read only.
+	- Note: `list_dir` in `src/scan.rs` tests `beneath::Kind` with `if ==` and queues anything else as a file. An exhaustive match makes a new kind a compile error.
+
+- dogfood_tukfs-hash.ps1 departs from the PowerShell style rules.
+	- ID: 2026102808215717
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `Write-Note` and `Exit-Launcher` are called with a positional message. `param($Source)` and `param($Item)` are untyped, and nothing uses Mandatory or validation attributes.
+	- Note: `-contains` tests every running process path inside a loop. A HashSet fits.
+	- Note: The same regex runs twice per file at lines 134-135. A suppression at line 335 has an empty reason. OutputType is on 3 functions only, and the functions have no comment-based help.
+	- Note: The 32-line header repeats the synopsis and holds the whole rotation policy, which belongs in design.md.
+	- Note: `lint-ps1.ps1:37` joins `../..` as one path piece.
+
+- Lint configs don't enforce all of the style rules.
+	- ID: 2026102808215708
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082157
+	- Opened by: style and performance review
+	- Note: `cicd/ruff.toml` lacks `ANN`, `PTH`, `BLE`, `S110`, `PERF` and `RUF`. There's no mypy config.
+	- Note: PSScriptAnalyzer could turn on `PSAvoidUsingDoubleQuotesForConstantString` and the Information level, once the OutputType lines are in.
+	- Note: No `.gitattributes` pins line endings for the scripts.
+
+- Shellcheck lines that do nothing hide later warnings.
+	- ID: 2026102808215698
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: The `## shellcheck source=` hints at `cicd.bash:170`, `config.bash:46`, `in-image.bash:32` and `include/leak-common.bash:41` aren't read as directives. They need a single `#`, and the lint stage would need `-x` to use them.
+	- Note: Top-of-file disables that suppress nothing: `cicd.bash:6,8,9`, `advisories.bash:4`, `in-image.bash:4`, `include/ctr-image.bash:3`, `lint-report.bash:3,4` and `remote-tests.bash:4`.
+	- Note: `hooks/pre-push:51` has a disable mid-file.
+	- Note: `include/gfs-rotate.bash` repeats 2 of its top disables mid-file, and `git-auto-msg.bash` has unbraced expansions. Both are copies from shcl, so fix them there.
+
+- Some Rust types and helpers hide what their parts mean.
+	- ID: 2026102808215688
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Plain tuples where a small struct would name the fields: the planned groups, read as `g.1`, `LinkVal`, read as `v.0` and `v.1`, and the byte offset in `ReadFail::Io`.
+	- Note: `xattr::write_b3` takes a bare `bool` that reads as `false` at the call site. A two-variant enum fits.
+	- Note: `scan::open_noatime` repeats the fallback in `Root::open_read`. Keep one.
+	- Note: `scan::lock_path` is `pub` but used only in `scan.rs`. The argument line in `main.rs` is joined twice. `build.rs:110` has an `unwrap` with no word on why it can't fail. The public test types in `testutil.rs` don't derive Debug.
+
+- About 50 public Rust items have no doc comment.
+	- ID: 2026102808215678
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Most are in `db.rs`, `util.rs`, `xattr.rs`, `mounts.rs`, `beneath.rs` and `snapdiff.rs`, plus `accept::run`, `gone::run` and 9 in `scan.rs`. The `Source` variants in `snapdiff.rs` use `//` where `///` belongs.
+	- Note: One line each. No Args or Returns blocks.
+
+- Comments run long, repeat design.md, or use words the house rules avoid.
+	- ID: 2026102808215668
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: `src/scan.rs` comments at 138-141, 257-259, 532-533, 967-970 and 1645-1647 repeat design.md. Cut each to a line and a section name. `scan.rs:2098` cites a cut-off item ID.
+	- Note: Long blocks in `cicd/config.bash` at 123-131, 165-176, 198-204, 208-220 and 257-266, plus `profiling.rs:197-204` and `db.rs:200-207`.
+	- Note: Bad wraps at `config.bash:73`, `config.bash:109-110`, `cicd.bash:876-877`, `hooks/pre-push:24` and `include/ctr-image.bash:26-27`.
+	- Note: Avoided words at `deny.toml:12`, `codeql-scan.bash:75,149,212`, `config.bash:329`, `cicd.bash:572`, `include/frozen-tree.bash:34`, `gen-demo-gif.py:587`, `xattr.rs:181` and `testutil.rs:35`. Line 212 of codeql-scan is a message users see.
+	- Note: `cicd.bash:456` says it has the only `rm -rf`, but `fSafeRmCache` has one too.
+	- Note: `config.bash:25` prints its error to stdout through a `basename` call.
+	- Note: Check who wrote each line with `git log -S` before rewording it.
+
+- The Python scripts in cicd/utility depart from the Python style rules.
+	- ID: 2026102808215658
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: `flame-report.py` reassigns the constant `STEP` at run time through `global`. Return the row height from `fParse` and pass it along.
+	- Note: `flame-report.py` reads `Frame` tuples by index, tests membership in a list inside a comprehension, and uses `zip(ys, ys[1:])` where `itertools.pairwise` fits.
+	- Note: `gen-demo-gif.py` keeps key actions as strings where an Enum fits, has a 215-line `main()` with 5 closures, pops from the front of a list in a loop, uses `open()` over `Path.open()`, and checks each character with `ord` in Python.
+	- Note: `test-ids.py` reuses `line` as a str and then an int, which strict mypy refuses. Some of its patterns are compiled and some aren't.
+	- Note: `flame-report.py` came from silkterm, so a fix may belong there too.
+	- Decided against: renaming the mix of PEP 8 and fCamelCase names in `test-ids.py`. New names follow the majority.
+
+- The integration test has a duplicate helper name, an odd header, and 2 hard-to-read one-liners.
+	- ID: 2026102808215647
+	- Type: Task
+	- Status: Queued
+	- Needs local test suite run?: Yes
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: `rscan()` is defined twice in `tests/integration.bash`, for step 14 and step 20, with different databases. Rename the second.
+	- Note: The header uses `#` lines with no SPDX line, unlike the other scripts, and the bottom says `Script history:` where the header says `History:`.
+	- Note: `fFlipByte` and `wait_reached` are single lines that need reading twice. Split them.
+	- Decided against: renaming the mixed snake_case and camelCase names here and in `cicd.bash`, since committed names stay. New names follow the file's majority.
+
+- No public code style guide or contributing.md, and README points to neither.
+	- ID: 2026102808215637
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: The repo is private, so this can wait until it goes public.
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
