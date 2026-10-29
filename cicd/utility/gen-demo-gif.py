@@ -289,7 +289,7 @@ class Scrubber:
         self.leaks = {getpass.getuser(), os.environ.get("HOME", ""), str(home), str(home.resolve())}
         self.leaks |= {str(Path(tempfile.gettempdir()).resolve()), "/mnt/", "/tmp/", "/media/", "/run/user"}
         self.leaks = {s for s in self.leaks if len(s) >= 3}
-        self.leak_tokens = [token_re(socket.gethostname()), token_re(socket.getfqdn())]
+        self.leak_tokens = [near_re(h) for h in {socket.gethostname(), socket.getfqdn()} if h]
 
     def __call__(self, text: str) -> str:
         for real, fake in self.literal:
@@ -314,6 +314,13 @@ def token_re(word: str) -> re.Pattern[str]:
     ##	A whole token only. Checksums are base64url, so a host name can't be
     ##	found inside one.
     return re.compile(rf"(?<![A-Za-z0-9_.-]){re.escape(word)}(?![A-Za-z0-9_-])")
+
+
+def near_re(word: str) -> re.Pattern[str]:
+    ##	For the leak check: the word next to anything but a letter or digit,
+    ##	such as b23-old or b23_snap, which token_re leaves alone. It can catch
+    ##	one inside a checksum too, but a failed render beats a leaked name.
+    return re.compile(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])")
 
 
 def run_all(sc: dict[str, Any], binpath: str, here: str, home: Path, scrub: Scrubber) -> list[list[str]]:
@@ -915,3 +922,4 @@ if __name__ == "__main__":
 ##		- 2026-10-28: A gifsicle that fails or times out is reported as not
 ##		  running, with its error, not as missing. The playback moved out of
 ##		  main() into Player.
+##		- 2026-10-28: The leak check finds the host next to -, _ and . too.

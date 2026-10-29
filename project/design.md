@@ -262,9 +262,9 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The gif at the top of README.md is drawn on each full run by `cicd/utility/gen-demo-gif.py`, from `cicd/demo/scenario.toml`, which follows `cicd/demo/script.txt`. The commands really run, against that run's release build, in a home made in the run's temp dir, with the database there too. `--quick` and `--gate` leave it out.
 
-- The output shows the home as `/home/<user>`, with the prompt's made-up user, and this box's host and user names as the prompt's. After that, a line with the real user, home, host or a temp path fails the stage rather than going into the README.
+- The output shows the home as `/home/<user>`, with the prompt's made-up user, and this box's host and user names as the prompt's. After that, a line with the real user, home, host or a temp path fails the stage rather than going into the README. The host is caught next to `-`, `_` or `.` too, such as `<host>-old`.
 
-- The demo files are the same bytes every run, and dates, times and the scan's own run time in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
+- The demo files are the same bytes every run, and dates, times, the disk name, the worker count and the scan's own run time in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
 
 - A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. No Pillow or font is a warning, and the run goes on.
 
