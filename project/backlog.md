@@ -58,8 +58,8 @@
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
 	- Type: Bug
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: The Other hosts step on vmDebARM64, in `--backlog-run-full` or `--backlog-run-quick remote`, for make, test and gone over ssh with the mark.
+	- Status: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 10
@@ -75,6 +75,7 @@
 		- 2026-10-28: `make` writes `.box-run` in each folder it makes. The sweep, `test DIR` and `gone DIR` all need it, as a plain file, in a folder that's ours and not a link, through one check, `fMarked`. The 2-day wait stays, per 2026102518150001.
 		- 2026-10-28: The integration test's own sweep needed its mark already, and now needs `-O` too.
 		- 2026-10-28: Verified: `remote-check.bash box` passes 14 cases, and its 5 new ones fail on the code from before. The issue's steps leave both folders. `temp-ctr-check.bash it` passes. `--backlog-run-quick` passes in 1m 47s, shellcheck included. The markdown check is clean.
+		- Verified: 2026-10-28, the round's `--backlog-run-full` passed the Other hosts step on vmDebARM64 (PASS Other hosts, 824 PASS, 0 FAIL).
 	- Decisions:
 		- `test DIR` refuses an unmarked folder up front, since it writes `run.pid` and `tmp/` there before its removal would refuse.
 		- Work folders on the VM from before the mark aren't swept now. Any there are left for a hand cleanup.
@@ -83,12 +84,13 @@
 	- Commit: `db2c70b`
 	- Test case: none with an ID. `remote-check.bash REPO box`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `rm -rf`, `fSafeRm` and stale sweep in `cicd/` and `tests/`. `cicd.bash`'s `fSweepStale` and the leak checks' `scratch.bash` already need their mark and `-O`. `remote-tests.bash` copies the stage with tar, which keeps the mark.
+	- Closed: 20261028-220411
 
 - `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
 	- ID: 2026102814341427
 	- Type: Enhancement
-	- Status: Waiting on automated testing
-	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, plain. Its Other hosts step and demo gif read the set from the run's temp dir now, which no quick run reaches.
+	- Status: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 17
@@ -101,11 +103,13 @@
 		- 2026-10-28: The backlog runs and the merge gate put the set in `release-set/` in the outer run's temp dir, and hand it to the run on the frozen copy as `TUKFS_RELEASE_DIR`. The release, Other hosts, dogfood and gif steps all read `release_dir`. A run that can ship still writes `cicd/artifacts/release`.
 		- 2026-10-28: Verified: `release-host-check.bash REPO noctr` passes, and fails on the code from before with "the run changed the set". `--backlog-run-quick release --no-container` left the checkout's set byte for byte as it was. `--backlog-run-quick`, shellcheck, the markdown checks, and the private flags, steps and gate record checks pass.
 		- 2026-10-28: The private pitfall about saving the set first went to the round report for memory.md.
+		- Verified: 2026-10-28, a plain `--backlog-run-full` passed in 18m 52s. Its release set, Other hosts step and demo gif used the run's temp dir, and `cicd/artifacts/release` kept its older files.
 	- Decisions:
 		- One dir in the outer run's temp dir for every check-only mode, the pushed-commit path included, rather than the frozen copy's `cicd/artifacts`. That one links back to the checkout for the lint logs, profiles and CodeQL output, and `--no-freeze` has no frozen copy.
 	- Branch: round-20261029
 	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, now fails a run that changes the checkout's set.
 	- Swept: every `RELEASE_ARTIFACT_DIR` use in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md. `remote-check.bash` still takes its arm64 binary from the checkout's set, which a run that can ship keeps.
+	- Closed: 20261028-220411
 
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
