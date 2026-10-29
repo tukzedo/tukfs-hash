@@ -308,8 +308,8 @@ FROZEN_LINKS=(target cicd/artifacts)
 GATE_TARGET_DIR="target-gate"
 
 ## Build caches the cleanup prunes: entries from an older toolchain, and those
-## of crates gone from Cargo.lock, under debug, release and profiling.
-## target-gate is the pre-push hook's.
+## of crates gone from Cargo.lock, under debug, release and profiling. One
+## that another run is building in is left. target-gate is the pre-push hook's.
 CACHE_DIRS=(target target-gate)
 
 ## Run and lint logs, gitignored and GFS-rotated. lint-report.bash reads them.

@@ -349,6 +349,20 @@
 	- Expected behavior [Bug]: They match.
 	- Note: No code changes, so it closes on reading.
 
+- With `--keep-temp`, the default run's cleanup line counts the kept temp folder as freed.
+	- ID: 2026102820562867
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-205628
+	- Opened by: found while working 2026102814341438
+	- Related IDs: 2026102814341438
+	- Steps to reproduce [Bug]: Run `cicd/cicd.bash --no-publish --keep-temp`, with no flags otherwise.
+	- Incorrect behavior [Bug]: `fCleanup` takes the kept folder's size off the total through `kb`, but the cache prune loop has reused `kb` by then. The line takes off the last cache dir's freed size instead.
+	- Expected behavior [Bug]: The kept folder isn't in the "about" size.
+	- Reproduced [Bug]: No, read only.
+	- Probable fix [Bug]: A variable of its own for the run folder's size.
+
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
 	- Type: Enhancement
@@ -441,30 +455,6 @@
 	- Requirements [Feature]:
 		- When the frozen tree differs from HEAD's, mark the build number, and never set the release flag.
 	- Note: A default run dogfoods that build and then commits the work, so `--version` names the commit before it. On a tagged HEAD it would print as the release.
-
-- The publisher's check for a leftover stash misses the stash cicd's sync stage leaves.
-	- ID: 2026102814341437
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 37
-	- Origin: `1282504`. Plausible, read only.
-	- Requirements [Feature]:
-		- Have the publisher also match `cicd sync <stamp>`, or have the sync stage refuse while such a stash exists.
-	- Note: The publisher part belongs in shcl.
-
-- `fPruneCache` judges `target/ctr` by the host's toolchain and `target-gate` by the checkout's lock file.
-	- ID: 2026102814341438
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 38
-	- Origin: `1282504` and `c4eacb8`. Plausible, read only.
-	- Requirements [Feature]:
-		- Leave out `target/ctr` and `target-gate`, or skip a cache folder while a live run uses it.
-	- Note: It can prune `target-gate` while a pre-push gate is building there.
 
 - `test-ids.py check` passes on tests and checks it can't see.
 	- ID: 2026102814341440
@@ -3002,6 +2992,58 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- The publisher's check for a leftover stash misses the stash cicd's sync stage leaves.
+	- ID: 2026102814341437
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 37
+	- Origin: `1282504`. Plausible, read only.
+	- Requirements [Feature]:
+		- Have the publisher also match `cicd sync <stamp>`, or have the sync stage refuse while such a stash exists.
+	- Note: The publisher part belongs in shcl.
+	- Progress log:
+		- 2026-10-29: The sync stage refuses at the start of a run while a `cicd sync <stamp>` or `auto-stash` stash is in `git stash list`. The publish stage refuses the same before it calls the publisher, since `--no-sync` skips the first. The publisher is unchanged.
+		- 2026-10-29: Verified: `publish-check.bash REPO` passes its 17 cases, 4 of them new. With a `cicd sync` stash left, a `--no-sync` run refuses to publish, and a run with sync refuses at the sync stage, before the build. An `auto-stash` left is refused at sync too, and a stash of another name still publishes. On the code from before, the first 3 fail with exit 0.
+		- 2026-10-29: Verified: `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- Both checks are in `cicd.bash`, and the publisher stays as shcl's copy, so there's no upstream patch. A shared publisher that knows one caller's stash name would tie it to that caller.
+		- The sync stage refuses whenever it runs, `--no-publish` runs included, not only when it would stash. The work in the stash is stranded either way.
+		- The publisher's own `auto-stash` is refused at sync too, which moves that refusal from the end of the run to the start.
+	- Swept: the only stashes made in this tree are the sync stage's and the publisher's.
+	- Branch: round-20261029
+	- Test case: none with an ID. `publish-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261028-205700
+
+- `fPruneCache` judges `target/ctr` by the host's toolchain and `target-gate` by the checkout's lock file.
+	- ID: 2026102814341438
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 38
+	- Origin: `1282504` and `c4eacb8`. Plausible, read only.
+	- Requirements [Feature]:
+		- Leave out `target/ctr` and `target-gate`, or skip a cache folder while a live run uses it.
+	- Note: It can prune `target-gate` while a pre-push gate is building there.
+	- Progress log:
+		- 2026-10-29: `fPruneCache` dates entries by the last change of `rust-toolchain.toml`, not by the host's install of the toolchain. The host and the release image both take their toolchain from that pin, so `target/ctr` is judged by the toolchain that built it. The cleanup leaves a cache dir as it is while another live run's frozen copy links to it as its target, such as a pre-push gate in `target-gate`, and says so.
+		- 2026-10-29: Verified: `prune-cache-check.bash CICD WORKDIR` passes its 8 cases. A `target/ctr` entry made after the pin changed, but before the host installed the toolchain, stays, and an older one goes. `fCacheInUse` is true for a live run's linked target, and false for its own run, a gone run, another dir and a target that isn't a link. On the code from before, the kept entry is pruned and the in-use case fails.
+		- 2026-10-29: Verified: `prune-cache-parity.bash` prints the same count and size and leaves the same entries as before, with the pin and the host's install at the same time. The default run's cleanup ran without error in the stub runs of `publish-check.bash`. `cicd/cicd.bash --backlog-run-quick` passed.
+		- Unverified in a real run: the prune runs only in the default run's cleanup, which a round doesn't run.
+	- Decisions:
+		- Both dirs stay in the prune, skipped only while a run builds there. Left out, they'd grow with each toolchain bump.
+		- The pin's time, not the image's build time. An image rebuilt for another reason has the same toolchain, and its cache is still good. A switch between branches with different pins costs one cold build.
+		- With no gate running, `target-gate` is still judged by the checkout's lock file. The gate builds what's pushed from this checkout, so a crate gone from its lock is dead for the next gate too, unless an older commit is pushed.
+		- A gate is seen only under the same temp root. One started with another `HOST_TEMP`, or a run in the checkout with no frozen copy, isn't.
+	- Swept: every container-built dir the prune reaches, `target/ctr`, `target/release-ctr` and `target-gate/release-ctr`, takes the same date now. Nothing else reads the host's sysroot for a cache. `target/leakcheck` sits 2 levels down, so the prune never reached it, before or after.
+	- Branch: round-20261029
+	- Test case: none with an ID. `prune-cache-check.bash CICD WORKDIR` and `prune-cache-parity.bash`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261028-205700
 
 - Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
 	- ID: 2026102810135573

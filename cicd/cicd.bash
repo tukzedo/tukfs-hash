@@ -955,11 +955,24 @@ fi
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
 ## Stages
 
+## A stash the sync stage or the publisher left, when a run stopped between
+## its stash and its pop, or the pop conflicted. It holds uncommitted work.
+## Syncing or publishing past it leaves that work stashed, and the next stash
+## buries it deeper. The publisher looks only for its own. Prints the entry.
+fLeftStash(){
+	local line=""
+	while IFS= read -r line; do
+		if [[ "${line}" =~ :\ (cicd\ sync\ [0-9]{8}-[0-9]{6}|auto-stash)$ ]]; then printf '%s\n' "${line}"; return 0; fi
+	done < <(git -C "${root}" stash list 2>/dev/null)
+	return 1
+}
+
 ## Stage 0: take the remote's work before anything is built, so the run tests
 ## the tree that gets pushed. The publish stage refuses if there's more by then.
 fStageSync(){
 	local branch="" upstream="" out="" ahead=0 behind=0 dirty=0 ff=0
 	fStep sync || return 0
+	if out="$(fLeftStash)"; then fDie "an earlier run's stash is still in 'git stash list': ${out}. Pop or drop it, then run again"; fi
 	branch="$(git -C "${root}" symbolic-ref --quiet --short HEAD || true)"
 	upstream="$(git -C "${root}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
 	if [[ -z "${branch}" ]]; then
@@ -1463,6 +1476,8 @@ fStagePublish(){
 	local -a changed=()
 	fStep publish || return 0
 	local -r nothing="Nothing was committed or pushed."
+	## Again here, since --no-sync skips the check at the start.
+	if out="$(fLeftStash)"; then fDie "publish refused: an earlier run's stash is still in 'git stash list': ${out}. Pop or drop it, then run again. ${nothing}"; fi
 	[[ -n "${tested_tree}" ]] || fDie "publish refused: no record of the tree this run tested. ${nothing}"
 	now="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "publish refused: could not read the checkout's tree. ${nothing}"
 	out="$(git -C "${root}" diff --name-only --no-renames "${tested_tree}" "${now}")" || fDie "publish refused: could not compare the checkout with the tree tested. ${nothing}"
@@ -1576,18 +1591,19 @@ fSafeRmCache(){   ## fSafeRmCache CACHE_REAL AREA NAME...
 	printf '%s\0' "${ok[@]}" | xargs -0 rm -rf --one-file-system --
 }
 
-## Build cache entries that are dead for sure: made before the pinned
-## toolchain was installed, so by an older one, or named for a crate that's
-## gone from Cargo.lock. A warm cache for the current toolchain and lockfile
-## stays. Prints "COUNT KB".
+## Build cache entries that are dead for sure: made before rust-toolchain.toml
+## last changed, so by the toolchain it pinned before, or named for a crate
+## that's gone from Cargo.lock. A warm cache for the current toolchain and
+## lockfile stays. The host and the release image both take their toolchain
+## from that pin, so it dates target/ctr too, where the host's own install
+## time didn't (2026102814341438). Prints "COUNT KB".
 fPruneCache(){   ## fPruneCache DIR
-	local dir="${root}/$1" cache="" sysroot="" toolTime=0 mt=0 kb=0 n=0 name="" crate="" e="" area="" size="" stale=0
+	local dir="${root}/$1" cache="" toolTime=0 mt=0 kb=0 n=0 name="" crate="" e="" area="" size="" stale=0
 	local -a names=()
 	local -A crates=() sizes=()
 	[[ -d "${dir}" ]] || { echo "0 0"; return 0; }
 	cache="$(realpath -e -- "${dir}")" || { echo "0 0"; return 0; }
-	sysroot="$(rustc --print sysroot 2>/dev/null || true)"
-	toolTime="$(stat -c %Y -- "${sysroot}/lib/rustlib/multirust-channel-manifest.toml" 2>/dev/null || echo 0)"
+	toolTime="$(stat -c %Y -- "${root}/rust-toolchain.toml" 2>/dev/null || echo 0)"
 	while read -r name; do crates["${name//-/_}"]=1; done < <(sed -n 's/^name = "\([^"]*\)"$/\1/p' "${root}/Cargo.lock")
 	## Names of what cargo makes for a unit: lib<crate>-<hash>.<ext>, <crate>-<hash>[.<ext>],
 	## and build_script_build-<hash> beside its package's dir.
@@ -1620,6 +1636,21 @@ fPruneCache(){   ## fPruneCache DIR
 		done
 	done
 	echo "${n} ${kb}"
+}
+
+## A cache dir that another live run's frozen copy links to as its target,
+## such as the pre-push gate building in target-gate. Its lock file can differ
+## from the checkout's, and its build is mid-write. A run in the checkout
+## itself, with no frozen copy, isn't seen.
+fCacheInUse(){   ## fCacheInUse DIR
+	local dir="${root}/$1" d="" pid=""
+	[[ -n "${run_tmp_root}" && -d "${dir}" ]] || return 1
+	for d in "${run_tmp_root}/tukfs-hash/"[0-9]*_[0-9][0-9][0-9]; do
+		[[ -L "${d}/tree/target" && "${d}/tree/target" -ef "${dir}" ]] || continue
+		pid=""; { read -r pid < "${d}/run.pid"; } 2>/dev/null || continue
+		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${pid}" != "$$" && -d "/proc/${pid}" ]] && return 0
+	done
+	return 1
 }
 
 ## Run dirs whose run is gone: killed outright, so their trap never ran, or
@@ -1687,6 +1718,7 @@ fCleanup(){
 	fFrozenGone || true
 	if ((! gate_mode)); then
 		for c in "${CACHE_DIRS[@]}"; do
+			if fCacheInUse "${c}"; then fEcho_Clean "cleanup: left ${c} as it is, since another run is building in it"; continue; fi
 			out="$(fPruneCache "${c}")"; read -r n kb <<< "${out}"
 			if ((n)); then gone+=("${n} stale build cache entries in ${c}"); total=$((total + kb)); fi
 		done
@@ -1826,3 +1858,6 @@ exit 0
 ##		  refused, and so is a plan with no steps.
 ##		- 2026-10-29: The profiler, lint, cross builds, packages and release
 ##		  checks in the background too, so a stop doesn't wait for them.
+##		- 2026-10-29: Sync and publish refuse while an earlier run's stash is
+##		  left. The cache prune dates entries by rust-toolchain.toml, and leaves
+##		  a cache dir alone while another run builds in it.
