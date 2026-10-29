@@ -196,6 +196,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	- The release stage does the same, so a box without docker still gets a release build, and the run doesn't fail on it, the merge gate included. Only x86_64 builds then, into `target/release-host`, since the box has no arm64 cross gcc. It needs the box's glibc, so the floor check gives a note rather than failing. Such a run doesn't record its tree for the pre-push hook, the same as one with a missing tool (2026102509342993).
 
 - The release set, in `cicd/artifacts/release/`, is named `tukfs-hash-<version>-linux-x86_64` and `tukfs-hash-<version>-linux-arm64`, the same names plus `.deb` and `.rpm`, and `tukfs-hash-<version>-sha256sums.txt`. Download links depend on these, so they stay. The x86_64 name is never amd64, though the `.deb` has to say amd64 inside.
+	- Only a run that can ship writes it there. The backlog runs and the merge gate build theirs in the run's temp dir, and the other hosts and the gif read it from there, so a check run leaves the set as the last run that can ship left it (2026102814341427).
 
 - The packages hold `/usr/bin/tukfs-hash` and nothing else. They depend on the glibc the binary was linked for, read off the binary, which is 2.28 for both. Both also need `libgcc_s`.
 

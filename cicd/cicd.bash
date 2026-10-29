@@ -18,8 +18,9 @@
 ##	   5. profiler (a flamegraph of a scan, from an in-process sampler, into
 ##	      PROFILE_OUT_DIR, and flame-report.py's summary of it)
 ##	   6. release builds (native, cross targets, packages, release checks),
-##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file. Without the
-##	      image, the native one alone, on the host, with the box's glibc
+##	      into RELEASE_ARTIFACT_DIR with a sha256 sums file, or the run's
+##	      temp dir in the backlog runs and merge gate. Without the image, the
+##	      native one alone, on the host, with the box's glibc
 ##	   7. other hosts (the unit tests and the integration test on a box of
 ##	      each other arch, on stage 6's build of it, held through the host
 ##	      lock and put back as it was found. A box that isn't there is a SKIP)
@@ -50,8 +51,8 @@
 ##	                       tests. Or only the areas named, listed at the end.
 ##	                       --gate is another name for it
 ##	   --backlog-run-full  what a backlog round runs at its end: every check
-##	                       of a run with no options. The gif is drawn into the
-##	                       temp dir and goes nowhere
+##	                       of a run with no options. The release set and the
+##	                       gif are made in the temp dir and go nowhere
 ##	   --merge-gate        the same checks, which the pre-push hook runs on a
 ##	                       push to main. --ci is another name for it
 ##	   --list              print the plan the other options make, and the
@@ -598,6 +599,15 @@ fi
 gate_skips="${run_tmp}/gate-skips"
 if ((inner_run)) && [[ "${TUKFS_GATE_SKIPS:-}" == /* ]]; then gate_skips="${TUKFS_GATE_SKIPS}"; else : > "${gate_skips}"; fi
 export TUKFS_GATE_SKIPS="${gate_skips}"
+## Where stage 6 puts the release set, and 7 to 9 read it. The check-only modes
+## keep theirs in the outer run's temp dir, so the checkout's set stays the one
+## the last run that can ship built (2026102814341427).
+release_dir=""
+if [[ -z "${RELEASE_ARTIFACT_DIR}" ]]; then :
+elif ((! gate_mode)); then release_dir="${root}/${RELEASE_ARTIFACT_DIR}"
+elif ((inner_run)) && [[ "${TUKFS_RELEASE_DIR:-}" == /* ]]; then release_dir="${TUKFS_RELEASE_DIR}"
+else release_dir="${run_tmp}/release-set"; export TUKFS_RELEASE_DIR="${release_dir}"
+fi
 ## "STEP: why" for each SKIP, for the summary at the end. The run on the frozen
 ## copy writes into its starter's.
 skip_log="${run_tmp}/skips"
@@ -800,7 +810,8 @@ if ((list_only || (! quiet && ! inner_run))); then
 	else
 		_rel="${RELEASE_NATIVE_OSARCH}"; for _t in "${CROSS_TARGETS[@]}"; do _t="${_t#*|}"; _rel+=", ${_t%%|*}"; done
 		if ((no_container)); then _rel="${RELEASE_NATIVE_OSARCH} on the host, with its glibc"; fi
-		fEcho_Clean "Release ........: ${_rel}, into ${RELEASE_ARTIFACT_DIR:-(nowhere)}"
+		if [[ -z "${release_dir}" ]]; then _relTo="(nowhere)"; elif ((gate_mode)); then _relTo="the run's temp dir"; else _relTo="${RELEASE_ARTIFACT_DIR}"; fi
+		fEcho_Clean "Release ........: ${_rel}, into ${_relTo}"
 		fEcho_Clean "Release checks .: ${#RELEASE_CHECKS[@]}"
 	fi
 	fEcho_Clean "Packages .......: $(fOnOff "${PACKAGE_ENABLE}" '.deb and .rpm')"
@@ -1250,14 +1261,14 @@ fReleaseName(){ [[ "$1" =~ ^${EXE_NAME}-[0-9][0-9A-Za-z.+~-]*-(linux-[a-z0-9_]+(
 ## Stage 6: the native release build and the cross targets, copied under their
 ## release names into a stage dir in the run's temp dir. Then the packages and
 ## the release checks over that, and only when all of them pass does the set
-## replace the one in RELEASE_ARTIFACT_DIR, with its sums file.
+## replace the one in release_dir, with its sums file.
 ## For the eval'd config strings: release_stage, release_work, ver,
 ## staged_osarchs, the os-arch of each build, native first, and
 ## release_glibc, the floor check's mode.
 release_stage=""; release_work=""; ver=""; release_glibc="glibc"
 declare -a staged_osarchs=()
 fStageRelease(){
-	local t label osarch art cmd c f n artDir sums relBin="${RELEASE_BUILD_BIN}"
+	local t label osarch art cmd c f n artDir artShown sums relBin="${RELEASE_BUILD_BIN}"
 	local -a built=() names=() relCmd=("${RELEASE_BUILD_CMD[@]}")
 	fStep release || return 0
 	ver="$(fVersion)"
@@ -1285,7 +1296,7 @@ fStageRelease(){
 		fEcho "OK: ${osarch}: ${art} ($(stat -c %s -- "${root}/${art}") bytes)"
 		built+=("${osarch}|${art}")
 	done
-	[[ -n "${RELEASE_ARTIFACT_DIR}" ]] || { fStepPass; return 0; }
+	[[ -n "${release_dir}" ]] || { fStepPass; return 0; }
 
 	release_stage="${TMPDIR}/release"; release_work="${TMPDIR}/release-work"
 	mkdir -- "${release_stage}" "${release_work}" || fDie "could not make the release stage dir"
@@ -1311,9 +1322,9 @@ fStageRelease(){
 	## The sums file goes first and comes back last, so a run stopped part way
 	## leaves no sums for a mixed set. Old files go by name, one at a time, so
 	## a dir that isn't the release set can't lose more than its release files.
-	artDir="${root}/${RELEASE_ARTIFACT_DIR}"
+	artDir="${release_dir}"; artShown="${artDir#"${root}/"}"
 	sums="${EXE_NAME}-${ver}-sha256sums.txt"
-	mkdir -p -- "${artDir}" || fDie "could not make ${RELEASE_ARTIFACT_DIR}"
+	mkdir -p -- "${artDir}" || fDie "could not make ${artShown}"
 	rm -f -- "${artDir}/.${sums}.tmp"
 	for f in "${artDir}/${EXE_NAME}-"*sha256sums.txt; do
 		if [[ -f "${f}" && ! -L "${f}" ]] && fReleaseName "${f##*/}"; then rm -f -- "${f}"; fi
@@ -1321,7 +1332,7 @@ fStageRelease(){
 	for f in "${release_stage}"/*; do
 		n="${f##*/}"
 		fReleaseName "${n}" || fDie "the stage dir has ${n}, which isn't a release name"
-		mv -f -- "${f}" "${artDir}/${n}" || fDie "could not move ${n} into ${RELEASE_ARTIFACT_DIR}"
+		mv -f -- "${f}" "${artDir}/${n}" || fDie "could not move ${n} into ${artShown}"
 		names+=("${n}")
 	done
 	for f in "${artDir}/${EXE_NAME}-"*; do
@@ -1329,7 +1340,7 @@ fStageRelease(){
 	done
 	( cd "${artDir}" && sha256sum -- "${names[@]}" > ".${sums}.tmp" && mv -f -- ".${sums}.tmp" "${sums}" ) || fDie "could not write ${sums}"
 	fEcho_Clean "$(cd "${artDir}" && stat -c '%10s  %n' -- "${names[@]}" "${sums}")"
-	fEcho "OK: ${#names[@]} release file(s) and ${sums} in ${RELEASE_ARTIFACT_DIR}/"
+	fEcho "OK: ${#names[@]} release file(s) and ${sums} in ${artShown}/"
 	if ((${#CROSS_TARGETS[@]} == 0)); then fEcho_Clean "note: no cross targets in this run, so the set is the native build alone"; fi
 	fStepPass
 }
@@ -1345,9 +1356,9 @@ fStageRemote(){
 	fStep remote || return 0
 	for h in "${REMOTE_HOSTS[@]}"; do
 		host="${h%%|*}"; h="${h#*|}"; osarch="${h%%|*}"; target="${h#*|}"
-		bin="${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-${ver}-${osarch}"
+		bin="${release_dir}/${EXE_NAME}-${ver}-${osarch}"
 		why=""
-		if [[ " ${staged_osarchs[*]} " != *" ${osarch} "* || -z "${RELEASE_ARTIFACT_DIR}" || ! -f "${bin}" ]]; then
+		if [[ " ${staged_osarchs[*]} " != *" ${osarch} "* || -z "${release_dir}" || ! -f "${bin}" ]]; then
 			why="no ${osarch} build in this run"
 		else
 			fEcho_Clean "${host}: cicd/utility/remote-tests.bash ${host} ${target} ${bin#"${root}/"}"
@@ -1377,8 +1388,8 @@ fStageDogfood(){
 	local src="" dest="" runner rSrc rDir sorry=0
 	local -a parts=()
 	fStep dogfood || return 0
-	src="${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}"
-	[[ -n "${RELEASE_ARTIFACT_DIR}" && -f "${src}" ]] || fDie "no native release build at ${src}"
+	src="${release_dir}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}"
+	[[ -n "${release_dir}" && -f "${src}" ]] || fDie "no native release build at ${src}"
 	dest="$(fFirstWritableDir "${DOGFOOD_DESTS[@]}")"
 	if [[ -z "${dest}" ]]; then
 		fEcho "WARNING: no dogfood dest is there and writable (${DOGFOOD_DESTS[*]}); skipped"
@@ -1785,3 +1796,5 @@ exit 0
 ##		  .shellcheckrc, so the disables that only covered for that are gone.
 ##		- 2026-10-29: Publish refuses a checkout that changed since the run took
 ##		  its tree, other than the gif, and an upstream with commits to take.
+##		- 2026-10-28: The backlog runs and the merge gate build the release set
+##		  in the run's temp dir, and leave the checkout's alone.

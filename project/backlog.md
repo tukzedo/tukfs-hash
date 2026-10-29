@@ -153,6 +153,29 @@
 	- Test case: none with an ID. `remote-check.bash REPO box`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `rm -rf`, `fSafeRm` and stale sweep in `cicd/` and `tests/`. `cicd.bash`'s `fSweepStale` and the leak checks' `scratch.bash` already need their mark and `-O`. `remote-tests.bash` copies the stage with tar, which keeps the mark.
 
+- `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
+	- ID: 2026102814341427
+	- Type: Enhancement
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: `cicd/cicd.bash --backlog-run-full`, plain. Its Other hosts step and demo gif read the set from the run's temp dir now, which no quick run reaches.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 17
+	- Related IDs: 2026102814341439
+	- Origin: `feb7806` and `1282504`. Private notes had it only as a pitfall with a hand workaround. Plausible, read only.
+	- Requirements [Feature]:
+		- In the check-only modes, build the set into the run's temp folder, as the `TUKFS_GATE_REV` path does, and leave `cicd/artifacts/release` alone.
+	- Note: Once fixed, the private note about saving the release set before such a run can go.
+	- Progress log:
+		- 2026-10-28: The backlog runs and the merge gate put the set in `release-set/` in the outer run's temp dir, and hand it to the run on the frozen copy as `TUKFS_RELEASE_DIR`. The release, Other hosts, dogfood and gif steps all read `release_dir`. A run that can ship still writes `cicd/artifacts/release`.
+		- 2026-10-28: Verified: `release-host-check.bash REPO noctr` passes, and fails on the code from before with "the run changed the set". `--backlog-run-quick release --no-container` left the checkout's set byte for byte as it was. `--backlog-run-quick`, shellcheck, the markdown checks, and the private flags, steps and gate record checks pass.
+		- 2026-10-28: The private pitfall about saving the set first went to the round report for memory.md.
+	- Decisions:
+		- One dir in the outer run's temp dir for every check-only mode, the pushed-commit path included, rather than the frozen copy's `cicd/artifacts`. That one links back to the checkout for the lint logs, profiles and CodeQL output, and `--no-freeze` has no frozen copy.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, now fails a run that changes the checkout's set.
+	- Swept: every `RELEASE_ARTIFACT_DIR` use in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md. `remote-check.bash` still takes its arm64 binary from the checkout's set, which a run that can ship keeps.
+
 - A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
 	- ID: 2026102814341412
 	- Type: Bug
@@ -208,18 +231,6 @@
 		- `-h` and `--help` after a command print the help.
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
 	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
-
-- `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
-	- ID: 2026102814341427
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 17
-	- Origin: `feb7806` and `1282504`. Private notes had it only as a pitfall with a hand workaround. Plausible, read only.
-	- Requirements [Feature]:
-		- In the check-only modes, build the set into the run's temp folder, as the `TUKFS_GATE_REV` path does, and leave `cicd/artifacts/release` alone.
-	- Note: Once fixed, the private note about saving the release set before such a run can go.
 
 - The dogfood launcher's rotation can't see a pool version another user runs, such as through sudo.
 	- ID: 2026102819305559
@@ -478,17 +489,6 @@
 		- Leave out `target/ctr` and `target-gate`, or skip a cache folder while a live run uses it.
 	- Note: It can prune `target-gate` while a pre-push gate is building there.
 
-- The release check sets `TMPDIR` for the integration test, which the test ignores.
-	- ID: 2026102814341439
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 39
-	- Origin: `cicd/config.bash`, since the test took `HOST_TEMP` first on 2026-10-25. Read only.
-	- Requirements [Feature]:
-		- Set `HOST_TEMP` there instead.
-
 - `test-ids.py check` passes on tests and checks it can't see.
 	- ID: 2026102814341440
 	- Type: Enhancement
@@ -524,6 +524,26 @@
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+
+- The release check sets `TMPDIR` for the integration test, which the test ignores.
+	- ID: 2026102814341439
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 39
+	- Related IDs: 2026102814341427
+	- Origin: `cicd/config.bash`, since the test took `HOST_TEMP` first on 2026-10-25. Read only.
+	- Requirements [Feature]:
+		- Set `HOST_TEMP` there instead.
+	- Progress log:
+		- 2026-10-28: The release check runs the integration test with `HOST_TEMP` on `release_work`.
+		- 2026-10-28: Verified: with `--keep-temp`, `--backlog-run-quick release --no-container` passed and left the test's folder under `release-work/tukfs-hash/`.
+	- Branch: round-20261029
+	- Test case: none with an ID. Every release build runs the check, and where its folder goes was checked once by hand.
+	- Swept: `TMPDIR=` in front of `IT_CMD` in `cicd/`. The other call, `fRunIt`, already sets `HOST_TEMP`.
+	- Acceptance signoff: Self-closed: mechanical, and checked as above.
+	- Closed: 20261028-201526
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902

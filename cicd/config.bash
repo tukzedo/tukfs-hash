@@ -213,6 +213,8 @@ RELEASE_NATIVE_OSARCH="linux-x86_64"
 CROSS_TARGETS=(
 	"Linux arm64|linux-arm64|target/release-ctr/aarch64-unknown-linux-gnu/release/${EXE_NAME}|cicd/utility/release-build.bash build aarch64-unknown-linux-gnu"
 )
+## The backlog runs and the merge gate leave it alone, and build theirs in
+## the run's temp dir.
 RELEASE_ARTIFACT_DIR="cicd/artifacts/release"
 ## A .deb and an .rpm per build, from cicd/packaging/nfpm.yaml, into the stage
 ## dir before the checks run. The binary is all they hold.
@@ -228,7 +230,7 @@ RELEASE_CHECKS=(
 	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash "${release_glibc}" "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
 	## The release builds aren't the ones stage 4 tested, so the integration
 	## test runs again on the x86_64 one, and the unit tests on arm64.
-	'the integration test passes on the x86_64 release build|TMPDIR="${release_work}" "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
+	'the integration test passes on the x86_64 release build|HOST_TEMP="${release_work}" "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
 	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 
@@ -267,7 +269,7 @@ GIF_ENABLE=1
 GIF_SCENARIO="cicd/demo/scenario.toml"
 GIF_OUT="assets/demo.gif"
 GIF_ROTATE_DIR="${root}/../private/demo/gif"
-GIF_CMD='cicd/utility/demo-gif.bash "${root}/${RELEASE_ARTIFACT_DIR}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
+GIF_CMD='cicd/utility/demo-gif.bash "${release_dir}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
 
 ## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
 ## A leak area keeps each leak check its text is in. With no area named it's
@@ -345,3 +347,5 @@ PUBLISH_AUTO_MESSAGE=""
 ##		- 2026-10-25: A length on each leak check.
 ##		- 2026-10-26: The parser fuzz tests, fast and long.
 ##		- 2026-10-28: mypy over the pipeline's Python.
+##		- 2026-10-28: The gif reads the release set from release_dir. The
+##		  release check's integration test gets HOST_TEMP, which it reads first.
