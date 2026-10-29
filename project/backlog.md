@@ -293,33 +293,6 @@
 	- Probable fix [Bug]: Take `fuseblk` and anything starting `fuseblk.` as hands-off, before the `fuse.` strip.
 	- Note: A unit test beside the `hands_off` cases in `src/mounts.rs`, with `fuseblk.ntfs-3g` and `fuseblk.exfat`.
 
-- The demo gif still shows the box's real disk name and worker count, so it's drawn again after a reboot or on another box.
-	- ID: 2026102814341418
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 23
-	- Origin: `a9bcbc4` pinned only the `group` line. Regression of 2026102309501605's intent. Confirmed.
-	- Incorrect behavior [Bug]: The output says `group sda with 2 worker(s):` and then `sdc: files 6 hashed 6`. A render here differs from `assets/demo.gif`.
-	- Expected behavior [Bug]: design.md, "Demo gif": a render only changes when the output or the script does.
-	- Probable fix [Bug]: Add `[[map]]` rows in `cicd/demo/scenario.toml` for the summary line's disk name and for the worker count.
-	- Note: The test is the existing one: 2 renders on 2 boxes, or with the disk name changed by hand, give the same bytes.
-
-- The demo gif's leak check misses the host name next to `-`, `_` or `.`.
-	- ID: 2026102814341419
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 24
-	- Origin: `d9a4f9d`. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]: Steps that print `backup at b23-old` and `b23_snap`.
-	- Incorrect behavior [Bug]: The gif renders with exit 0, and `b23` is neither replaced nor caught. `token_re` in `gen-demo-gif.py` only matches the host as a whole token.
-	- Expected behavior [Bug]: design.md, "Demo gif": a line with the real host fails the stage.
-	- Probable fix [Bug]: Match the host as a substring bounded only by letters and digits.
-	- Note: A test can feed `gen-demo-gif.py`'s leak check lines with the host next to `-`, `_` and `.`, and expect each to fail.
-
 - 3 integration checks pass whether or not what they check holds.
 	- ID: 2026102814341420
 	- Type: Bug
@@ -2310,6 +2283,61 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- The demo gif still shows the box's real disk name and worker count, so it's drawn again after a reboot or on another box.
+	- ID: 2026102814341418
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 23
+	- Origin: `a9bcbc4` pinned only the `group` line. Regression of 2026102309501605's intent. Confirmed.
+	- Incorrect behavior [Bug]: The output says `group sda with 2 worker(s):` and then `sdc: files 6 hashed 6`. A render here differs from `assets/demo.gif`.
+	- Expected behavior [Bug]: design.md, "Demo gif": a render only changes when the output or the script does.
+	- Probable fix [Bug]: Add `[[map]]` rows in `cicd/demo/scenario.toml` for the summary line's disk name and for the worker count.
+	- Note: The test is the existing one: 2 renders on 2 boxes, or with the disk name changed by hand, give the same bytes.
+	- Reproduced [Bug]: Yes, here: the summary line said `sdc:`, and a render with the disk name, worker count and run time rewritten gave other bytes.
+	- Actual cause [Bug]: The `[[map]]` pinned only the disk name on the `group` line. The summary line names the disk too, and the worker count follows the kind of disk.
+	- Progress log:
+		- 2026-10-28: The `group` line is pinned whole, as `group sda with 2 worker(s):`, and the summary line's disk name as `sda`. design.md, "Demo gif", says so.
+		- 2026-10-28: Verified: `demo-pin-check.bash` gives the same bytes for the real binary and one whose output says `nvme9n1`, 4 workers and 3s, and different bytes on the scenario from before. `--backlog-run-quick` passes in 1m 58s, ruff and mypy included. The markdown check is clean.
+	- Decisions:
+		- 2 workers, since that's what an sda, a SATA SSD, gets.
+		- `assets/demo.gif` is left for the next run with no options to redraw, from that run's release build. It differs from a render now only by the summary line's `sdc`.
+	- Actual fix [Bug]: 2 `[[map]]` rows in `cicd/demo/scenario.toml`.
+	- Branch: round-20261029
+	- Commit: `3e22a40`
+	- Test case: none with an ID. `demo-pin-check.bash REPO WORKDIR`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every line the demo's steps print. The progress line also names the disk, but the scan ends before its first one.
+	- Closed: 20261028-200400
+
+- The demo gif's leak check misses the host name next to `-`, `_` or `.`.
+	- ID: 2026102814341419
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 24
+	- Origin: `d9a4f9d`. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]: Steps that print `backup at b23-old` and `b23_snap`.
+	- Incorrect behavior [Bug]: The gif renders with exit 0, and `b23` is neither replaced nor caught. `token_re` in `gen-demo-gif.py` only matches the host as a whole token.
+	- Expected behavior [Bug]: design.md, "Demo gif": a line with the real host fails the stage.
+	- Probable fix [Bug]: Match the host as a substring bounded only by letters and digits.
+	- Note: A test can feed `gen-demo-gif.py`'s leak check lines with the host next to `-`, `_` and `.`, and expect each to fail.
+	- Reproduced [Bug]: Yes, here: lines with `b23-old`, `b23_snap`, `pool-b23`, `x_b23` and `at.b23` all passed the leak check.
+	- Actual cause [Bug]: The leak check used `token_re`, which is the scrub's whole-token match, so `-`, `_` and `.` next to the host hid it from both.
+	- Progress log:
+		- 2026-10-28: The leak check has its own match, `near_re`, the host next to anything but a letter or digit. The scrub keeps `token_re`, so a prompt's or a dotted name's host is still shown as the made-up one. design.md, "Demo gif", says so.
+		- 2026-10-28: Verified: `demo-leak-check.py` passes 10 cases. The 5 next to `-`, `_` and `.` fail the check, `b23.lan` and a prompt are shown as the made-up host, and `xb23y`, `b239` and a plain line pass. On the code from before the 5 pass. The real render still passes.
+	- Decisions:
+		- Fail rather than replace a host next to `-` or `_`, per the item. Replacing it could also change a checksum shown, since checksums are base64url.
+		- A checksum with the host between `-` or `_` would now fail the render. The demo's bytes are fixed, so that would show the same on every run on a box, and a failed render beats a leaked name.
+	- Actual fix [Bug]: `near_re` for `Scrubber.leak_tokens` in `cicd/utility/gen-demo-gif.py`.
+	- Branch: round-20261029
+	- Commit: `3e22a40`
+	- Test case: none with an ID. `demo-leak-check.py GEN_DEMO_GIF_PY WORKDIR`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: the user name is a plain substring leak already, and the home and temp paths too. Only the host and FQDN went through `token_re`.
+	- Closed: 20261028-200400
 
 - The dogfood stage's check for a running copy can't see a scan run through sudo.
 	- ID: 2026102814341417
