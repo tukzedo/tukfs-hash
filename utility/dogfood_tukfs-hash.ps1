@@ -1,8 +1,8 @@
 ## dogfood_tukfs-hash.ps1
 ##
-##	Runs the newest dogfood build of tukfs-hash, on Linux, under PowerShell 7.
-##	The pool, its rotation and the fixed name are in design.md, "Build and
-##	release".
+##	Picks the newest dogfood build of tukfs-hash, on Linux, under PowerShell 7,
+##	and prints its path for dogfood_tukfs-hash to run. The pool, its rotation
+##	and the fixed name are in design.md, "Build and release".
 ##
 ##	History: At bottom of script.
 
@@ -13,13 +13,11 @@
 
 <#
 .SYNOPSIS
-Runs the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
+Prints the path of the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
 .DESCRIPTION
-Every argument but --no-update goes to tukfs-hash as it came, and its exit code comes back. --no-update runs the newest build already held and copies nothing. What this script has to say goes to stderr, and only on a run that took a new build or changed something. For tukfs-hash's own help, run it with --help.
+The bash launcher, dogfood_tukfs-hash, runs what this prints with the arguments as typed, and its exit code comes back. PowerShell would expand wildcards and ~ in them, and can't carry a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
 .EXAMPLE
-dogfood_tukfs-hash scan --db ~/tukfs.db --root /home
-.EXAMPLE
-dogfood_tukfs-hash --no-update --version
+dogfood_tukfs-hash.ps1 --no-update
 #>
 
 $ProgramName = 'tukfs-hash'
@@ -446,45 +444,13 @@ function Get-RunTarget {
 	return $newest
 }
 
-function Get-FileArgument {
-	<#
-	.SYNOPSIS
-	This script's arguments as typed, from the process's own argument list.
-	.DESCRIPTION
-	Started by -File, PowerShell has parsed the arguments as its own before the script sees them, so a `-`-led one with a colon became a name and a value. The process's argument list still has them as typed, after this script's path. Nothing when no argument there names this script. From shcl's dogfood_shcl.ps1.
-	.PARAMETER Self
-	This script's path.
-	#>
-	[CmdletBinding()]
-	[OutputType([string[]])]
-	param(
-		[Parameter(Mandatory)]
-		[ValidateNotNullOrEmpty()]
-		[string]$Self
-	)
-	$argv = [Environment]::GetCommandLineArgs()
-	$leaf = Split-Path -Path $Self -Leaf
-	for ($i = 1; $i -lt $argv.Count; $i++) {
-		if ((Split-Path -Path $argv[$i] -Leaf) -ceq $leaf) { return Write-Output -NoEnumerate -InputObject ([string[]]@($argv | Select-Object -Skip ($i + 1))) }
-	}
-	return $null
-}
-
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-## Its own flag is taken out, and everything else goes to tukfs-hash as it
-## came, `-h` included, which is why there's no param() block to bind them.
-$given = @($args)
-if (-not $MyInvocation.Line) {
-	$fromFile = Get-FileArgument -Self $PSCommandPath
-	if ($null -ne $fromFile) { $given = $fromFile }
-}
 ## The flag goes on the left, since a `$true` there equals any word.
 $noUpdate = $false
-$passArgs = [Collections.Generic.List[string]]::new()
-foreach ($arg in $given) {
-	if ('--no-update' -ceq $arg) { $noUpdate = $true } else { $passArgs.Add("$arg") }
+foreach ($arg in $args) {
+	if ('--no-update' -ceq $arg) { $noUpdate = $true } else { Exit-Launcher -Message "this only picks the build, so run dogfood_tukfs-hash to pass it '$arg'" }
 }
 
 if (-not $noUpdate) {
@@ -495,8 +461,7 @@ if (-not $noUpdate) {
 
 $exe = Get-RunTarget
 if (-not $exe) { Exit-Launcher -Message "no $ProgramName build held, and none in $($SourceDirs -join ' or ')" }
-& $exe @passArgs
-exit $LASTEXITCODE
+Write-Output -InputObject $exe
 
 
 ##	History:
@@ -506,3 +471,6 @@ exit $LASTEXITCODE
 ##		  under 10 and 1 GB, and a running one is found through a linked home.
 ##		- 2026-10-28: Plain ASCII header, typed parameters and help on each
 ##		  function. The pool policy moved to design.md.
+##		- 2026-10-28: Prints the build's path for the bash launcher to run,
+##		  rather than running it, so arguments and the exit code go through
+##		  as they are.

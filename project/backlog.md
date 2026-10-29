@@ -114,27 +114,6 @@
 	- Note: Only names in the database's own folder are hit, since `scan::excluded` also checks the parent.
 	- Note: A unit test of `excluded` over the 5 names and a few lookalikes, plus the integration repro.
 
-- The dogfood launcher expands wildcards and `~` in its arguments, and exits 0 on Ctrl+C whatever tukfs-hash exited.
-	- ID: 2026102814341409
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 9
-	- Origin: `4a1977a`, copied from shcl's `dogfood_shcl.ps1`, which likely has the same line. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]:
-		- In a folder with `a1` and `a[1]`, run the launcher with `'a[1]'`, `'a?'` and `'*'`. The binary gets `a1`, `a1` and the file list.
-		- With a stand-in binary that exits 6 on INT, send INT to the launcher's group. The launcher exits 0.
-	- Incorrect behavior [Bug]:
-		- `accept 'x[1]'` through the launcher accepts `x1`, so a real mismatch on `x1` goes quiet.
-		- A name that isn't UTF-8 reaches the binary with U+FFFD in it.
-		- The script's help says the exit code comes back.
-	- Expected behavior [Bug]: Arguments and exit code pass through unchanged.
-	- Probable fix [Bug]: Have pwsh only rotate and print the target path, and have the bash launcher `exec "$target" "$@"`.
-	- Sweep: `& $exe @passArgs` in `utility/dogfood_tukfs-hash.ps1`, and the same line in shcl's copy.
-	- Note: shcl's `dogfood_shcl.ps1` is outside this tree. Fix the copy here, and the same line in shcl needs a go-ahead.
-	- Note: A test can run the launcher with a stand-in binary that prints its arguments and exits 6 on INT, under a fake `HOME`, as the review did.
-
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
 	- Type: Bug
@@ -245,6 +224,20 @@
 		- In the check-only modes, build the set into the run's temp folder, as the `TUKFS_GATE_REV` path does, and leave `cicd/artifacts/release` alone.
 	- Note: Once fixed, the private note about saving the release set before such a run can go.
 
+- The dogfood launcher's rotation can't see a pool version another user runs, such as through sudo.
+	- ID: 2026102819305559
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-193055
+	- Opened by: 2026102814341417's sweep
+	- Related IDs: 2026102814341417
+	- Incorrect behavior [Bug]: `Get-RunningPath` in `utility/dogfood_tukfs-hash.ps1` reads each process's image path, which is empty for another user's. A pool version a root run started can be removed while it runs. The run isn't hurt, since the file is only unlinked.
+	- Expected behavior [Bug]: design.md, "Build and release": old versions never go while one is running.
+	- Possible cause [Bug]: A run through the fixed name has `tukfs-hash` as its comm and the link as `argv[0]`, so neither says which version it started. Keeping every version while any such run is seen would hold the pool over budget for a long scan.
+	- Origin: `4a1977a`. Its help says a process that can't be read isn't protected. Read only.
+	- Note: `fInUse` in `cicd/cicd.bash` matches by comm and `argv[0]` for the same case since 2026102814341417.
+
 - Attributes are written when a root is inside a git work tree.
 	- ID: 2026102814341413
 	- Type: Bug
@@ -302,19 +295,6 @@
 	- Expected behavior [Bug]: design.md, "Attributes": `fuseblk` counts.
 	- Probable fix [Bug]: Take `fuseblk` and anything starting `fuseblk.` as hands-off, before the `fuse.` strip.
 	- Note: A unit test beside the `hands_off` cases in `src/mounts.rs`, with `fuseblk.ntfs-3g` and `fuseblk.exfat`.
-
-- The dogfood stage's check for a running copy can't see a scan run through sudo.
-	- ID: 2026102814341417
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 22
-	- Origin: `4a1977a`, reworked in `be1e173`. Not seen before. Confirmed.
-	- Incorrect behavior [Bug]: `fInUse` in `cicd/cicd.bash` compares `/proc/<pid>/exe`, which a normal user can't read for root's processes. The copy goes in anyway. The install is a rename, so the running scan isn't hurt.
-	- Expected behavior [Bug]: config.bash and design.md: no copy while that copy is running.
-	- Probable fix [Bug]: Drop the check and say why the rename is safe, or match by inode through what `/proc` lets a user read.
-	- Note: Dropping the check changes design.md's "A copy that's running is never deleted" for the stage, so that choice waits on UAT.
 
 - The demo gif still shows the box's real disk name and worker count, so it's drawn again after a reboot or on another box.
 	- ID: 2026102814341418
@@ -1403,6 +1383,36 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 
+- The dogfood launcher expands wildcards and `~` in its arguments, and exits 0 on Ctrl+C whatever tukfs-hash exited.
+	- ID: 2026102814341409
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints both files, and the dogfood check below runs them.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 9
+	- Origin: `4a1977a`, copied from shcl's `dogfood_shcl.ps1`, which likely has the same line. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]:
+		- In a folder with `a1` and `a[1]`, run the launcher with `'a[1]'`, `'a?'` and `'*'`. The binary gets `a1`, `a1` and the file list.
+		- With a stand-in binary that exits 6 on INT, send INT to the launcher's group. The launcher exits 0.
+	- Incorrect behavior [Bug]:
+		- `accept 'x[1]'` through the launcher accepts `x1`, so a real mismatch on `x1` goes quiet.
+		- A name that isn't UTF-8 reaches the binary with U+FFFD in it.
+		- The script's help says the exit code comes back.
+	- Expected behavior [Bug]: Arguments and exit code pass through unchanged.
+	- Probable fix [Bug]: Have pwsh only rotate and print the target path, and have the bash launcher `exec "$target" "$@"`.
+	- Sweep: `& $exe @passArgs` in `utility/dogfood_tukfs-hash.ps1`, and the same line in shcl's copy.
+	- Note: shcl's `dogfood_shcl.ps1` is outside this tree. Fix the copy here, and the same line in shcl needs a go-ahead.
+	- Note: A test can run the launcher with a stand-in binary that prints its arguments and exits 6 on INT, under a fake `HOME`, as the review did.
+	- Reproduced [Bug]: Yes, all 4 ways, with a stand-in build under a scratch `HOME`.
+	- Actual cause: pwsh ran the build. pwsh expands wildcards and `~` in a native call's arguments, and holds them as UTF-16, so a byte that isn't UTF-8 became U+FFFD. On INT it exited 0, not with the build's code.
+	- Fix: `dogfood_tukfs-hash.ps1` copies a new build in, rotates the pool and points the fixed name as before, then prints the path to run. The bash launcher takes `--no-update` out, calls it, and `exec`s that path with the rest as typed. The .ps1 alone refuses any other argument and names the launcher.
+	- Decisions: The .ps1 refuses other arguments rather than dropping them, so an old direct call fails with a message. `Get-FileArgument` went, since only `--no-update` reaches pwsh now. design.md, "Build and release", says who runs the build.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO` now runs through the launcher, and 4 of its 5 new cases failed before the fix: arguments changed by wildcards, `~` and a byte that isn't UTF-8, exit 0 on INT, and the 2 for the .ps1 alone. Verified: 29 of 29 pass after, and `dogfood-launcher-check.bash REPO` passes.
+	- Swept: `& $exe` and other native calls in both `.ps1` files. `lint-ps1.ps1` passes no user arguments. shcl's `dogfood_shcl.ps1` wasn't changed, since it needs a go-ahead.
+	- Closed: 20261028-193110
+
 - A scan that fails reading the mount table after it starts leaves its run marked running.
 	- ID: 2026102808215852
 	- Type: Bug
@@ -2253,6 +2263,28 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- The dogfood stage's check for a running copy can't see a scan run through sudo.
+	- ID: 2026102814341417
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the dogfood stage runs only in a run with no options, and the check below runs `fInUse` itself.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 22
+	- Origin: `4a1977a`, reworked in `be1e173`. Not seen before. Confirmed.
+	- Incorrect behavior [Bug]: `fInUse` in `cicd/cicd.bash` compares `/proc/<pid>/exe`, which a normal user can't read for root's processes. The copy goes in anyway. The install is a rename, so the running scan isn't hurt.
+	- Expected behavior [Bug]: config.bash and design.md: no copy while that copy is running.
+	- Probable fix [Bug]: Drop the check and say why the rename is safe, or match by inode through what `/proc` lets a user read.
+	- Note: Dropping the check changes design.md's "A copy that's running is never deleted" for the stage, so that choice waits on UAT.
+	- Reproduced [Bug]: Yes, with root processes already running standing in for a scan through sudo.
+	- Actual cause: `/proc/<pid>/exe` of another user's process can't be read, so `-ef` was false for it.
+	- Fix: Where the exe link can't be read, `fInUse` matches the process's comm against the file's name, cut to 15 characters, unless `argv[0]` is a path to some other file. Both are readable for any process. sudo passes `argv[0]` as typed.
+	- Decisions: Kept the check rather than dropping it, so design.md stands, and it says how another user's run is found. No part of `/proc` a user can read gives another user's inode, so the name has to do. Another user's run of any `tukfs-hash` with a bare `argv[0]` skips the copy too, which costs a warning and a later copy.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks have none. New `private/claude_simple/tools/in-use-check.bash REPO [REV]`: an idle file, its own running file, and 2 other-user processes, one with a bare `argv[0]` and one with a path to another file. With `HEAD` the bare one failed. Verified: 4 of 4 pass after. A scan through sudo itself wasn't run.
+	- Swept: `fInUse` has one caller, `fStageDogfood`. No other script reads `/proc/<pid>/exe`. The launcher's `Get-RunningPath` has the same blind spot, filed as 2026102819305559.
+	- Closed: 20261028-193110
 
 - The demo gif shows a scan's real time, so a slow run redraws it.
 	- ID: 2026102808415586

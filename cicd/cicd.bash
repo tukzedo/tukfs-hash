@@ -431,11 +431,21 @@ fFirstWritableDir(){ local d; for d in "$@"; do if [[ -d "${d}" && -w "${d}" ]];
 ## 0 when a running process was started from this file. -ef compares the
 ## inode the exe link points at, with no process per entry. A replaced file's
 ## old inode doesn't match, the same as its "(deleted)" name didn't.
+## Another user's exe link can't be read, as with a run through sudo, so there
+## the name has to do: comm, unless argv[0] is a path to some other file.
 fInUse(){   ## fInUse PATH
-	local exe
+	local exe pid comm name="${1##*/}"
+	local -a argv=()
 	[[ -e "$1" ]] || return 1
 	for exe in /proc/[0-9]*/exe; do
 		if [[ "${exe}" -ef "$1" ]]; then return 0; fi
+		[[ -e "${exe}" ]] && continue
+		pid="${exe%/exe}"; comm=""
+		read -r comm 2>/dev/null < "${pid}/comm" || continue
+		[[ "${comm}" == "${name:0:15}" ]] || continue
+		mapfile -d '' -n 1 argv 2>/dev/null < "${pid}/cmdline" || continue
+		[[ "${argv[0]:-}" == /* && -e "${argv[0]}" && ! "${argv[0]}" -ef "$1" ]] && continue
+		return 0
 	done
 	return 1
 }
