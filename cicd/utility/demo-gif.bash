@@ -6,7 +6,7 @@
 ##		  ROTATE_DIR, unless it's the same as the newest one there, and copied
 ##		  to OUT when it's different than what's there.
 ##		- No python3, Pillow or monospace font is a warning and exit 0, so the
-##		  run goes on. A step that exits wrong, or output with anything
+##		  run goes on, or a failure with TUKFS_GATE_STRICT set. A step that exits wrong, or output with anything
 ##		  personal in it, fails.
 ##		- ROTATE_DIR is resolved before anything goes in it, and has to end
 ##		  in /demo/gif with no link inside the private dir. Nothing is written
@@ -30,7 +30,10 @@ bin="${1:?${usage}}"; scenario="${2:?${usage}}"; out="${3:?${usage}}"; rotateDir
 meDir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${meDir}/include/gfs-rotate.bash"
 
-fWarn(){ echo "[ WARNING: demo gif skipped: $* ]"; exit 0; }
+fWarn(){
+	if [[ -n "${TUKFS_GATE_STRICT:-}" ]]; then echo "demo-gif: $*, and the gate needs it" >&2; exit 1; fi
+	echo "[ WARNING: demo gif skipped: $* ]"; exit 0
+}
 
 [[ "${stamp}" =~ ^[0-9]{8}-[0-9]{6}$ ]] || { echo "demo-gif: bad stamp: ${stamp}" >&2; exit 1; }
 [[ -x "${bin}" ]] || { echo "demo-gif: no release binary at ${bin}" >&2; exit 1; }

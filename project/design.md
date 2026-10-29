@@ -186,7 +186,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - The pipeline runs here, not on a hosted service. The pre-push hook runs `--merge-gate` on a push to `main`, and a push to `dev` or a feature branch isn't gated. The merge gate runs every check of a run with no options, so it takes most of an hour. A push to `main` that changes only the paths in `cicd/docs-paths`, which are `.md` files and `assets/`, skips it.
 	- A backlog worker runs `--backlog-run-quick`, alone or with the areas `--help` lists, and a round runs `--backlog-run-full` at its end. `--gate` and `--ci` are other names for `--backlog-run-quick` and `--merge-gate`.
 	- None of the 3 syncs, dogfoods, publishes, installs, rewrites a tracked file, or prompts. The demo gif they draw stays in the run's temp dir.
-	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again.
+	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again. It records once the demo gif has passed too, in the run that started, not in the one on the frozen copy. `--no-gif` makes a run partial (2026102814341404).
+	- In the 3 check-only modes a missing tool fails the run. The check scripts see this as `TUKFS_GATE_STRICT`. A check that needs the leak check image, on a box with no docker and without the tool, is a skip instead, and the run doesn't record its tree (2026102814341405).
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
 

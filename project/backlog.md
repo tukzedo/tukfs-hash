@@ -65,37 +65,6 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
-- A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
-	- ID: 2026102814341404
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 4
-	- Origin: `fRecordGreen` moved after the release checks in `69bd3ee`. The stage order is from `1282504`, and `--no-gif` from `a17da2f`. Not seen before. Plausible, read only.
-	- Incorrect behavior [Bug]:
-		- The frozen copy's run records the tree. The gif stage runs after that, in the outer run, and fails the run on a leak or a wrong exit. The hook then lets the same tree through on the next push.
-		- `--no-gif` doesn't set `gate_partial`, so `--backlog-run-full --no-gif` records a tree the gif never checked.
-	- Expected behavior [Bug]: design.md, "Build and release": a run records its tree only when it's at least as thorough as the merge gate, and passed.
-	- Probable fix [Bug]: Record from the outer run after `fStageGif` passes, and have `--no-gif` set `gate_partial`.
-	- Sweep: every stage that runs after `fRecordGreen` in `cicd/cicd.bash`.
-	- Note: No harness runs the engine's stage order with a stage made to fail. Adding one, such as a stand-in gif step under a test flag, is part of the fix. Watch it go red with the record moved back.
-
-- The check-only modes pass when the advisory scan, a sanitizer or CodeQL skips for a missing tool, and still record the tree.
-	- ID: 2026102814341405
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 5
-	- Origin: `0a623fb` read `TUKFS_GATE_STRICT` for later use. The advisory scan joined every run in `b8ea7c0`, and nothing ever set the variable. Not seen before. Confirmed for the advisory scan, the rest read only.
-	- Steps to reproduce [Bug]: `env -u TUKFS_GATE_STRICT PATH=/usr/bin:/bin bash cicd/utility/advisories.bash`, with no cargo-deny on that path.
-	- Incorrect behavior [Bug]: It prints a note and exits 0. The leak step runner only sees exit codes, so the gate passes and records the tree.
-	- Expected behavior [Bug]: The recorded decision that the 3 check-only modes stay strict, and `--help`: a missing tool keeps a run from recording.
-	- Probable fix [Bug]: Export `TUKFS_GATE_STRICT=1` when `gate_strict` is set. Have each child skip either fail under it or add its name to the run's skip list.
-	- Sweep: `advisories.bash`, `sanitize-rust.bash` with no nightly, `codeql-scan.bash` with no image or CodeQL, `demo-gif.bash` with no Pillow or font, `fRunIt`'s wrong-filesystem warning, and a `TUKFS_NO_IMAGE` left in the caller's environment.
-	- Note: A test can run each child script with its tool hidden from PATH and `TUKFS_GATE_STRICT=1`, and expect exit 1. A second one checks the engine exports the variable in all 3 check-only modes.
-
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
 	- Type: Bug
@@ -771,6 +740,51 @@
 	- Swept: The zfs names already use the full dataset name. In `vm-scan`, the mount folder and fsck log use the image's base name within its dataset, so 2 images of one name in different subfolders would share them. No dataset has 2 such images today.
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
+	- ID: 2026102814341404
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 4
+	- Origin: `fRecordGreen` moved after the release checks in `69bd3ee`. The stage order is from `1282504`, and `--no-gif` from `a17da2f`. Not seen before. Plausible, read only.
+	- Incorrect behavior [Bug]:
+		- The frozen copy's run records the tree. The gif stage runs after that, in the outer run, and fails the run on a leak or a wrong exit. The hook then lets the same tree through on the next push.
+		- `--no-gif` doesn't set `gate_partial`, so `--backlog-run-full --no-gif` records a tree the gif never checked.
+	- Expected behavior [Bug]: design.md, "Build and release": a run records its tree only when it's at least as thorough as the merge gate, and passed.
+	- Probable fix [Bug]: Record from the outer run after `fStageGif` passes, and have `--no-gif` set `gate_partial`.
+	- Sweep: every stage that runs after `fRecordGreen` in `cicd/cicd.bash`.
+	- Note: No harness runs the engine's stage order with a stage made to fail. Adding one, such as a stand-in gif step under a test flag, is part of the fix. Watch it go red with the record moved back.
+	- Actual cause: The run on the frozen copy recorded the tree, and the gif runs after it, in the run that started it. `--no-gif` didn't set `gate_partial`.
+	- Fix: Only the starting run records, after `fStageGif` and before publish. The frozen copy's run gets no tree, and writes its skips into the starter's list through `TUKFS_GATE_SKIPS`. `--no-gif` sets `gate_partial`. `TUKFS_GREEN_TREE` is gone.
+	- Test case: `private/claude_simple/tools/gate-record-check.bash REPO`, no test ID, since private checks have none. It runs the merge gate in a scratch clone whose `config.bash` makes each stage a stand-in, with the gif failing, with `--no-gif`, and passing. Before the fix "failed gif" and "--no-gif" recorded the tree. Verified: 15 of 15 pass after.
+	- Swept: Every stage after `fRecordGreen`: dogfood, gif and publish. Dogfood is off in the check-only modes, and in a default run it fails the run before the record. Publish has to come after, since it commits the tree it pushes.
+	- Closed: 20261028-172500
+
+- The check-only modes pass when the advisory scan, a sanitizer or CodeQL skips for a missing tool, and still record the tree.
+	- ID: 2026102814341405
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 5
+	- Origin: `0a623fb` read `TUKFS_GATE_STRICT` for later use. The advisory scan joined every run in `b8ea7c0`, and nothing ever set the variable. Not seen before. Confirmed for the advisory scan, the rest read only.
+	- Steps to reproduce [Bug]: `env -u TUKFS_GATE_STRICT PATH=/usr/bin:/bin bash cicd/utility/advisories.bash`, with no cargo-deny on that path.
+	- Incorrect behavior [Bug]: It prints a note and exits 0. The leak step runner only sees exit codes, so the gate passes and records the tree.
+	- Expected behavior [Bug]: The recorded decision that the 3 check-only modes stay strict, and `--help`: a missing tool keeps a run from recording.
+	- Probable fix [Bug]: Export `TUKFS_GATE_STRICT=1` when `gate_strict` is set. Have each child skip either fail under it or add its name to the run's skip list.
+	- Sweep: `advisories.bash`, `sanitize-rust.bash` with no nightly, `codeql-scan.bash` with no image or CodeQL, `demo-gif.bash` with no Pillow or font, `fRunIt`'s wrong-filesystem warning, and a `TUKFS_NO_IMAGE` left in the caller's environment.
+	- Note: A test can run each child script with its tool hidden from PATH and `TUKFS_GATE_STRICT=1`, and expect exit 1. A second one checks the engine exports the variable in all 3 check-only modes.
+	- Actual cause: The engine set `gate_strict` but never exported `TUKFS_GATE_STRICT`, and only `advisories.bash` read it.
+	- Fix: The engine exports it in the 3 check-only modes and unsets it otherwise. `demo-gif.bash` fails under it for no python3, Pillow or font. `sanitize-rust.bash` and `codeql-scan.bash` skip only when there's no image and the host lacks the tool, so under strict they add `sanitize-rust-<mode>` or `codeql` to the skip list through `fLeakHostSkip` in `leak-common.bash`, and the run passes without recording. A missing docker never fails a run, per design.md. In the image, a missing nightly is now exit 2, as codeql's already was. `fRunIt`'s wrong-filesystem warning adds `it-<label>` to the skip list.
+	- Note: `advisories.bash` now fails the check-only modes when the advisory database can't be fetched, as it was written to. An offline merge gate fails there.
+	- Note: A `TUKFS_NO_IMAGE` left in the caller's environment sends the leak checks to the host, where they still run. Only codeql and the sanitizers can then skip, and they no longer record.
+	- Test case: `private/claude_simple/tools/gate-record-check.bash REPO`, the strict cases: the lint stand-in fails unless strict reaches it, in `--backlog-run-quick lint`, `--backlog-run-full` and `--merge-gate`, and passes a run with no options. Each script runs with its tool hidden, with and without strict. Before the fix 7 cases failed. Verified: 15 of 15 pass after.
+	- Swept: `advisories.bash`, `sanitize-rust.bash`, `codeql-scan.bash`, `demo-gif.bash`, `fRunIt`, and `TUKFS_NO_IMAGE` in `leak-common.bash`. `fLintTool` already failed under strict.
+	- Closed: 20261028-172500
 
 - A database row with a read date in the future skips its file on every scan, `--verify` included, and the scan exits 0.
 	- ID: 2026102814341401
