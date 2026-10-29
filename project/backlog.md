@@ -29,6 +29,16 @@
 
 ## Issues
 
+- In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
+	- ID: 2026102819580272
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-195802
+	- Opened by:
+	- Progress log:
+		- Seen by the worker on 2026102814341426. Not checked whether it's meant.
+
 - `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
 	- ID: 2026102814341403
 	- Type: Bug
