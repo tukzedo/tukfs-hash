@@ -29,62 +29,6 @@
 
 ## Issues
 
-- `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
-	- ID: 2026102814341410
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 10
-	- Origin: `234b09f`. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]: Make `<temp>/tukfs-hash/20260101-000000_001/notes.txt`, set its mtime 4 weeks back, and run `HOST_TEMP=<temp> bash cicd/utility/box-side.bash make`.
-	- Incorrect behavior [Bug]: The folder and its file are removed. It also takes a folder the integration test kept with `--keep-temp`, ignoring its `.test-kept` mark.
-	- Expected behavior [Bug]: The house rule: a recursive removal only takes a path the script made and proves it owns. `fSweepStale` and the integration test's sweep both need their mark.
-	- Probable fix [Bug]: Have `make` write a mark, and have the sweep need the mark and `-O`.
-	- Note: `box-side.bash make` can be run here with `HOST_TEMP` pointed at a temp folder, so the test needs no test box.
-	- Reproduced [Bug]: Yes, here with `HOST_TEMP` on a temp folder. The hand-made folder and a kept integration test folder were both removed.
-	- Actual cause [Bug]: The sweep went by name, age and a dead `run.pid` only, and `make` left nothing to tell its own folders apart.
-	- Progress log:
-		- 2026-10-28: `make` writes `.box-run` in each folder it makes. The sweep, `test DIR` and `gone DIR` all need it, as a plain file, in a folder that's ours and not a link, through one check, `fMarked`. The 2-day wait stays, per 2026102518150001.
-		- 2026-10-28: The integration test's own sweep needed its mark already, and now needs `-O` too.
-		- 2026-10-28: Verified: `remote-check.bash box` passes 14 cases, and its 5 new ones fail on the code from before. The issue's steps leave both folders. `temp-ctr-check.bash it` passes. `--backlog-run-quick` passes in 1m 47s, shellcheck included. The markdown check is clean.
-		- Verified: 2026-10-28, the round's `--backlog-run-full` passed the Other hosts step on vmDebARM64 (PASS Other hosts, 824 PASS, 0 FAIL).
-	- Decisions:
-		- `test DIR` refuses an unmarked folder up front, since it writes `run.pid` and `tmp/` there before its removal would refuse.
-		- Work folders on the VM from before the mark aren't swept now. Any there are left for a hand cleanup.
-	- Actual fix [Bug]: The `.box-run` mark and `fMarked` in `cicd/utility/box-side.bash`, and `-O` in the sweep in `tests/integration.bash`. design.md, "Build and release", says so.
-	- Branch: round-20261029
-	- Commit: `db2c70b`
-	- Test case: none with an ID. `remote-check.bash REPO box`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
-	- Swept: every `rm -rf`, `fSafeRm` and stale sweep in `cicd/` and `tests/`. `cicd.bash`'s `fSweepStale` and the leak checks' `scratch.bash` already need their mark and `-O`. `remote-tests.bash` copies the stage with tar, which keeps the mark.
-	- Closed: 20261028-220411
-
-- `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
-	- ID: 2026102814341427
-	- Type: Enhancement
-	- Status: Done
-	- Needs local test suite run?: No
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 17
-	- Related IDs: 2026102814341439
-	- Origin: `feb7806` and `1282504`. Private notes had it only as a pitfall with a hand workaround. Plausible, read only.
-	- Requirements [Feature]:
-		- In the check-only modes, build the set into the run's temp folder, as the `TUKFS_GATE_REV` path does, and leave `cicd/artifacts/release` alone.
-	- Note: Once fixed, the private note about saving the release set before such a run can go.
-	- Progress log:
-		- 2026-10-28: The backlog runs and the merge gate put the set in `release-set/` in the outer run's temp dir, and hand it to the run on the frozen copy as `TUKFS_RELEASE_DIR`. The release, Other hosts, dogfood and gif steps all read `release_dir`. A run that can ship still writes `cicd/artifacts/release`.
-		- 2026-10-28: Verified: `release-host-check.bash REPO noctr` passes, and fails on the code from before with "the run changed the set". `--backlog-run-quick release --no-container` left the checkout's set byte for byte as it was. `--backlog-run-quick`, shellcheck, the markdown checks, and the private flags, steps and gate record checks pass.
-		- 2026-10-28: The private pitfall about saving the set first went to the round report for memory.md.
-		- Verified: 2026-10-28, a plain `--backlog-run-full` passed in 18m 52s. Its release set, Other hosts step and demo gif used the run's temp dir, and `cicd/artifacts/release` kept its older files.
-	- Decisions:
-		- One dir in the outer run's temp dir for every check-only mode, the pushed-commit path included, rather than the frozen copy's `cicd/artifacts`. That one links back to the checkout for the lint logs, profiles and CodeQL output, and `--no-freeze` has no frozen copy.
-	- Branch: round-20261029
-	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, now fails a run that changes the checkout's set.
-	- Swept: every `RELEASE_ARTIFACT_DIR` use in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md. `remote-check.bash` still takes its arm64 binary from the checkout's set, which a run that can ship keeps.
-	- Closed: 20261028-220411
-
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
@@ -431,35 +375,6 @@
 		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database", not the path.
 		- Note: Found while testing 2026102814341403 as root.
 
-- `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
-	- ID: 2026102814341403
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 3
-	- Origin: the lock open is from `f05c368`, the hand-back from `422efff` and `65e5872`. An earlier item looked at `give_back` for its error messages only. Confirmed.
-	- Steps to reproduce [Bug]:
-		- `ln -s elsewhere/made-by-lock db.sqlite.lock`.
-		- `SUDO_UID=1001 SUDO_GID=1001 strace -e openat,chown tukfs-hash prune --db db.sqlite`.
-	- Incorrect behavior [Bug]: The lock open has no `O_NOFOLLOW` and creates the link's target. `chown` then follows the link. The database name, `-wal` and `-shm` go the same way. README has the database in the user's own folder, so any process running as that user can point the lock at a system file before the next `sudo` run.
-	- Expected behavior [Bug]: A link at any of the 4 names is refused, and nothing outside them changes owner.
-	- Reproduced [Bug]: Yes, as a normal user with strace. The root case wasn't run.
-	- Probable fix [Bug]: Open the lock with `O_NOFOLLOW` from the folder's fd, refuse a database that's a link, and hand back with `fchown` on those fds, regular files only.
-	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
-	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
-	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
-	- Actual cause: The lock was opened with no `O_NOFOLLOW`, the database by name with SQLite following a link at it, and the handover used `chown`, which follows links.
-	- Fix: The lock opens with `O_NOFOLLOW` and must be a regular file. Both database opens pass `SQLITE_OPEN_NOFOLLOW`. `hand_over` opens each name with `O_NOFOLLOW`, checks it's a regular file, and uses `fchown` on that fd. A link at a name is reported as one.
-	- Note: SQLite already opens `-wal` and `-shm` with `O_NOFOLLOW`, so dejds and dejdt passed before the fix too. They stay as guards. The refusal there reads "unable to open database file", which doesn't name the link.
-	- Note: A link in a parent folder of the database is still followed. The parent is resolved once at the start, and the folder is the user's own choice.
-	- Test case: dejdp to dejdt, step 24 of `tests/integration.bash`, with the own ids as `SUDO_UID` and `SUDO_GID`. Before the fix dejdq got "0 none" and dejdr "0 made". And dejdv, `a_link_is_not_handed_over`, not run before the fix.
-	- Swept: `scan::lock`, `scan::hand_over`, `db::open_rw` and `db::open_ro`, which every command uses. The callers in `scan::run`, `accept::run` and `prune` all go through these. The root case wasn't run.
-	- Acceptance signoff: Self-closed: dejdp to dejdv passed in the round's full run at 9a36d46, and the root case passed as uid 0 in a user namespace with other ids mapped, so the hand-back really changed owners.
-	- Closed: 20261028-220623
-	- Stand-in: root in a user namespace in place of sudo, with `SUDO_UID` and `SUDO_GID` set to a second mapped id. `scan`, `accept` and `prune` each handed the database and lock back with no links, and refused a link at each of the 4 names, to nothing and to a file owned by root. No target was made, and no root file changed owner or bytes. The same check against a stand-in for the old behavior failed 24 of 28.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -625,6 +540,35 @@
 	- Swept: The zfs names already use the full dataset name. In `vm-scan`, the mount folder and fsck log use the image's base name within its dataset, so 2 images of one name in different subfolders would share them. No dataset has 2 such images today.
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
+	- ID: 2026102814341403
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 3
+	- Origin: the lock open is from `f05c368`, the hand-back from `422efff` and `65e5872`. An earlier item looked at `give_back` for its error messages only. Confirmed.
+	- Steps to reproduce [Bug]:
+		- `ln -s elsewhere/made-by-lock db.sqlite.lock`.
+		- `SUDO_UID=1001 SUDO_GID=1001 strace -e openat,chown tukfs-hash prune --db db.sqlite`.
+	- Incorrect behavior [Bug]: The lock open has no `O_NOFOLLOW` and creates the link's target. `chown` then follows the link. The database name, `-wal` and `-shm` go the same way. README has the database in the user's own folder, so any process running as that user can point the lock at a system file before the next `sudo` run.
+	- Expected behavior [Bug]: A link at any of the 4 names is refused, and nothing outside them changes owner.
+	- Reproduced [Bug]: Yes, as a normal user with strace. The root case wasn't run.
+	- Probable fix [Bug]: Open the lock with `O_NOFOLLOW` from the folder's fd, refuse a database that's a link, and hand back with `fchown` on those fds, regular files only.
+	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
+	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
+	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
+	- Actual cause: The lock was opened with no `O_NOFOLLOW`, the database by name with SQLite following a link at it, and the handover used `chown`, which follows links.
+	- Fix: The lock opens with `O_NOFOLLOW` and must be a regular file. Both database opens pass `SQLITE_OPEN_NOFOLLOW`. `hand_over` opens each name with `O_NOFOLLOW`, checks it's a regular file, and uses `fchown` on that fd. A link at a name is reported as one.
+	- Note: SQLite already opens `-wal` and `-shm` with `O_NOFOLLOW`, so dejds and dejdt passed before the fix too. They stay as guards. The refusal there reads "unable to open database file", which doesn't name the link.
+	- Note: A link in a parent folder of the database is still followed. The parent is resolved once at the start, and the folder is the user's own choice.
+	- Test case: dejdp to dejdt, step 24 of `tests/integration.bash`, with the own ids as `SUDO_UID` and `SUDO_GID`. Before the fix dejdq got "0 none" and dejdr "0 made". And dejdv, `a_link_is_not_handed_over`, not run before the fix.
+	- Swept: `scan::lock`, `scan::hand_over`, `db::open_rw` and `db::open_ro`, which every command uses. The callers in `scan::run`, `accept::run` and `prune` all go through these. The root case wasn't run.
+	- Acceptance signoff: Self-closed: dejdp to dejdv passed in the round's full run at 9a36d46, and the root case passed as uid 0 in a user namespace with other ids mapped, so the hand-back really changed owners.
+	- Closed: 20261028-220623
+	- Stand-in: root in a user namespace in place of sudo, with `SUDO_UID` and `SUDO_GID` set to a second mapped id. `scan`, `accept` and `prune` each handed the database and lock back with no links, and refused a link at each of the 4 names, to nothing and to a file owned by root. No target was made, and no root file changed owner or bytes. The same check against a stand-in for the old behavior failed 24 of 28.
 
 - A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
 	- ID: 2026102814341404
@@ -1288,6 +1232,37 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 
+- `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
+	- ID: 2026102814341410
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 10
+	- Origin: `234b09f`. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]: Make `<temp>/tukfs-hash/20260101-000000_001/notes.txt`, set its mtime 4 weeks back, and run `HOST_TEMP=<temp> bash cicd/utility/box-side.bash make`.
+	- Incorrect behavior [Bug]: The folder and its file are removed. It also takes a folder the integration test kept with `--keep-temp`, ignoring its `.test-kept` mark.
+	- Expected behavior [Bug]: The house rule: a recursive removal only takes a path the script made and proves it owns. `fSweepStale` and the integration test's sweep both need their mark.
+	- Probable fix [Bug]: Have `make` write a mark, and have the sweep need the mark and `-O`.
+	- Note: `box-side.bash make` can be run here with `HOST_TEMP` pointed at a temp folder, so the test needs no test box.
+	- Reproduced [Bug]: Yes, here with `HOST_TEMP` on a temp folder. The hand-made folder and a kept integration test folder were both removed.
+	- Actual cause [Bug]: The sweep went by name, age and a dead `run.pid` only, and `make` left nothing to tell its own folders apart.
+	- Progress log:
+		- 2026-10-28: `make` writes `.box-run` in each folder it makes. The sweep, `test DIR` and `gone DIR` all need it, as a plain file, in a folder that's ours and not a link, through one check, `fMarked`. The 2-day wait stays, per 2026102518150001.
+		- 2026-10-28: The integration test's own sweep needed its mark already, and now needs `-O` too.
+		- 2026-10-28: Verified: `remote-check.bash box` passes 14 cases, and its 5 new ones fail on the code from before. The issue's steps leave both folders. `temp-ctr-check.bash it` passes. `--backlog-run-quick` passes in 1m 47s, shellcheck included. The markdown check is clean.
+		- Verified: 2026-10-28, the round's `--backlog-run-full` passed the Other hosts step on vmDebARM64 (PASS Other hosts, 824 PASS, 0 FAIL).
+	- Decisions:
+		- `test DIR` refuses an unmarked folder up front, since it writes `run.pid` and `tmp/` there before its removal would refuse.
+		- Work folders on the VM from before the mark aren't swept now. Any there are left for a hand cleanup.
+	- Actual fix [Bug]: The `.box-run` mark and `fMarked` in `cicd/utility/box-side.bash`, and `-O` in the sweep in `tests/integration.bash`. design.md, "Build and release", says so.
+	- Branch: round-20261029
+	- Commit: `db2c70b`
+	- Test case: none with an ID. `remote-check.bash REPO box`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `rm -rf`, `fSafeRm` and stale sweep in `cicd/` and `tests/`. `cicd.bash`'s `fSweepStale` and the leak checks' `scratch.bash` already need their mark and `-O`. `remote-tests.bash` copies the stage with tar, which keeps the mark.
+	- Closed: 20261028-220411
+
 - The publish stage fails on a box with no rar, though cicd turns the backup off for that case.
 	- ID: 2026102814341411
 	- Type: Bug
@@ -1610,6 +1585,31 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+
+- `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
+	- ID: 2026102814341427
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 17
+	- Related IDs: 2026102814341439
+	- Origin: `feb7806` and `1282504`. Private notes had it only as a pitfall with a hand workaround. Plausible, read only.
+	- Requirements [Feature]:
+		- In the check-only modes, build the set into the run's temp folder, as the `TUKFS_GATE_REV` path does, and leave `cicd/artifacts/release` alone.
+	- Note: Once fixed, the private note about saving the release set before such a run can go.
+	- Progress log:
+		- 2026-10-28: The backlog runs and the merge gate put the set in `release-set/` in the outer run's temp dir, and hand it to the run on the frozen copy as `TUKFS_RELEASE_DIR`. The release, Other hosts, dogfood and gif steps all read `release_dir`. A run that can ship still writes `cicd/artifacts/release`.
+		- 2026-10-28: Verified: `release-host-check.bash REPO noctr` passes, and fails on the code from before with "the run changed the set". `--backlog-run-quick release --no-container` left the checkout's set byte for byte as it was. `--backlog-run-quick`, shellcheck, the markdown checks, and the private flags, steps and gate record checks pass.
+		- 2026-10-28: The private pitfall about saving the set first went to the round report for memory.md.
+		- Verified: 2026-10-28, a plain `--backlog-run-full` passed in 18m 52s. Its release set, Other hosts step and demo gif used the run's temp dir, and `cicd/artifacts/release` kept its older files.
+	- Decisions:
+		- One dir in the outer run's temp dir for every check-only mode, the pushed-commit path included, rather than the frozen copy's `cicd/artifacts`. That one links back to the checkout for the lint logs, profiles and CodeQL output, and `--no-freeze` has no frozen copy.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, now fails a run that changes the checkout's set.
+	- Swept: every `RELEASE_ARTIFACT_DIR` use in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md. `remote-check.bash` still takes its arm64 binary from the checkout's set, which a run that can ship keeps.
+	- Closed: 20261028-220411
 
 - The publish stage commits and pushes the live checkout, not the tree the run tested.
 	- ID: 2026102814341426
