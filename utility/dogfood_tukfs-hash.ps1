@@ -1,8 +1,8 @@
 ## dogfood_tukfs-hash.ps1
 ##
-##	Runs the newest dogfood build of tukfs-hash, on Linux, under PowerShell 7.
-##	The pool, its rotation and the fixed name are in design.md, "Build and
-##	release".
+##	Picks the newest dogfood build of tukfs-hash, on Linux, under PowerShell 7,
+##	and prints its path for dogfood_tukfs-hash to run. The pool, its rotation
+##	and the fixed name are in design.md, "Build and release".
 ##
 ##	History: At bottom of script.
 
@@ -13,13 +13,11 @@
 
 <#
 .SYNOPSIS
-Runs the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
+Prints the path of the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
 .DESCRIPTION
-Every argument but --no-update goes to tukfs-hash as it came, and its exit code comes back. --no-update runs the newest build already held and copies nothing. What this script has to say goes to stderr, and only on a run that took a new build or changed something. For tukfs-hash's own help, run it with --help.
+The bash launcher, dogfood_tukfs-hash, runs what this prints with the arguments as typed, and its exit code comes back. PowerShell would expand wildcards and ~ in them, and can't carry a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
 .EXAMPLE
-dogfood_tukfs-hash scan --db ~/tukfs.db --root /home
-.EXAMPLE
-dogfood_tukfs-hash --no-update --version
+dogfood_tukfs-hash.ps1 --no-update
 #>
 
 $ProgramName = 'tukfs-hash'
@@ -50,6 +48,9 @@ $KeepMonthly = 1
 $KeepYearly = 1
 
 $StampFormat = 'yyyyMMdd-HHmmss'
+$VersionPattern = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
+## The kernel keeps this much of a program's name as its comm.
+$CommLength = 15
 ## Written and read in one culture, or a culture with another calendar writes
 ## a year the read takes as a different one.
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
@@ -129,10 +130,9 @@ function Get-HeldVersion {
 	[OutputType([object[]])]
 	param()
 	if (-not (Test-Path -LiteralPath $PoolDir)) { return , @() }
-	$rx = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
 	$found = [Collections.Generic.List[object]]::new()
 	foreach ($file in Get-ChildItem -LiteralPath $PoolDir -File) {
-		if (-not ($file.Name -cmatch $rx)) { continue }
+		if (-not ($file.Name -cmatch $VersionPattern)) { continue }
 		$stamp = ConvertFrom-Stamp -Stamp $Matches.stamp
 		if ($null -ne $stamp) { $found.Add([PSCustomObject]@{ File = $file; Name = $file.Name; Stamp = $stamp }) }
 	}
@@ -167,7 +167,7 @@ function Copy-NewBuild {
 	.SYNOPSIS
 	Copies the source build in when nothing held matches it. True when it took one.
 	.DESCRIPTION
-	Written to a temp name and renamed, so a copy that dies partway never passes for a version.
+	Written to a temp name and renamed, so a copy that dies partway never passes for a version. Its write time is when it came in, since the name keeps the build's. That's how Get-RunningVersion tells which version a run through the fixed name started.
 	#>
 	[CmdletBinding()]
 	[OutputType([bool])]
@@ -185,6 +185,7 @@ function Copy-NewBuild {
 	try {
 		Copy-Item -LiteralPath $src.FullName -Destination $partial -Force
 		[IO.File]::SetUnixFileMode($partial, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute, GroupRead, GroupExecute, OtherRead, OtherExecute')
+		[IO.File]::SetLastWriteTimeUtc($partial, [datetime]::UtcNow)
 		Move-Item -LiteralPath $partial -Destination $dest -Force
 		Write-Note -Message "new build $stamp from $($src.DirectoryName)"
 		return $true
@@ -261,7 +262,7 @@ function Select-Budget {
 	.SYNOPSIS
 	The names that fit the budget.
 	.DESCRIPTION
-	The newest goes in first whatever it weighs, since the fixed name points at it, then the oldest, then those with a GFS role, then those without, each newest first. A version with no role still stays while the pool is under the count and the bytes.
+	The newest goes in first whatever it weighs, since the fixed name points at it, then the oldest, then those with a GFS role from year down to frequent, then those without, each newest first within its group. So a burst of builds can't push out the week and day versions. A version with no role still stays while the pool is under the count and the bytes.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]
@@ -280,7 +281,9 @@ function Select-Budget {
 	if ($ranked.Count -gt 1) { $order.Add($ranked[-1]) }
 	if ($ranked.Count -gt 2) {
 		$middle = @($ranked[1..($ranked.Count - 2)])
-		$order.AddRange(@($middle | Where-Object -FilterScript { $Roles.ContainsKey($_.Name) }))
+		$rank = @{ year = 0; month = 1; week = 2; day = 3; hour = 4; frequent = 5 }
+		$held = @($middle | Where-Object -FilterScript { $Roles.ContainsKey($_.Name) })
+		$order.AddRange(@($held | Sort-Object -Stable -Property { $rank[$Roles[$_.Name]] }))
 		$order.AddRange(@($middle | Where-Object -FilterScript { -not $Roles.ContainsKey($_.Name) }))
 	}
 	$bytes = 0
@@ -321,22 +324,62 @@ function Resolve-RealPath {
 	return Resolve-RealPath -Path ([IO.Path]::GetFullPath("$($item.Target)", $parent)) -Depth ($Depth + 1)
 }
 
-function Get-RunningPath {
+function Get-RunningVersion {
 	<#
 	.SYNOPSIS
-	The image paths of what's running now.
+	The names of the versions running now.
 	.DESCRIPTION
-	A process that can't be read isn't protected by this.
+	One of this user's runs is found by its image path. Another user's, such as a run through sudo, has none to read, so it's found by its comm and first argument, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name in them gives its stamp, which a later rename keeps. A run through the fixed name has only that name, so it holds the version the fixed name pointed at when it started: the newest that had come in by then.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]
-	param()
-	$paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
+		[object[]]$Versions
+	)
+	$names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	## A running one shows by its real path, which isn't the pool's when a
+	## link is on the way, such as a linked home.
+	$realPool = Resolve-RealPath -Path $PoolDir
+	$byPath = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	$byStamp = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	foreach ($v in $Versions) {
+		$byPath[$v.File.FullName] = $v.Name
+		if ($realPool) { $byPath[(Join-Path -Path $realPool -ChildPath $v.Name)] = $v.Name }
+		$byStamp[$v.Stamp.ToString($StampFormat, $Invariant)] = $v.Name
+	}
+	$fixedComm = $ProgramName.Substring(0, [Math]::Min($CommLength, $ProgramName.Length))
 	foreach ($proc in Get-Process -ErrorAction SilentlyContinue) {
 		$image = try { $proc.Path } catch { $null }
-		if ($image) { $null = $paths.Add($image) }
+		if ($image) {
+			if ($byPath.ContainsKey($image)) { $null = $names.Add($byPath[$image]) }
+			continue
+		}
+		## The comm first, since most processes are someone else's and few
+		## are this program.
+		try {
+			$comm = [IO.File]::ReadAllText("/proc/$($proc.Id)/comm").TrimEnd("`n")
+			if (-not $comm.StartsWith($fixedComm, [StringComparison]::Ordinal)) { continue }
+			$argv0 = [IO.File]::ReadAllText("/proc/$($proc.Id)/cmdline").Split([char]0)[0]
+		} catch { continue }
+		if (-not $argv0) { continue }
+		if ($argv0.StartsWith('/') -and (Test-Path -LiteralPath $argv0)) {
+			$real = Resolve-RealPath -Path $argv0
+			if (-not $realPool -or -not $real -or -not $real.StartsWith($realPool + '/', [StringComparison]::Ordinal)) { continue }
+		}
+		$leaf = [IO.Path]::GetFileName($argv0)
+		if ($leaf -cmatch $VersionPattern -and $comm -ceq $leaf.Substring(0, [Math]::Min($CommLength, $leaf.Length))) {
+			if ($byStamp.ContainsKey($Matches.stamp)) { $null = $names.Add($byStamp[$Matches.stamp]) }
+			continue
+		}
+		if ($comm -cne $fixedComm) { continue }
+		try { $started = $proc.StartTime.ToUniversalTime() } catch { continue }
+		## Versions come in oldest first, so the last in by then is the newest.
+		$before = @($Versions | Where-Object -FilterScript { $_.File.LastWriteTimeUtc -le $started })
+		if ($before.Count -gt 0) { $null = $names.Add($before[-1].Name) }
 	}
-	return Write-Output -NoEnumerate -InputObject $paths
+	return Write-Output -NoEnumerate -InputObject $names
 }
 
 function Invoke-Rotation {
@@ -353,14 +396,10 @@ function Invoke-Rotation {
 	if ($versions.Count -eq 0) { return }
 	$roles = Get-GfsRole -Versions $versions
 	$keep = Select-Budget -Versions $versions -Roles $roles
-	$running = Get-RunningPath
-	## A running one shows by its real path, which isn't the pool's when a
-	## link is on the way, such as a linked home.
-	$realPool = Resolve-RealPath -Path $PoolDir
+	$running = Get-RunningVersion -Versions $versions
 	foreach ($v in $versions) {
 		if ($keep.Contains($v.Name)) { continue }
-		$realFile = if ($realPool) { Join-Path -Path $realPool -ChildPath $v.Name } else { $v.File.FullName }
-		if ($running.Contains($v.File.FullName) -or $running.Contains($realFile)) {
+		if ($running.Contains($v.Name)) {
 			Write-Note -Message "$($v.Name) is running, so it stays for now"
 			continue
 		}
@@ -446,45 +485,13 @@ function Get-RunTarget {
 	return $newest
 }
 
-function Get-FileArgument {
-	<#
-	.SYNOPSIS
-	This script's arguments as typed, from the process's own argument list.
-	.DESCRIPTION
-	Started by -File, PowerShell has parsed the arguments as its own before the script sees them, so a `-`-led one with a colon became a name and a value. The process's argument list still has them as typed, after this script's path. Nothing when no argument there names this script. From shcl's dogfood_shcl.ps1.
-	.PARAMETER Self
-	This script's path.
-	#>
-	[CmdletBinding()]
-	[OutputType([string[]])]
-	param(
-		[Parameter(Mandatory)]
-		[ValidateNotNullOrEmpty()]
-		[string]$Self
-	)
-	$argv = [Environment]::GetCommandLineArgs()
-	$leaf = Split-Path -Path $Self -Leaf
-	for ($i = 1; $i -lt $argv.Count; $i++) {
-		if ((Split-Path -Path $argv[$i] -Leaf) -ceq $leaf) { return Write-Output -NoEnumerate -InputObject ([string[]]@($argv | Select-Object -Skip ($i + 1))) }
-	}
-	return $null
-}
-
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-## Its own flag is taken out, and everything else goes to tukfs-hash as it
-## came, `-h` included, which is why there's no param() block to bind them.
-$given = @($args)
-if (-not $MyInvocation.Line) {
-	$fromFile = Get-FileArgument -Self $PSCommandPath
-	if ($null -ne $fromFile) { $given = $fromFile }
-}
 ## The flag goes on the left, since a `$true` there equals any word.
 $noUpdate = $false
-$passArgs = [Collections.Generic.List[string]]::new()
-foreach ($arg in $given) {
-	if ('--no-update' -ceq $arg) { $noUpdate = $true } else { $passArgs.Add("$arg") }
+foreach ($arg in $args) {
+	if ('--no-update' -ceq $arg) { $noUpdate = $true } else { Exit-Launcher -Message "this only picks the build, so run dogfood_tukfs-hash to pass it '$arg'" }
 }
 
 if (-not $noUpdate) {
@@ -495,8 +502,7 @@ if (-not $noUpdate) {
 
 $exe = Get-RunTarget
 if (-not $exe) { Exit-Launcher -Message "no $ProgramName build held, and none in $($SourceDirs -join ' or ')" }
-& $exe @passArgs
-exit $LASTEXITCODE
+Write-Output -InputObject $exe
 
 
 ##	History:
@@ -506,3 +512,10 @@ exit $LASTEXITCODE
 ##		  under 10 and 1 GB, and a running one is found through a linked home.
 ##		- 2026-10-28: Plain ASCII header, typed parameters and help on each
 ##		  function. The pool policy moved to design.md.
+##		- 2026-10-28: Prints the build's path for the bash launcher to run,
+##		  rather than running it, so arguments and the exit code go through
+##		  as they are.
+##		- 2026-10-29: Role holders go into the budget from year down to
+##		  frequent, so a burst of builds can't push out the week and day ones.
+##		  Another user's run, such as one through sudo, is found by its comm
+##		  and first argument.

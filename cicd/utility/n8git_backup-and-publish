@@ -123,8 +123,9 @@ fMain(){
 		esac
 	done
 
-	## Validate dependencies
-	fMustBeInPath rar
+	## Validate dependencies. rar only for the backup, so a box without it can
+	## still publish with the backup off.
+	if ((! skipBackup)); then fMustBeInPath rar; fi
 	fMustBeInPath git
 
 	## Arguments. This script takes no positional args; a stray one is a typo, so throw.
@@ -779,3 +780,4 @@ fMain  "${@}"
 ##		  left out of the backup. Linked asset packs had grown one to 72 GB.
 ##		- 20261023: Copied into tukfs-hash. A linked worktree counts as a git project
 ##		  dir, and a remote with no ssh host skips the key check.
+##		- 20261029: rar is required only when the backup is on.

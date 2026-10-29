@@ -11,6 +11,7 @@ fn main() {
 	println!("cargo:rerun-if-changed=build.rs");
 	println!("cargo:rerun-if-env-changed=TUKFS_HASH_BUILD");
 	println!("cargo:rerun-if-env-changed=TUKFS_HASH_RELEASE");
+	println!("cargo:rerun-if-env-changed=TUKFS_HASH_DIRTY");
 	let build = std::env::var("TUKFS_HASH_BUILD").unwrap_or_default();
 	assert!(
 		build.chars().all(|c| DIGITS.contains(c)),
@@ -21,10 +22,21 @@ fn main() {
 		release.is_empty() || release == "1",
 		"TUKFS_HASH_RELEASE must be empty or 1, got {release:?}"
 	);
-	let suffix = if build.is_empty() {
-		String::new()
-	} else {
-		format!(" build {build}")
+	// Set when the tree built isn't the commit's, so the number names a commit
+	// that doesn't hold what was built. Such a build is never a release.
+	let dirty = std::env::var("TUKFS_HASH_DIRTY").unwrap_or_default();
+	assert!(
+		dirty.is_empty() || dirty == "1",
+		"TUKFS_HASH_DIRTY must be empty or 1, got {dirty:?}"
+	);
+	assert!(
+		dirty.is_empty() || release.is_empty(),
+		"TUKFS_HASH_DIRTY and TUKFS_HASH_RELEASE can't both be set"
+	);
+	let suffix = match (build.is_empty(), dirty.is_empty()) {
+		(true, _) => String::new(),
+		(false, true) => format!(" build {build}"),
+		(false, false) => format!(" build {build}-dirty"),
 	};
 	// Builds between releases also show their day, which main.rs works out
 	// when it runs, in the time zone of whoever looks.

@@ -7,7 +7,8 @@
 ##		  "NAME vVERSION build BUILD", and unless RELEASE is 1, then " (DATE)",
 ##		  the build's day where the binary runs. That's checked in 2 zones a
 ##		  day apart too. An empty BUILD fails, since a release with no build
-##		  number can't be traced to its commit.
+##		  number can't be traced to its commit. BUILD may end in -dirty, for a
+##		  tree that isn't its commit's, and then RELEASE can't be 1.
 ##		- arch: `file` names the architecture each os-arch says.
 ##		- package: each .deb and .rpm holds /usr/bin/NAME and nothing else,
 ##		  with the same bytes as the binary beside it, and its name, version,
@@ -36,13 +37,15 @@ fDie(){ echo "check-release: $*" >&2; exit 1; }
 fOk(){ echo "[ OK: $* ]"; }
 
 fVersionCheck(){   ## fVersionCheck BIN NAME VERSION BUILD [RELEASE]
-	local bin="$1" want="" got="" digits="0123456789abcdefghjkmnpqrstvwxyz" minutes=0 c i zone
+	local bin="$1" want="" got="" digits="0123456789abcdefghjkmnpqrstvwxyz" minutes=0 number="" c i zone
 	local -a tzSet=()
 	[[ -x "${bin}" ]] || fDie "not an executable: ${bin}"
 	[[ -n "${4:-}" ]] || fDie "no build number to check ${bin##*/} against; is the commit time missing?"
-	[[ "${4}" =~ ^[0-9a-hjkmnp-tv-z]{1,10}$ ]] || fDie "not a build number: '${4}'"
-	for ((i = 0; i < ${#4}; i++)); do
-		c="${digits%%"${4:i:1}"*}"
+	[[ "${4}" =~ ^([0-9a-hjkmnp-tv-z]{1,10})(-dirty)?$ ]] || fDie "not a build number: '${4}'"
+	number="${BASH_REMATCH[1]}"
+	[[ -z "${BASH_REMATCH[2]}" || "${5:-}" != 1 ]] || fDie "${4} is a dirty build, so it can't be a release"
+	for ((i = 0; i < ${#number}; i++)); do
+		c="${digits%%"${number:i:1}"*}"
 		minutes=$((minutes * 32 + ${#c}))
 	done
 	## The box's own zone first, then UTC+14 and UTC-12, which never share a
@@ -186,3 +189,4 @@ esac
 ##		- 2026-10-23: glibc, for the release image's floor.
 ##		- 2026-10-23: version checks the date a build between releases shows.
 ##		- 2026-10-25: glibc-note, for a build on the box.
+##		- 2026-10-29: version takes a build number marked -dirty.

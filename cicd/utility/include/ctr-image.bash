@@ -28,8 +28,9 @@
 ##			                    TMPDIR and HOME are in WORK, so on the host's
 ##			                    filesystem, with its user xattrs.
 ##			                    TUKFS_IN_IMAGE=1 tells the script where it is.
-##			                    The build number, its release flag and
-##			                    SOURCE_DATE_EPOCH go in when they're set.
+##			                    The build number, its release and dirty
+##			                    flags and SOURCE_DATE_EPOCH go in when
+##			                    they're set.
 ##			                    Returns the script's exit, or 2.
 ##		Every container is named tukfs-hash-<run>-<step>-<n> and labeled
 ##		dev.project and dev.run, and every image dev.project and dev.run too.
@@ -227,7 +228,7 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 		"${rwMount[@]}" -w "${root}" \
 		-e TUKFS_IN_IMAGE=1 -e TINI_KILL_PROCESS_GROUP=1 -e "CPU_CAP=${CPU_CAP:-1}" -e "TMPDIR=${work}/tmp" \
 		-e "HOME=${work}/home" -e "CARGO_HOME=${ch}" -e CARGO_NET_OFFLINE=true -e "TUKFS_GATE_STRICT=${TUKFS_GATE_STRICT:-}" \
-		-e "${BUILD_ENV_NAME}" -e "${BUILD_RELEASE_ENV_NAME}" -e SOURCE_DATE_EPOCH -e CARGO_TERM_QUIET \
+		-e "${BUILD_ENV_NAME}" -e "${BUILD_RELEASE_ENV_NAME}" -e "${BUILD_DIRTY_ENV_NAME}" -e SOURCE_DATE_EPOCH -e CARGO_TERM_QUIET \
 		"${ctr_tag}" nice -n 19 ionice -c 3 bash "$@" || rc=$?
 	return "${rc}"
 }
@@ -246,3 +247,4 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		- 2026-10-25: Container names and dev.project and dev.run labels. A
 ##		  build keeps the tag before the new one, and the cache prune keeps a
 ##		  week.
+##		- 2026-10-29: The dirty flag goes in with the build number.

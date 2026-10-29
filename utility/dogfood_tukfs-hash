@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 ##	Purpose:
-##		- Lets 'dogfood_tukfs-hash' be typed at a shell without knowing it's a
-##		  pwsh script. Hands off to dogfood_tukfs-hash.ps1 in the same window,
-##		  with every argument passed through.
+##		- Runs the newest dogfood build of tukfs-hash. dogfood_tukfs-hash.ps1
+##		  takes a new build in, rotates the pool and prints which to run, and
+##		  this runs it in its own place, with every argument but --no-update
+##		  as typed. So its exit code and a Ctrl+C reach it untouched.
 ##		- Lives in util/linux/bash, and the .ps1 in util/0_crossplatform beside
 ##		  it. The repo keeps both in utility/.
 ##	History: At bottom of script.
@@ -39,9 +40,23 @@ if ! command -v pwsh >/dev/null 2>&1; then
 	exit 1
 fi
 
-exec pwsh -NoProfile -File "${ps1}" "$@"
+## Not through pwsh, which expands wildcards and ~ in a native call's
+## arguments, and turns bytes that aren't UTF-8 into U+FFFD.
+noUpdate=()
+passArgs=()
+for arg in "$@"; do
+	if [[ "${arg}" == "--no-update" ]]; then noUpdate=(--no-update); else passArgs+=("${arg}"); fi
+done
+target="$(pwsh -NoProfile -File "${ps1}" "${noUpdate[@]}")" || exit 1
+if [[ "${target}" != /* || ! -x "${target}" ]]; then
+	echo "dogfood_tukfs-hash: ${ps1} gave no build to run: ${target}" >&2
+	exit 1
+fi
+exec "${target}" "${passArgs[@]}"
 
 
 ##	History:
 ##		- 2026-10-23: Created from shcl's dogfood_shcl.
 ##		- 2026-10-28: Resolve links with one readlink -f, so a link loop ends.
+##		- 2026-10-28: Runs the build itself, with the arguments as typed. The
+##		  .ps1 only picks it.

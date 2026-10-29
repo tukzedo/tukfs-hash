@@ -12,6 +12,8 @@
 
 - A build between releases shows its date after the build number, in the local time zone.
 
+- A build with uncommitted changes shows `-dirty` after the build number, and is never shown as a release.
+
 - Release builds for x86_64 and arm64 Linux, each with a `.deb` and an `.rpm`, and a sha256 sums file, all named by version. 2 builds of one commit give the same bytes.
 
 - `dogfood_tukfs-hash` runs the newest dogfood build, and keeps a few older ones.

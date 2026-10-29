@@ -27,9 +27,13 @@ put  = '2026-06-12 00:00:00'
 [[map]]
 find = '\d{4}-\d{2}-\d{2} (?!00:00:00)\d{2}:\d{2}:\d{2}'
 put  = '2026-06-12 09:41:07'
-# The disk the temp home is on, which moves between boots and boxes.
+# The disk the temp home is on, which moves between boots and boxes, and the
+# worker count, which goes with the kind of disk.
 [[map]]
-find = '(?<=^group )\S+(?= with \d+ worker)'
+find = '^group \S+ with \d+ worker\(s\):$'
+put  = 'group sda with 2 worker(s):'
+[[map]]
+find = '^\S+(?=: files \d+ hashed )'
 put  = 'sda'
 # The scan's own run time, which moves with the box's load.
 [[map]]

@@ -51,13 +51,13 @@ fSafeRm() {
 
 # Ours, and its run gone, such as a killed one's. A kept one waits 2 days
 # (2026102518150001). A folder with no marker of this script's, such as a
-# cicd run's, isn't ours.
+# cicd run's, or another user's, isn't ours.
 mkdir -p -- "${base}"
 while IFS= read -r -d '' old; do
 	pid=''; got=''
 	read -r pid 2> /dev/null < "${old}/run.pid" || continue
 	read -r got 2> /dev/null < "${old}/.test-run" || continue
-	[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" ]] || continue
+	[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" && -O "${old}" && ! -L "${old}" ]] || continue
 	if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
 	fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
 done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
@@ -620,10 +620,11 @@ else
 fi
 
 # 21. --version gives the version, and the build number when the pipeline
-# stamped one, with its date unless it's a release. That one line and nothing
-# else, so the x keeps a trailing blank line from being stripped.
+# stamped one, with its date unless it's a release. A tree that isn't the
+# commit's marks the number -dirty, and is never a release. That one line and
+# nothing else, so the x keeps a trailing blank line from being stripped.
 ver="$("${bin}" --version; echo x)"; ver="${ver%x}"
-st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+(\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
+st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+((-dirty)?\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
 expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
 check deb0e "version line alone" "${ver}" "${ver%%$'\n'*}"$'\n'
 
@@ -726,3 +727,5 @@ fi
 ##		- 20261028: ddx1e and de5gd fail on their own line when they find
 ##		  nothing, rather than ending the script. Step 20's scan helper is
 ##		  rdscan, not a second rscan. SPDX line.
+##		- 20261028: The stale folder sweep also needs the folder to be ours.
+##		- 20261029: A build number marked -dirty.
