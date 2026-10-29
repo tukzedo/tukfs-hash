@@ -442,29 +442,6 @@
 		- When the frozen tree differs from HEAD's, mark the build number, and never set the release flag.
 	- Note: A default run dogfoods that build and then commits the work, so `--version` names the commit before it. On a tagged HEAD it would print as the release.
 
-- A leak area named with `--no-leakcheck` or `--no-codeql` gives a run with 0 steps that exits 0.
-	- ID: 2026102814341435
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 35
-	- Origin: `b8ea7c0`. Confirmed with `--list`.
-	- Requirements [Feature]:
-		- Refuse the pair, as the parser does for other pairs that contradict, and fail a run whose plan has no steps.
-
-- A TERM to cicd.bash waits for the profiler, cross build, packages and release checks to finish before it stops.
-	- ID: 2026102814341436
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 36
-	- Origin: `1282504` and `4a1977a`. Plausible, read only.
-	- Requirements [Feature]:
-		- Run those steps through `fBg`, as the native release build already is.
-	- Note: Bash runs a trap only after the foreground child exits. `timeout`'s group TERM still works.
-
 - The publisher's check for a leftover stash misses the stash cicd's sync stage leaves.
 	- ID: 2026102814341437
 	- Type: Enhancement
@@ -524,6 +501,48 @@
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+
+- A TERM to cicd.bash waits for the profiler, cross build, packages and release checks to finish before it stops.
+	- ID: 2026102814341436
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 36
+	- Origin: `1282504` and `4a1977a`. Plausible, read only.
+	- Requirements [Feature]:
+		- Run those steps through `fBg`, as the native release build already is.
+	- Note: Bash runs a trap only after the foreground child exits. `timeout`'s group TERM still works.
+	- Progress log:
+		- 2026-10-29: The profiling build, attribution check, workload, timed steps and hot spot report, the cross builds, the packages, the release checks, and each lint tool run through `fBg`.
+		- 2026-10-29: Verified: with each of those steps held by a 60 s stand-in, a TERM stopped the run in under a second, where before it waited the 59 s out. 8 of 8 failed before and pass after. The native release build, already in the background, stopped at once both times. The quick gate and the profile and release areas pass.
+	- Decisions:
+		- Lint went in too, since clippy can take a minute and had the same wait. The format step stays in the foreground, since it takes seconds.
+	- Swept: every command cicd.bash runs in its own shell. Left in the foreground: format, sync and publish, which are short, or may need the terminal for git's editor. A command run in the background reads /dev/null, not the terminal.
+	- Branch: round-20261029
+	- Test case: none with an ID, since the cicd scripts have none. `cicd-term-steps-check.bash REPO [CASE...]`, new in the private tools folder.
+	- Closed: 20261028-204017
+
+- A leak area named with `--no-leakcheck` or `--no-codeql` gives a run with 0 steps that exits 0.
+	- ID: 2026102814341435
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 35
+	- Origin: `b8ea7c0`. Confirmed with `--list`.
+	- Requirements [Feature]:
+		- Refuse the pair, as the parser does for other pairs that contradict, and fail a run whose plan has no steps.
+	- Progress log:
+		- 2026-10-29: `--backlog-run-quick` refuses an area named with the `--no-` option that takes its step out: a leak area with `--no-leakcheck` or `--no-tests`, an area whose leak checks all name codeql with `--no-codeql`, and fmt, build, lint, unit, it, profile, release and remote with their own. A plan with no steps fails with exit 1 after printing it, under `--list` too.
+		- 2026-10-29: Verified: the 13 pairs exit 2, and a plan with every step off exits 1, where before all of them exited 0. `leak --no-codeql` still keeps the other 6 leak checks, and `release --no-cross` still runs. The quick gate passes.
+	- Decisions:
+		- The pairs for the other areas are refused too, since each gave the same empty or partial run. `release` with `--no-cross` or `--no-package` stays allowed, since the native build still runs.
+		- A plan with no steps exits 1, as a failed run, not 2, since config.bash can empty it as well as the options.
+	- Swept: every area in `BACKLOG_AREAS` against each `--no-` option that turns a step off. The other modes take no areas, and their only empty plan is every option off, which the plan check catches.
+	- Branch: round-20261029
+	- Test case: none with an ID, since the cicd scripts have none. `cicd-flags-check.bash REPO` in the private tools folder: its refusal and empty plan cases failed before and pass after.
+	- Closed: 20261028-204017
 
 - The release check sets `TMPDIR` for the integration test, which the test ignores.
 	- ID: 2026102814341439

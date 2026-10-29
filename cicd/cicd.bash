@@ -66,9 +66,10 @@
 ##	   --leakcheck         add the leak checks a run with no options has to
 ##	                       --quick or --backlog-run-quick
 ##	   --no-leakcheck      leave the leak checks out of any run. Not with
-##	                       --leakcheck
+##	                       --leakcheck, or with a leak check area
 ##	   --no-codeql         leave out the leak check steps that name codeql,
-##	                       and keep the rest
+##	                       and keep the rest. Not with an area that has only
+##	                       those
 ##	   -q, --quiet         unattended and quiet: no preflight block, and cargo
 ##	                       and the publisher get their own quiet flags. Stage
 ##	                       lines, results and warnings still print
@@ -91,6 +92,8 @@
 ##	   --no-publish        skip the backup + publish
 ##	   --no-freeze         run stages 2-7 in the checkout, not in a copy
 ##	   -h, --help          show this help
+##	- An area named with the --no- option that takes its step out, and a plan
+##	  with no steps at all, are refused rather than run as nothing.
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
 ##	  stops the whole run.
@@ -299,15 +302,28 @@ if ((gate_mode)); then
 		## config.bash, and a leak area keeps the leak checks its text is in.
 		_known=" "; _leakKept=()
 		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
+		## The step each area runs in, so an area named with the --no- option
+		## that takes that step out is refused. off_why holds only the options
+		## given so far.
+		declare -A _areaStep=([fmt]=format [build]=build [lint]=lint [unit]=tests [it]=tests [profile]=profile [release]=release [remote]=remote)
 		for _name in "${areas[@]}"; do
 			[[ "${_known}" == *" ${_name} "* ]] || { echo "--backlog-run-quick: no area named ${_name} (try --help)" >&2; exit 2; }
 			for _a in "${BACKLOG_AREAS[@]}"; do
 				[[ "${_a%%|*}" == "${_name}" ]] || continue
 				_pat="${_a#*|}"; _pat="${_pat%%|*}"
+				## A leak area is in the tests step.
+				_off="${off_why["${_areaStep["${_name}"]:-tests}"]:-}"
+				if [[ -z "${_off}" && -n "${_pat}" ]] && ((no_leakcheck)); then _off="--no-leakcheck"; fi
+				if [[ -n "${_off}" ]]; then echo "--backlog-run-quick: area ${_name} and ${_off} can't go together (try --help)" >&2; exit 2; fi
 				[[ -n "${_pat}" ]] || continue
+				_matched=0; _codeql=0
 				for _step in "${LEAKCHECK_STEPS[@]}"; do
-					if [[ "${_step}" == *"${_pat}"* && " ${_leakKept[*]} " != *" ${_step} "* ]]; then _leakKept+=("${_step}"); fi
+					[[ "${_step}" == *"${_pat}"* ]] || continue
+					_matched=$((_matched + 1))
+					if [[ "${_step,,}" == *codeql* ]]; then _codeql=$((_codeql + 1)); fi
+					if [[ " ${_leakKept[*]} " != *" ${_step} "* ]]; then _leakKept+=("${_step}"); fi
 				done
+				if ((no_codeql && _matched && _codeql == _matched)); then echo "--backlog-run-quick: area ${_name} and --no-codeql can't go together (try --help)" >&2; exit 2; fi
 			done
 		done
 		_named=" ${areas[*]} "
@@ -848,6 +864,12 @@ elif ((! inner_run)) && ((${#steps_off[@]})); then
 	_off="$(printf '%s; ' "${steps_off[@]}")"
 	fEcho_Clean "steps off: ${_off%; }"
 fi
+## A run with nothing in its plan would pass having checked nothing. The plan
+## above says why each step is off.
+if ((step_total == 0 && ! inner_run)); then
+	keep_temp=0
+	fDie "every step is off, so there's nothing to run (try --help)"
+fi
 ## fListIds SUITE WHAT WHERE...: the IDs a suite prints its status lines with,
 ## and the steps that run it.
 fListIds(){
@@ -1034,7 +1056,9 @@ fStageBuild(){
 
 ## One lint tool, its output also into the lint log.
 lint_log="/dev/null"
-fLintRun(){ local rc=0; "$@" 2>&1 | tee -a "${lint_log}" || rc=$?; return "${rc}"; }
+## In the background, as each long step is, so a stop doesn't wait for it.
+fLintTee(){ "$@" 2>&1 | tee -a "${lint_log}"; }
+fLintRun(){ local rc=0; fBg fLintTee "$@" || rc=$?; return "${rc}"; }
 ## An eval'd one. Without its own ERR trap, since a finding isn't the run
 ## aborting.
 fLintEval(){ trap - ERR; eval "$1"; }
@@ -1201,12 +1225,12 @@ fStageProfile(){
 	local base="" fsType="" work="" step="" name="" cmd="" t0="" svg="" profDir="" latest=""
 	fStep profile || return 0
 	fEcho_Clean "${PROFILE_BUILD_CMD[*]}"
-	"${PROFILE_BUILD_CMD[@]}" || fDie "profiling build failed"
+	fBg "${PROFILE_BUILD_CMD[@]}" || fDie "profiling build failed"
 	export PROFILE_BIN="${root}/${PROFILE_BIN}"
 	[[ -x "${PROFILE_BIN}" ]] || fDie "no profiling binary at ${PROFILE_BIN}"
 	if [[ -n "${PROFILE_CHECK}" ]]; then
 		fEcho_Clean "attribution check: ${PROFILE_CHECK}"
-		eval "${PROFILE_CHECK}" || fDie "profiler attribution check failed; its graph would name the wrong code"
+		fBg eval "${PROFILE_CHECK}" || fDie "profiler attribution check failed; its graph would name the wrong code"
 	fi
 
 	base="${PROFILE_ROOT}"
@@ -1221,13 +1245,13 @@ fStageProfile(){
 	export PROFILE_WORKLOAD="${work}" TUKFS_PROFILE_DIR="${work}/samples"
 	mkdir -- "${TUKFS_PROFILE_DIR}" || fDie "could not make ${TUKFS_PROFILE_DIR}"
 	fEcho_Clean "workload: ${PROFILE_WORKLOAD_GEN}  (in ${work})"
-	eval "${PROFILE_WORKLOAD_GEN}" || fDie "the profiler workload failed"
+	fBg eval "${PROFILE_WORKLOAD_GEN}" || fDie "the profiler workload failed"
 	for step in "${PROFILE_TIMED[@]}"; do
 		name="${step%%|*}"; cmd="${step#*|}"
 		fEcho_Clean "profile step: ${name}"
 		t0="${EPOCHREALTIME}"
 		## In an if, so a step can test its own exit, as the rescan's 4.
-		if ! eval "${cmd}"; then fDie "profiler step failed: ${name}"; fi
+		if ! fBg eval "${cmd}"; then fDie "profiler step failed: ${name}"; fi
 		fEcho_Clean "profile timing: ${name} $(fSecsSince "${t0}")"
 	done
 	svg="${TUKFS_PROFILE_DIR}/flame.svg"
@@ -1246,7 +1270,7 @@ fStageProfile(){
 	fEcho "OK: flamegraph: ${latest#"${root}/"}"
 	if command -v python3 >/dev/null 2>&1; then
 		fEcho_Clean
-		python3 "${here}/utility/flame-report.py" --dir "${profDir}" || fEcho_Clean "hot spots: no report; the reason is above"
+		fBg python3 "${here}/utility/flame-report.py" --dir "${profDir}" || fEcho_Clean "hot spots: no report; the reason is above"
 	else
 		fEcho "WARNING: python3 isn't installed; no hot spot report"
 	fi
@@ -1291,7 +1315,7 @@ fStageRelease(){
 	for t in "${CROSS_TARGETS[@]}"; do
 		label="${t%%|*}"; t="${t#*|}"; osarch="${t%%|*}"; t="${t#*|}"; art="${t%%|*}"; cmd="${t#*|}"
 		fEcho_Clean "cross: ${label}: ${cmd}"
-		eval "${cmd}" || fDie "cross build failed: ${label}"
+		fBg eval "${cmd}" || fDie "cross build failed: ${label}"
 		[[ -f "${root}/${art}" ]] || fDie "no binary for ${label} at ${art}"
 		fEcho "OK: ${osarch}: ${art} ($(stat -c %s -- "${root}/${art}") bytes)"
 		built+=("${osarch}|${art}")
@@ -1311,11 +1335,11 @@ fStageRelease(){
 	done
 	if ((PACKAGE_ENABLE)) && [[ -n "${PACKAGE_CMD}" ]]; then
 		fEcho_Clean "packages"
-		eval "${PACKAGE_CMD}" || fDie "packages failed"
+		fBg eval "${PACKAGE_CMD}" || fDie "packages failed"
 	fi
 	for c in "${RELEASE_CHECKS[@]}"; do
 		fEcho_Clean "release check: ${c%%|*}"
-		eval "${c#*|}" || fDie "release check failed: ${c%%|*}"
+		fBg eval "${c#*|}" || fDie "release check failed: ${c%%|*}"
 	done
 	if ((${#RELEASE_CHECKS[@]})); then fEcho "OK: ${#RELEASE_CHECKS[@]} release check(s)"; fi
 
@@ -1798,3 +1822,7 @@ exit 0
 ##		  its tree, other than the gif, and an upstream with commits to take.
 ##		- 2026-10-28: The backlog runs and the merge gate build the release set
 ##		  in the run's temp dir, and leave the checkout's alone.
+##		- 2026-10-29: An area named with the --no- option that takes it out is
+##		  refused, and so is a plan with no steps.
+##		- 2026-10-29: The profiler, lint, cross builds, packages and release
+##		  checks in the background too, so a stop doesn't wait for them.
