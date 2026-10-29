@@ -48,6 +48,9 @@ $KeepMonthly = 1
 $KeepYearly = 1
 
 $StampFormat = 'yyyyMMdd-HHmmss'
+$VersionPattern = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
+## The kernel keeps this much of a program's name as its comm.
+$CommLength = 15
 ## Written and read in one culture, or a culture with another calendar writes
 ## a year the read takes as a different one.
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
@@ -127,10 +130,9 @@ function Get-HeldVersion {
 	[OutputType([object[]])]
 	param()
 	if (-not (Test-Path -LiteralPath $PoolDir)) { return , @() }
-	$rx = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
 	$found = [Collections.Generic.List[object]]::new()
 	foreach ($file in Get-ChildItem -LiteralPath $PoolDir -File) {
-		if (-not ($file.Name -cmatch $rx)) { continue }
+		if (-not ($file.Name -cmatch $VersionPattern)) { continue }
 		$stamp = ConvertFrom-Stamp -Stamp $Matches.stamp
 		if ($null -ne $stamp) { $found.Add([PSCustomObject]@{ File = $file; Name = $file.Name; Stamp = $stamp }) }
 	}
@@ -165,7 +167,7 @@ function Copy-NewBuild {
 	.SYNOPSIS
 	Copies the source build in when nothing held matches it. True when it took one.
 	.DESCRIPTION
-	Written to a temp name and renamed, so a copy that dies partway never passes for a version.
+	Written to a temp name and renamed, so a copy that dies partway never passes for a version. Its write time is when it came in, since the name keeps the build's. That's how Get-RunningVersion tells which version a run through the fixed name started.
 	#>
 	[CmdletBinding()]
 	[OutputType([bool])]
@@ -183,6 +185,7 @@ function Copy-NewBuild {
 	try {
 		Copy-Item -LiteralPath $src.FullName -Destination $partial -Force
 		[IO.File]::SetUnixFileMode($partial, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute, GroupRead, GroupExecute, OtherRead, OtherExecute')
+		[IO.File]::SetLastWriteTimeUtc($partial, [datetime]::UtcNow)
 		Move-Item -LiteralPath $partial -Destination $dest -Force
 		Write-Note -Message "new build $stamp from $($src.DirectoryName)"
 		return $true
@@ -259,7 +262,7 @@ function Select-Budget {
 	.SYNOPSIS
 	The names that fit the budget.
 	.DESCRIPTION
-	The newest goes in first whatever it weighs, since the fixed name points at it, then the oldest, then those with a GFS role, then those without, each newest first. A version with no role still stays while the pool is under the count and the bytes.
+	The newest goes in first whatever it weighs, since the fixed name points at it, then the oldest, then those with a GFS role from year down to frequent, then those without, each newest first within its group. So a burst of builds can't push out the week and day versions. A version with no role still stays while the pool is under the count and the bytes.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]
@@ -278,7 +281,9 @@ function Select-Budget {
 	if ($ranked.Count -gt 1) { $order.Add($ranked[-1]) }
 	if ($ranked.Count -gt 2) {
 		$middle = @($ranked[1..($ranked.Count - 2)])
-		$order.AddRange(@($middle | Where-Object -FilterScript { $Roles.ContainsKey($_.Name) }))
+		$rank = @{ year = 0; month = 1; week = 2; day = 3; hour = 4; frequent = 5 }
+		$held = @($middle | Where-Object -FilterScript { $Roles.ContainsKey($_.Name) })
+		$order.AddRange(@($held | Sort-Object -Stable -Property { $rank[$Roles[$_.Name]] }))
 		$order.AddRange(@($middle | Where-Object -FilterScript { -not $Roles.ContainsKey($_.Name) }))
 	}
 	$bytes = 0
@@ -319,22 +324,62 @@ function Resolve-RealPath {
 	return Resolve-RealPath -Path ([IO.Path]::GetFullPath("$($item.Target)", $parent)) -Depth ($Depth + 1)
 }
 
-function Get-RunningPath {
+function Get-RunningVersion {
 	<#
 	.SYNOPSIS
-	The image paths of what's running now.
+	The names of the versions running now.
 	.DESCRIPTION
-	A process that can't be read isn't protected by this.
+	One of this user's runs is found by its image path. Another user's, such as a run through sudo, has none to read, so it's found by its comm and first argument, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name in them gives its stamp, which a later rename keeps. A run through the fixed name has only that name, so it holds the version the fixed name pointed at when it started: the newest that had come in by then.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]
-	param()
-	$paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
+		[object[]]$Versions
+	)
+	$names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	## A running one shows by its real path, which isn't the pool's when a
+	## link is on the way, such as a linked home.
+	$realPool = Resolve-RealPath -Path $PoolDir
+	$byPath = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	$byStamp = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	foreach ($v in $Versions) {
+		$byPath[$v.File.FullName] = $v.Name
+		if ($realPool) { $byPath[(Join-Path -Path $realPool -ChildPath $v.Name)] = $v.Name }
+		$byStamp[$v.Stamp.ToString($StampFormat, $Invariant)] = $v.Name
+	}
+	$fixedComm = $ProgramName.Substring(0, [Math]::Min($CommLength, $ProgramName.Length))
 	foreach ($proc in Get-Process -ErrorAction SilentlyContinue) {
 		$image = try { $proc.Path } catch { $null }
-		if ($image) { $null = $paths.Add($image) }
+		if ($image) {
+			if ($byPath.ContainsKey($image)) { $null = $names.Add($byPath[$image]) }
+			continue
+		}
+		## The comm first, since most processes are someone else's and few
+		## are this program.
+		try {
+			$comm = [IO.File]::ReadAllText("/proc/$($proc.Id)/comm").TrimEnd("`n")
+			if (-not $comm.StartsWith($fixedComm, [StringComparison]::Ordinal)) { continue }
+			$argv0 = [IO.File]::ReadAllText("/proc/$($proc.Id)/cmdline").Split([char]0)[0]
+		} catch { continue }
+		if (-not $argv0) { continue }
+		if ($argv0.StartsWith('/') -and (Test-Path -LiteralPath $argv0)) {
+			$real = Resolve-RealPath -Path $argv0
+			if (-not $realPool -or -not $real -or -not $real.StartsWith($realPool + '/', [StringComparison]::Ordinal)) { continue }
+		}
+		$leaf = [IO.Path]::GetFileName($argv0)
+		if ($leaf -cmatch $VersionPattern -and $comm -ceq $leaf.Substring(0, [Math]::Min($CommLength, $leaf.Length))) {
+			if ($byStamp.ContainsKey($Matches.stamp)) { $null = $names.Add($byStamp[$Matches.stamp]) }
+			continue
+		}
+		if ($comm -cne $fixedComm) { continue }
+		try { $started = $proc.StartTime.ToUniversalTime() } catch { continue }
+		## Versions come in oldest first, so the last in by then is the newest.
+		$before = @($Versions | Where-Object -FilterScript { $_.File.LastWriteTimeUtc -le $started })
+		if ($before.Count -gt 0) { $null = $names.Add($before[-1].Name) }
 	}
-	return Write-Output -NoEnumerate -InputObject $paths
+	return Write-Output -NoEnumerate -InputObject $names
 }
 
 function Invoke-Rotation {
@@ -351,14 +396,10 @@ function Invoke-Rotation {
 	if ($versions.Count -eq 0) { return }
 	$roles = Get-GfsRole -Versions $versions
 	$keep = Select-Budget -Versions $versions -Roles $roles
-	$running = Get-RunningPath
-	## A running one shows by its real path, which isn't the pool's when a
-	## link is on the way, such as a linked home.
-	$realPool = Resolve-RealPath -Path $PoolDir
+	$running = Get-RunningVersion -Versions $versions
 	foreach ($v in $versions) {
 		if ($keep.Contains($v.Name)) { continue }
-		$realFile = if ($realPool) { Join-Path -Path $realPool -ChildPath $v.Name } else { $v.File.FullName }
-		if ($running.Contains($v.File.FullName) -or $running.Contains($realFile)) {
+		if ($running.Contains($v.Name)) {
 			Write-Note -Message "$($v.Name) is running, so it stays for now"
 			continue
 		}
@@ -474,3 +515,7 @@ Write-Output -InputObject $exe
 ##		- 2026-10-28: Prints the build's path for the bash launcher to run,
 ##		  rather than running it, so arguments and the exit code go through
 ##		  as they are.
+##		- 2026-10-29: Role holders go into the budget from year down to
+##		  frequent, so a burst of builds can't push out the week and day ones.
+##		  Another user's run, such as one through sudo, is found by its comm
+##		  and first argument.

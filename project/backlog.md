@@ -232,20 +232,6 @@
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
 	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
 
-- The dogfood launcher's rotation can't see a pool version another user runs, such as through sudo.
-	- ID: 2026102819305559
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-193055
-	- Opened by: 2026102814341417's sweep
-	- Related IDs: 2026102814341417
-	- Incorrect behavior [Bug]: `Get-RunningPath` in `utility/dogfood_tukfs-hash.ps1` reads each process's image path, which is empty for another user's. A pool version a root run started can be removed while it runs. The run isn't hurt, since the file is only unlinked.
-	- Expected behavior [Bug]: design.md, "Build and release": old versions never go while one is running.
-	- Possible cause [Bug]: A run through the fixed name has `tukfs-hash` as its comm and the link as `argv[0]`, so neither says which version it started. Keeping every version while any such run is seen would hold the pool over budget for a long scan.
-	- Origin: `4a1977a`. Its help says a process that can't be read isn't protected. Read only.
-	- Note: `fInUse` in `cicd/cicd.bash` matches by comm and `argv[0]` for the same case since 2026102814341417.
-
 - Attributes are written when a root is inside a git work tree.
 	- ID: 2026102814341413
 	- Type: Bug
@@ -444,18 +430,6 @@
 		- The exit code list has 130 for a second signal.
 		- The `gone` help has README's `dir-error` rule.
 
-- A burst of dogfood builds pushes the week and day versions out of the pool before the newer hour ones.
-	- ID: 2026102814341441
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 41
-	- Origin: `4a1977a`. Confirmed with 11 builds in 2 hours under a fake home.
-	- Requirements [Feature]:
-		- In `Select-Budget`, rank role holders by role from year down to frequent, then newest first.
-	- Note: The roles add up to 17 against a cap of 10, so the coarse ones lose.
-
 - The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
 	- ID: 2026102814341442
 	- Type: Enhancement
@@ -466,6 +440,51 @@
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+
+- The dogfood launcher's rotation can't see a pool version another user runs, such as through sudo.
+	- ID: 2026102819305559
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No, the dogfood stage runs only in a run with no options, the quick gate lints the script, and the check below runs it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-193055
+	- Opened by: 2026102814341417's sweep
+	- Related IDs: 2026102814341417
+	- Incorrect behavior [Bug]: `Get-RunningPath` in `utility/dogfood_tukfs-hash.ps1` reads each process's image path, which is empty for another user's. A pool version a root run started can be removed while it runs. The run isn't hurt, since the file is only unlinked.
+	- Expected behavior [Bug]: design.md, "Build and release": old versions never go while one is running.
+	- Possible cause [Bug]: A run through the fixed name has `tukfs-hash` as its comm and the link as `argv[0]`, so neither says which version it started. Keeping every version while any such run is seen would hold the pool over budget for a long scan.
+	- Origin: `4a1977a`. Its help says a process that can't be read isn't protected. Read only.
+	- Note: `fInUse` in `cicd/cicd.bash` matches by comm and `argv[0]` for the same case since 2026102814341417.
+	- Reproduced [Bug]: Yes, with a stand-in that makes its exe link unreadable, run by a version's path and by the fixed name. Both versions were removed while running.
+	- Actual cause [Bug]: Only the image path was read, and it's empty for another user's process.
+	- Actual fix [Bug]: `Get-RunningVersion` replaces `Get-RunningPath`. Where the image path is empty it reads the comm and `argv[0]`, and skips a path to a file outside the pool, as `fInUse` does. A version's name in them holds that version by its stamp, so a role rename since doesn't lose it. A run through the fixed name holds the newest version that had come into the pool before the run started. A new build's pool file now takes the time it came in as its write time, since the name keeps the build's.
+	- Decisions:
+		- One version per run through the fixed name, not every version, so a long scan doesn't hold the pool over budget.
+		- The write time marks when a version came in. Nothing else read it, and the copy kept the build's. Versions copied in before this keep the build's time, which is earlier, so a run through the fixed name could hold a later version than the one it started, until those versions age out.
+		- Another user's run of any `tukfs-hash` with a bare `argv[0]`, or a path this user can't see, holds one version too, as with `fInUse`.
+		- The comm is read before anything else, so rotation costs the same CPU as before. Verified: about 2.4 s user plus system both ways, with 1564 processes on the box.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO`, with the new stand-in `nodump.c`: another user's run by a version's path, renamed since, and by the fixed name after 9 newer builds, each stays and goes once stopped, and a run of another file named `tukfs-hash` holds nothing. Verified: the 2 hold cases failed on `HEAD`, and all 38 cases pass after. A run through sudo itself wasn't done.
+	- Swept: `Get-Process` and `.Path` in both `.ps1` files. `Invoke-Rotation` is the only caller. `fInUse` in `cicd/cicd.bash` already covers the stage.
+	- Closed: 20261028-214159
+
+- A burst of dogfood builds pushes the week and day versions out of the pool before the newer hour ones.
+	- ID: 2026102814341441
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate lints the script, and the check below runs it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 41
+	- Origin: `4a1977a`. Confirmed with 11 builds in 2 hours under a fake home.
+	- Requirements [Feature]:
+		- In `Select-Budget`, rank role holders by role from year down to frequent, then newest first.
+	- Note: The roles add up to 17 against a cap of 10, so the coarse ones lose.
+	- Progress log:
+		- 2026-10-29: `Select-Budget` takes the newest, then the oldest, then role holders from year down to frequent, newest first within each, then spares. design.md, "Build and release", says so.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO` keeps 9 versions with their roles, adds 11 builds from today, and checks that every year, month, week and day version stays. Verified: on `HEAD` 2 of 4 were dropped, and all 38 cases pass after.
+	- Closed: 20261028-214159
 
 - `test-ids.py check` passes on tests and checks it can't see.
 	- ID: 2026102814341440
