@@ -29,32 +29,6 @@
 
 ## Issues
 
-- `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
-	- ID: 2026102814341403
-	- Type: Bug
-	- Status: Waiting on UAT
-	- Needs local test suite run?: No
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 3
-	- Origin: the lock open is from `f05c368`, the hand-back from `422efff` and `65e5872`. An earlier item looked at `give_back` for its error messages only. Confirmed.
-	- Steps to reproduce [Bug]:
-		- `ln -s elsewhere/made-by-lock db.sqlite.lock`.
-		- `SUDO_UID=1001 SUDO_GID=1001 strace -e openat,chown tukfs-hash prune --db db.sqlite`.
-	- Incorrect behavior [Bug]: The lock open has no `O_NOFOLLOW` and creates the link's target. `chown` then follows the link. The database name, `-wal` and `-shm` go the same way. README has the database in the user's own folder, so any process running as that user can point the lock at a system file before the next `sudo` run.
-	- Expected behavior [Bug]: A link at any of the 4 names is refused, and nothing outside them changes owner.
-	- Reproduced [Bug]: Yes, as a normal user with strace. The root case wasn't run.
-	- Probable fix [Bug]: Open the lock with `O_NOFOLLOW` from the folder's fd, refuse a database that's a link, and hand back with `fchown` on those fds, regular files only.
-	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
-	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
-	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
-	- Actual cause: The lock was opened with no `O_NOFOLLOW`, the database by name with SQLite following a link at it, and the handover used `chown`, which follows links.
-	- Fix: The lock opens with `O_NOFOLLOW` and must be a regular file. Both database opens pass `SQLITE_OPEN_NOFOLLOW`. `hand_over` opens each name with `O_NOFOLLOW`, checks it's a regular file, and uses `fchown` on that fd. A link at a name is reported as one.
-	- Note: SQLite already opens `-wal` and `-shm` with `O_NOFOLLOW`, so dejds and dejdt passed before the fix too. They stay as guards. The refusal there reads "unable to open database file", which doesn't name the link.
-	- Note: A link in a parent folder of the database is still followed. The parent is resolved once at the start, and the folder is the user's own choice.
-	- Test case: dejdp to dejdt, step 24 of `tests/integration.bash`, with the own ids as `SUDO_UID` and `SUDO_GID`. Before the fix dejdq got "0 none" and dejdr "0 made". And dejdv, `a_link_is_not_handed_over`, not run before the fix.
-	- Swept: `scan::lock`, `scan::hand_over`, `db::open_rw` and `db::open_ro`, which every command uses. The callers in `scan::run`, `accept::run` and `prune` all go through these. The root case wasn't run.
-
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
 	- Type: Bug
@@ -444,6 +418,47 @@
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+
+- A link at the database's name, `-wal` or `-shm` is refused as "unable to open database file", which doesn't say it's a link.
+	- ID: 2026102822062342
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-220623
+	- Opened by:
+	- Related IDs: 2026102814341403
+	- Progress log:
+		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database", not the path.
+		- Note: Found while testing 2026102814341403 as root.
+
+- `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
+	- ID: 2026102814341403
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 3
+	- Origin: the lock open is from `f05c368`, the hand-back from `422efff` and `65e5872`. An earlier item looked at `give_back` for its error messages only. Confirmed.
+	- Steps to reproduce [Bug]:
+		- `ln -s elsewhere/made-by-lock db.sqlite.lock`.
+		- `SUDO_UID=1001 SUDO_GID=1001 strace -e openat,chown tukfs-hash prune --db db.sqlite`.
+	- Incorrect behavior [Bug]: The lock open has no `O_NOFOLLOW` and creates the link's target. `chown` then follows the link. The database name, `-wal` and `-shm` go the same way. README has the database in the user's own folder, so any process running as that user can point the lock at a system file before the next `sudo` run.
+	- Expected behavior [Bug]: A link at any of the 4 names is refused, and nothing outside them changes owner.
+	- Reproduced [Bug]: Yes, as a normal user with strace. The root case wasn't run.
+	- Probable fix [Bug]: Open the lock with `O_NOFOLLOW` from the folder's fd, refuse a database that's a link, and hand back with `fchown` on those fds, regular files only.
+	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
+	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
+	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
+	- Actual cause: The lock was opened with no `O_NOFOLLOW`, the database by name with SQLite following a link at it, and the handover used `chown`, which follows links.
+	- Fix: The lock opens with `O_NOFOLLOW` and must be a regular file. Both database opens pass `SQLITE_OPEN_NOFOLLOW`. `hand_over` opens each name with `O_NOFOLLOW`, checks it's a regular file, and uses `fchown` on that fd. A link at a name is reported as one.
+	- Note: SQLite already opens `-wal` and `-shm` with `O_NOFOLLOW`, so dejds and dejdt passed before the fix too. They stay as guards. The refusal there reads "unable to open database file", which doesn't name the link.
+	- Note: A link in a parent folder of the database is still followed. The parent is resolved once at the start, and the folder is the user's own choice.
+	- Test case: dejdp to dejdt, step 24 of `tests/integration.bash`, with the own ids as `SUDO_UID` and `SUDO_GID`. Before the fix dejdq got "0 none" and dejdr "0 made". And dejdv, `a_link_is_not_handed_over`, not run before the fix.
+	- Swept: `scan::lock`, `scan::hand_over`, `db::open_rw` and `db::open_ro`, which every command uses. The callers in `scan::run`, `accept::run` and `prune` all go through these. The root case wasn't run.
+	- Acceptance signoff: Self-closed: dejdp to dejdv passed in the round's full run at 9a36d46, and the root case passed as uid 0 in a user namespace with other ids mapped, so the hand-back really changed owners.
+	- Closed: 20261028-220623
+	- Stand-in: root in a user namespace in place of sudo, with `SUDO_UID` and `SUDO_GID` set to a second mapped id. `scan`, `accept` and `prune` each handed the database and lock back with no links, and refused a link at each of the 4 names, to nothing and to a file owned by root. No target was made, and no root file changed owner or bytes. The same check against a stand-in for the old behavior failed 24 of 28.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
