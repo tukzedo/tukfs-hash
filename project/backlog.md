@@ -117,7 +117,8 @@
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on automated testing
+	- Needs local test suite run?: The Other hosts step on vmDebARM64, in `--backlog-run-full` or `--backlog-run-quick remote`, for make, test and gone over ssh with the mark.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 10
@@ -127,6 +128,20 @@
 	- Expected behavior [Bug]: The house rule: a recursive removal only takes a path the script made and proves it owns. `fSweepStale` and the integration test's sweep both need their mark.
 	- Probable fix [Bug]: Have `make` write a mark, and have the sweep need the mark and `-O`.
 	- Note: `box-side.bash make` can be run here with `HOST_TEMP` pointed at a temp folder, so the test needs no test box.
+	- Reproduced [Bug]: Yes, here with `HOST_TEMP` on a temp folder. The hand-made folder and a kept integration test folder were both removed.
+	- Actual cause [Bug]: The sweep went by name, age and a dead `run.pid` only, and `make` left nothing to tell its own folders apart.
+	- Progress log:
+		- 2026-10-28: `make` writes `.box-run` in each folder it makes. The sweep, `test DIR` and `gone DIR` all need it, as a plain file, in a folder that's ours and not a link, through one check, `fMarked`. The 2-day wait stays, per 2026102518150001.
+		- 2026-10-28: The integration test's own sweep needed its mark already, and now needs `-O` too.
+		- 2026-10-28: Verified: `remote-check.bash box` passes 14 cases, and its 5 new ones fail on the code from before. The issue's steps leave both folders. `temp-ctr-check.bash it` passes. `--backlog-run-quick` passes in 1m 47s, shellcheck included. The markdown check is clean.
+	- Decisions:
+		- `test DIR` refuses an unmarked folder up front, since it writes `run.pid` and `tmp/` there before its removal would refuse.
+		- Work folders on the VM from before the mark aren't swept now. Any there are left for a hand cleanup.
+	- Actual fix [Bug]: The `.box-run` mark and `fMarked` in `cicd/utility/box-side.bash`, and `-O` in the sweep in `tests/integration.bash`. design.md, "Build and release", says so.
+	- Branch: round-20261029
+	- Commit: `db2c70b`
+	- Test case: none with an ID. `remote-check.bash REPO box`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `rm -rf`, `fSafeRm` and stale sweep in `cicd/` and `tests/`. `cicd.bash`'s `fSweepStale` and the leak checks' `scratch.bash` already need their mark and `-O`. `remote-tests.bash` copies the stage with tar, which keeps the mark.
 
 - The publish stage fails on a box with no rar, though cicd turns the backup off for that case.
 	- ID: 2026102814341411
