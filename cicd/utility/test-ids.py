@@ -65,15 +65,22 @@ def fWhen(tid: str) -> str:
 RUST_GLOB = "src/*.rs"
 RUST_TEST = re.compile(r"^\s*#\[test\]$")
 RUST_ID = re.compile(rf'^\s*let _id = test_id\("({ID})"\);$')
-##	Every #[test] in a tracked file. One outside RUST_GLOB would run with no
-##	ID and nothing here saying so.
-STRAY = re.compile(r"^\s*#\[test\]")
+##	Any test attribute, in any spelling, such as `#[test] // note` or
+##	`#[tokio::test]`. One that RUST_TEST doesn't take would run unseen. Also
+##	every one in a tracked file outside RUST_GLOB, where nothing here looks.
+ANY_TEST = re.compile(r"^\s*#\s*\[\s*(?:\w+\s*::\s*)*test\s*[\](]")
 ##	The integration test's checks: check, expect and skip calls, each with its
 ##	ID as the first word. A skip stands for a check that didn't run, so its
 ##	ID has to be one a check has. A word that's a positional parameter is a
-##	helper passing it on.
+##	helper passing it on. Both patterns read the file through fShellCode, so
+##	quoted text and comments can't match.
 IT_FILE = "tests/integration.bash"
 IT_CALL = re.compile(r"(?:^|;|&&|\|\||\bthen\b|\belse\b|\bdo\b|\{)\s*(check|expect|skip|ok|bad)\s+(\S+)")
+##	Any call of those, wherever it is. One IT_CALL missed, such as after if,
+##	!, ( or $(, is a check nothing here sees, or one whose status line a $(
+##	swallows.
+IT_ANY = re.compile(r"(?<![\w$./=:@%+-])(check|expect|skip|ok|bad)(?![\w(=+-])")
+HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)(\w+)\2")
 IT_HELPER = re.compile(r'^"\$\{[1-9]\}"$')
 IT_NAME = re.compile(r'\s+("(?:[^"\\]|\\.)*"|\'[^\']*\'|\S+)')
 SUITES = ("unit", "it")
@@ -84,8 +91,68 @@ RUST_MOD = re.compile(r"^(\s*)(?:pub\s+)?mod\s+(\w+)\s*\{")
 RUST_FN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)")
 
 
-def fLiveLines(path: Path) -> list[str]:
-    return ["" if line.lstrip().startswith("#") else line for line in path.read_text(encoding="utf-8").splitlines()]
+##	The script's lines with only its code left, each the same length as
+##	before: quoted text and heredoc bodies become "_", comments become spaces.
+##	A $( ) inside double quotes stays code. Close enough for bash as this
+##	project writes it, not a full parser.
+def fShellCode(text: str) -> list[str]:
+    out = list(text)
+    stack = ["code"]
+    heredocs: list[tuple[str, bool]] = []
+    i, size = 0, len(text)
+    while i < size:
+        c, top = text[i], stack[-1]
+        if c == "\n" and top != "sq":
+            i += 1
+            for word, tabs in heredocs:
+                while i < size:
+                    end = text.find("\n", i)
+                    end = size if end < 0 else end
+                    body = text[i:end]
+                    out[i:end] = "_" * len(body)
+                    i = end + 1
+                    if (body.lstrip("\t") if tabs else body) == word:
+                        break
+            heredocs = []
+            continue
+        if top == "sq":
+            if c == "'":
+                stack.pop()
+            elif c != "\n":
+                out[i] = "_"
+        elif top == "dq":
+            if c == '"':
+                stack.pop()
+            elif text.startswith("$(", i):
+                stack.append("sub")
+                i += 1
+            elif c != "\n":
+                out[i] = "_"
+                if c == "\\" and i + 1 < size and text[i + 1] != "\n":
+                    out[i + 1] = "_"
+                    i += 1
+        elif c == "\\":
+            i += 1
+        elif c == "'":
+            stack.append("sq")
+        elif c == '"':
+            stack.append("dq")
+        elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+            end = text.find("\n", i)
+            end = size if end < 0 else end
+            out[i:end] = " " * (end - i)
+            i = end
+            continue
+        elif c == "(":
+            stack.append("sub")
+        elif c == ")" and top == "sub":
+            stack.pop()
+        elif c == "<" and (doc := HEREDOC.match(text, i)) and not text.startswith("<<<", i):
+            heredocs.append((doc.group(3), doc.group(1) == "-"))
+            i = doc.end()
+            continue
+        i += 1
+    return "".join(out).split("\n")
 
 
 ##	The path libtest names a test's thread by: the file's module, then each
@@ -118,6 +185,8 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
         lines = path.read_text(encoding="utf-8").splitlines()
         for n, line in enumerate(lines):
             if not RUST_TEST.match(line):
+                if ANY_TEST.match(line):
+                    bad.append(f"{rel}:{n + 1}: a test attribute this check can't read; put #[test] alone on its line")
                 continue
             m = n + 1
             while m < len(lines) and (not lines[m].strip() or lines[m].lstrip().startswith("#[")):
@@ -135,13 +204,16 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
     )
     for rel in sorted(t for t in tracked if fnmatch.fnmatch(t, "*.rs") and t not in placed):
         for n, line in enumerate((repo / rel).read_text(encoding="utf-8").splitlines()):
-            if STRAY.match(line):
+            if ANY_TEST.match(line):
                 bad.append(f"{rel}:{n + 1}: a test outside {RUST_GLOB}, where nothing here looks")
 
     skips: list[tuple[str, str, int]] = []
-    for n, line in enumerate(fLiveLines(repo / IT_FILE)):
-        for hit in IT_CALL.finditer(line):
-            word, first = hit.group(1), hit.group(2)
+    it_text = (repo / IT_FILE).read_text(encoding="utf-8")
+    for n, (line, code) in enumerate(zip(it_text.split("\n"), fShellCode(it_text), strict=True)):
+        seen = set()
+        for hit in IT_CALL.finditer(code):
+            seen.add(hit.start(1))
+            word, first = hit.group(1), line[hit.start(2) : hit.end(2)]
             if IT_HELPER.match(first):
                 continue
             if word in ("ok", "bad"):
@@ -156,6 +228,11 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
                 if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'":
                     text = text[1:-1]
                 found.append((first, IT_FILE, n + 1, "it", text))
+        bad.extend(
+            f"{IT_FILE}:{n + 1}: a {hit.group(1)} this check can't read; start a statement with it, or quote it"
+            for hit in IT_ANY.finditer(code)
+            if hit.start(1) not in seen
+        )
     have = {tid for tid, *_ in found}
     for tid, file, line_no in skips:
         if tid not in have:
@@ -250,3 +327,4 @@ if __name__ == "__main__":
 ##		            same times.
 ##		2026-10-25  list, for cicd.bash --list.
 ##		2026-10-28  Every pattern compiled.
+##		2026-10-28  Flags a test attribute or a check call it can't read.

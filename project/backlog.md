@@ -444,19 +444,6 @@
 		- The exit code list has 130 for a second signal.
 		- The `gone` help has README's `dir-error` rule.
 
-- `test-ids.py check` passes on tests and checks it can't see.
-	- ID: 2026102814341440
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 40
-	- Origin: `d6e7857`. Confirmed on a made-up tree. The current tree is clean.
-	- Requirements [Feature]:
-		- In `src/*.rs`, flag any test attribute `RUST_TEST` doesn't take, such as `#[test] // note`.
-		- In the integration test, flag any `check`, `expect` or `skip` call `IT_CALL` missed, such as after `if`, `(`, `!` or `$(`.
-	- Note: `test-ids.py` already takes a tree to check. A made-up tree with each missed form is its test.
-
 - A burst of dogfood builds pushes the week and day versions out of the pool before the newer hour ones.
 	- ID: 2026102814341441
 	- Type: Enhancement
@@ -479,6 +466,32 @@
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+
+- `test-ids.py check` passes on tests and checks it can't see.
+	- ID: 2026102814341440
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 40
+	- Origin: `d6e7857`. Confirmed on a made-up tree. The current tree is clean.
+	- Requirements [Feature]:
+		- In `src/*.rs`, flag any test attribute `RUST_TEST` doesn't take, such as `#[test] // note`.
+		- In the integration test, flag any `check`, `expect` or `skip` call `IT_CALL` missed, such as after `if`, `(`, `!` or `$(`.
+	- Note: `test-ids.py` already takes a tree to check. A made-up tree with each missed form is its test.
+	- Progress log:
+		- 2026-10-28: `test-ids.py check` now fails on any test attribute in `src/*.rs` that `RUST_TEST` doesn't take, such as `#[test] // note`, `#[ test ]`, `#[tokio::test]` or `#[test] fn x() {}`. The check for tracked `.rs` files outside `src/` uses the same pattern.
+		- 2026-10-28: It reads the integration test with quoted text, comments and heredoc bodies masked out, a `$( )` in double quotes kept as code, and fails on any `check`, `expect`, `skip`, `ok` or `bad` call `IT_CALL` didn't take, such as after `if`, `elif`, `(`, `!`, `|` or `$(`.
+		- 2026-10-28: Verified: the check passes on the tree, and `list` prints the same 246 lines as before. `test-ids-check.bash REPO` passes 14 of 14. On the script from before, its 11 missed-form cases fail and its 3 pass cases pass. `--backlog-run-quick` passed in 1m 52s.
+	- Decisions:
+		- A missed form is flagged rather than taken, so the file keeps one form for a call. A call after `if` or `!` reads its return, and one in `$( )` swallows its status line.
+		- `ok` and `bad` are flagged the same way, as the existing check does when `IT_CALL` finds them.
+		- An unquoted `check`, `expect` or `skip` word that isn't a call, such as `[[ ${x} == check ]]`, is flagged too. The message says to quote it. None is in the file.
+	- Swept: every pattern in `test-ids.py`, the old `STRAY` check now on the same pattern, and `#[test]` in `cicd/` and `tests/`. Only `codeql-scan.bash` writes one, into an untracked bait file, as before.
+	- Branch: round-20261029
+	- Test case: `private/claude_simple/tools/test-ids-check.bash REPO`, no test ID, since private checks have none. Each case is a made-up tree with one form changed.
+	- Acceptance signoff: Self-closed: a check-tool change, with its check failing on the code from before.
+	- Closed: 20261028-212700
 
 - A build from a tree with uncommitted changes gets HEAD's build number, with no mark.
 	- ID: 2026102814341434
