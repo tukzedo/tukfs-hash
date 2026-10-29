@@ -444,18 +444,6 @@
 		- The exit code list has 130 for a second signal.
 		- The `gone` help has README's `dir-error` rule.
 
-- A build from a tree with uncommitted changes gets HEAD's build number, with no mark.
-	- ID: 2026102814341434
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 34
-	- Origin: `1282504`. Plausible, read only.
-	- Requirements [Feature]:
-		- When the frozen tree differs from HEAD's, mark the build number, and never set the release flag.
-	- Note: A default run dogfoods that build and then commits the work, so `--version` names the commit before it. On a tagged HEAD it would print as the release.
-
 - `test-ids.py check` passes on tests and checks it can't see.
 	- ID: 2026102814341440
 	- Type: Enhancement
@@ -491,6 +479,31 @@
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+
+- A build from a tree with uncommitted changes gets HEAD's build number, with no mark.
+	- ID: 2026102814341434
+	- Type: Enhancement
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 34
+	- Origin: `1282504`. Plausible, read only.
+	- Requirements [Feature]:
+		- When the frozen tree differs from HEAD's, mark the build number, and never set the release flag.
+	- Note: A default run dogfoods that build and then commits the work, so `--version` names the commit before it. On a tagged HEAD it would print as the release.
+	- Progress log:
+		- 2026-10-29: cicd.bash compares the tree being built, as `git add --all` would commit it, with HEAD's. When they differ, the build number gets `-dirty`, the release flag stays off, and the date shows. The run on the frozen copy works it out from the copy, and a `--no-freeze` run again after its format stage. build.rs takes `TUKFS_HASH_DIRTY`, and refuses it with the release flag. The release check and the integration test's version line take the mark.
+		- 2026-10-29: Verified: `build-mark-check.bash REPO` passes 21 of 21, and fails 10 with `--head`, on the code from before. `--backlog-run-quick` and `--backlog-run-quick release` pass, the second with its release check on `build dejne-dirty` in 3 zones. The markdown checks pass.
+	- Decisions:
+		- The mark is `-dirty`, as `git describe --dirty` gives, after the number and before the date: `build debj2-dirty (2026-10-23)`. The number stays the commit's, so the build still traces to where it started.
+		- Untracked files that aren't ignored count, since the frozen copy and the tree the gate records take them too.
+		- The merge gate on a pushed commit is never marked, since it builds that commit as it is.
+		- In a run with a frozen copy, the plan's Version line is worked out before the format stage, so a format that rewrites a clean tree shows there unmarked. The build itself gets the mark.
+	- Branch: round-20261029
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `private/claude_simple/tools/build-mark-check.bash REPO [--head] [--no-cargo|--only-cargo]`. The release stage's `native --version shows the stamped build` check also fails a dirty build that shows as clean or as a release, and deb0d takes the mark.
+	- Swept: every reader of `TUKFS_HASH_BUILD`, `TUKFS_HASH_RELEASE`, `build_number`, `build_release` and `--version` in `cicd/`, `tests/`, `utility/`, `build.rs` and `src/`: the image's `-e` list, the release check, integration step 21, which vmDebARM64 runs from the same tree, design.md and the changelog. Dogfood and the gif don't read the version.
+	- Closed: 20261028-211920
 
 - A TERM to cicd.bash waits for the profiler, cross build, packages and release checks to finish before it stops.
 	- ID: 2026102814341436

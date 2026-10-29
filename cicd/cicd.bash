@@ -726,21 +726,37 @@ fBuildNumber(){   ## fBuildNumber EPOCH_SECONDS
 ## over it.
 ## A release is a commit tagged v<version>, so tag before building one. Any
 ## other build prints its date too.
-build_number=""; build_release=""; build_date=""
-commit_time="$(git -C "${root}" log -1 --format=%ct "${gate_rev:-HEAD}" 2>/dev/null || true)"
-if [[ -n "${commit_time}" ]]; then
+## A tree that isn't the commit's, such as uncommitted work in the frozen copy,
+## gets -dirty after the number and is never a release, since the number names
+## a commit that doesn't hold what was built. The run on the frozen copy works
+## it out again from the copy, and a run with no copy does after its format
+## stage, which can rewrite the tree.
+build_number=""; build_release=""; build_date=""; build_mark=""
+fBuildStamp(){
+	local commit_time="" commit_tags="" head_tree="" tree=""
+	build_number=""; build_release=""; build_date=""; build_mark=""
+	commit_time="$(git -C "${root}" log -1 --format=%ct "${gate_rev:-HEAD}" 2>/dev/null || true)"
+	[[ -n "${commit_time}" ]] || return 0
 	build_number="$(fBuildNumber "${commit_time}")" || fDie "no build number from the commit time"
 	export "${BUILD_ENV_NAME}=${build_number}"
+	## The gate builds the pushed commit as it is.
+	if [[ -z "${gate_rev}" ]]; then
+		head_tree="$(git -C "${root}" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" || fDie "no tree for HEAD"
+		tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "could not read the tree being built"
+		if [[ "${tree}" != "${head_tree}" ]]; then build_mark="-dirty"; fi
+	fi
 	commit_tags="$(git -C "${root}" tag --points-at "${gate_rev:-HEAD}" 2>/dev/null || true)"
-	if [[ $'\n'"${commit_tags}"$'\n' == *$'\n'"v$(fVersion)"$'\n'* ]]; then
+	if [[ -z "${build_mark}" && $'\n'"${commit_tags}"$'\n' == *$'\n'"v$(fVersion)"$'\n'* ]]; then
 		build_release=1
 	else
 		build_date=" ($(date -d "@$(( (10#${commit_time} - 946684800 + 30) / 60 * 60 + 946684800 ))" +%F))"
 	fi
 	export "${BUILD_RELEASE_ENV_NAME}=${build_release}"
+	export "${BUILD_DIRTY_ENV_NAME}=${build_mark:+1}"
 	## The packages' mtimes, and anything else that would read the clock.
 	export SOURCE_DATE_EPOCH="${commit_time}"
-fi
+}
+fBuildStamp
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -808,7 +824,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "${APP_NAME} ${run_kind}"
 	fEcho_Clean
 	fEcho_Clean "Repo root ......: ${root}"
-	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_date}}"
+	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_mark}${build_date}}"
 	fEcho_Clean "Jobs ...........: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}; checked again at each step"
 	cpu_shown="${CPU_CAP}"
 	fEcho_Clean "Temp dir .......: ${run_tmp}"
@@ -1763,7 +1779,7 @@ if [[ -n "${frozen_root}" ]]; then
 	fRunFrozen
 else
 	## The run on the frozen copy only checks, and only in the check-only modes.
-	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fi
+	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fBuildStamp; fi
 	if ((! inner_run)) && { ((record_green)) || ((${#GIT_PUBLISH[@]})); }; then tested_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
 	if ((record_green && ! inner_run)); then green_tree="${tested_tree}"; fi
 	fStageBuild
@@ -1861,3 +1877,5 @@ exit 0
 ##		- 2026-10-29: Sync and publish refuse while an earlier run's stash is
 ##		  left. The cache prune dates entries by rust-toolchain.toml, and leaves
 ##		  a cache dir alone while another run builds in it.
+##		- 2026-10-29: A build of a tree that differs from the commit's gets
+##		  -dirty after its build number, and is never a release.

@@ -181,6 +181,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A build that isn't a release shows its date after the build number, such as `build debj2 (2026-10-23)`. The date is worked out from the build number when `--version` runs, in the local time zone of whoever runs it, so the same binary can show a different day in another zone. A release is a commit tagged `v<version>`, so the tag goes on before the release is built. A release build leaves the date off. The release check runs `--version` in the box's zone, UTC+14 and UTC-12, since the last 2 never share a date.
 
+- A build of a tree that differs from its commit's, such as one with uncommitted work in the frozen copy, gets `-dirty` after the build number, such as `build debj2-dirty (2026-10-23)`, and is never a release, tag or not. The number still names the commit it was built on. Untracked files that aren't ignored count, the same as for the tree the gate records. The merge gate builds the pushed commit, so it's never marked (2026102814341434).
+
 - Feature branches merge into `dev` with `--no-ff`. A `dev` to `main` merge is a release, and gets tagged. Pulls are `--ff-only`.
 
 - The pipeline runs here, not on a hosted service. The pre-push hook runs `--merge-gate` on a push to `main`, and a push to `dev` or a feature branch isn't gated. The merge gate runs every check of a run with no options, so it takes most of an hour. A push to `main` that changes only the paths in `cicd/docs-paths`, which are `.md` files and `assets/`, skips it.
