@@ -10,6 +10,7 @@
 
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, ToSql, params};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -105,7 +106,11 @@ pub fn init() {
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
 	let fresh = !path.exists();
-	let conn = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+	// A link at the name is refused. SQLite opens `-wal` and `-shm` with
+	// O_NOFOLLOW already, so under sudo nothing is made through a link.
+	let conn =
+		Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
+			.map_err(|e| format!("{}: {e}", path.display()))?;
 	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
 	if fresh {
@@ -194,7 +199,9 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	init();
 	let conn = Connection::open_with_flags(
 		path,
-		OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+		OpenFlags::SQLITE_OPEN_READ_ONLY
+			| OpenFlags::SQLITE_OPEN_NO_MUTEX
+			| OpenFlags::SQLITE_OPEN_NOFOLLOW,
 	)
 	.map_err(|e| format!("{}: {e}", path.display()))?;
 	conn.busy_timeout(Duration::from_secs(30)).ok();
@@ -269,6 +276,32 @@ pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prio
 		}
 		Err(e) => vec![Err(e.to_string()); paths.len()],
 	}
+}
+
+/// Paths whose last mismatch came after their last good read, so nothing has
+/// read them clean or accepted them since. A mismatch keeps the old row, so
+/// its read date alone would skip the file again. See design.md, "Skipping",
+/// row `db-mismatch`.
+pub fn open_misses(conn: &Connection) -> Result<HashSet<Vec<u8>>, String> {
+	let e = |e: rusqlite::Error| format!("database: {e}");
+	let mut st = conn
+		.prepare(
+			"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
+			WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
+		)
+		.map_err(e)?;
+	let rows = st
+		.query_map(
+			[Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch],
+			|r| {
+				Ok(match r.get_ref(0)? {
+					ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
+					_ => Vec::new(),
+				})
+			},
+		)
+		.map_err(e)?;
+	rows.collect::<rusqlite::Result<_>>().map_err(e)
 }
 
 /// A file's sums and stat, as read, for the writer to store.
@@ -807,6 +840,30 @@ mod tests {
 		assert_eq!(lookup(&mut st, b"/x/a").unwrap().unwrap().seen_run, 2);
 		assert_eq!(lookup(&mut st, b"/x/b").unwrap().unwrap().seen_run, 1);
 		drop(st);
+		close_rw(conn).unwrap();
+	}
+
+	// design.md, "Skipping", row `db-mismatch`: open until a later good read.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn open_misses_are_the_unread_ones() {
+		let _id = test_id("dejdf");
+		let (_dir, p) = temp_db("misses");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 3);
+			INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run) VALUES
+				('/a', 1, 3, 9, 1, 100, 1), ('/b', 1, 3, 9, 1, 300, 1), ('/d', 1, 3, 9, 1, 100, 1);
+			INSERT INTO events (run_id, at_us, kind, path) VALUES
+				(1, 200, 'b3-db-mismatch', '/a'), (1, 200, 'b3-xattr-mismatch', '/a'),
+				(1, 200, 'b3-db-mismatch', '/b'), (1, 50, 'b3-xattr-mismatch', '/c'),
+				(1, 200, 'cache-mismatch', '/d'), (1, 200, 'read-error', '/d'),
+				(1, 50, 'b2b-rmlint-mismatch', x'2f65ff');",
+		)
+		.unwrap();
+		let mut got: Vec<_> = open_misses(&conn).unwrap().into_iter().collect();
+		got.sort();
+		assert_eq!(got, [&b"/a"[..], b"/c", b"/e\xff"]);
 		close_rw(conn).unwrap();
 	}
 

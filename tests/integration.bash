@@ -217,6 +217,9 @@ last_run() { q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM 
 rc="$(scan --since "${tomorrow}")"
 check ddy6r "reported again on the next run" "${rc} $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
 check ddy6s "attribute still kept" "$(xget "${tree}/big.bin" user.blake3.b64u)" "${x_before}"
+# The row still has the earlier good read's date, so a plain run would skip.
+rc="$(scan)"
+check dejdg "reported again on a plain run the same day" "${rc} $(last_run "AND kind LIKE '%-mismatch'")" "4 7"
 rc=0; (cd "${tree}" && "${bin}" accept --db "${db}" ./big.bin "sub dir/big-link.bin" rm.txt) > "${work}/accept.txt" 2>&1 || rc=$?
 check ddy6t "accept exit" "${rc}" 0
 check ddy6v "accept logged" "$(last_run "AND kind = 'accepted'")" 3
@@ -227,6 +230,14 @@ rc=0; "${bin}" accept --db "${db}" "${tree}/sub dir" "${tree}/small.txt" > /dev/
 check ddy6z "accept of a folder fails" "${rc}" 1
 rc="$(scan --since "${tomorrow}")"
 check ddy70 "clean after accept" "${rc} $(last_run "")" "0 0"
+# A read date later than now never skips, or a wrong clock would hide damage.
+ob="${tree}/sub dir/one byte"
+q "UPDATE paths SET hashed_us = hashed_us + 31536000000000 WHERE path = '${ob}'"
+fFlipByte "${ob}" 0 1
+rc="$(scan --since "${tomorrow}")"
+check dejdh "future read date: read and reported" "${rc} $(last_run "AND kind = 'b3-db-mismatch'")" "4 1"
+rc=0; "${bin}" accept --db "${db}" "${ob}" > /dev/null 2>&1 || rc=$?
+check dejdj "future read date: accepted" "${rc} $(scan --since "${tomorrow}")" "0 0"
 
 # 4. A real edit moves the time and is not a mismatch.
 sleep 0.01
@@ -649,6 +660,28 @@ elif [[ -e "${ns}/mounted" ]]; then
 else
 	skip deeby "scan with a mount point that isn't UTF-8 (no user namespace here)"
 fi
+
+# 24. Run through sudo, a link at the database or one of its 3 other names
+# would be followed as root and the target made or chowned (2026102814341403).
+# The own ids stand in for sudo's, so no root is needed.
+ln_case() {
+	local d="${work}/ln${1:-db}" rc=0
+	mkdir -p "${d}"
+	cp "${db}" "${d}/real.sqlite"
+	if [[ "${2}" == db ]]; then
+		ln -s "${d}/real.sqlite" "${d}/t.sqlite"
+	else
+		cp "${db}" "${d}/t.sqlite"
+		[[ "${2}" == none ]] || ln -s "${d}/target" "${d}/t.sqlite${1}"
+	fi
+	SUDO_UID="$(id -u)" SUDO_GID="$(id -g)" "${bin}" prune --db "${d}/t.sqlite" > "${d}/out.txt" 2>&1 || rc=$?
+	echo "${rc} $([[ -e "${d}/target" ]] && echo made || echo none)"
+}
+check dejdp "sudo prune, no links" "$(ln_case .none none)" "0 none"
+check dejdq "sudo prune, database name a link" "$(ln_case "" db)" "1 none"
+check dejdr "sudo prune, lock a link" "$(ln_case .lock link)" "1 none"
+check dejds "sudo prune, -wal a link" "$(ln_case -wal link)" "1 none"
+check dejdt "sudo prune, -shm a link" "$(ln_case -shm link)" "1 none"
 
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"

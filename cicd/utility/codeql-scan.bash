@@ -23,7 +23,8 @@
 ##		It runs on the dated nightly, since rust-analyzer wants rust-src.
 ##		The SARIF and findings.txt go in cicd/artifacts/codeql/, and the
 ##		database goes with the scratch dir. CodeQL is the pinned one in the
-##		leak check image, run with no network. With no docker, a noted skip.
+##		leak check image, run with no network. With no docker, a noted skip,
+##		which keeps a check-only run from recording its tree.
 ##		From shcl's cicd/utility/codeql-scan.bash.
 ##	Syntax:
 ##		codeql-scan.bash
@@ -59,6 +60,7 @@ if command -v codeql >/dev/null 2>&1 && [[ "$(codeql version --format=terse 2>/d
 if ((${#missing[@]})); then
 	((in_image)) && { echo "codeql-scan: the leak check image has no ${missing[*]}" >&2; exit 2; }
 	echo "note: codeql-scan: skipped, since ${leak_why:-the image is off}, and the host has no ${missing[*]}"
+	fLeakHostSkip codeql
 	exit 0
 fi
 export RUSTUP_TOOLCHAIN="${PIN_NIGHTLY}"

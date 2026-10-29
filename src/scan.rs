@@ -14,7 +14,7 @@ use crate::util::{
 };
 use crate::xattr::{self, OnFile};
 use rusqlite::OptionalExtension;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -293,6 +293,8 @@ struct Shared {
 	// blake2b for every file read, not only ones with a current rmlint set.
 	rmlint: bool,
 	mode: Mode,
+	// Never skipped until read clean or accepted.
+	open_misses: HashSet<Vec<u8>>,
 	tx: SyncSender<Msg>,
 }
 
@@ -402,12 +404,21 @@ pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 		));
 	}
 	let p = lock_path(db);
+	// Under sudo a link here would make and later chown a file of the user's
+	// choosing.
 	let f = OpenOptions::new()
 		.create(true)
 		.truncate(false)
 		.write(true)
+		.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
 		.open(&p)
-		.map_err(|e| format!("{}: {e}", p.display()))?;
+		.map_err(|e| match e.raw_os_error() {
+			Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
+			_ => format!("{}: {e}", p.display()),
+		})?;
+	if !f.metadata().is_ok_and(|m| m.file_type().is_file()) {
+		return Err(format!("{}: not a regular file; refused", p.display()));
+	}
 	// SAFETY: f is open for the length of the call.
 	if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
 		let e = io::Error::last_os_error();
@@ -455,15 +466,29 @@ fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	};
 	let mut failed = Vec::new();
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
-		let Ok(c) = crate::util::cpath(&p) else {
-			continue;
+		// By fd, so a link swapped in at the name isn't followed.
+		let f = match OpenOptions::new()
+			.read(true)
+			.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+			.open(&p)
+		{
+			Ok(f) => f,
+			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+			Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+				failed.push((p, io::Error::other("it's a symbolic link")));
+				continue;
+			}
+			Err(e) => {
+				failed.push((p, e));
+				continue;
+			}
 		};
-		// SAFETY: c is NUL-terminated and outlives the call.
-		if unsafe { libc::chown(c.as_ptr(), uid, gid) } == 0 {
-			continue;
-		}
-		let e = io::Error::last_os_error();
-		if e.kind() != io::ErrorKind::NotFound {
+		let given = match f.metadata() {
+			Ok(m) if m.file_type().is_file() => std::os::unix::fs::fchown(&f, Some(uid), Some(gid)),
+			Ok(_) => Err(io::Error::other("not a regular file")),
+			Err(e) => Err(e),
+		};
+		if let Err(e) = given {
 			failed.push((p, e));
 		}
 	}
@@ -489,6 +514,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let db_path = canonical_db(&o.db)?;
 	let _lock = lock(&db_path, &mounts)?;
 	let conn = db::open_rw(&db_path)?;
+	let open_misses = db::open_misses(&conn)?;
 
 	let started = now_us();
 	let Resumed {
@@ -529,6 +555,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
 		mode: o.mode,
+		open_misses,
 		tx,
 	});
 	let groups = groups(planned, &hands_off);
@@ -1487,7 +1514,7 @@ impl<'a> Worker<'a> {
 		let Some(md) = self.stat(job, rel) else {
 			return;
 		};
-		if self.judged_already(prior, &md) {
+		if self.judged_already(job, prior, &md) {
 			return;
 		}
 		let Some((file, before)) = self.open(job, rel) else {
@@ -1541,14 +1568,20 @@ impl<'a> Worker<'a> {
 		Some(md)
 	}
 
-	fn judged_already(&self, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
+	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch` and
+	// `resume-seen`.
+	fn judged_already(&self, job: &Job, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
 		let Some(p) = prior else {
 			return false;
 		};
+		let fresh = || {
+			(sh.cutoff_us..=now_us()).contains(&p.hashed_us)
+				&& !sh.open_misses.contains(job.path.as_os_str().as_bytes())
+		};
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
-		if (p.hashed_us >= sh.cutoff_us || p.seen_run == sh.run_id)
+		if (p.seen_run == sh.run_id || fresh())
 			&& p.bytes == md.len() as i64
 			&& p.mtime_us == mtime_us(md)
 			&& p.ino == md.ino() as i64
@@ -1620,9 +1653,13 @@ impl<'a> Worker<'a> {
 		else {
 			return false;
 		};
+		// Row `x-mismatch`.
+		let pbytes = job.path.as_os_str().as_bytes();
+		if sh.open_misses.contains(pbytes) {
+			return false;
+		}
 		st.skip_xattr.fetch_add(1, Relaxed);
 		self.links.passed(before);
-		let pbytes = job.path.as_os_str().as_bytes();
 		send(
 			sh,
 			hashed_msg(pbytes, &Sums { b3: d, b2b: None }, before, date),
@@ -1893,6 +1930,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			mode: Mode::Full,
+			open_misses: HashSet::new(),
 			tx,
 		};
 		(sh, rx)
@@ -2386,6 +2424,26 @@ mod tests {
 		assert!(hand_over(&db, me.uid(), me.gid()).is_empty());
 		let failed: Vec<PathBuf> = hand_over(&db, 0, 0).into_iter().map(|f| f.0).collect();
 		assert_eq!(failed, [db.clone(), lock_path(&db)]);
+	}
+
+	// A link at a name is named, not followed (2026102814341403).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no chown")]
+	fn a_link_is_not_handed_over() {
+		let _id = test_id("dejdv");
+		let d = scratch("scan_handover_link");
+		let db = d.join("t.sqlite");
+		fs::write(&db, "").unwrap();
+		let mut wal = db.as_os_str().to_owned();
+		wal.push("-wal");
+		std::os::unix::fs::symlink(d.join("target"), &wal).unwrap();
+		let me = fs::metadata(&db).unwrap();
+		let failed: Vec<PathBuf> = hand_over(&db, me.uid(), me.gid())
+			.into_iter()
+			.map(|f| f.0)
+			.collect();
+		assert_eq!(failed, [PathBuf::from(wal)]);
+		assert!(!d.join("target").exists());
 	}
 
 	#[test]

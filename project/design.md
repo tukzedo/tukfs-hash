@@ -23,6 +23,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The folder walk looks up each file's row before it queues the file, 256 at a time in one read transaction. A transaction per lookup cost most of the lookup, about a sixth of the CPU on small files. Each batch ends before it waits on the queue, so it doesn't hold back the writer's checkpoints for long.
 
+- Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
+
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
 
 - Pages are 16 KiB, to match the dataset's recordsize.
@@ -184,7 +186,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - The pipeline runs here, not on a hosted service. The pre-push hook runs `--merge-gate` on a push to `main`, and a push to `dev` or a feature branch isn't gated. The merge gate runs every check of a run with no options, so it takes most of an hour. A push to `main` that changes only the paths in `cicd/docs-paths`, which are `.md` files and `assets/`, skips it.
 	- A backlog worker runs `--backlog-run-quick`, alone or with the areas `--help` lists, and a round runs `--backlog-run-full` at its end. `--gate` and `--ci` are other names for `--backlog-run-quick` and `--merge-gate`.
 	- None of the 3 syncs, dogfoods, publishes, installs, rewrites a tracked file, or prompts. The demo gif they draw stays in the run's temp dir.
-	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again.
+	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again. It records once the demo gif has passed too, in the run that started, not in the one on the frozen copy. `--no-gif` makes a run partial (2026102814341404).
+	- In the 3 check-only modes a missing tool fails the run. The check scripts see this as `TUKFS_GATE_STRICT`. A check that needs the leak check image, on a box with no docker and without the tool, is a skip instead, and the run doesn't record its tree (2026102814341405).
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
 

@@ -166,12 +166,12 @@ QUIET_FLAG=""
 source "${here}/config.bash"
 
 ## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs
-## stages 2-7 only, and TUKFS_GREEN_TREE is the tree the copy holds. The
-## pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then
+## stages 2-7 only. It records no tree, since the gif comes after it, in the
+## run that started it. The pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then
 ## what gets copied, with nothing uncommitted.
 ## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count
 ## on from its.
-run_part="${TUKFS_RUN_PART:-}"; green_given="${TUKFS_GREEN_TREE:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
+run_part="${TUKFS_RUN_PART:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
 unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV TUKFS_STEP_PLAN
 case "${run_part}" in ''|build) ;; *) echo "TUKFS_RUN_PART=${run_part}: not build" >&2; exit 2 ;; esac
 if [[ -n "${plan_given}" && ! "${plan_given}" =~ ^[0-9]+( [a-z]+=[0-9]+)*$ ]]; then echo "TUKFS_STEP_PLAN=${plan_given}: not a step plan" >&2; exit 2; fi
@@ -236,7 +236,7 @@ while (($#)); do case "$1" in
 	## Dogfood and the gif take the release binary, so a stale one would go out.
 	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; fOffWhy "$1" release remote dogfood gif; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-dogfood)             DOGFOOD_ENABLE=0; fOffWhy "$1" dogfood; shift ;;
-	--no-gif)                 GIF_ENABLE=0; fOffWhy "$1" gif; shift ;;
+	--no-gif)                 GIF_ENABLE=0; fOffWhy "$1" gif; gate_partial=1; shift ;;
 	--no-publish)             GIT_PUBLISH=(); fOffWhy "$1" publish; shift ;;
 	--no-freeze)              no_freeze=1; shift ;;
 	--message=*|--msg=*|-m=*) cli_message="${1#*=}"; shift ;;
@@ -330,6 +330,10 @@ else
 	gif_to_tmp=0
 	FMT_CHECK_CMD=()
 fi
+## The check scripts read it too, since they only report an exit code: under
+## it a missing tool fails, and a check the box can't run at all, with no
+## image, goes on the skip list (2026102814341405).
+if ((gate_strict)); then export TUKFS_GATE_STRICT=1; else unset TUKFS_GATE_STRICT; fi
 ## The run that froze the tree formatted the checkout first.
 if [[ "${run_part}" == build ]]; then FMT_CMD=(); fi
 if ((fmt_off)); then FMT_CMD=(); FMT_CHECK_CMD=(); fi
@@ -577,8 +581,10 @@ if ((! inner_run)); then
 	export TUKFS_CID_DIR="${run_tmp}/cid"
 	stop_cid_dir="${TUKFS_CID_DIR}"
 fi
+## The run on the frozen copy writes into its starter's, which records.
 gate_skips="${run_tmp}/gate-skips"
-: > "${gate_skips}"
+if ((inner_run)) && [[ "${TUKFS_GATE_SKIPS:-}" == /* ]]; then gate_skips="${TUKFS_GATE_SKIPS}"; else : > "${gate_skips}"; fi
+export TUKFS_GATE_SKIPS="${gate_skips}"
 ## "STEP: why" for each SKIP, for the summary at the end. The run on the frozen
 ## copy writes into its starter's.
 skip_log="${run_tmp}/skips"
@@ -1107,7 +1113,7 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	real="$(realpath -e -- "${itRoot}")"
 	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
 	case "${label}" in ext4) want="ext2/ext3" ;; *) want="${label}" ;; esac
-	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; fi
+	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; echo "it-${label}" >> "${gate_skips}"; fi
 	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real} ${RELEASE_NATIVE_BIN}"
 	HOST_TEMP="${real}" fBg "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
@@ -1144,8 +1150,10 @@ fStageTests(){
 }
 
 ## The tree this run tested, for the pre-push hook, once the release checks
-## are through too, since the merge gate has them. Taken after the format
-## stage, since that rewrites what gets tested.
+## and the gif are through too, since the merge gate has them. Taken after the
+## format stage, since that rewrites what gets tested. Only the run that
+## started records, so a gif that fails leaves nothing recorded
+## (2026102814341404).
 green_tree=""
 fRecordGreen(){
 	[[ -n "${green_tree}" ]] || return 0
@@ -1462,9 +1470,9 @@ fFreeze(){
 ## Stages 2-7 in the frozen copy, by the copy's own engine.
 fRunFrozen(){
 	local -a inner=("$( ((quiet)) && echo -q || echo -y )" --no-sync --no-dogfood --no-gif --no-publish "${inner_pass[@]}")
-	local rc=0 green=""
-	((record_green)) && green="${frozen_tree}"
-	TUKFS_RUN_PART=build TUKFS_GREEN_TREE="${green}" TUKFS_STEP_PLAN="${step_plan}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
+	local rc=0
+	((record_green)) && green_tree="${frozen_tree}"
+	TUKFS_RUN_PART=build TUKFS_STEP_PLAN="${step_plan}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
 	_wasLastEchoBlank=1
 	## A stopped run stays a stopped run, and the EXIT trap says so.
@@ -1654,19 +1662,18 @@ if [[ -n "${frozen_root}" ]]; then
 else
 	## The run on the frozen copy only checks, and only in the check-only modes.
 	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fi
-	if [[ -n "${green_given}" ]]; then green_tree="${green_given}"
-	elif ((record_green && ! inner_run)); then green_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
+	if ((record_green && ! inner_run)); then green_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
 	fStageBuild
 	fStageLint
 	fStageTests
 	fStageProfile
 	fStageRelease
 	fStageRemote
-	fRecordGreen
 fi
 if ((! inner_run)); then
 	fStageDogfood
 	fStageGif
+	fRecordGreen
 	fStagePublish
 fi
 ## Before the cleanup takes the file away.

@@ -54,7 +54,9 @@ fLeakInImage "sanitize-rust ${mode}" "${me}/sanitize-rust.bash" "${LEAK_DIR}" "$
 ## spot, so the list says whether it's here.
 toolchains="$(rustup toolchain list 2>/dev/null || true)"
 if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${toolchains}"; then
+	((in_image)) && { echo "sanitize-rust: the leak check image has no ${PIN_NIGHTLY}" >&2; exit 2; }
 	echo "note: sanitize-rust ${mode}: skipped, since ${PIN_NIGHTLY} isn't installed (rustup toolchain install ${PIN_NIGHTLY} --component rust-src,miri)"
+	fLeakHostSkip "sanitize-rust-${mode}"
 	exit 0
 fi
 fScratchMake "${mode}" || exit 2

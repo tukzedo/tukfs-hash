@@ -8,7 +8,7 @@
 ##		check image has no network.
 ##		The fetch and the check are apart, so a database that can't be had is
 ##		told from a finding. That's a noted skip, or a failure with
-##		TUKFS_GATE_STRICT set, should this ever join the gate.
+##		TUKFS_GATE_STRICT set, as the check-only modes do.
 ##	Syntax:
 ##		advisories.bash
 ##	Exit: 0 = clean or skipped, 1 = an advisory, or a failure under strict, 2 = can't run.

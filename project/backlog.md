@@ -29,64 +29,11 @@
 
 ## Issues
 
-- No public code style guide or contributing.md, and README points to neither.
-	- ID: 2026102808215637
-	- Type: Task
-	- Status: Stalled
-		- Held for: the repo going public.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: The repo is private, so this can wait until it goes public.
-
-- A database row with a read date in the future skips its file on every scan, `--verify` included, and the scan exits 0.
-	- ID: 2026102814341401
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 1
-	- Origin: `f05c368`. 2026101406340902 named this case, but its fix bounded only the attribute date. Its "Swept:" line said the DB skip already checks the inode, which doesn't cover the date. Regression of that item. Confirmed.
-	- Steps to reproduce [Bug]:
-		- Scan a file with `--no-xattrs`. Move its `paths.hashed_us` a year ahead.
-		- Flip a byte and put the mtime back with `touch -r`.
-		- Scan again with `--verify`, or with `--since` tomorrow.
-	- Incorrect behavior [Bug]: "hashed 0 skipped 1", no events, exit 0.
-	- Expected behavior [Bug]: design.md, "Skipping": a date later than now never skips. Exit 4.
-	- Reproduced [Bug]: Yes, on ext4, with and without attributes.
-	- Probable fix [Bug]: `Worker::judged_already` in `src/scan.rs` also needs `hashed_us` no later than now.
-	- Sweep: every place that compares `hashed_us` or the attribute date with the cutoff.
-	- Note: This is the third skip-rule defect, after 2026101406340902 and item 2 of this review. The rules are now a table in design.md, "Skipping", and each fix in this class names its row.
-	- Note: design.md, "Skipping", row `db-future`.
-	- Note: A unit test beside `a_match_is_not_read_again` can set a future `hashed_us` on the prior row and expect a read. An integration check can repeat the repro and expect exit 4.
-
-- After `--verify` or `--since` reports a damaged file, a plain scan later that day skips it and exits 0.
-	- ID: 2026102814341402
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 2
-	- Origin: the skip rule is from `f05c368`, and keeping the old row on a mismatch from `eb111ff` (2026101406340901). That item's test used `--since` tomorrow on both runs, so it never had a same-day plain run. Confirmed.
-	- Steps to reproduce [Bug]:
-		- Scan a tree. Flip a byte in a file and put its mtime back.
-		- `scan --verify` exits 4.
-		- A plain scan right after exits 0, "skipped 1", no events. The same after `--since` tomorrow, and for hard-linked names.
-	- Incorrect behavior [Bug]: The row still has the earlier good read's `hashed_us`, after midnight, so it skips. The attribute set has the same digest and date, so `b3_fresh` passes too.
-	- Expected behavior [Bug]: design.md, "Mismatches", and `--help`: the next run reads the file again and reports it again.
-	- Reproduced [Bug]: Yes, on ext4.
-	- Probable fix [Bug]: Mark a path with an open mismatch, set by `keep` and cleared by a clean read or `accept`, and never skip a marked path.
-	- Sweep: `Worker::judged_already` and `Worker::skip_unread` in `src/scan.rs`.
-	- Related IDs: 2026102814341401
-	- Note: design.md, "Skipping", rows `db-mismatch` and `x-mismatch`.
-	- Against: 2026101406340901, "Keep the stored xattr and DB digest on any mismatch". The fix has to keep both digests as they are. Only what skips may change.
-	- Note: A new column means table version 5, so an older binary then refuses the database. The house rule to derive state rather than store a second copy points the other way: an open mismatch is already in `events`, as a mismatch for the path with no clean read or `accepted` after it. Measure the lookup cost of that on the small-files workload before picking.
-	- Note: Step 3 of `tests/integration.bash` is the place for a test: after its mismatch run, a plain run the same day has to exit 4 again.
-
 - `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
 	- ID: 2026102814341403
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on UAT
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 3
@@ -101,37 +48,22 @@
 	- Sweep: `scan::lock`, `scan::hand_over`, the SQLite open of the database, and their callers in `scan::run`, `accept::run` and `prune` in `main.rs`.
 	- Note: A test needs no root. Plant each of the 4 links in a temp folder, run `prune` with `SUDO_UID` and `SUDO_GID` set to the user's own ids, and check that the run refuses and the link targets don't exist. strace can't be a gate, so the test looks at the targets.
 	- Note: Changes what the program writes to disk and touches security, so it waits on UAT after the fix.
+	- Actual cause: The lock was opened with no `O_NOFOLLOW`, the database by name with SQLite following a link at it, and the handover used `chown`, which follows links.
+	- Fix: The lock opens with `O_NOFOLLOW` and must be a regular file. Both database opens pass `SQLITE_OPEN_NOFOLLOW`. `hand_over` opens each name with `O_NOFOLLOW`, checks it's a regular file, and uses `fchown` on that fd. A link at a name is reported as one.
+	- Note: SQLite already opens `-wal` and `-shm` with `O_NOFOLLOW`, so dejds and dejdt passed before the fix too. They stay as guards. The refusal there reads "unable to open database file", which doesn't name the link.
+	- Note: A link in a parent folder of the database is still followed. The parent is resolved once at the start, and the folder is the user's own choice.
+	- Test case: dejdp to dejdt, step 24 of `tests/integration.bash`, with the own ids as `SUDO_UID` and `SUDO_GID`. Before the fix dejdq got "0 none" and dejdr "0 made". And dejdv, `a_link_is_not_handed_over`, not run before the fix.
+	- Swept: `scan::lock`, `scan::hand_over`, `db::open_rw` and `db::open_ro`, which every command uses. The callers in `scan::run`, `accept::run` and `prune` all go through these. The root case wasn't run.
 
-- A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
-	- ID: 2026102814341404
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 4
-	- Origin: `fRecordGreen` moved after the release checks in `69bd3ee`. The stage order is from `1282504`, and `--no-gif` from `a17da2f`. Not seen before. Plausible, read only.
-	- Incorrect behavior [Bug]:
-		- The frozen copy's run records the tree. The gif stage runs after that, in the outer run, and fails the run on a leak or a wrong exit. The hook then lets the same tree through on the next push.
-		- `--no-gif` doesn't set `gate_partial`, so `--backlog-run-full --no-gif` records a tree the gif never checked.
-	- Expected behavior [Bug]: design.md, "Build and release": a run records its tree only when it's at least as thorough as the merge gate, and passed.
-	- Probable fix [Bug]: Record from the outer run after `fStageGif` passes, and have `--no-gif` set `gate_partial`.
-	- Sweep: every stage that runs after `fRecordGreen` in `cicd/cicd.bash`.
-	- Note: No harness runs the engine's stage order with a stage made to fail. Adding one, such as a stand-in gif step under a test flag, is part of the fix. Watch it go red with the record moved back.
-
-- The check-only modes pass when the advisory scan, a sanitizer or CodeQL skips for a missing tool, and still record the tree.
-	- ID: 2026102814341405
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 5
-	- Origin: `0a623fb` read `TUKFS_GATE_STRICT` for later use. The advisory scan joined every run in `b8ea7c0`, and nothing ever set the variable. Not seen before. Confirmed for the advisory scan, the rest read only.
-	- Steps to reproduce [Bug]: `env -u TUKFS_GATE_STRICT PATH=/usr/bin:/bin bash cicd/utility/advisories.bash`, with no cargo-deny on that path.
-	- Incorrect behavior [Bug]: It prints a note and exits 0. The leak step runner only sees exit codes, so the gate passes and records the tree.
-	- Expected behavior [Bug]: The recorded decision that the 3 check-only modes stay strict, and `--help`: a missing tool keeps a run from recording.
-	- Probable fix [Bug]: Export `TUKFS_GATE_STRICT=1` when `gate_strict` is set. Have each child skip either fail under it or add its name to the run's skip list.
-	- Sweep: `advisories.bash`, `sanitize-rust.bash` with no nightly, `codeql-scan.bash` with no image or CodeQL, `demo-gif.bash` with no Pillow or font, `fRunIt`'s wrong-filesystem warning, and a `TUKFS_NO_IMAGE` left in the caller's environment.
-	- Note: A test can run each child script with its tool hidden from PATH and `TUKFS_GATE_STRICT=1`, and expect exit 1. A second one checks the engine exports the variable in all 3 check-only modes.
+- No public code style guide or contributing.md, and README points to neither.
+	- ID: 2026102808215637
+	- Type: Task
+	- Status: Stalled
+		- Held for: the repo going public.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: The repo is private, so this can wait until it goes public.
 
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
@@ -808,6 +740,108 @@
 	- Swept: The zfs names already use the full dataset name. In `vm-scan`, the mount folder and fsck log use the image's base name within its dataset, so 2 images of one name in different subfolders would share them. No dataset has 2 such images today.
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
+	- ID: 2026102814341404
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 4
+	- Origin: `fRecordGreen` moved after the release checks in `69bd3ee`. The stage order is from `1282504`, and `--no-gif` from `a17da2f`. Not seen before. Plausible, read only.
+	- Incorrect behavior [Bug]:
+		- The frozen copy's run records the tree. The gif stage runs after that, in the outer run, and fails the run on a leak or a wrong exit. The hook then lets the same tree through on the next push.
+		- `--no-gif` doesn't set `gate_partial`, so `--backlog-run-full --no-gif` records a tree the gif never checked.
+	- Expected behavior [Bug]: design.md, "Build and release": a run records its tree only when it's at least as thorough as the merge gate, and passed.
+	- Probable fix [Bug]: Record from the outer run after `fStageGif` passes, and have `--no-gif` set `gate_partial`.
+	- Sweep: every stage that runs after `fRecordGreen` in `cicd/cicd.bash`.
+	- Note: No harness runs the engine's stage order with a stage made to fail. Adding one, such as a stand-in gif step under a test flag, is part of the fix. Watch it go red with the record moved back.
+	- Actual cause: The run on the frozen copy recorded the tree, and the gif runs after it, in the run that started it. `--no-gif` didn't set `gate_partial`.
+	- Fix: Only the starting run records, after `fStageGif` and before publish. The frozen copy's run gets no tree, and writes its skips into the starter's list through `TUKFS_GATE_SKIPS`. `--no-gif` sets `gate_partial`. `TUKFS_GREEN_TREE` is gone.
+	- Test case: `private/claude_simple/tools/gate-record-check.bash REPO`, no test ID, since private checks have none. It runs the merge gate in a scratch clone whose `config.bash` makes each stage a stand-in, with the gif failing, with `--no-gif`, and passing. Before the fix "failed gif" and "--no-gif" recorded the tree. Verified: 15 of 15 pass after.
+	- Swept: Every stage after `fRecordGreen`: dogfood, gif and publish. Dogfood is off in the check-only modes, and in a default run it fails the run before the record. Publish has to come after, since it commits the tree it pushes.
+	- Closed: 20261028-172500
+
+- The check-only modes pass when the advisory scan, a sanitizer or CodeQL skips for a missing tool, and still record the tree.
+	- ID: 2026102814341405
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 5
+	- Origin: `0a623fb` read `TUKFS_GATE_STRICT` for later use. The advisory scan joined every run in `b8ea7c0`, and nothing ever set the variable. Not seen before. Confirmed for the advisory scan, the rest read only.
+	- Steps to reproduce [Bug]: `env -u TUKFS_GATE_STRICT PATH=/usr/bin:/bin bash cicd/utility/advisories.bash`, with no cargo-deny on that path.
+	- Incorrect behavior [Bug]: It prints a note and exits 0. The leak step runner only sees exit codes, so the gate passes and records the tree.
+	- Expected behavior [Bug]: The recorded decision that the 3 check-only modes stay strict, and `--help`: a missing tool keeps a run from recording.
+	- Probable fix [Bug]: Export `TUKFS_GATE_STRICT=1` when `gate_strict` is set. Have each child skip either fail under it or add its name to the run's skip list.
+	- Sweep: `advisories.bash`, `sanitize-rust.bash` with no nightly, `codeql-scan.bash` with no image or CodeQL, `demo-gif.bash` with no Pillow or font, `fRunIt`'s wrong-filesystem warning, and a `TUKFS_NO_IMAGE` left in the caller's environment.
+	- Note: A test can run each child script with its tool hidden from PATH and `TUKFS_GATE_STRICT=1`, and expect exit 1. A second one checks the engine exports the variable in all 3 check-only modes.
+	- Actual cause: The engine set `gate_strict` but never exported `TUKFS_GATE_STRICT`, and only `advisories.bash` read it.
+	- Fix: The engine exports it in the 3 check-only modes and unsets it otherwise. `demo-gif.bash` fails under it for no python3, Pillow or font. `sanitize-rust.bash` and `codeql-scan.bash` skip only when there's no image and the host lacks the tool, so under strict they add `sanitize-rust-<mode>` or `codeql` to the skip list through `fLeakHostSkip` in `leak-common.bash`, and the run passes without recording. A missing docker never fails a run, per design.md. In the image, a missing nightly is now exit 2, as codeql's already was. `fRunIt`'s wrong-filesystem warning adds `it-<label>` to the skip list.
+	- Note: `advisories.bash` now fails the check-only modes when the advisory database can't be fetched, as it was written to. An offline merge gate fails there.
+	- Note: A `TUKFS_NO_IMAGE` left in the caller's environment sends the leak checks to the host, where they still run. Only codeql and the sanitizers can then skip, and they no longer record.
+	- Test case: `private/claude_simple/tools/gate-record-check.bash REPO`, the strict cases: the lint stand-in fails unless strict reaches it, in `--backlog-run-quick lint`, `--backlog-run-full` and `--merge-gate`, and passes a run with no options. Each script runs with its tool hidden, with and without strict. Before the fix 7 cases failed. Verified: 15 of 15 pass after.
+	- Swept: `advisories.bash`, `sanitize-rust.bash`, `codeql-scan.bash`, `demo-gif.bash`, `fRunIt`, and `TUKFS_NO_IMAGE` in `leak-common.bash`. `fLintTool` already failed under strict.
+	- Closed: 20261028-172500
+
+- A database row with a read date in the future skips its file on every scan, `--verify` included, and the scan exits 0.
+	- ID: 2026102814341401
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 1
+	- Origin: `f05c368`. 2026101406340902 named this case, but its fix bounded only the attribute date. Its "Swept:" line said the DB skip already checks the inode, which doesn't cover the date. Regression of that item. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Scan a file with `--no-xattrs`. Move its `paths.hashed_us` a year ahead.
+		- Flip a byte and put the mtime back with `touch -r`.
+		- Scan again with `--verify`, or with `--since` tomorrow.
+	- Incorrect behavior [Bug]: "hashed 0 skipped 1", no events, exit 0.
+	- Expected behavior [Bug]: design.md, "Skipping": a date later than now never skips. Exit 4.
+	- Reproduced [Bug]: Yes, on ext4, with and without attributes.
+	- Probable fix [Bug]: `Worker::judged_already` in `src/scan.rs` also needs `hashed_us` no later than now.
+	- Sweep: every place that compares `hashed_us` or the attribute date with the cutoff.
+	- Note: This is the third skip-rule defect, after 2026101406340902 and item 2 of this review. The rules are now a table in design.md, "Skipping", and each fix in this class names its row.
+	- Note: design.md, "Skipping", row `db-future`.
+	- Note: A unit test beside `a_match_is_not_read_again` can set a future `hashed_us` on the prior row and expect a read. An integration check can repeat the repro and expect exit 4.
+	- Actual cause: `judged_already` took any read date on or after the skip date as fresh, with no upper bound.
+	- Fix: The row skips only when its read date is between the skip date and now.
+	- Test case: dejdh, then dejdj, in step 3 of `tests/integration.bash`. Without the fix dejdh got "0 0".
+	- Swept: Every comparison of `hashed_us` or the attribute date with the cutoff. `OnFile::b3_fresh` already stops at now, and `main.rs` only prints the cutoff.
+	- Closed: 20261028-171500
+
+- After `--verify` or `--since` reports a damaged file, a plain scan later that day skips it and exits 0.
+	- ID: 2026102814341402
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 2
+	- Origin: the skip rule is from `f05c368`, and keeping the old row on a mismatch from `eb111ff` (2026101406340901). That item's test used `--since` tomorrow on both runs, so it never had a same-day plain run. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Scan a tree. Flip a byte in a file and put its mtime back.
+		- `scan --verify` exits 4.
+		- A plain scan right after exits 0, "skipped 1", no events. The same after `--since` tomorrow, and for hard-linked names.
+	- Incorrect behavior [Bug]: The row still has the earlier good read's `hashed_us`, after midnight, so it skips. The attribute set has the same digest and date, so `b3_fresh` passes too.
+	- Expected behavior [Bug]: design.md, "Mismatches", and `--help`: the next run reads the file again and reports it again.
+	- Reproduced [Bug]: Yes, on ext4.
+	- Probable fix [Bug]: Mark a path with an open mismatch, set by `keep` and cleared by a clean read or `accept`, and never skip a marked path.
+	- Sweep: `Worker::judged_already` and `Worker::skip_unread` in `src/scan.rs`.
+	- Related IDs: 2026102814341401
+	- Note: design.md, "Skipping", rows `db-mismatch` and `x-mismatch`.
+	- Against: 2026101406340901, "Keep the stored xattr and DB digest on any mismatch". The fix has to keep both digests as they are. Only what skips may change.
+	- Note: A new column means table version 5, so an older binary then refuses the database. The house rule to derive state rather than store a second copy points the other way: an open mismatch is already in `events`, as a mismatch for the path with no clean read or `accepted` after it. Measure the lookup cost of that on the small-files workload before picking.
+	- Note: Step 3 of `tests/integration.bash` is the place for a test: after its mismatch run, a plain run the same day has to exit 4 again.
+	- Actual cause: `keep` leaves the row's read date as the earlier good read, so the next run's skip date passes it.
+	- Fix: No new column. `db::open_misses` loads, once per run, the paths whose last xattr, rmlint or database mismatch came after the row's read date, or that have no row. `judged_already` and `skip_unread` never skip one, except for a path this run already reached. A clean read or `accept` writes a later read date, which closes it. Cache mismatches end in a clean read, so they don't count.
+	- Note: The load is one query over `events` at the start, before `begin()`. Per file it adds a set lookup, only for a row that would have skipped.
+	- Test case: dejdg in step 3 of `tests/integration.bash`, and dejdf, `open_misses_are_the_unread_ones`. Without the fix dejdg got "0 0".
+	- Swept: `Worker::judged_already` and `Worker::skip_unread`, the only two skips. The link-done path compares each name with its own row and set, so it reports again already.
+	- Closed: 20261028-171500
 
 - `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
 	- ID: 2026101406340913
