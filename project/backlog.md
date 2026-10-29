@@ -143,21 +143,6 @@
 	- Test case: none with an ID. `remote-check.bash REPO box`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `rm -rf`, `fSafeRm` and stale sweep in `cicd/` and `tests/`. `cicd.bash`'s `fSweepStale` and the leak checks' `scratch.bash` already need their mark and `-O`. `remote-tests.bash` copies the stage with tar, which keeps the mark.
 
-- The publish stage fails on a box with no rar, though cicd turns the backup off for that case.
-	- ID: 2026102814341411
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 11
-	- Origin: `1282504`, in the copy from shcl. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]: In an empty folder, with no rar on PATH, run `GIT_BACKUP_AND_PUBLISH_NOBACKUP=1 cicd/utility/n8git_backup-and-publish --no-prompt`.
-	- Incorrect behavior [Bug]: "Not found in path: rar", exit 1.
-	- Expected behavior [Bug]: The comment at the publish stage in `cicd/cicd.bash`: no backup, then publish.
-	- Probable fix [Bug]: Check for rar only when the backup is on. The fix belongs in shcl, then copied here.
-	- Note: The canonical copy is in the synced common bash folder, outside this tree, and several projects have their own copies. Patch the block here, per the n8git-backup skill, and the canonical fix needs a go-ahead.
-	- Note: The repro above is the test: no rar on PATH, the backup off, expect it to get past the rar check.
-
 - A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
 	- ID: 2026102814341412
 	- Type: Bug
@@ -213,19 +198,6 @@
 		- `-h` and `--help` after a command print the help.
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
 	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
-
-- The publish stage commits and pushes the live checkout, not the tree the run tested.
-	- ID: 2026102814341426
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 16
-	- Origin: `1282504`. Plausible, read only.
-	- Requirements [Feature]:
-		- Before publishing, compare the checkout's tree with the frozen one, and refuse when they differ or the pull brought in commits.
-	- Note: The publisher pulls, then adds everything the checkout has by then, another session's edits included. A push to `dev` isn't gated.
-	- Note: The publisher is the shcl copy. The check belongs in `fStagePublish` in `cicd/cicd.bash`, so shcl needn't change.
 
 - `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
 	- ID: 2026102814341427
@@ -1398,6 +1370,31 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 
+- The publish stage fails on a box with no rar, though cicd turns the backup off for that case.
+	- ID: 2026102814341411
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 11
+	- Origin: `1282504`, in the copy from shcl. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]: In an empty folder, with no rar on PATH, run `GIT_BACKUP_AND_PUBLISH_NOBACKUP=1 cicd/utility/n8git_backup-and-publish --no-prompt`.
+	- Incorrect behavior [Bug]: "Not found in path: rar", exit 1.
+	- Expected behavior [Bug]: The comment at the publish stage in `cicd/cicd.bash`: no backup, then publish.
+	- Probable fix [Bug]: Check for rar only when the backup is on. The fix belongs in shcl, then copied here.
+	- Note: The canonical copy is in the synced common bash folder, outside this tree, and several projects have their own copies. Patch the block here, per the n8git-backup skill, and the canonical fix needs a go-ahead.
+	- Note: The repro above is the test: no rar on PATH, the backup off, expect it to get past the rar check.
+	- Actual cause [Bug]: The publisher checked for rar before reading whether the backup was on.
+	- Progress log:
+		- 2026-10-29: The publisher checks for rar only when the backup is on. Patched here as a block, per the n8git-backup skill. The canonical copy and shcl's are unchanged, and need a go-ahead. The draft patch and issue text are in the private upstream drafts folder, under this item's ID.
+		- 2026-10-29: Verified: `publish-check.bash REPO` passes. With the backup off and no rar on PATH, the publisher pushes, and so does a whole run with no rar. With the backup on it still asks for rar. On the code from before, the first 2 fail with "Not found in path: rar".
+	- Actual fix [Bug]: `fMustBeInPath rar` only when `skipBackup` is 0, in `cicd/utility/n8git_backup-and-publish`.
+	- Swept: the publisher is the only copy in this tree, and rar is its only optional tool. `fStagePublish` already turns the backup off without rar.
+	- Branch: round-20261029
+	- Test case: none with an ID. `publish-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261028-195800
+
 - The dogfood launcher expands wildcards and `~` in its arguments, and exits 0 on Ctrl+C whatever tukfs-hash exited.
 	- ID: 2026102814341409
 	- Type: Bug
@@ -1695,6 +1692,31 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+
+- The publish stage commits and pushes the live checkout, not the tree the run tested.
+	- ID: 2026102814341426
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 16
+	- Origin: `1282504`. Plausible, read only.
+	- Requirements [Feature]:
+		- Before publishing, compare the checkout's tree with the frozen one, and refuse when they differ or the pull brought in commits.
+	- Note: The publisher pulls, then adds everything the checkout has by then, another session's edits included. A push to `dev` isn't gated.
+	- Note: The publisher is the shcl copy. The check belongs in `fStagePublish` in `cicd/cicd.bash`, so shcl needn't change.
+	- Progress log:
+		- 2026-10-29: `fStagePublish` compares the checkout's tree, as `git add --all` would commit it, with the tree the run tested, and refuses with the paths that changed. The demo gif the run drew is let through. It then fetches, and refuses when the upstream has commits that `HEAD` lacks, since the publisher's pull would bring them in. A run with `--no-freeze` checks against the tree taken before its build.
+		- 2026-10-29: Verified: `publish-check.bash REPO` passes its 8 cases for this item: a tracked change, a new file, a `--no-freeze` change and a push to the upstream mid-run are refused, and a run with no change, with only the gif changed, or with edits made before it started publishes. On the code from before, the 4 refusals fail. `--backlog-run-quick` and `gate-record-check.bash REPO` passed.
+	- Decisions:
+		- The upstream check is a fetch just before the publisher runs, not a check after its pull, so the publisher stays shcl's. A push in the seconds between the two still gets in.
+		- The demo gif is the run's own output from the tested build, so a change there alone doesn't refuse.
+		- A refusal fails the run, with "Nothing was committed or pushed", as the publisher's own refusals do.
+	- Swept: the publish stage is the only place a run commits or pushes. The sync stage runs before the tree is taken, and the dogfood stage writes outside the repo.
+	- Branch: round-20261029
+	- Test case: none with an ID. `publish-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and its refusal cases fail on the code from before.
+	- Closed: 20261028-195800
 
 - snapdiff allocates and zeroes 2 MiB for every file pair it compares.
 	- ID: 2026102808215768

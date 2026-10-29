@@ -93,6 +93,9 @@
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
 ##	  stops the whole run.
+##	- Publish refuses when the checkout no longer holds the tree the run
+##	  tested, other than the demo gif it drew, or when the upstream has
+##	  commits the run didn't take.
 ##	- The job count is half the logical CPUs, or a quarter when the 1-minute
 ##	  load is over half the CPU count, checked at the start and at each step.
 ##	  The leak checks get a quarter, busy or not. Never under 1. It goes to
@@ -920,7 +923,7 @@ fi
 ## Stages
 
 ## Stage 0: take the remote's work before anything is built, so the run tests
-## the tree that gets pushed. The publish stage pulls too, but after the tests.
+## the tree that gets pushed. The publish stage refuses if there's more by then.
 fStageSync(){
 	local branch="" upstream="" out="" ahead=0 behind=0 dirty=0 ff=0
 	fStep sync || return 0
@@ -1412,13 +1415,34 @@ fStageGif(){
 		if [[ -n "${gate_rev}" && -n "${frozen_root}" ]]; then gifRoot="${frozen_root}"; fi
 	fi
 	fBg fGifIn "${gifRoot}" || fDie "demo gif failed"
+	if ((! gif_to_tmp)); then gif_wrote="${GIF_OUT#"${root}"/}"; fi
 	fStepPass
 }
 
-## Stage 10: backup + publish through the copied publisher.
+## Stage 10: backup + publish through the copied publisher. It commits and
+## pushes the checkout as it is, after its own pull, so first make sure that's
+## what was tested. The gif this run drew is the one change it makes itself.
+tested_tree=""; gif_wrote=""
 fStagePublish(){
-	local flag="--no-prompt"
+	local flag="--no-prompt" now="" out="" upstream="" behind="" i=0
+	local -a changed=()
 	fStep publish || return 0
+	local -r nothing="Nothing was committed or pushed."
+	[[ -n "${tested_tree}" ]] || fDie "publish refused: no record of the tree this run tested. ${nothing}"
+	now="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "publish refused: could not read the checkout's tree. ${nothing}"
+	out="$(git -C "${root}" diff --name-only --no-renames "${tested_tree}" "${now}")" || fDie "publish refused: could not compare the checkout with the tree tested. ${nothing}"
+	if [[ -n "${out}" ]]; then mapfile -t changed < <(grep -vxF -- "${gif_wrote:-/}" <<< "${out}" || true); fi
+	if ((${#changed[@]})); then
+		fEcho_Clean "Changed in the checkout since the run took the tree it tested:"
+		for ((i = 0; i < ${#changed[@]} && i < 20; i++)); do fEcho_Clean "	${changed[i]}"; done
+		if ((${#changed[@]} > 20)); then fEcho_Clean "	and $((${#changed[@]} - 20)) more"; fi
+		fDie "publish refused: the checkout isn't the tree this run tested. ${nothing}"
+	fi
+	if upstream="$(git -C "${root}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+		out="$(fGitRemote -C "${root}" fetch --quiet 2>&1)" || { fEcho_Clean "${out}"; fDie "publish refused: fetch from ${upstream} failed. ${nothing}"; }
+		behind="$(git -C "${root}" rev-list --count "HEAD..${upstream}")" || fDie "publish refused: could not compare with ${upstream}. ${nothing}"
+		((behind == 0)) || fDie "publish refused: ${upstream} has ${behind} commit(s) this run didn't test. Run again to take them. ${nothing}"
+	fi
 	command -v rar >/dev/null 2>&1 || export GIT_BACKUP_AND_PUBLISH_NOBACKUP=1
 	## This run already asked, so the publisher doesn't. -q also quiets it.
 	((quiet)) && flag="--quiet"
@@ -1481,6 +1505,7 @@ fFreeze(){
 fRunFrozen(){
 	local -a inner=("$( ((quiet)) && echo -q || echo -y )" --no-sync --no-dogfood --no-gif --no-publish "${inner_pass[@]}")
 	local rc=0
+	tested_tree="${frozen_tree}"
 	((record_green)) && green_tree="${frozen_tree}"
 	TUKFS_RUN_PART=build TUKFS_STEP_PLAN="${step_plan}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
@@ -1672,7 +1697,8 @@ if [[ -n "${frozen_root}" ]]; then
 else
 	## The run on the frozen copy only checks, and only in the check-only modes.
 	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fi
-	if ((record_green && ! inner_run)); then green_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
+	if ((! inner_run)) && { ((record_green)) || ((${#GIT_PUBLISH[@]})); }; then tested_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
+	if ((record_green && ! inner_run)); then green_tree="${tested_tree}"; fi
 	fStageBuild
 	fStageLint
 	fStageTests
@@ -1757,3 +1783,5 @@ exit 0
 ##		  again. Only a kept dir waits 2 days.
 ##		- 2026-10-28: mypy in the lint stage. shellcheck follows sources, per
 ##		  .shellcheckrc, so the disables that only covered for that are gone.
+##		- 2026-10-29: Publish refuses a checkout that changed since the run took
+##		  its tree, other than the gif, and an upstream with commits to take.
