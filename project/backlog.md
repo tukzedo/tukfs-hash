@@ -200,7 +200,7 @@
 		- Verified: `des6s`, `des6t` and `des6v` fail with the vet calls taken out and `.cargo/config.toml` moved aside, and pass with them. `--backlog-run-quick` passed in 1m 45s, ext4 and ZFS integration runs included. The release image built both targets, the arm64 unit tests passed under qemu, and the ASan run and the advisories check passed.
 	- Decisions:
 		- The flags go in `.cargo/config.toml` rather than in cicd, so a plain `cargo build` gets them too. `des6s` fails in any build they don't reach.
-		- The check matches each row's type, name and table against a list, and wants SQL that starts with SQLite's own `CREATE TABLE ` or `CREATE INDEX `. A row can claim any type, and a planted `CREATE VIRTUAL TABLE` can't pass the prefix.
+		- The check matches each row's type, name and table against a list, and wants SQL that starts with SQLite's own `CREATE TABLE` or `CREATE INDEX`, followed by a space. A row can claim any type, and a planted `CREATE VIRTUAL TABLE` can't pass the prefix.
 		- `sqlite_stat1` and `sqlite_stat4` are refused too. Nothing here runs ANALYZE, and stat4 is parsed from the file as well.
 		- The read-only opens are checked too, since `report` and `gone` read the same file under sudo.
 	- Swept: every `Connection::open` in `src`. Outside the tests there are only `open_rw` and `open_ro`. The only other `LIBSQLITE3_FLAGS` in the repo was the leak check's. The trigger in integration step 16 was the only schema object a test or private tool adds to a database before the program opens it.
