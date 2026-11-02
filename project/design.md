@@ -25,6 +25,10 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
 
+- Every open checks the schema first, and refuses anything the program doesn't make, such as a trigger, a view or a virtual table, without reading further. `trusted_schema` is off on every connection. Under sudo the file is one its user can write, so nothing in it should run code the program didn't put there (2026102814341423).
+
+- A database inside a root leaves out only its own names, the file and its `-wal`, `-shm`, `-journal` and `.lock`. Anything else beside it is read, whatever its name starts with.
+
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
 
 - Pages are 16 KiB, to match the dataset's recordsize.
@@ -35,6 +39,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Each root is walked on its own and the walk stops at every mount point, so bind mounts, snapshots and other filesystems are only read when they are listed.
 	- It also stops at any folder on another device than the root. That covers a btrfs subvolume that isn't mounted, and anything mounted after the mount table was read.
+	- A mount that's been mounted over isn't a mount point any more, and neither is anything mounted on it, since no path reaches them. The table's parent IDs show which those are. The same goes for which mount a root or the database is on.
+	- A root that's the same folder as another, or inside another on the same mount and device, is dropped, so nothing is read twice. A btrfs subvolume inside another root is kept, since that root's walk stops at it. A root that can't be resolved, or is gone by the time its walk starts, is a `dir-error`, so the run exits 8.
 
 - Every file and folder is opened from the root's own folder, and no symlink is followed and no mount crossed anywhere on the way. A folder swapped for a symlink after it was listed counts as gone, rather than sending the scan, which runs as root, somewhere else. Kernels before 5.6 have no `openat2`, so there it goes one folder at a time.
 
@@ -102,6 +108,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A resumed run keeps its original skip date. Anything it already read counts as fresh even when `--since` is later than when it began.
 
+- A mismatch writes no row, so a file with no row at its size and time has nothing there to say an earlier part reached it. For `resume-seen` the run's own mismatch events stand in. Such a path is skipped only when its ctime is from before the run began, since then nothing has touched it since that part read it.
+
 ## Runs and exit codes
 
 - `--resume` only continues the newest scan, and only when it didn't finish and has the same roots. An older stopped run would bring back its old skip date, and 2 wrappers share one database, so one could finish the other's run over the wrong roots. Roots are compared as `plan` keeps them, so the order they're given in doesn't matter. Runs from before the root list was kept can't be resumed.
@@ -150,11 +158,12 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - The names and formats match nemo-anywhere, so either program can use what the other left. The date and inode are new; nemo-anywhere ignores them.
 
 - None are written in git work trees. Files come and go with each checkout, git checksums what it keeps, and a ctime change makes git look at each file again.
+	- A root below a folder with `.git` is in one too. The search stops where the filesystem changes, as git's does.
 
 - Dropbox folders get them like any other. Dropbox already keeps its own attribute on each file, and rmlint's attributes have sat on most of them without trouble. Other attributes on a file are left as they are.
 
 - Nothing is written to NTFS, APFS or HFS+, not attributes and not the database. Linux's drivers for them aren't reliable enough to trust with writes, and this tool only runs on Linux. They're still read and recorded.
-	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway.
+	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway. A `fuseblk` given a subtype shows as `fuseblk.<name>`, and counts the same.
 	- The walk stays on its root's device, so a root's filesystem decides for every file under it.
 
 - With `--rmlint`, rmlint's `user.rmlint.blake2b.*` are written too, where they're missing or their time is stale. The format is what rmlint 2.10 writes: hex ending in a NUL, and the time as C's `%.17g` of seconds plus nanoseconds. A current one that disagrees is a mismatch and stays, the same as ours.
@@ -188,11 +197,13 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - The pipeline runs here, not on a hosted service. The pre-push hook runs `--merge-gate` on a push to `main`, and a push to `dev` or a feature branch isn't gated. The merge gate runs every check of a run with no options, so it takes most of an hour. A push to `main` that changes only the paths in `cicd/docs-paths`, which are `.md` files and `assets/`, skips it.
 	- A backlog worker runs `--backlog-run-quick`, alone or with the areas `--help` lists, and a round runs `--backlog-run-full` at its end. `--gate` and `--ci` are other names for `--backlog-run-quick` and `--merge-gate`.
 	- None of the 3 syncs, dogfoods, publishes, installs, rewrites a tracked file, or prompts. The demo gif they draw stays in the run's temp dir.
-	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again. It records once the demo gif has passed too, in the run that started, not in the one on the frozen copy. `--no-gif` makes a run partial (2026102814341404).
+	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again. It records once the demo gif has passed too, in the run that started, not in the one on the frozen copy. `--no-gif` makes a run partial (2026102814341404). A run with no options records the tree with the gif it copied into the checkout, since the merge gate draws the same bytes from that tree and publish commits it. When anything else changed during the run, it records nothing (2026102819580272).
 	- A run with no options publishes last. It refuses when the checkout no longer holds the tree the run tested, other than the demo gif it drew, or when the upstream has commits the run didn't take. On a box without rar it publishes with no backup (2026102814341411, 2026102814341426).
 	- In the 3 check-only modes a missing tool fails the run. The check scripts see this as `TUKFS_GATE_STRICT`. A check that needs the leak check image, on a box with no docker and without the tool, is a skip instead, and the run doesn't record its tree (2026102814341405).
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
+
+- The bundled SQLite is built without FTS3, FTS5, R-Tree and extension loading, none of which the program uses, by `LIBSQLITE3_FLAGS` in `.cargo/config.toml`. Every cargo build in the tree reads it, the release image's and the leak checks' included, and a unit test fails when they're missing (2026102814341423).
 
 - Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The debug build, clippy, the unit tests and the release build the integration test runs are built in the same image, into `target/ctr`, so they use its pinned toolchain, the merge gate included, and the integration test can run that build on any box. Without docker, or when the image can't be set up, they build on the box with one note line, and `--no-container` does that on purpose. The integration test and the soak run on the box, since they scan its real disks.
 	- The release stage does the same, so a box without docker still gets a release build, and the run doesn't fail on it, the merge gate included. Only x86_64 builds then, into `target/release-host`, since the box has no arm64 cross gcc. It needs the box's glibc, so the floor check gives a note rather than failing. Such a run doesn't record its tree for the pre-push hook, the same as one with a missing tool (2026102509342993).

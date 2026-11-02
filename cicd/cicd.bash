@@ -1230,14 +1230,23 @@ fStageTests(){
 ## and the gif are through too, since the merge gate has them. Taken after the
 ## format stage, since that rewrites what gets tested. Only the run that
 ## started records, so a gif that fails leaves nothing recorded
-## (2026102814341404).
+## (2026102814341404). A run with no options copies a changed gif into the
+## checkout, so the tree it records has that gif. The gate draws the same bytes
+## from it, and publish commits it (2026102819580272).
 green_tree=""
 fRecordGreen(){
-	[[ -n "${green_tree}" ]] || return 0
+	local tree="${green_tree}" now="" out=""
+	[[ -n "${tree}" ]] || return 0
 	if [[ -s "${gate_skips}" ]]; then
 		fEcho_Clean "tree not recorded for the pre-push hook, since this run skipped: $(sort -u "${gate_skips}" | paste -sd ' ')"
-	elif "${here}/utility/green-tree.bash" record "${root}" "${green_tree}"; then
-		fEcho "OK: tree ${green_tree:0:12} recorded; a push of it skips the pre-push gate"
+		return 0
+	fi
+	if [[ -n "${gif_wrote}" ]] && now="$("${here}/utility/green-tree.bash" tree "${root}")" && [[ "${now}" != "${tree}" ]] \
+		&& out="$(git -C "${root}" diff --name-only --no-renames "${tree}" "${now}")" && [[ "${out}" == "${gif_wrote}" ]]; then
+		tree="${now}"
+	fi
+	if "${here}/utility/green-tree.bash" record "${root}" "${tree}"; then
+		fEcho "OK: tree ${tree:0:12} recorded; a push of it skips the pre-push gate"
 	fi
 	return 0
 }
@@ -1720,7 +1729,7 @@ fSweepKilled(){
 ## line. The run on the frozen copy only removes its own.
 fCleanup(){
 	local -a gone=()
-	local d kb=0 total=0 n=0 c out
+	local d kb=0 runKb=0 total=0 n=0 c out
 	if ((inner_run)); then
 		fFrozenGone || true
 		for d in "${run_dirs[@]}"; do fRunDirGone "${d}" || true; done
@@ -1728,9 +1737,10 @@ fCleanup(){
 	fi
 	fSection "$(fNow): Cleanup"
 	## Measured first, while the frozen copy is still in it.
-	kb="$(du -sk -- "${run_tmp}" 2>/dev/null | cut -f1 || true)"
-	[[ "${kb}" =~ ^[0-9]{1,15}$ ]] || kb=0
-	total=$((freed_kb + kb))
+	## Its own variable, since the cache prune below reuses kb (2026102820562867).
+	runKb="$(du -sk -- "${run_tmp}" 2>/dev/null | cut -f1 || true)"
+	[[ "${runKb}" =~ ^[0-9]{1,15}$ ]] || runKb=0
+	total=$((freed_kb + runKb))
 	fFrozenGone || true
 	if ((! gate_mode)); then
 		for c in "${CACHE_DIRS[@]}"; do
@@ -1749,7 +1759,7 @@ fCleanup(){
 	if ((keep_temp)); then
 		kept_shown=1
 		for d in "${kept_dirs[@]}"; do fEcho_Clean "kept (--keep-temp): ${d}"; done
-		total=$((total - kb))
+		total=$((total - runKb))
 		if ((${#gone[@]})); then fEcho_Clean "cleanup: removed $(printf '%s, ' "${gone[@]}" | sed 's/, $//'), about $(fSize "${total}")"; fi
 		return 0
 	fi
@@ -1879,3 +1889,6 @@ exit 0
 ##		  a cache dir alone while another run builds in it.
 ##		- 2026-10-29: A build of a tree that differs from the commit's gets
 ##		  -dirty after its build number, and is never a release.
+##		- 2026-11-02: A run with no options records the tree with the gif it
+##		  copied in. --keep-temp's cleanup line no longer takes a cache dir's
+##		  freed size off for the kept temp dir.

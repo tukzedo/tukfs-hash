@@ -63,6 +63,55 @@ CREATE TABLE events (
 CREATE INDEX events_run_kind ON events(run_id, kind);
 ";
 
+// Everything CREATE makes, as (type, name, table), the autoindexes for its
+// UNIQUE columns included. Under sudo the file belongs to the user, so it's
+// checked against this before root reads it (2026102814341423).
+const KNOWN: [(&str, &str, &str); 9] = [
+	("table", "meta", "meta"),
+	("table", "runs", "runs"),
+	("table", "files", "files"),
+	("index", "sqlite_autoindex_files_1", "files"),
+	("table", "paths", "paths"),
+	("index", "sqlite_autoindex_paths_1", "paths"),
+	("index", "paths_file", "paths"),
+	("table", "events", "events"),
+	("index", "events_run_kind", "events"),
+];
+
+/// Turns off schema trust and refuses anything CREATE didn't make, such as a
+/// trigger, a view or a virtual table, before anything else reads the file.
+fn vet(conn: &Connection, path: &Path) -> Result<(), String> {
+	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
+	conn.pragma_update(None, "trusted_schema", false)
+		.map_err(e)?;
+	let mut st = conn
+		.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema")
+		.map_err(e)?;
+	let mut rows = st.query([]).map_err(e)?;
+	while let Some(r) = rows.next().map_err(e)? {
+		let kind: String = r.get(0).map_err(e)?;
+		let name: String = r.get(1).map_err(e)?;
+		let table: String = r.get(2).map_err(e)?;
+		let sql: Option<String> = r.get(3).map_err(e)?;
+		// SQLite writes these prefixes itself, and a type or name in the row
+		// can say anything. "CREATE VIRTUAL TABLE" can't pass.
+		let made_here = KNOWN.contains(&(kind.as_str(), name.as_str(), table.as_str()))
+			&& match (kind.as_str(), sql.as_deref()) {
+				("table", Some(q)) => q.starts_with("CREATE TABLE "),
+				("index", Some(q)) => q.starts_with("CREATE INDEX "),
+				("index", None) => name.starts_with("sqlite_autoindex_"),
+				_ => false,
+			};
+		if !made_here {
+			return Err(format!(
+				"{}: holds {kind} {name:?}, which this program doesn't make. Left as is.",
+				path.display()
+			));
+		}
+	}
+	Ok(())
+}
+
 /// Names are bytes on Linux. Most are UTF-8 and go in as text, so the sqlite3
 /// shell can match them with a plain string; the rest go in as blobs.
 #[derive(Debug)]
@@ -113,6 +162,7 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 			.map_err(|e| format!("{}: {e}", path.display()))?;
 	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
+	vet(&conn, path)?;
 	if fresh {
 		conn.pragma_update(None, "page_size", PAGE_SIZE)
 			.map_err(e)?;
@@ -205,6 +255,7 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	)
 	.map_err(|e| format!("{}: {e}", path.display()))?;
 	conn.busy_timeout(Duration::from_secs(30)).ok();
+	vet(&conn, path)?;
 	Ok(conn)
 }
 
@@ -283,24 +334,44 @@ pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prio
 /// its read date alone would skip the file again. See design.md, "Skipping",
 /// row `db-mismatch`.
 pub fn open_misses(conn: &Connection) -> Result<HashSet<Vec<u8>>, String> {
+	miss_paths(
+		conn,
+		"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
+		WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
+		None,
+	)
+}
+
+/// Paths an earlier part of this run reported a mismatch for. A path with no
+/// row at its size and time has nothing else to say it was reached. See
+/// design.md, "Skipping", row `resume-seen`.
+pub fn run_misses(conn: &Connection, run_id: i64) -> Result<HashSet<Vec<u8>>, String> {
+	miss_paths(
+		conn,
+		"SELECT DISTINCT path FROM events WHERE kind IN (?1, ?2, ?3) AND run_id = ?4",
+		Some(run_id),
+	)
+}
+
+fn miss_paths(
+	conn: &Connection,
+	sql: &str,
+	run_id: Option<i64>,
+) -> Result<HashSet<Vec<u8>>, String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
-	let mut st = conn
-		.prepare(
-			"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
-			WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
-		)
-		.map_err(e)?;
-	let rows = st
-		.query_map(
-			[Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch],
-			|r| {
-				Ok(match r.get_ref(0)? {
-					ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
-					_ => Vec::new(),
-				})
-			},
-		)
-		.map_err(e)?;
+	let mut st = conn.prepare(sql).map_err(e)?;
+	let kinds = [Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch];
+	let row = |r: &rusqlite::Row<'_>| {
+		Ok(match r.get_ref(0)? {
+			ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
+			_ => Vec::new(),
+		})
+	};
+	let rows = match run_id {
+		Some(id) => st.query_map(params![kinds[0], kinds[1], kinds[2], id], row),
+		None => st.query_map(kinds, row),
+	}
+	.map_err(e)?;
 	rows.collect::<rusqlite::Result<_>>().map_err(e)
 }
 
@@ -869,6 +940,26 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn run_misses_are_this_runs() {
+		let _id = test_id("des7p");
+		let (_dir, p) = temp_db("runmisses");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO events (run_id, at_us, kind, path) VALUES
+				(2, 200, 'b3-xattr-mismatch', '/a'), (2, 300, 'b3-xattr-mismatch', '/a'),
+				(2, 200, 'b2b-rmlint-mismatch', x'2f62ff'), (2, 200, 'b3-db-mismatch', '/c'),
+				(2, 200, 'cache-mismatch', '/d'), (2, 200, 'read-error', '/e'),
+				(1, 100, 'b3-xattr-mismatch', '/f');",
+		)
+		.unwrap();
+		let mut got: Vec<_> = run_misses(&conn, 2).unwrap().into_iter().collect();
+		got.sort();
+		assert_eq!(got, [&b"/a"[..], b"/b\xff", b"/c"]);
+		close_rw(conn).unwrap();
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn lookup_error_is_not_no_row() {
 		let _id = test_id("ddy6g");
 		let (_dir, p) = temp_db("lookup");
@@ -1005,6 +1096,91 @@ mod tests {
 		assert_eq!(ids, [1, 3]);
 		assert_eq!(prune(&conn).unwrap(), 0);
 		close_rw(conn).unwrap();
+	}
+
+	// .cargo/config.toml's LIBSQLITE3_FLAGS reached the build.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn sqlite_is_built_lean() {
+		let _id = test_id("des6s");
+		assert!(
+			rusqlite::version_number() >= 3_050_003,
+			"{}",
+			rusqlite::version()
+		);
+		init();
+		let c = Connection::open_in_memory().unwrap();
+		let opts: Vec<String> = c
+			.prepare("PRAGMA compile_options")
+			.unwrap()
+			.query_map([], |r| r.get(0))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		for gone in [
+			"ENABLE_FTS3",
+			"ENABLE_FTS5",
+			"ENABLE_RTREE",
+			"ENABLE_LOAD_EXTENSION",
+		] {
+			assert!(!opts.iter().any(|o| o == gone), "{gone} in {opts:?}");
+		}
+		assert!(opts.iter().any(|o| o == "OMIT_LOAD_EXTENSION"), "{opts:?}");
+		for module in ["fts3", "fts4", "fts5", "rtree"] {
+			let err = c
+				.execute_batch(&format!(
+					"CREATE VIRTUAL TABLE v_{module} USING {module}(a)"
+				))
+				.unwrap_err()
+				.to_string();
+			assert!(err.contains("no such module"), "{module}: {err}");
+		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn refuses_what_it_didnt_make() {
+		let _id = test_id("des6t");
+		let plants = [
+			"CREATE TRIGGER t AFTER INSERT ON runs BEGIN SELECT 1; END;",
+			"CREATE VIEW v AS SELECT * FROM runs;",
+			"CREATE TABLE extra (a);",
+			"CREATE INDEX extra_i ON files(bytes);",
+			// What a planted FTS5 table looks like to a build that has it.
+			"PRAGMA writable_schema = ON;
+			INSERT INTO sqlite_schema VALUES ('table', 'f', 'f', 0, 'CREATE VIRTUAL TABLE f USING fts5(a)');",
+			// A row can name a known object and still hold something else.
+			"PRAGMA writable_schema = ON;
+			UPDATE sqlite_schema SET sql = 'CREATE  TABLE meta (key TEXT PRIMARY KEY, value) WITHOUT ROWID' WHERE name = 'meta';",
+		];
+		for (n, plant) in plants.iter().enumerate() {
+			let (_dir, p) = temp_db(&format!("vet{n}"));
+			close_rw(open_rw(&p).unwrap()).unwrap();
+			let c = Connection::open(&p).unwrap();
+			c.execute_batch(plant).unwrap();
+			drop(c);
+			for err in [open_rw(&p).unwrap_err(), open_ro(&p).unwrap_err()] {
+				assert!(err.contains("doesn't make"), "{plant}: {err}");
+			}
+		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn schema_is_not_trusted() {
+		let _id = test_id("des6v");
+		let (_dir, p) = temp_db("trust");
+		let trusted = |c: &Connection| -> i64 {
+			c.query_row("PRAGMA trusted_schema", [], |r| r.get(0))
+				.unwrap()
+		};
+		let rw = open_rw(&p).unwrap();
+		assert_eq!(trusted(&rw), 0);
+		// The check reads before a new file's page size is set.
+		let page: i64 = rw.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
+		assert_eq!(page, PAGE_SIZE);
+		assert_eq!(trusted(&open_ro(&p).unwrap()), 0);
+		close_rw(rw).unwrap();
 	}
 
 	#[test]

@@ -28,6 +28,18 @@ base="$(realpath -e -- "${HOST_TEMP:-${TMPDIR:-/tmp}}")/tukfs-hash"
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 # A TERM to this shell alone leaves its children writing into the folder.
 source "${here}/cicd/utility/include/stop-descendants.bash"
+# A Ctrl+C reaches a running scan too, which stops and exits on its own, and
+# with no trap bash would go on to the next step. A stop that comes between 2
+# command substitutions in one word makes bash 5.2 fail to parse the trap,
+# and set -e then exits 2, which still cleans up.
+fStopOnSignals
+
+# Gives back what a step made unreadable and a stop or kill kept it from
+# putting back, so the folder can be removed or looked at. find doesn't follow
+# links.
+fUnlock() {
+	find "${1}" -xdev \( -type d ! -perm -u=rwx -exec chmod u+rwx {} + \) -o \( -type f ! -perm -u=r -exec chmod u+r {} + \) 2> /dev/null || true
+}
 
 # rm -rf, but only on what can only be one of this script's work folders:
 # <base>/<stamp>_<NNN>, no links, no dots.
@@ -46,6 +58,7 @@ fSafeRm() {
 	if [[ "${real}" != "${p}" || ! -d "${p}" || -L "${p}" ]]; then
 		printf 'fSafeRm: refused, a link or not a folder: %s\n' "${p}" >&2; return 1
 	fi
+	fUnlock "${p}"
 	rm -rf --one-file-system -- "${p}"
 }
 
@@ -78,7 +91,7 @@ export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
 fCleanup() {
 	local got=''
 	fStopDescendants
-	if [[ -n "${keep}" ]]; then : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
+	if [[ -n "${keep}" ]]; then fUnlock "${work}"; : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
 	fSafeRm "${work}" || true
@@ -186,8 +199,14 @@ check ddx0n "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "${work}/o
 check ddx0p "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
 check ddx0q "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
 check ddx0r "no events" "$(q 'SELECT count(*) FROM events')" 0
-check ddx0s "file handed back readable" "$(stat -c %U "${db}")" "$(id -un)"
-st=0; [[ ! -e "${db}-wal" ]] || st=1; expect ddx0t "database left in rollback mode" "WAL file left behind" "${st}"
+# Only sudo hands the file to someone else. Without it the owner is always us.
+if [[ "$(id -u)" == 0 && "${SUDO_UID:-}" =~ ^[0-9]+$ ]]; then
+	check ddx0s "file handed back readable" "$(stat -c %u "${db}")" "${SUDO_UID}"
+else
+	skip ddx0s "file handed back readable (not run through sudo)"
+fi
+# A database still in WAL mode has no -wal file after a clean close either.
+check ddx0t "database left in rollback mode" "$(q 'PRAGMA journal_mode')" delete
 
 # 2. Same day: nothing read again.
 rc="$(scan)"
@@ -279,6 +298,16 @@ check ddx1d "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_
 skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2 || true)"
 st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect ddx1e "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
 check ddx1f "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
+# The same in a new database, where only the attributes know the damaged file
+# and no row says the stopped part reached it (2026102814341415).
+"${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
+pid=$!
+st=0; { wait_started "${work}/stop.txt" && wait_reached "${pid}" "${tree}/many"; } || st=1
+expect des7k "new database: scan got past the top folder" "scan never opened a file in many/" "${st}"
+kill -INT "${pid}"
+rc=0; wait "${pid}" || rc=$?
+rc2=0; "${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --resume --progress 3600 > "${work}/out.txt" 2>&1 || rc2=$?
+check des7m "new database: resume didn't report it twice" "${rc} ${rc2} $(sqlite3 "${work}/db/r5.sqlite" "SELECT count(*) FROM events WHERE path = '${tree}/rm-stale.txt'")" "6 4 1"
 
 # 6. snapdiff: same size and time, different bytes.
 mkdir -p "${work}/old" "${work}/new"
@@ -431,8 +460,6 @@ uscan() { local rc=0; "${bin}" scan --db "${work}/db/ud.sqlite" --root "${ud}" -
 uq() { sqlite3 "${work}/db/ud.sqlite" "${1}"; }
 check ddy7a "readable tree" "$(uscan)" 0
 chmod 000 "${ud}/locked" "${ud}/open/c"
-# Put back on any exit, or the cleanup can't remove them.
-trap 'chmod 755 "${ud}/locked" 2> /dev/null || true; chmod 644 "${ud}/open/c" 2> /dev/null || true; fCleanup' EXIT
 check ddy7b "unreadable folder and file" "$(uscan --since "${tomorrow}") $(uq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY path)")" "8 dir-error ${ud}/locked, open-error ${ud}/open/c"
 fFlipByte "${ud}/open/a" 0 1
 rc="$(uscan --since "${tomorrow}")"
@@ -495,18 +522,24 @@ printf 'one\n' > "${wf}/a"; printf 'two\n' > "${wf}/b"
 fdb="${work}/db/wf.sqlite"
 fscan() { local rc=0; "${bin}" scan --db "${fdb}" --root "${wf}" --no-xattrs --progress 3600 "${@}" > "${work}/wf.txt" 2>&1 || rc=$?; echo "${rc}"; }
 fq() { sqlite3 "${fdb}" "${1}"; }
+fqSchema() { sqlite3 -cmd '.dbconfig defensive off' "${fdb}" "PRAGMA writable_schema = ON; ${1}" > /dev/null; }
 fscan > /dev/null
 fFlipByte "${wf}/a" 0 1
 sleep 0.01; printf 'two, edited\n' > "${wf}/b"
-fq "CREATE TRIGGER refuse BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;"
+# A trigger would be refused when the database opens, so it's a CHECK the
+# rows already there pass. b's new content is 12 bytes.
+fqSchema "UPDATE sqlite_schema SET sql = substr(sql, 1, length(sql) - 1) || ', CONSTRAINT refused_by_the_test CHECK (bytes < 10))' WHERE name = 'files';"
 check ddy8p "a refused row fails the run" "$(fscan --since "${tomorrow}") $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "1 failed"
 check ddy8q "its events kept" "$(fq "SELECT group_concat(kind || ' ' || path) FROM events WHERE run_id = (SELECT max(id) FROM runs)")" "b3-db-mismatch ${wf}/a"
 expect ddy8r "summary kept" "summary: $(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1$' <<< "$(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
-expect ddy8s "says why" "output: $(cat "${work}/wf.txt")" grep -q 'refused by the test' "${work}/wf.txt"
+expect ddy8s "says why" "output: $(cat "${work}/wf.txt")" grep -q 'refused_by_the_test' "${work}/wf.txt"
 check ddy8t "failed run left in rollback mode" "$(fq 'PRAGMA journal_mode')" delete
-fq "DROP TRIGGER refuse"
+fqSchema "UPDATE sqlite_schema SET sql = replace(sql, ', CONSTRAINT refused_by_the_test CHECK (bytes < 10))', ')') WHERE name = 'files';"
 check ddy8v "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
 check ddy8w "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${wf}/b' AND f.bytes = 12")" 1
+fq "CREATE TRIGGER planted AFTER INSERT ON runs BEGIN SELECT 1; END;"
+check des6w "a planted trigger refused" "$(fscan) $(grep -c 'holds trigger "planted"' "${work}/wf.txt")" "1 1"
+fq "DROP TRIGGER planted"
 
 # 17. --verify reads every file with a stored checksum again, even the same
 # day, and nothing else. It leaves no attributes and records no new files.
@@ -554,7 +587,6 @@ gscan --root "${gd}/b" > /dev/null
 gscan --root "${gd}/a/sub" > /dev/null
 rm -f -- "${gd}/a/del"
 chmod 000 "${gd}/a/locked" "${gd}/a/dlock"
-trap 'chmod 755 "${gd}/a/dlock" 2> /dev/null || true; chmod 644 "${gd}/a/locked" 2> /dev/null || true; fCleanup' EXIT
 check ddya0 "gone: scan with an unreadable file and folder" "$(gscan --root "${gd}/a" --exclude "${gd}/a/sub" --since "${tomorrow}")" 8
 chmod 755 "${gd}/a/dlock"; chmod 644 "${gd}/a/locked"
 check ddya1 "gone: exit" "$(gone)" 0
@@ -629,13 +661,16 @@ expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
 check deb0e "version line alone" "${ver}" "${ver%%$'\n'*}"$'\n'
 
 # 22. Help ends with one blank line before the prompt, however it's asked
-# for. The bare command shows it too, with exit 1.
-helpBad=""
+# for. The bare command shows it too, with exit 1. The x and exit code after
+# the output keep its trailing blank line from being stripped.
+helpBad=""; helpRcs=""
 for helpArg in -h --help help ''; do
-	if [[ -n "${helpArg}" ]]; then helpOut="$("${bin}" "${helpArg}"; echo x)"; else helpOut="$("${bin}" || true; echo x)"; fi
-	[[ "${helpOut}" == *[![:space:]]$'\n\nx' ]] || helpBad+=" [${helpArg}]"
+	helpOut="$("${bin}" ${helpArg:+"${helpArg}"} && echo "x0" || echo "x$?")"
+	helpRcs+=" [${helpArg}] ${helpOut##*x}"
+	[[ "${helpOut%x*}" == *[![:space:]]$'\n\n' ]] || helpBad+=" [${helpArg}]"
 done
 check dee8e "help ends with a blank line" "${helpBad}" ""
+check des4v "help exit codes" "${helpRcs}" " [-h] 0 [--help] 0 [help] 0 [] 1"
 
 # 23. A mount point whose name isn't UTF-8 doesn't stop a scan of some other
 # root (2026102519331112). The mounts are in a user namespace, so no root is
@@ -684,6 +719,74 @@ check dejdr "sudo prune, lock a link" "$(ln_case .lock link)" "1 none"
 check dejds "sudo prune, -wal a link" "$(ln_case -wal link)" "1 none"
 check dejdt "sudo prune, -shm a link" "$(ln_case -shm link)" "1 none"
 
+# 25. A mount that's been mounted over is gone from the walk's view, and so is
+# what's mounted on it (2026102814341407). In a user namespace, as step 23.
+# Under a whole mnt, sub is a folder like any other. A root under a tmpfs
+# that covers ext4 takes the tmpfs's type, so it's refused as no disk.
+cat > "${ns}/over.bash" << 'EOF2'
+cd "${1}" && mkdir -p a/base/sub a/hid a/vis/sub a/mnt b/base/sub b/hid b/mnt || exit 1
+printf 'x\n' > a/vis/top; printf 'y\n' > a/vis/sub/f1; printf 'z\n' > a/hid/f0
+mount --bind a/base a/mnt && mount --bind a/hid a/mnt/sub && mount --bind a/vis a/mnt || exit 1
+mount --bind b/base b/mnt && mount --bind b/hid b/mnt/sub && mount -t tmpfs none b/mnt || exit 1
+mkdir b/mnt/sub && printf 'w\n' > b/mnt/sub/f || exit 1
+: > over.mounted
+rc=0; "${2}" scan --db a.sqlite --root a/mnt --progress 3600 > a.out 2>&1 || rc=$?
+echo "${rc} $(grep -o 'hashed [0-9]*' a.out | head -1)" > a.got
+rc=0; "${2}" scan --db b.sqlite --root b/mnt/sub --progress 3600 > b.out 2>&1 || rc=$?
+echo "${rc} $(grep -c 'is tmpfs from none' b.out)" > b.got
+EOF2
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/over.bash" "${ns}" "${bin}" 2> /dev/null || true
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip des5j "walk under a mount that's been mounted over (ZFS pools aren't seen from a user namespace)"
+	skip des5k "root's type from the mount on top (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/over.mounted" ]]; then
+	check des5j "walk under a mount that's been mounted over" "$(cat "${ns}/a.got")" "0 hashed 2"
+	check des5k "root's type from the mount on top" "$(cat "${ns}/b.got")" "1 1"
+else
+	skip des5j "walk under a mount that's been mounted over (no user namespace here)"
+	skip des5k "root's type from the mount on top (no user namespace here)"
+fi
+
+# 26. A root that can't be resolved isn't read, so the run isn't clean: a
+# dir-error with the real error, and exit 8 (2026102814341406).
+mr="${work}/mr"
+mkdir -p "${mr}/t"
+printf 'x\n' > "${mr}/t/f"
+rc=0; "${bin}" scan --db "${mr}/t.sqlite" --root "${mr}/t" --root "${mr}/t/nonexist" --progress 3600 > "${mr}/out.txt" 2>&1 || rc=$?
+check des5v "scan with a missing root" "${rc}" 8
+check des5w "missing root's dir-error" "$(sqlite3 "${mr}/t.sqlite" "SELECT kind || ' ' || path || ' ' || detail FROM events" || true)" "dir-error ${mr}/t/nonexist No such file or directory (os error 2)"
+
+# 27. An unmounted btrfs subvolume given as a root is read on its own, though
+# it sits inside another root whose walk stops at it (2026102814341412). Only
+# on btrfs, so HOST_TEMP picks it.
+bt="${work}/bt"
+mkdir -p "${bt}/p"
+printf 'a\n' > "${bt}/p/f1"
+if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/p/sv" > /dev/null 2>&1; then
+	printf 'b\n' > "${bt}/p/sv/f2"; printf 'c\n' > "${bt}/p/sv/f3"
+	rc=0; "${bin}" scan --db "${bt}/t.sqlite" --root "${bt}/p" --root "${bt}/p/sv" --progress 3600 > "${bt}/out.txt" 2>&1 || rc=$?
+	check des5x "btrfs subvolume inside another root" "${rc} $(grep -o 'hashed [0-9]*' "${bt}/out.txt" | head -1 || true)" "0 hashed 3"
+	# rm --one-file-system leaves a subvolume behind, so it goes first.
+	rm -f -- "${bt}/p/sv/f2" "${bt}/p/sv/f3"; rmdir -- "${bt}/p/sv" || true
+else
+	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
+fi
+
+# 28. Beside a database inside the root, only its own 5 names are left out,
+# not every name that starts with it (2026102814341408). A root below a
+# folder with .git is in a git work tree, as the folder with .git is
+# (2026102814341413).
+dn="${work}/dn"; mkdir -p "${dn}/tree/tukdir" "${dn}/repo/.git" "${dn}/repo/src"
+printf 'n\n' > "${dn}/tree/tuk-notes.txt"; printf 'd\n' > "${dn}/tree/tuk.d"; printf 'i\n' > "${dn}/tree/tukdir/f"
+printf 'c\n' > "${dn}/repo/src/a.c"
+rc=0; "${bin}" scan --db "${dn}/tree/tuk" --root "${dn}/tree" --no-xattrs --progress 3600 > "${dn}/out.txt" 2>&1 || rc=$?
+check des65 "names that start with the database's" "${rc} $(sqlite3 "${dn}/tree/tuk" 'SELECT count(*) FROM paths')" "0 3"
+check des66 "the database's own names left out" "$(sqlite3 "${dn}/tree/tuk" "SELECT count(*) FROM paths WHERE path LIKE '%/tuk' OR path LIKE '%/tuk.lock' OR path LIKE '%/tuk-%al'")" 0
+rc=0; "${bin}" scan --db "${dn}/g.sqlite" --root "${dn}/repo/src" --progress 3600 > "${dn}/g.txt" 2>&1 || rc=$?
+check des67 "root below a git folder: no attributes" "${rc} $(sqlite3 "${dn}/g.sqlite" 'SELECT count(*) FROM paths') $(xget "${dn}/repo/src/a.c" user.blake3.b64u)" "0 1 "
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -729,3 +832,15 @@ fi
 ##		  rdscan, not a second rscan. SPDX line.
 ##		- 20261028: The stale folder sweep also needs the folder to be ours.
 ##		- 20261029: A build number marked -dirty.
+##		- 20261102: A Ctrl+C stops the test, not only the running scan. A
+##		  locked folder left by a stop or kill no longer blocks its removal.
+##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and
+##		  step 22 checks the exit codes.
+##		- 20261102: Mounts that have been mounted over.
+##		- 20261102: A root that can't be resolved, and a btrfs subvolume
+##		  inside another root.
+##		- 20261102: Names that start with the database's, and a root below a
+##		  folder with .git.
+##		- 20261102: A CHECK in place of the trigger that refuses a row, and a
+##		  planted trigger refused.
+##		- 20261102: Step 5 also stops and resumes over a new database.

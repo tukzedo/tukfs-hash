@@ -5,7 +5,7 @@
 // disk at once. Two readers on one hard drive make it seek between them, and
 // both go slower than one would alone.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
@@ -15,6 +15,8 @@ use std::process::Command;
 /// One line of the mount table.
 #[derive(Debug, Clone)]
 pub struct Mount {
+	pub id: u64,
+	pub parent: u64,
 	pub point: PathBuf,
 	pub fstype: String,
 	pub source: String,
@@ -55,7 +57,13 @@ pub fn parse_mountinfo(text: &[u8]) -> Vec<Mount> {
 		if l.len() < 5 || r.len() < 2 {
 			continue;
 		}
+		let num = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u64>().ok();
+		let (Some(id), Some(parent)) = (num(l[0]), num(l[1])) else {
+			continue;
+		};
 		out.push(Mount {
+			id,
+			parent,
 			point: unescape(l[4]),
 			fstype: String::from_utf8_lossy(r[0]).into_owned(),
 			source: String::from_utf8_lossy(r[1]).into_owned(),
@@ -78,11 +86,66 @@ pub fn read_mounts() -> Result<Vec<Mount>, String> {
 	}
 	let text =
 		fs::read("/proc/self/mountinfo").map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
-	Ok(parse_mountinfo(&text))
+	Ok(visible(parse_mountinfo(&text)))
 }
 
-/// The mount a path is on. Later lines are mounted over earlier ones, so the
-/// last of the longest matches is the one in effect.
+/// Only the mounts a path can reach. One mounted over another, or over a folder
+/// above it, hides it and all that's mounted on it (2026102814341407). Works
+/// from the table alone, so kernels without `STATX_MNT_ID` get it too.
+pub fn visible(mounts: Vec<Mount>) -> Vec<Mount> {
+	let mut kids: HashMap<u64, Vec<usize>> = HashMap::new();
+	for (i, m) in mounts.iter().enumerate() {
+		kids.entry(m.parent).or_default().push(i);
+	}
+	let index: HashMap<u64, usize> = mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
+	let on = |id: u64| kids.get(&id).map_or(&[][..], Vec::as_slice);
+	let parent_of = |i: usize| index.get(&mounts[i].parent).copied().filter(|&p| p != i);
+	let covered = |i: usize| {
+		on(mounts[i].id)
+			.iter()
+			.any(|&k| k != i && mounts[k].point == mounts[i].point)
+	};
+	// A sibling on a folder above it was mounted later, or it'd be the parent.
+	let shadowed = |i: usize| {
+		let m = &mounts[i];
+		on(m.parent).iter().any(|&s| {
+			let s = &mounts[s];
+			s.id != m.id && s.id != m.parent && s.point != m.point && m.point.starts_with(&s.point)
+		})
+	};
+	// Whether a path gets to a mount's point at all, covered or not.
+	let mut reach: Vec<Option<bool>> = vec![None; mounts.len()];
+	for start in 0..mounts.len() {
+		let mut chain = Vec::new();
+		let mut at = Some(start);
+		// Up to one already known, the namespace's root, or a loop.
+		while let Some(i) = at
+			&& reach[i].is_none()
+			&& !chain.contains(&i)
+		{
+			chain.push(i);
+			at = parent_of(i);
+		}
+		while let Some(i) = chain.pop() {
+			let through = parent_of(i).and_then(|p| {
+				let r = reach[p]?;
+				Some(r && (mounts[i].point == mounts[p].point || !covered(p)))
+			});
+			reach[i] = Some(through.unwrap_or(true) && !shadowed(i));
+		}
+	}
+	let keep: Vec<bool> = (0..mounts.len())
+		.map(|i| reach[i] == Some(true) && !covered(i))
+		.collect();
+	mounts
+		.into_iter()
+		.zip(keep)
+		.filter_map(|(m, k)| k.then_some(m))
+		.collect()
+}
+
+/// The mount a path is on, from a table already cut down by `visible`. Of 2
+/// at one point, the later line is the one on top.
 pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
 	let mut best: Option<&Mount> = None;
 	for m in mounts {
@@ -288,11 +351,13 @@ pub fn mount_points(mounts: Vec<Mount>) -> BTreeMap<PathBuf, String> {
 /// and nothing more, no attributes and no database. A FUSE mount of a disk or
 /// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
 /// fuseblk for a block device, plain fuse for a file mounted by a user.
+/// fuseblk with a subtype shows as `fuseblk.<name>`.
 pub fn hands_off(m: &Mount) -> bool {
 	let t = m.fstype.strip_prefix("fuse.").unwrap_or(&m.fstype);
 	match t {
 		"fuseblk" | "ntfs" | "ntfs3" | "ntfs-3g" | "lowntfs-3g" | "apfs" | "apfs-fuse" | "hfs"
 		| "hfsplus" => true,
+		_ if t.starts_with("fuseblk.") => true,
 		"fuse" => m.source.starts_with('/'),
 		_ => false,
 	}
@@ -355,6 +420,8 @@ mod tests {
 	fn no_writes_on_ntfs_or_mac_disks() {
 		let _id = test_id("ddyar");
 		let m = |t: &str, src: &str| Mount {
+			id: 1,
+			parent: 0,
 			point: PathBuf::from("/m"),
 			fstype: t.into(),
 			source: src.into(),
@@ -419,6 +486,90 @@ mod tests {
 		assert_eq!(g[0].1, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
 		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);
 		assert_eq!(group_name(&g[1].0), "sda+sdb");
+	}
+
+	#[test]
+	fn fuseblk_with_a_subtype() {
+		let _id = test_id("des5e");
+		let all = parse_mountinfo(
+			b"22 1 8:1 / / rw - ext4 /dev/sda1 rw\n\
+			70 22 8:49 / /mnt/win rw - fuseblk.ntfs-3g /dev/sdd1 rw\n\
+			71 22 8:50 / /mnt/stick rw - fuseblk.exfat /dev/sde1 rw\n",
+		);
+		assert_eq!(
+			hands_off_at(&all, Path::new("/mnt/win/a")).as_deref(),
+			Some("fuseblk.ntfs-3g")
+		);
+		assert_eq!(
+			hands_off_at(&all, Path::new("/mnt/stick")).as_deref(),
+			Some("fuseblk.exfat")
+		);
+		assert_eq!(hands_off_at(&all, Path::new("/home")), None);
+	}
+
+	// base on mnt, hid on mnt/sub, then vis over mnt.
+	const OVER: &[u8] = b"22 1 8:1 / / rw - ext4 /dev/sda1 rw
+30 22 8:1 /base /t/mnt rw - ext4 /dev/sda1 rw
+31 30 8:1 /hid /t/mnt/sub rw - ext4 /dev/sda1 rw
+32 30 8:1 /vis /t/mnt rw - ext4 /dev/sda1 rw
+";
+
+	#[test]
+	fn mounted_over_point_is_walked() {
+		let _id = test_id("des5f");
+		let ids = |v: &[Mount]| v.iter().map(|m| m.id).collect::<Vec<_>>();
+		let all = parse_mountinfo(OVER);
+		assert_eq!(ids(&all), [22, 30, 31, 32]);
+		let shown = visible(all);
+		assert_eq!(ids(&shown), [22, 32]);
+		let points = mount_points(shown);
+		assert!(!points.contains_key(Path::new("/t/mnt/sub")));
+		assert!(points.contains_key(Path::new("/t/mnt")));
+	}
+
+	#[test]
+	fn type_comes_from_the_mount_on_top() {
+		let _id = test_id("des5g");
+		for (top, want) in [("tmpfs", None), ("ntfs3", Some("ntfs3"))] {
+			let text = String::from_utf8_lossy(OVER).replace(
+				"/vis /t/mnt rw - ext4 /dev/sda1",
+				&format!("/ /t/mnt rw - {top} /dev/sdd1"),
+			);
+			let all = visible(parse_mountinfo(text.as_bytes()));
+			let under = Path::new("/t/mnt/sub/f");
+			assert_eq!(mount_for(&all, under).map(|m| m.fstype.as_str()), Some(top));
+			assert_eq!(hands_off_at(&all, under).as_deref(), want);
+		}
+	}
+
+	#[test]
+	fn hidden_by_a_later_mount_above() {
+		let _id = test_id("des5h");
+		let ids = |text: &[u8]| {
+			visible(parse_mountinfo(text))
+				.iter()
+				.map(|m| m.id)
+				.collect::<Vec<_>>()
+		};
+		// b on a/b, then a over the folder a: both hang off the root.
+		assert_eq!(
+			ids(b"1 1 0:1 / / rw - ext4 /dev/sda1 rw\n\
+				2 1 0:2 / /a/b rw - ext4 /dev/sdb1 rw\n\
+				3 2 0:3 / /a/b/c rw - ext4 /dev/sdc1 rw\n\
+				4 1 0:4 / /a rw - ext4 /dev/sdd1 rw\n\
+				5 1 0:5 / /ab rw - ext4 /dev/sde1 rw\n"),
+			[1, 4, 5]
+		);
+		// A root over the namespace's own, a parent not in the table, and a
+		// loop that can't happen but mustn't hang.
+		assert_eq!(
+			ids(b"1 0 0:1 / / rw - rootfs rootfs rw\n\
+				2 1 0:2 / / rw - ext4 /dev/sda1 rw\n\
+				3 2 0:3 / /x rw - ext4 /dev/sdb1 rw\n\
+				8 9 0:8 / /y rw - ext4 /dev/sdc1 rw\n\
+				9 8 0:9 / /y/z rw - ext4 /dev/sdd1 rw\n"),
+			[2, 3, 8, 9]
+		);
 	}
 
 	#[test]
@@ -524,6 +675,7 @@ mod tests {
 					2 => (left, b" - ", fstype),
 					_ => {
 						want.push((
+							(20 + i as u64, 1 + i as u64),
 							PathBuf::from(OsString::from_vec(point.clone())),
 							fstype,
 							source,
@@ -546,7 +698,14 @@ mod tests {
 			let got = parse_mountinfo(&text);
 			let got: Vec<_> = got
 				.iter()
-				.map(|m| (m.point.clone(), m.fstype.as_str(), m.source.as_str()))
+				.map(|m| {
+					(
+						(m.id, m.parent),
+						m.point.clone(),
+						m.fstype.as_str(),
+						m.source.as_str(),
+					)
+				})
 				.collect();
 			assert_eq!(got, want, "{}", text.escape_ascii());
 			// Real lines gone bad: no panic, and no field runs past a space.
