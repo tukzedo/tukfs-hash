@@ -29,6 +29,16 @@
 
 ## Issues
 
+- When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
+	- ID: 2026110210514819
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261102-105148
+	- Opened by:
+	- Progress log:
+		- Found by the 2026102814341421 worker. fUnlock makes it rarer. Keep the marks until the last removal, or remove them last.
+
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
