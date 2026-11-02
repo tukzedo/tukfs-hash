@@ -147,12 +147,24 @@
 - In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
 	- ID: 2026102819580272
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-195802
 	- Opened by:
+	- Reproduced [Bug]: 2026-11-02, in a stub run with a gif stand-in that changes `assets/demo.gif`: "the files changed during the run, so it is not recorded".
+	- Actual cause [Bug]: `fRecordGreen` records the tree taken before the build, and the default run's gif stage copies a changed gif into the checkout first, so `green-tree.bash record` sees a different tree.
 	- Progress log:
 		- Seen by the worker on 2026102814341426. Not checked whether it's meant.
+		- 2026-11-02: Not meant. The default run is as thorough as the merge gate, and publish commits the new gif, so the pushed commit's tree was never on record and the hook ran the whole gate again.
+		- 2026-11-02: Verified: `gate-record-check.bash REPO` passes 21 of 21. The new cases fail on the code from before.
+	- Decisions:
+		- Record the tree with the new gif, when the gif is the only change since the tree was taken. The gif is drawn the same from the same tree, so the gate would draw those bytes too. Any other change still records nothing.
+	- Actual fix [Bug]: `fRecordGreen` takes the checkout's tree when it differs from the tested one only by the gif it wrote, the same exception publish makes. design.md, "Build and release", says so.
+	- Branch: round-20261102
+	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, cases "changed gif" and "gif and README", since private checks stay out of the pipeline (2026102508462883).
+	- Swept: the publish stage's own gif exception, which this matches. No other stage compares the tree after the gif.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261102-102849
 
 - Attributes are written when a root is inside a git work tree.
 	- ID: 2026102814341413
@@ -260,7 +272,7 @@
 - With `--keep-temp`, the default run's cleanup line counts the kept temp folder as freed.
 	- ID: 2026102820562867
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-205628
 	- Opened by: found while working 2026102814341438
@@ -268,8 +280,16 @@
 	- Steps to reproduce [Bug]: Run `cicd/cicd.bash --no-publish --keep-temp`, with no flags otherwise.
 	- Incorrect behavior [Bug]: `fCleanup` takes the kept folder's size off the total through `kb`, but the cache prune loop has reused `kb` by then. The line takes off the last cache dir's freed size instead.
 	- Expected behavior [Bug]: The kept folder isn't in the "about" size.
-	- Reproduced [Bug]: No, read only.
+	- Reproduced [Bug]: 2026-11-02, in a stub run with a 64 MB stale cache entry in `target`: "about 69 MB". `target-gate` came last and freed nothing, so the kept folder's 5 MB stayed in.
 	- Probable fix [Bug]: A variable of its own for the run folder's size.
+	- Actual fix [Bug]: `fCleanup` keeps the run folder's size in `runKb`.
+	- Progress log:
+		- 2026-11-02: Verified: `gate-record-check.bash REPO` case "--keep-temp" says "about 64 MB", and "about 69 MB" on the code from before.
+	- Branch: round-20261102
+	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, case "--keep-temp".
+	- Swept: `fRunTmpGone`, the stop path, sums its own `total` and doesn't reuse `kb`.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261102-102849
 
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
