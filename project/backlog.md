@@ -323,6 +323,7 @@
 	- Test case: des7k and des7m in step 5 of `tests/integration.bash`, a stop and resume over a new database. Unit tests des7n `a_reported_miss_is_not_read_again`, which also covers a row at an older size, and des7p `run_misses_are_this_runs`. des7m and des7n failed before the fix and pass after.
 	- Swept: `judged_already` and `skip_unread`, the only skips. The `link-done` path calls `keep` with its own name's row, so each name is judged by its own events. `--verify` resumes go through the same check.
 	- Closed: 20261102-120951
+	- 2026-11-02: des7n failed under Miri on openat2 in the full run. Marked it to skip Miri, as the other walk tests are.
 
 - A `fuseblk` mount with a subtype isn't treated as hands-off.
 	- ID: 2026102814341416
