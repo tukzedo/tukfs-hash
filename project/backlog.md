@@ -29,27 +29,6 @@
 
 ## Issues
 
-- The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
-	- ID: 2026110211132205
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261102-111322
-	- Opened by: work on 2026102814341412
-	- Related IDs: 2026102814341412
-	- Requirements [Feature]: `des5x` runs only when the test's work folder is on btrfs. `IT_ROOTS` in `cicd/config.bash` has ext4 and ZFS only, so it always skips in a run.
-	- Note: b23's `/tmp` is btrfs, but slow to fsync under load (2026102409041302). A missing test root keeps the tree from being recorded for the pre-push hook, so a btrfs root that only some boxes have needs its own rule, or a small btrfs image made by the test.
-
-- When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
-	- ID: 2026110210514819
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261102-105148
-	- Opened by:
-	- Progress log:
-		- Found by the 2026102814341421 worker. fUnlock makes it rarer. Keep the marks until the last removal, or remove them last.
-
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
@@ -59,156 +38,6 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
-
-- A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
-	- ID: 2026102814341406
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 6
-	- Origin: `f05c368`. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]: `scan --db d.sqlite --root t1 --root t1/nonexist`.
-	- Incorrect behavior [Bug]: "skipping root t1/nonexist: missing", exit 0, nothing in the run's summary or events. Any `canonicalize` error says "missing", EACCES and ELOOP included.
-	- Expected behavior [Bug]: README: exit 8 when some files or folders couldn't be checked. A mistyped root shouldn't read as clean.
-	- Probable fix [Bug]: Log a `dir-error` event for each dropped root, with the real error text.
-	- Sweep: `scan::plan`, and `walk`'s NotFound branch for a root that goes away after the plan.
-	- Note: The exit code a user sees changes, so it waits on UAT. The b23 scan wrapper takes 8 as a normal finish, so it needs no change.
-	- Note: An integration check with a missing root, expecting 8 and a `dir-error` that names it.
-	- Reproduced [Bug]: Yes, with the build from before `5602fb5`: "skipping root t1/nonexist: missing", exit 0, no events.
-	- Actual cause [Bug]: `plan` kept only a line of text for a root `canonicalize` refused, so nothing reached the run's events, and the walk returned quietly on a root gone since the plan.
-	- Actual fix [Bug]:
-		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and logs a `dir-error` for it once the run has begun, so the run exits 8.
-		- A root gone by the time its walk starts is a `dir-error` too, like any other error opening it.
-		- `plan` prints the real error, and still exits 0, since it reads nothing.
-		- design.md, "Reading files", says which roots are dropped and which are a `dir-error`.
-	- Decisions:
-		- The event's path is the root made absolute without resolving it, so `report` names it the same way it names other paths.
-		- No roots left at all is still "nothing to scan", exit 1, before a run begins.
-	- Branch: round-20261102
-	- Commit: `5602fb5`
-	- Test case: `des5v` (exit 8) and `des5w` (the `dir-error` with the path and error), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
-	- Verified: `des5v` and `des5w` fail against the build from before the fix, with exit 0 and no event, and pass after, on ext4 and btrfs. `--backlog-run-quick` passed in 1m 38s, ext4 and ZFS integration runs included.
-	- Swept: The only other silent skip of a root was `walk`'s NotFound branch, now an event. `--exclude`, `--no-xattr` and `--threads` paths that don't resolve stay quiet, since none of them leaves files unread. Nothing in the repo or the private tools parses "skipping root" or `plan`'s "skip" lines.
-	- Acceptance signoff: Self-closed per memory.md's close policy: README already says 8 means some folders weren't checked, and the test fails before and passes after. The exit code users see changes, so it's in questions.md as a Check.
-	- Closed: 20261102-111322
-
-- A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
-	- ID: 2026102814341407
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 7
-	- Origin: `mount_for` is from `f05c368`, the walk's mount check from `9120949`. 2026101406340922 added the device check, which can't see 2 mounts of one device. Confirmed.
-	- Steps to reproduce [Bug]:
-		- In `unshare -rm`, bind `base` on `mnt`, `hid` on `mnt/sub`, then `vis` over `mnt`. `scan --root mnt` reads only `mnt/top` and exits 0, with no event for `mnt/sub/f1`.
-		- Bind ext4 on `mnt` and `mnt/sub`, then a tmpfs over `mnt`. `scan --root mnt/sub` writes `user.blake3.*` onto the tmpfs.
-	- Incorrect behavior [Bug]: `mounts::mount_for` takes the last of the longest matches, and `mount_points` lists covered points too. The same path could put attributes or the database on an ntfs3 mount made over an ext4 one.
-	- Expected behavior [Bug]: design.md, "Reading files" and "Attributes": the walk stops only at real mount points, and nothing is written to NTFS, APFS or HFS+.
-	- Probable fix [Bug]: Compare mount IDs from `statx` `STATX_MNT_ID` on the open folder fds, kernel 5.8 and up, with mountinfo's first field. Keep the table rule as the fallback.
-	- Sweep: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, and `accept.rs`'s `hands_off_at` call.
-	- Note: `STATX_MNT_ID` needs kernel 5.8. The release builds run on Debian 10, whose 4.19 kernel has neither it nor `openat2`, so the table fallback stays and keeps this gap there.
-	- Note: Integration check `deeby` already runs a scan under `unshare --user --map-root-user --mount`. Both repros fit there, with the same skip on ZFS and where user namespaces are off.
-	- Reproduced [Bug]: Yes, both, with the build from `dfc7936`: the first read 1 file and exited 0, the second scanned the folder on the tmpfs and exited 0.
-	- Actual cause [Bug]: As above. The mount table was taken whole, so a covered mount and anything mounted on it still counted.
-	- Actual fix [Bug]:
-		- The mount table drops what no path reaches: a mount with another on top at its point, a mount on a folder that a later mount above it hides, and anything mounted on either. It goes by the table's own mount and parent IDs.
-		- Every caller gets the table that way, so the walk's mount points, a root's type and disks, the database's lock check and `accept` all see only the mounts in effect.
-		- A root under a tmpfs that covers ext4 now takes the tmpfs's type, so it's refused like any tmpfs root.
-	- Decisions:
-		- The table's parent IDs, not `STATX_MNT_ID`. Same answer on every kernel, Debian 10's 4.19 included, with no extra call per folder. So the gap the note expected on 4.19 isn't there.
-	- Branch: round-20261102
-	- Commit: `81d8d8f`
-	- Test case: `des5f`, `des5g` and `des5h` (unit, the table), `des5j` and `des5k` (integration, the two repros in a user namespace, skipped on ZFS).
-	- Verified: `des5j` and `des5k` fail against the build from HEAD before the fix, with "0 hashed 1" and "0 0", and pass after on ext4. Making the filter keep everything turns `des5f`, `des5g` and `des5h` red, dropping the rule for a mount on a hidden folder turns `des5h` red, and dropping the one that lets a mount on top of its parent through turns all 3 red. On this box the filter hides only the autofs under `/proc/sys/fs/binfmt_misc`. `--backlog-run-quick` passed in 1m 37s.
-	- Swept: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, `accept`'s `hands_off_at` call and `main.rs`'s prune lock all read the table through `read_mounts`. `disks_for`'s loop file lookup does too.
-	- Acceptance signoff: Self-closed: as reported, tests fail before and pass after.
-	- Closed: 20261102-110336
-
-- A file or folder beside the database whose name starts with the database's file name is skipped with no event.
-	- ID: 2026102814341408
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 8
-	- Origin: `f05c368`. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]: Put `--db tree/tuk` inside the root, with `tukfs-notes.txt`, `tuk.d` and a folder `tukdir/` beside it.
-	- Incorrect behavior [Bug]: All 3 are skipped, the whole folder included, and `gone` lists none of them.
-	- Expected behavior [Bug]: Only the database, its `-wal`, `-shm`, `-journal` and `.lock` are left out, as the comment at `scan::excluded` says.
-	- Probable fix [Bug]: Match those 5 names exactly.
-	- Note: Only names in the database's own folder are hit, since `scan::excluded` also checks the parent.
-	- Note: A unit test of `excluded` over the 5 names and a few lookalikes, plus the integration repro.
-	- Actual cause [Bug]: `scan::excluded` left out every name in the database's folder that started with its name.
-	- Actual fix [Bug]: It matches only the database's name and that name plus `-wal`, `-shm`, `-journal` or `.lock`. design.md, "Database", says so.
-	- Branch: round-20261102
-	- Test case: des63 (`only_the_databases_own_names_are_left_out`), and des65 and des66 in step 28 of `tests/integration.bash`. Without the fix des63 failed and des65 got "0 0".
-	- Swept: `scan::excluded` is the only place the walk leaves a name out by the database's name. `hand_over` and `lock` already use exact names, and `gone` has no name rule of its own.
-	- Closed: 20261102-112339
-
-- A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
-	- ID: 2026102814341412
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 12
-	- Origin: the "inside" rule is from `f05c368`, the device stop from 2026101406340922. Not seen before. Plausible, read only.
-	- Incorrect behavior [Bug]: `scan::plan` finds the parent's mount for the subvolume and drops it as "inside" the parent root. The parent's walk then sees another device and stops there, with no event. Its files are never read, at exit 0.
-	- Expected behavior [Bug]: design.md, "Reading files": each root is walked on its own.
-	- Probable fix [Bug]: The "inside" check also needs both folders on the same device.
-	- Note: To reproduce, `btrfs subvolume create` works for a normal user on b23's btrfs `/tmp`. Removing it needs kernel 5.7 or later, where the owner can `rmdir` an empty subvolume, or root.
-	- Reproduced [Bug]: Yes, with the build from before `5602fb5`, on `/tmp`: "skipping root .../p/sv: inside .../p", and 1 of 3 files hashed at exit 0.
-	- Actual cause [Bug]: As above.
-	- Actual fix [Bug]: A root is dropped as inside another only when both are on the same mount and the same device. The subvolume is kept as its own root, in the same group as its parent, since they share disks.
-	- Decisions:
-		- Both tests stay. Same device alone would drop a root under a bind mount of a folder of the same filesystem, which the outer walk stops at.
-		- A stopped run from before this, over such roots, has another root list, so `--resume` refuses it. A new run reads everything again.
-	- Branch: round-20261102
-	- Commit: `5602fb5`
-	- Test case: `des5x`, integration step 27. It runs only when the test's work folder is on btrfs, and skips otherwise. The pipeline's test roots are ext4 and ZFS, so it skips there until 2026110211132205.
-	- Verified: `des5x` fails against the build from before the fix ("0 hashed 1") and passes after ("0 hashed 3"), with `HOST_TEMP=/tmp` on b23's btrfs. The subvolume is removed by the test as a normal user on kernel 6.12.
-	- Swept: The `--threads` match in `plan` uses folder names only, which is right, since it picks a count. design.md, "Reading files", already said the walk stops at another device; it now says such a root is kept.
-	- Acceptance signoff: Self-closed: the probable fix as written, test fails before and passes after.
-	- Closed: 20261102-111322
-
-- The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
-	- ID: 2026102814341423
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 13
-	- Origin: `f05c368`. Not seen before. Plausible, read only.
-	- Requirements [Feature]:
-		- Move to a `libsqlite3-sys` that bundles 3.50.3 or later.
-		- Build SQLite without FTS3, FTS5, RTREE and extension loading, none of which are used.
-		- Refuse a schema with anything but the known tables and indexes before `quick_check`, and set `trusted_schema` off.
-	- Note: CVE-2025-7709 reads a tombstone size from the file with no bound. `give_back` hands the database to the user, so a planted FTS5 table runs that code as root on the next `sudo` scan. cargo-deny only checks RustSec, which doesn't list C CVEs in bundled code.
-	- Note: A newer rusqlite has to keep `rust-version = "1.88"` and build in the Debian 10 release image for both targets. `LIBSQLITE3_FLAGS` has to reach the release, leak check and host builds alike.
-	- Note: The release build should shrink with FTS and RTREE out. Check the size against the release set before and after.
-	- Actual effort: Avg
-	- Progress log:
-		- 2026-11-02: rusqlite 0.40.2 and `libsqlite3-sys` 0.38.2, which bundles SQLite 3.53.2. rusqlite 0.41 needs Rust 1.89, so it isn't taken. The lock still resolves for Rust 1.88.
-		- 2026-11-02: `.cargo/config.toml` sets `LIBSQLITE3_FLAGS` for every cargo build in the tree, taking out FTS3, FTS5, RTREE and extension loading. The leak check's own flags now go after these rather than replacing them.
-		- 2026-11-02: Every open, read only or not, turns `trusted_schema` off and checks `sqlite_schema` against what the program makes before anything else reads the file. Anything else is refused with its type and name.
-		- 2026-11-02: Integration step 16 made a row fail with a trigger, which the check now refuses. It uses a CHECK constraint on `files` instead, and ddy8s greps for the constraint's name, `refused_by_the_test`, rather than the trigger's message, 'refused by the test'.
-		- 2026-11-02: Sizes, built in the release image. x86_64 2,712,136 to 2,258,312 bytes, 17% less. arm64 2,419,960 to 1,984,808, 18% less. A host build went from 3,058,056 to 2,494,568.
-		- 2026-11-02: 30,000 small files, 3 rounds, load 7 on 32 cores: first scan user 0.54 to 0.57 s before against 0.51 to 0.55 after, rescan 0.69 to 0.75 against 0.71 to 0.75. The same within the noise.
-		- 2026-11-02: The bump brought hashlink 0.12.2 and hashbrown 0.17.1, whose CodeQL findings weren't in `cicd/codeql/vendored-reviewed.tsv`. 20 of the 23 hashlink findings and the hashbrown one are the code reviewed in hashlink 0.10.0 and hashbrown 0.15.5, at new lines, so those rows moved over. The other 3 are new: `back_entry` and `front_entry` return on `is_empty()` first, as `front` and `back` do, and `current_entry` returns when the cursor is on the guard node. The old rows are gone. Checked against the failed run's SARIF: no finding open in either crate, and no row stale.
-		- Verified: `des6s`, `des6t` and `des6v` fail with the vet calls taken out and `.cargo/config.toml` moved aside, and pass with them. `--backlog-run-quick` passed in 1m 45s, ext4 and ZFS integration runs included. The release image built both targets, the arm64 unit tests passed under qemu, and the ASan run and the advisories check passed.
-	- Decisions:
-		- The flags go in `.cargo/config.toml` rather than in cicd, so a plain `cargo build` gets them too. `des6s` fails in any build they don't reach.
-		- The check matches each row's type, name and table against a list, and wants SQL that starts with SQLite's own `CREATE TABLE` or `CREATE INDEX`, followed by a space. A row can claim any type, and a planted `CREATE VIRTUAL TABLE` can't pass the prefix.
-		- `sqlite_stat1` and `sqlite_stat4` are refused too. Nothing here runs ANALYZE, and stat4 is parsed from the file as well.
-		- The read-only opens are checked too, since `report` and `gone` read the same file under sudo.
-	- Swept: every `Connection::open` in `src`. Outside the tests there are only `open_rw` and `open_ro`. The only other `LIBSQLITE3_FLAGS` in the repo was the leak check's. The trigger in integration step 16 was the only schema object a test or private tool adds to a database before the program opens it.
-	- Branch: round-20261102
-	- Test case: `des6s` (SQLite version, compile options, no FTS or RTREE module), `des6t` (planted trigger, view, table, index, virtual table and a changed `meta` row, refused by both opens), `des6v` (`trusted_schema` off, page size still set), and `des6w` (a scan refuses a planted trigger, integration step 16).
-	- Acceptance signoff: Self-closed per memory.md's close policy. A database with anything extra in it is now refused, which a user would notice, so it's in questions.md as a Check.
-	- Closed: 20261102-115543
 
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
@@ -237,50 +66,15 @@
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
 	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
 
-- In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
-	- ID: 2026102819580272
+- When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
+	- ID: 2026110210514819
 	- Type: Bug
-	- Status: Done
+	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-195802
+	- Opened: 20261102-105148
 	- Opened by:
-	- Reproduced [Bug]: 2026-11-02, in a stub run with a gif stand-in that changes `assets/demo.gif`: "the files changed during the run, so it is not recorded".
-	- Actual cause [Bug]: `fRecordGreen` records the tree taken before the build, and the default run's gif stage copies a changed gif into the checkout first, so `green-tree.bash record` sees a different tree.
 	- Progress log:
-		- Seen by the worker on 2026102814341426. Not checked whether it's meant.
-		- 2026-11-02: Not meant. The default run is as thorough as the merge gate, and publish commits the new gif, so the pushed commit's tree was never on record and the hook ran the whole gate again.
-		- 2026-11-02: Verified: `gate-record-check.bash REPO` passes 21 of 21. The new cases fail on the code from before.
-	- Decisions:
-		- Record the tree with the new gif, when the gif is the only change since the tree was taken. The gif is drawn the same from the same tree, so the gate would draw those bytes too. Any other change still records nothing.
-	- Actual fix [Bug]: `fRecordGreen` takes the checkout's tree when it differs from the tested one only by the gif it wrote, the same exception publish makes. design.md, "Build and release", says so.
-	- Branch: round-20261102
-	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, cases "changed gif" and "gif and README", since private checks stay out of the pipeline (2026102508462883).
-	- Swept: the publish stage's own gif exception, which this matches. No other stage compares the tree after the gif.
-	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
-	- Closed: 20261102-102849
-
-- Attributes are written when a root is inside a git work tree.
-	- ID: 2026102814341413
-	- Type: Bug
-	- Status: Done
-	- Needs local test suite run?: No
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 18
-	- Origin: `9120949`, from the rule in `f05c368`. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]: `--root repo/src`, where `repo/.git` exists.
-	- Incorrect behavior [Bug]: `repo/src/a.c` gets the full `user.blake3.*` set. `--root repo` writes none.
-	- Expected behavior [Bug]: design.md, "Attributes": none are written in git work trees.
-	- Probable fix [Bug]: Before walking a root, look for `.git` in the folders above it, up to its mount point.
-	- Note: An integration check: a root below a folder with `.git`, expecting no `user.blake3.*` on its files.
-	- Actual cause [Bug]: The walk looked for `.git` only in the root and below it.
-	- Actual fix [Bug]: Before a root's walk, `scan::git_tree_above` looks for `.git` in each folder above it while the device stays the root's. A `.git` file, as in a linked work tree or a submodule, counts too.
-	- Decisions:
-		- Stop where the device changes, which is how git stops looking by default. That also stops at a btrfs subvolume, the same as git. git doesn't find a `.git` past a mount point unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, so it doesn't count here either.
-	- Branch: round-20261102
-	- Test case: des64 (`a_root_below_a_git_folder_is_in_git`), and des67 in step 28 of `tests/integration.bash`. Without the fix both failed, des67 with the full attribute set.
-	- Swept: The walk is the only place that writes a new set. `accept` only replaces a set already there, so it adds none in a git tree.
-	- Closed: 20261102-112339
+		- Found by the 2026102814341421 worker. fUnlock makes it rarer. Keep the marks until the last removal, or remove them last.
 
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414
@@ -297,108 +91,6 @@
 	- Note: The repro runs without root under `unshare -rm`, the same as check `deeby`.
 	- Related IDs: 2026102814341407
 
-- A resumed run reads and reports again a mismatch an earlier part found, when the file has no current database row.
-	- ID: 2026102814341415
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 20
-	- Origin: `11847b0` and `ce82cda`. Regression of 2026101406340909, whose fix only covered files with a row. Confirmed.
-	- Steps to reproduce [Bug]: A file known only by its attributes, in a new database. Flip a byte, stop the scan partway, exit 6. Resume, exit 4.
-	- Incorrect behavior [Bug]: `report` shows 2 `b3-xattr-mismatch` rows for the one path. The exit code is still right, since it counts paths.
-	- Expected behavior [Bug]: design.md, "Runs and exit codes": a resumed run doesn't read again what an earlier part judged, mismatches included.
-	- Probable fix [Bug]: On resume, load the paths with a mismatch event in this run and skip them.
-	- Sweep: a row at an older size or time with a current attribute set goes the same way.
-	- Note: design.md, "Skipping", row `resume-seen`.
-	- Note: Step 5 of `tests/integration.bash` does a stop and resume with a damaged file that has a row. The same with a file known only by its attributes is the test.
-	- Reproduced [Bug]: Yes, on ext4: the new check got 2 events for the path where 1 was wanted.
-	- Actual cause [Bug]: `resume-seen` went only by the row's `seen_run`, size, time and inode. A mismatch writes no row, so with none at the file's size and time nothing said the earlier part had reached it.
-	- Decisions:
-		- The run's own mismatch events stand in for the row, loaded once by `db::run_misses` when a run is resumed. No schema change.
-		- The events keep no size, time or inode, so a path is skipped only when its ctime is from before the run began. A file touched since then is read again, which at worst reports it twice.
-		- `cache-mismatch` isn't loaded, since it ends in a clean read that writes a row.
-	- Actual fix [Bug]: `judged_already` skips a path an earlier part reported a mismatch for when its ctime is from before the run began, with or without a row. design.md, "Skipping", says so under the table.
-	- Branch: round-20261102
-	- Test case: des7k and des7m in step 5 of `tests/integration.bash`, a stop and resume over a new database. Unit tests des7n `a_reported_miss_is_not_read_again`, which also covers a row at an older size, and des7p `run_misses_are_this_runs`. des7m and des7n failed before the fix and pass after.
-	- Swept: `judged_already` and `skip_unread`, the only skips. The `link-done` path calls `keep` with its own name's row, so each name is judged by its own events. `--verify` resumes go through the same check.
-	- Closed: 20261102-120951
-	- 2026-11-02: des7n failed under Miri on openat2 in the full run. Marked it to skip Miri, as the other walk tests are.
-
-- A `fuseblk` mount with a subtype isn't treated as hands-off.
-	- ID: 2026102814341416
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 21
-	- Origin: `25144d2`. The NTFS item tested plain `fuseblk` only. Plausible, read only.
-	- Incorrect behavior [Bug]: The kernel shows such a mount as `fuseblk.<name>`. `mounts::hands_off` strips only a leading `fuse.`, so `fuseblk.ntfs-3g` gets attributes and can hold the database. It takes an explicit `-o subtype=` or an fstab type of `fuseblk.X`.
-	- Expected behavior [Bug]: design.md, "Attributes": `fuseblk` counts.
-	- Probable fix [Bug]: Take `fuseblk` and anything starting `fuseblk.` as hands-off, before the `fuse.` strip.
-	- Note: A unit test beside the `hands_off` cases in `src/mounts.rs`, with `fuseblk.ntfs-3g` and `fuseblk.exfat`.
-	- Actual fix [Bug]: Any type starting `fuseblk.` is hands-off too. design.md, "Attributes", says so.
-	- Branch: round-20261102
-	- Commit: `81d8d8f`
-	- Test case: `des5e`.
-	- Verified: `des5e` fails without the new rule and passes with it.
-	- Swept: `hands_off` is the only place a type is matched for this. `hands_off_at` shows the type as it is, such as `fuseblk.ntfs-3g`.
-	- Acceptance signoff: Self-closed: the fix as proposed, tested.
-	- Closed: 20261102-110336
-
-- 3 integration checks pass whether or not what they check holds.
-	- ID: 2026102814341420
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 25
-	- Origin: ddx0t and ddx0s from `f05c368`, step 22 from `d317f52`. Not seen before. Confirmed for ddx0t, the others read only.
-	- Incorrect behavior [Bug]:
-		- ddx0t checks that `-wal` is gone. A database still in WAL mode has no `-wal` after a clean close either.
-		- ddx0s compares the owner with `id -un`, which is always true without sudo.
-		- Step 22 says the bare command exits 1, but `|| true; echo x` throws the code away, and so does the help loop.
-	- Expected behavior [Bug]: Each fails when its claim is false.
-	- Probable fix [Bug]: Check `PRAGMA journal_mode` is `delete`, as ddy8n does. Skip ddx0s when not root. Record and check each code in step 22.
-	- Note: Each changed check has to be watched to fail: a database left in WAL mode, a file owned by someone else, and a binary that exits 0 bare.
-	- Reproduced [Bug]: 2026-11-02 on b23. With a stand-in binary that leaves each database in WAL mode, the old ddx0t passed. With one whose bare command exits 0, the old test said "all passed".
-	- Decisions:
-		- ddx0s runs only as root with `SUDO_UID` set, and compares the owner's uid with it. Run as root without sudo it would be just as always-true, so it skips then too.
-		- The exit codes get their own check, des4v, so dee8e keeps meaning only the blank line.
-	- Actual fix [Bug]: ddx0t checks `PRAGMA journal_mode` is `delete`. ddx0s skips unless run through sudo. Step 22 records each exit code, and des4v checks them: 0 for `-h`, `--help` and `help`, 1 bare.
-	- Progress log:
-		- 2026-11-02: Verified: with `it-fault-bin.bash`, ddx0t fails on a database left in WAL mode, and des4v fails on a bare command that exits 0 and on a `-h` that exits 1. As uid 0 in a user namespace with `SUDO_UID` 1000, ddx0s passes on the real binary and fails when the hand-back is skipped. All pass on the real binary, and `--backlog-run-quick` passes.
-	- Branch: round-20261102
-	- Test case: ddx0t, ddx0s and des4v in `tests/integration.bash`. `it-fault-bin.bash` in the private tools folder breaks each claim.
-	- Closed: 20261102-105100
-
-- Ctrl+C in the integration test stops only the running scan, and the test goes on.
-	- ID: 2026102814341421
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 26
-	- Origin: `ef00124`. 2026102408015248 tested TERM, not INT. Confirmed with a stand-in script.
-	- Incorrect behavior [Bug]: `tests/integration.bash` sources the stop include but never calls `fStopOnSignals`. The scan handles INT and exits, so bash goes on to the next step and a string of FAIL lines.
-	- Expected behavior [Bug]: One Ctrl+C stops the test and cleans up.
-	- Probable fix [Bug]: Call `fStopOnSignals` after the `source` line.
-	- Sweep: step 9's `chmod 000` has no trap to undo it, unlike steps 13 and 18, so a stop there leaves a folder the cleanup can't empty. Plausible.
-	- Note: A test can start the integration test under a stand-in binary, send INT to its group, and expect it to stop with the work folder gone.
-	- Reproduced [Bug]: 2026-11-02 on b23. An INT to the group at 13 and 14 s, during a scan, let the test go on for 70 more checks. Earlier stops hit a python3 or sleep, which die of INT, and bash stops with them. A TERM during step 9's stand-in left the work folder with `sd/old/locked`.
-	- Actual cause [Bug]: With no INT trap, bash goes on when its child exits on its own after an INT.
-	- Actual fix [Bug]: `fStopOnSignals` after the `source` line. Step 9's sweep is fixed for every step: `fSafeRm` and a kept folder's cleanup give back a locked folder or file first, through `fUnlock`, so steps 13 and 18 lost their own EXIT traps. A killed run's folder now goes at the next run too.
-	- Decisions:
-		- One fix in the removal rather than a trap per step, since a KILL runs no trap, and a new `chmod 000` step can't miss it.
-		- A TERM to the PID alone now waits for the step running, as cicd.bash's does. The steps are short, under 3 s at the slowest seen.
-		- bash 5.2 can fail to parse the trap when the signal comes between 2 command substitutions in one word, already reported upstream (bug-bash, 2023-09). `set -e` then exits 2, and the cleanup still runs, so the stop still works with exit 2 and bash's message.
-	- Progress log:
-		- 2026-11-02: Verified: an INT to the group at 3, 6, 10, 13, 14 and 16 s, and a TERM to the PID at the same times, each stopped the test within 3 s, printed no check line after it, and left nothing. A TERM to the PID, to the group and an INT during step 9, and a KILL there swept by the next run, left nothing. A kept run's locked folder is given back. The full test passes on ext4 and ZFS, and `--backlog-run-quick` passes.
-	- Swept: steps 13 and 18 are the only other `chmod`s. `cicd.bash` and `remote-tests.bash` already call `fStopOnSignals`. The soak, fuzz, sanitizer, CodeQL, advisories and release scripts source the include without it, but none runs the binary as a step of its own, so what they start dies of INT. That part is unverified.
-	- Branch: round-20261102
-	- Test case: `it-stop-check.bash REPO [DELAY|after:ID] [TMPDIR] [pid|group|int] [BINARY]`, in the private tools folder, now with `int` and a check that no line follows the stop. `int` at 13 and 14 s failed before the fix and passes after, and so did `pid` with `after:ddy6a` and a stand-in that holds step 9.
-	- Closed: 20261102-105100
-
 - Docs disagree with the code in 3 places.
 	- ID: 2026102814341422
 	- Type: Bug
@@ -414,27 +106,16 @@
 	- Expected behavior [Bug]: They match.
 	- Note: No code changes, so it closes on reading.
 
-- With `--keep-temp`, the default run's cleanup line counts the kept temp folder as freed.
-	- ID: 2026102820562867
-	- Type: Bug
-	- Status: Done
+- The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
+	- ID: 2026110211132205
+	- Type: Enhancement
+	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-205628
-	- Opened by: found while working 2026102814341438
-	- Related IDs: 2026102814341438
-	- Steps to reproduce [Bug]: Run `cicd/cicd.bash --no-publish --keep-temp`, with no flags otherwise.
-	- Incorrect behavior [Bug]: `fCleanup` takes the kept folder's size off the total through `kb`, but the cache prune loop has reused `kb` by then. The line takes off the last cache dir's freed size instead.
-	- Expected behavior [Bug]: The kept folder isn't in the "about" size.
-	- Reproduced [Bug]: 2026-11-02, in a stub run with a 64 MB stale cache entry in `target`: "about 69 MB". `target-gate` came last and freed nothing, so the kept folder's 5 MB stayed in.
-	- Probable fix [Bug]: A variable of its own for the run folder's size.
-	- Actual fix [Bug]: `fCleanup` keeps the run folder's size in `runKb`.
-	- Progress log:
-		- 2026-11-02: Verified: `gate-record-check.bash REPO` case "--keep-temp" says "about 64 MB", and "about 69 MB" on the code from before.
-	- Branch: round-20261102
-	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, case "--keep-temp".
-	- Swept: `fRunTmpGone`, the stop path, sums its own `total` and doesn't reuse `kb`.
-	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
-	- Closed: 20261102-102849
+	- Opened: 20261102-111322
+	- Opened by: work on 2026102814341412
+	- Related IDs: 2026102814341412
+	- Requirements [Feature]: `des5x` runs only when the test's work folder is on btrfs. `IT_ROOTS` in `cicd/config.bash` has ext4 and ZFS only, so it always skips in a run.
+	- Note: b23's `/tmp` is btrfs, but slow to fsync under load (2026102409041302). A missing test root keeps the tree from being recorded for the pre-push hook, so a btrfs root that only some boxes have needs its own rule, or a small btrfs image made by the test.
 
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
@@ -447,33 +128,6 @@
 	- Requirements [Feature]:
 		- Open both sides through `beneath::Root`, as scan does.
 	- Note: With `lo/dir -> /etc` and a list line `dir/hostname`, it compared the live `/etc/hostname` and said "same".
-
-- A second name of a hard-linked file can read a half-written attribute set from the worker that claimed it.
-	- ID: 2026102814341429
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 29
-	- Origin: `c634e3a`, on the design from `f05c368`. Plausible, read only.
-	- Requirements [Feature]:
-		- For a file with more than one link, take the claim before reading the attributes, or read them again after a `Claim::Done`.
-	- Note: Read and write orders differ, so after an edit a name can see the new size, time and date with the old inode value. That stores the old checksum for the new content, a false `b3-db-mismatch` from then on.
-	- Note: design.md, "Skipping", row `link-writing`.
-	- Note: Hard to hit by chance. A test-only pause between the claimant's attribute writes, in the style of `db::PANIC_ON`, can make it happen every time.
-	- Actual effort: Low
-	- Decisions:
-		- The claim is taken before the attributes are read, and filled only after the claimant's set is written. A `Done` claim now means the set is whole, so no re-read is needed. Re-reading alone wouldn't have covered the attribute skip, which runs before the claim.
-		- `Claim::Done` no longer counts down inside `claim`. The name counts down once through `passed`, by whichever path deals with it, since the attribute skip now runs while a `Done` claim is held.
-		- A name that could skip by its attributes now waits while another name of the inode is being read. Those names share one set, so that's rare.
-		- The test doesn't pause between writes, since the bad view comes from a read that spans the writes and no pause on the writer's side forces it. It puts that view on the file while the test holds the claim, and checks the other name records the new checksum.
-	- Branch: round-20261102
-	- Test case: des6h, `scan::tests::a_half_written_set_is_not_read`.
-	- Verified:
-		- des6h failed before the fix, with the old checksum recorded for the new content, and passes after.
-		- Unit tests (92), clippy, and `--backlog-run-quick`, the integration test on ext4 and ZFS included.
-	- Swept: `OnFile::read` and `write_b3` callers. `accept` reads and writes one name under the database lock, so it can't overlap a scan's claim. `skipped_links_count_down` still holds, with the count-down moved out of `claim`.
-	- Closed: 20261102-113301
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
@@ -1410,6 +1064,120 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 
+- A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
+	- ID: 2026102814341406
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 6
+	- Origin: `f05c368`. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]: `scan --db d.sqlite --root t1 --root t1/nonexist`.
+	- Incorrect behavior [Bug]: "skipping root t1/nonexist: missing", exit 0, nothing in the run's summary or events. Any `canonicalize` error says "missing", EACCES and ELOOP included.
+	- Expected behavior [Bug]: README: exit 8 when some files or folders couldn't be checked. A mistyped root shouldn't read as clean.
+	- Probable fix [Bug]: Log a `dir-error` event for each dropped root, with the real error text.
+	- Sweep: `scan::plan`, and `walk`'s NotFound branch for a root that goes away after the plan.
+	- Note: The exit code a user sees changes, so it waits on UAT. The b23 scan wrapper takes 8 as a normal finish, so it needs no change.
+	- Note: An integration check with a missing root, expecting 8 and a `dir-error` that names it.
+	- Reproduced [Bug]: Yes, with the build from before `5602fb5`: "skipping root t1/nonexist: missing", exit 0, no events.
+	- Actual cause [Bug]: `plan` kept only a line of text for a root `canonicalize` refused, so nothing reached the run's events, and the walk returned quietly on a root gone since the plan.
+	- Actual fix [Bug]:
+		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and logs a `dir-error` for it once the run has begun, so the run exits 8.
+		- A root gone by the time its walk starts is a `dir-error` too, like any other error opening it.
+		- `plan` prints the real error, and still exits 0, since it reads nothing.
+		- design.md, "Reading files", says which roots are dropped and which are a `dir-error`.
+	- Decisions:
+		- The event's path is the root made absolute without resolving it, so `report` names it the same way it names other paths.
+		- No roots left at all is still "nothing to scan", exit 1, before a run begins.
+	- Branch: round-20261102
+	- Commit: `5602fb5`
+	- Test case: `des5v` (exit 8) and `des5w` (the `dir-error` with the path and error), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
+	- Verified: `des5v` and `des5w` fail against the build from before the fix, with exit 0 and no event, and pass after, on ext4 and btrfs. `--backlog-run-quick` passed in 1m 38s, ext4 and ZFS integration runs included.
+	- Swept: The only other silent skip of a root was `walk`'s NotFound branch, now an event. `--exclude`, `--no-xattr` and `--threads` paths that don't resolve stay quiet, since none of them leaves files unread. Nothing in the repo or the private tools parses "skipping root" or `plan`'s "skip" lines.
+	- Acceptance signoff: Self-closed per memory.md's close policy: README already says 8 means some folders weren't checked, and the test fails before and passes after. The exit code users see changes, so it's in questions.md as a Check.
+	- Closed: 20261102-111322
+
+- A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
+	- ID: 2026102814341407
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 7
+	- Origin: `mount_for` is from `f05c368`, the walk's mount check from `9120949`. 2026101406340922 added the device check, which can't see 2 mounts of one device. Confirmed.
+	- Steps to reproduce [Bug]:
+		- In `unshare -rm`, bind `base` on `mnt`, `hid` on `mnt/sub`, then `vis` over `mnt`. `scan --root mnt` reads only `mnt/top` and exits 0, with no event for `mnt/sub/f1`.
+		- Bind ext4 on `mnt` and `mnt/sub`, then a tmpfs over `mnt`. `scan --root mnt/sub` writes `user.blake3.*` onto the tmpfs.
+	- Incorrect behavior [Bug]: `mounts::mount_for` takes the last of the longest matches, and `mount_points` lists covered points too. The same path could put attributes or the database on an ntfs3 mount made over an ext4 one.
+	- Expected behavior [Bug]: design.md, "Reading files" and "Attributes": the walk stops only at real mount points, and nothing is written to NTFS, APFS or HFS+.
+	- Probable fix [Bug]: Compare mount IDs from `statx` `STATX_MNT_ID` on the open folder fds, kernel 5.8 and up, with mountinfo's first field. Keep the table rule as the fallback.
+	- Sweep: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, and `accept.rs`'s `hands_off_at` call.
+	- Note: `STATX_MNT_ID` needs kernel 5.8. The release builds run on Debian 10, whose 4.19 kernel has neither it nor `openat2`, so the table fallback stays and keeps this gap there.
+	- Note: Integration check `deeby` already runs a scan under `unshare --user --map-root-user --mount`. Both repros fit there, with the same skip on ZFS and where user namespaces are off.
+	- Reproduced [Bug]: Yes, both, with the build from `dfc7936`: the first read 1 file and exited 0, the second scanned the folder on the tmpfs and exited 0.
+	- Actual cause [Bug]: As above. The mount table was taken whole, so a covered mount and anything mounted on it still counted.
+	- Actual fix [Bug]:
+		- The mount table drops what no path reaches: a mount with another on top at its point, a mount on a folder that a later mount above it hides, and anything mounted on either. It goes by the table's own mount and parent IDs.
+		- Every caller gets the table that way, so the walk's mount points, a root's type and disks, the database's lock check and `accept` all see only the mounts in effect.
+		- A root under a tmpfs that covers ext4 now takes the tmpfs's type, so it's refused like any tmpfs root.
+	- Decisions:
+		- The table's parent IDs, not `STATX_MNT_ID`. Same answer on every kernel, Debian 10's 4.19 included, with no extra call per folder. So the gap the note expected on 4.19 isn't there.
+	- Branch: round-20261102
+	- Commit: `81d8d8f`
+	- Test case: `des5f`, `des5g` and `des5h` (unit, the table), `des5j` and `des5k` (integration, the two repros in a user namespace, skipped on ZFS).
+	- Verified: `des5j` and `des5k` fail against the build from HEAD before the fix, with "0 hashed 1" and "0 0", and pass after on ext4. Making the filter keep everything turns `des5f`, `des5g` and `des5h` red, dropping the rule for a mount on a hidden folder turns `des5h` red, and dropping the one that lets a mount on top of its parent through turns all 3 red. On this box the filter hides only the autofs under `/proc/sys/fs/binfmt_misc`. `--backlog-run-quick` passed in 1m 37s.
+	- Swept: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, `accept`'s `hands_off_at` call and `main.rs`'s prune lock all read the table through `read_mounts`. `disks_for`'s loop file lookup does too.
+	- Acceptance signoff: Self-closed: as reported, tests fail before and pass after.
+	- Closed: 20261102-110336
+
+- A file or folder beside the database whose name starts with the database's file name is skipped with no event.
+	- ID: 2026102814341408
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 8
+	- Origin: `f05c368`. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]: Put `--db tree/tuk` inside the root, with `tukfs-notes.txt`, `tuk.d` and a folder `tukdir/` beside it.
+	- Incorrect behavior [Bug]: All 3 are skipped, the whole folder included, and `gone` lists none of them.
+	- Expected behavior [Bug]: Only the database, its `-wal`, `-shm`, `-journal` and `.lock` are left out, as the comment at `scan::excluded` says.
+	- Probable fix [Bug]: Match those 5 names exactly.
+	- Note: Only names in the database's own folder are hit, since `scan::excluded` also checks the parent.
+	- Note: A unit test of `excluded` over the 5 names and a few lookalikes, plus the integration repro.
+	- Actual cause [Bug]: `scan::excluded` left out every name in the database's folder that started with its name.
+	- Actual fix [Bug]: It matches only the database's name and that name plus `-wal`, `-shm`, `-journal` or `.lock`. design.md, "Database", says so.
+	- Branch: round-20261102
+	- Test case: des63 (`only_the_databases_own_names_are_left_out`), and des65 and des66 in step 28 of `tests/integration.bash`. Without the fix des63 failed and des65 got "0 0".
+	- Swept: `scan::excluded` is the only place the walk leaves a name out by the database's name. `hand_over` and `lock` already use exact names, and `gone` has no name rule of its own.
+	- Closed: 20261102-112339
+
+- A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
+	- ID: 2026102814341412
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 12
+	- Origin: the "inside" rule is from `f05c368`, the device stop from 2026101406340922. Not seen before. Plausible, read only.
+	- Incorrect behavior [Bug]: `scan::plan` finds the parent's mount for the subvolume and drops it as "inside" the parent root. The parent's walk then sees another device and stops there, with no event. Its files are never read, at exit 0.
+	- Expected behavior [Bug]: design.md, "Reading files": each root is walked on its own.
+	- Probable fix [Bug]: The "inside" check also needs both folders on the same device.
+	- Note: To reproduce, `btrfs subvolume create` works for a normal user on b23's btrfs `/tmp`. Removing it needs kernel 5.7 or later, where the owner can `rmdir` an empty subvolume, or root.
+	- Reproduced [Bug]: Yes, with the build from before `5602fb5`, on `/tmp`: "skipping root .../p/sv: inside .../p", and 1 of 3 files hashed at exit 0.
+	- Actual cause [Bug]: As above.
+	- Actual fix [Bug]: A root is dropped as inside another only when both are on the same mount and the same device. The subvolume is kept as its own root, in the same group as its parent, since they share disks.
+	- Decisions:
+		- Both tests stay. Same device alone would drop a root under a bind mount of a folder of the same filesystem, which the outer walk stops at.
+		- A stopped run from before this, over such roots, has another root list, so `--resume` refuses it. A new run reads everything again.
+	- Branch: round-20261102
+	- Commit: `5602fb5`
+	- Test case: `des5x`, integration step 27. It runs only when the test's work folder is on btrfs, and skips otherwise. The pipeline's test roots are ext4 and ZFS, so it skips there until 2026110211132205.
+	- Verified: `des5x` fails against the build from before the fix ("0 hashed 1") and passes after ("0 hashed 3"), with `HOST_TEMP=/tmp` on b23's btrfs. The subvolume is removed by the test as a normal user on kernel 6.12.
+	- Swept: The `--threads` match in `plan` uses folder names only, which is right, since it picks a count. design.md, "Reading files", already said the walk stops at another device; it now says such a root is kept.
+	- Acceptance signoff: Self-closed: the probable fix as written, test fails before and passes after.
+	- Closed: 20261102-111322
+
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
 	- Type: Bug
@@ -1763,6 +1531,42 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+
+- The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
+	- ID: 2026102814341423
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 13
+	- Origin: `f05c368`. Not seen before. Plausible, read only.
+	- Requirements [Feature]:
+		- Move to a `libsqlite3-sys` that bundles 3.50.3 or later.
+		- Build SQLite without FTS3, FTS5, RTREE and extension loading, none of which are used.
+		- Refuse a schema with anything but the known tables and indexes before `quick_check`, and set `trusted_schema` off.
+	- Note: CVE-2025-7709 reads a tombstone size from the file with no bound. `give_back` hands the database to the user, so a planted FTS5 table runs that code as root on the next `sudo` scan. cargo-deny only checks RustSec, which doesn't list C CVEs in bundled code.
+	- Note: A newer rusqlite has to keep `rust-version = "1.88"` and build in the Debian 10 release image for both targets. `LIBSQLITE3_FLAGS` has to reach the release, leak check and host builds alike.
+	- Note: The release build should shrink with FTS and RTREE out. Check the size against the release set before and after.
+	- Actual effort: Avg
+	- Progress log:
+		- 2026-11-02: rusqlite 0.40.2 and `libsqlite3-sys` 0.38.2, which bundles SQLite 3.53.2. rusqlite 0.41 needs Rust 1.89, so it isn't taken. The lock still resolves for Rust 1.88.
+		- 2026-11-02: `.cargo/config.toml` sets `LIBSQLITE3_FLAGS` for every cargo build in the tree, taking out FTS3, FTS5, RTREE and extension loading. The leak check's own flags now go after these rather than replacing them.
+		- 2026-11-02: Every open, read only or not, turns `trusted_schema` off and checks `sqlite_schema` against what the program makes before anything else reads the file. Anything else is refused with its type and name.
+		- 2026-11-02: Integration step 16 made a row fail with a trigger, which the check now refuses. It uses a CHECK constraint on `files` instead, and ddy8s greps for the constraint's name, `refused_by_the_test`, rather than the trigger's message, 'refused by the test'.
+		- 2026-11-02: Sizes, built in the release image. x86_64 2,712,136 to 2,258,312 bytes, 17% less. arm64 2,419,960 to 1,984,808, 18% less. A host build went from 3,058,056 to 2,494,568.
+		- 2026-11-02: 30,000 small files, 3 rounds, load 7 on 32 cores: first scan user 0.54 to 0.57 s before against 0.51 to 0.55 after, rescan 0.69 to 0.75 against 0.71 to 0.75. The same within the noise.
+		- 2026-11-02: The bump brought hashlink 0.12.2 and hashbrown 0.17.1, whose CodeQL findings weren't in `cicd/codeql/vendored-reviewed.tsv`. 20 of the 23 hashlink findings and the hashbrown one are the code reviewed in hashlink 0.10.0 and hashbrown 0.15.5, at new lines, so those rows moved over. The other 3 are new: `back_entry` and `front_entry` return on `is_empty()` first, as `front` and `back` do, and `current_entry` returns when the cursor is on the guard node. The old rows are gone. Checked against the failed run's SARIF: no finding open in either crate, and no row stale.
+		- Verified: `des6s`, `des6t` and `des6v` fail with the vet calls taken out and `.cargo/config.toml` moved aside, and pass with them. `--backlog-run-quick` passed in 1m 45s, ext4 and ZFS integration runs included. The release image built both targets, the arm64 unit tests passed under qemu, and the ASan run and the advisories check passed.
+	- Decisions:
+		- The flags go in `.cargo/config.toml` rather than in cicd, so a plain `cargo build` gets them too. `des6s` fails in any build they don't reach.
+		- The check matches each row's type, name and table against a list, and wants SQL that starts with SQLite's own `CREATE TABLE` or `CREATE INDEX`, followed by a space. A row can claim any type, and a planted `CREATE VIRTUAL TABLE` can't pass the prefix.
+		- `sqlite_stat1` and `sqlite_stat4` are refused too. Nothing here runs ANALYZE, and stat4 is parsed from the file as well.
+		- The read-only opens are checked too, since `report` and `gone` read the same file under sudo.
+	- Swept: every `Connection::open` in `src`. Outside the tests there are only `open_rw` and `open_ro`. The only other `LIBSQLITE3_FLAGS` in the repo was the leak check's. The trigger in integration step 16 was the only schema object a test or private tool adds to a database before the program opens it.
+	- Branch: round-20261102
+	- Test case: `des6s` (SQLite version, compile options, no FTS or RTREE module), `des6t` (planted trigger, view, table, index, virtual table and a changed `meta` row, refused by both opens), `des6v` (`trusted_schema` off, page size still set), and `des6w` (a scan refuses a planted trigger, integration step 16).
+	- Acceptance signoff: Self-closed per memory.md's close policy. A database with anything extra in it is now refused, which a user would notice, so it's in questions.md as a Check.
+	- Closed: 20261102-115543
 
 - `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
 	- ID: 2026102814341427
@@ -2396,6 +2200,175 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
+	- ID: 2026102819580272
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-195802
+	- Opened by:
+	- Reproduced [Bug]: 2026-11-02, in a stub run with a gif stand-in that changes `assets/demo.gif`: "the files changed during the run, so it is not recorded".
+	- Actual cause [Bug]: `fRecordGreen` records the tree taken before the build, and the default run's gif stage copies a changed gif into the checkout first, so `green-tree.bash record` sees a different tree.
+	- Progress log:
+		- Seen by the worker on 2026102814341426. Not checked whether it's meant.
+		- 2026-11-02: Not meant. The default run is as thorough as the merge gate, and publish commits the new gif, so the pushed commit's tree was never on record and the hook ran the whole gate again.
+		- 2026-11-02: Verified: `gate-record-check.bash REPO` passes 21 of 21. The new cases fail on the code from before.
+	- Decisions:
+		- Record the tree with the new gif, when the gif is the only change since the tree was taken. The gif is drawn the same from the same tree, so the gate would draw those bytes too. Any other change still records nothing.
+	- Actual fix [Bug]: `fRecordGreen` takes the checkout's tree when it differs from the tested one only by the gif it wrote, the same exception publish makes. design.md, "Build and release", says so.
+	- Branch: round-20261102
+	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, cases "changed gif" and "gif and README", since private checks stay out of the pipeline (2026102508462883).
+	- Swept: the publish stage's own gif exception, which this matches. No other stage compares the tree after the gif.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261102-102849
+
+- Attributes are written when a root is inside a git work tree.
+	- ID: 2026102814341413
+	- Type: Bug
+	- Status: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 18
+	- Origin: `9120949`, from the rule in `f05c368`. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]: `--root repo/src`, where `repo/.git` exists.
+	- Incorrect behavior [Bug]: `repo/src/a.c` gets the full `user.blake3.*` set. `--root repo` writes none.
+	- Expected behavior [Bug]: design.md, "Attributes": none are written in git work trees.
+	- Probable fix [Bug]: Before walking a root, look for `.git` in the folders above it, up to its mount point.
+	- Note: An integration check: a root below a folder with `.git`, expecting no `user.blake3.*` on its files.
+	- Actual cause [Bug]: The walk looked for `.git` only in the root and below it.
+	- Actual fix [Bug]: Before a root's walk, `scan::git_tree_above` looks for `.git` in each folder above it while the device stays the root's. A `.git` file, as in a linked work tree or a submodule, counts too.
+	- Decisions:
+		- Stop where the device changes, which is how git stops looking by default. That also stops at a btrfs subvolume, the same as git. git doesn't find a `.git` past a mount point unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, so it doesn't count here either.
+	- Branch: round-20261102
+	- Test case: des64 (`a_root_below_a_git_folder_is_in_git`), and des67 in step 28 of `tests/integration.bash`. Without the fix both failed, des67 with the full attribute set.
+	- Swept: The walk is the only place that writes a new set. `accept` only replaces a set already there, so it adds none in a git tree.
+	- Closed: 20261102-112339
+
+- A resumed run reads and reports again a mismatch an earlier part found, when the file has no current database row.
+	- ID: 2026102814341415
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 20
+	- Origin: `11847b0` and `ce82cda`. Regression of 2026101406340909, whose fix only covered files with a row. Confirmed.
+	- Steps to reproduce [Bug]: A file known only by its attributes, in a new database. Flip a byte, stop the scan partway, exit 6. Resume, exit 4.
+	- Incorrect behavior [Bug]: `report` shows 2 `b3-xattr-mismatch` rows for the one path. The exit code is still right, since it counts paths.
+	- Expected behavior [Bug]: design.md, "Runs and exit codes": a resumed run doesn't read again what an earlier part judged, mismatches included.
+	- Probable fix [Bug]: On resume, load the paths with a mismatch event in this run and skip them.
+	- Sweep: a row at an older size or time with a current attribute set goes the same way.
+	- Note: design.md, "Skipping", row `resume-seen`.
+	- Note: Step 5 of `tests/integration.bash` does a stop and resume with a damaged file that has a row. The same with a file known only by its attributes is the test.
+	- Reproduced [Bug]: Yes, on ext4: the new check got 2 events for the path where 1 was wanted.
+	- Actual cause [Bug]: `resume-seen` went only by the row's `seen_run`, size, time and inode. A mismatch writes no row, so with none at the file's size and time nothing said the earlier part had reached it.
+	- Decisions:
+		- The run's own mismatch events stand in for the row, loaded once by `db::run_misses` when a run is resumed. No schema change.
+		- The events keep no size, time or inode, so a path is skipped only when its ctime is from before the run began. A file touched since then is read again, which at worst reports it twice.
+		- `cache-mismatch` isn't loaded, since it ends in a clean read that writes a row.
+	- Actual fix [Bug]: `judged_already` skips a path an earlier part reported a mismatch for when its ctime is from before the run began, with or without a row. design.md, "Skipping", says so under the table.
+	- Branch: round-20261102
+	- Test case: des7k and des7m in step 5 of `tests/integration.bash`, a stop and resume over a new database. Unit tests des7n `a_reported_miss_is_not_read_again`, which also covers a row at an older size, and des7p `run_misses_are_this_runs`. des7m and des7n failed before the fix and pass after.
+	- Swept: `judged_already` and `skip_unread`, the only skips. The `link-done` path calls `keep` with its own name's row, so each name is judged by its own events. `--verify` resumes go through the same check.
+	- Closed: 20261102-120951
+	- 2026-11-02: des7n failed under Miri on openat2 in the full run. Marked it to skip Miri, as the other walk tests are.
+
+- A `fuseblk` mount with a subtype isn't treated as hands-off.
+	- ID: 2026102814341416
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 21
+	- Origin: `25144d2`. The NTFS item tested plain `fuseblk` only. Plausible, read only.
+	- Incorrect behavior [Bug]: The kernel shows such a mount as `fuseblk.<name>`. `mounts::hands_off` strips only a leading `fuse.`, so `fuseblk.ntfs-3g` gets attributes and can hold the database. It takes an explicit `-o subtype=` or an fstab type of `fuseblk.X`.
+	- Expected behavior [Bug]: design.md, "Attributes": `fuseblk` counts.
+	- Probable fix [Bug]: Take `fuseblk` and anything starting `fuseblk.` as hands-off, before the `fuse.` strip.
+	- Note: A unit test beside the `hands_off` cases in `src/mounts.rs`, with `fuseblk.ntfs-3g` and `fuseblk.exfat`.
+	- Actual fix [Bug]: Any type starting `fuseblk.` is hands-off too. design.md, "Attributes", says so.
+	- Branch: round-20261102
+	- Commit: `81d8d8f`
+	- Test case: `des5e`.
+	- Verified: `des5e` fails without the new rule and passes with it.
+	- Swept: `hands_off` is the only place a type is matched for this. `hands_off_at` shows the type as it is, such as `fuseblk.ntfs-3g`.
+	- Acceptance signoff: Self-closed: the fix as proposed, tested.
+	- Closed: 20261102-110336
+
+- 3 integration checks pass whether or not what they check holds.
+	- ID: 2026102814341420
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 25
+	- Origin: ddx0t and ddx0s from `f05c368`, step 22 from `d317f52`. Not seen before. Confirmed for ddx0t, the others read only.
+	- Incorrect behavior [Bug]:
+		- ddx0t checks that `-wal` is gone. A database still in WAL mode has no `-wal` after a clean close either.
+		- ddx0s compares the owner with `id -un`, which is always true without sudo.
+		- Step 22 says the bare command exits 1, but `|| true; echo x` throws the code away, and so does the help loop.
+	- Expected behavior [Bug]: Each fails when its claim is false.
+	- Probable fix [Bug]: Check `PRAGMA journal_mode` is `delete`, as ddy8n does. Skip ddx0s when not root. Record and check each code in step 22.
+	- Note: Each changed check has to be watched to fail: a database left in WAL mode, a file owned by someone else, and a binary that exits 0 bare.
+	- Reproduced [Bug]: 2026-11-02 on b23. With a stand-in binary that leaves each database in WAL mode, the old ddx0t passed. With one whose bare command exits 0, the old test said "all passed".
+	- Decisions:
+		- ddx0s runs only as root with `SUDO_UID` set, and compares the owner's uid with it. Run as root without sudo it would be just as always-true, so it skips then too.
+		- The exit codes get their own check, des4v, so dee8e keeps meaning only the blank line.
+	- Actual fix [Bug]: ddx0t checks `PRAGMA journal_mode` is `delete`. ddx0s skips unless run through sudo. Step 22 records each exit code, and des4v checks them: 0 for `-h`, `--help` and `help`, 1 bare.
+	- Progress log:
+		- 2026-11-02: Verified: with `it-fault-bin.bash`, ddx0t fails on a database left in WAL mode, and des4v fails on a bare command that exits 0 and on a `-h` that exits 1. As uid 0 in a user namespace with `SUDO_UID` 1000, ddx0s passes on the real binary and fails when the hand-back is skipped. All pass on the real binary, and `--backlog-run-quick` passes.
+	- Branch: round-20261102
+	- Test case: ddx0t, ddx0s and des4v in `tests/integration.bash`. `it-fault-bin.bash` in the private tools folder breaks each claim.
+	- Closed: 20261102-105100
+
+- Ctrl+C in the integration test stops only the running scan, and the test goes on.
+	- ID: 2026102814341421
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 26
+	- Origin: `ef00124`. 2026102408015248 tested TERM, not INT. Confirmed with a stand-in script.
+	- Incorrect behavior [Bug]: `tests/integration.bash` sources the stop include but never calls `fStopOnSignals`. The scan handles INT and exits, so bash goes on to the next step and a string of FAIL lines.
+	- Expected behavior [Bug]: One Ctrl+C stops the test and cleans up.
+	- Probable fix [Bug]: Call `fStopOnSignals` after the `source` line.
+	- Sweep: step 9's `chmod 000` has no trap to undo it, unlike steps 13 and 18, so a stop there leaves a folder the cleanup can't empty. Plausible.
+	- Note: A test can start the integration test under a stand-in binary, send INT to its group, and expect it to stop with the work folder gone.
+	- Reproduced [Bug]: 2026-11-02 on b23. An INT to the group at 13 and 14 s, during a scan, let the test go on for 70 more checks. Earlier stops hit a python3 or sleep, which die of INT, and bash stops with them. A TERM during step 9's stand-in left the work folder with `sd/old/locked`.
+	- Actual cause [Bug]: With no INT trap, bash goes on when its child exits on its own after an INT.
+	- Actual fix [Bug]: `fStopOnSignals` after the `source` line. Step 9's sweep is fixed for every step: `fSafeRm` and a kept folder's cleanup give back a locked folder or file first, through `fUnlock`, so steps 13 and 18 lost their own EXIT traps. A killed run's folder now goes at the next run too.
+	- Decisions:
+		- One fix in the removal rather than a trap per step, since a KILL runs no trap, and a new `chmod 000` step can't miss it.
+		- A TERM to the PID alone now waits for the step running, as cicd.bash's does. The steps are short, under 3 s at the slowest seen.
+		- bash 5.2 can fail to parse the trap when the signal comes between 2 command substitutions in one word, already reported upstream (bug-bash, 2023-09). `set -e` then exits 2, and the cleanup still runs, so the stop still works with exit 2 and bash's message.
+	- Progress log:
+		- 2026-11-02: Verified: an INT to the group at 3, 6, 10, 13, 14 and 16 s, and a TERM to the PID at the same times, each stopped the test within 3 s, printed no check line after it, and left nothing. A TERM to the PID, to the group and an INT during step 9, and a KILL there swept by the next run, left nothing. A kept run's locked folder is given back. The full test passes on ext4 and ZFS, and `--backlog-run-quick` passes.
+	- Swept: steps 13 and 18 are the only other `chmod`s. `cicd.bash` and `remote-tests.bash` already call `fStopOnSignals`. The soak, fuzz, sanitizer, CodeQL, advisories and release scripts source the include without it, but none runs the binary as a step of its own, so what they start dies of INT. That part is unverified.
+	- Branch: round-20261102
+	- Test case: `it-stop-check.bash REPO [DELAY|after:ID] [TMPDIR] [pid|group|int] [BINARY]`, in the private tools folder, now with `int` and a check that no line follows the stop. `int` at 13 and 14 s failed before the fix and passes after, and so did `pid` with `after:ddy6a` and a stand-in that holds step 9.
+	- Closed: 20261102-105100
+
+- With `--keep-temp`, the default run's cleanup line counts the kept temp folder as freed.
+	- ID: 2026102820562867
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-205628
+	- Opened by: found while working 2026102814341438
+	- Related IDs: 2026102814341438
+	- Steps to reproduce [Bug]: Run `cicd/cicd.bash --no-publish --keep-temp`, with no flags otherwise.
+	- Incorrect behavior [Bug]: `fCleanup` takes the kept folder's size off the total through `kb`, but the cache prune loop has reused `kb` by then. The line takes off the last cache dir's freed size instead.
+	- Expected behavior [Bug]: The kept folder isn't in the "about" size.
+	- Reproduced [Bug]: 2026-11-02, in a stub run with a 64 MB stale cache entry in `target`: "about 69 MB". `target-gate` came last and freed nothing, so the kept folder's 5 MB stayed in.
+	- Probable fix [Bug]: A variable of its own for the run folder's size.
+	- Actual fix [Bug]: `fCleanup` keeps the run folder's size in `runKb`.
+	- Progress log:
+		- 2026-11-02: Verified: `gate-record-check.bash REPO` case "--keep-temp" says "about 64 MB", and "about 69 MB" on the code from before.
+	- Branch: round-20261102
+	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, case "--keep-temp".
+	- Swept: `fRunTmpGone`, the stop path, sums its own `total` and doesn't reuse `kb`.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261102-102849
 
 - The dogfood launcher's rotation can't see a pool version another user runs, such as through sudo.
 	- ID: 2026102819305559
@@ -3103,6 +3076,33 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- A second name of a hard-linked file can read a half-written attribute set from the worker that claimed it.
+	- ID: 2026102814341429
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 29
+	- Origin: `c634e3a`, on the design from `f05c368`. Plausible, read only.
+	- Requirements [Feature]:
+		- For a file with more than one link, take the claim before reading the attributes, or read them again after a `Claim::Done`.
+	- Note: Read and write orders differ, so after an edit a name can see the new size, time and date with the old inode value. That stores the old checksum for the new content, a false `b3-db-mismatch` from then on.
+	- Note: design.md, "Skipping", row `link-writing`.
+	- Note: Hard to hit by chance. A test-only pause between the claimant's attribute writes, in the style of `db::PANIC_ON`, can make it happen every time.
+	- Actual effort: Low
+	- Decisions:
+		- The claim is taken before the attributes are read, and filled only after the claimant's set is written. A `Done` claim now means the set is whole, so no re-read is needed. Re-reading alone wouldn't have covered the attribute skip, which runs before the claim.
+		- `Claim::Done` no longer counts down inside `claim`. The name counts down once through `passed`, by whichever path deals with it, since the attribute skip now runs while a `Done` claim is held.
+		- A name that could skip by its attributes now waits while another name of the inode is being read. Those names share one set, so that's rare.
+		- The test doesn't pause between writes, since the bad view comes from a read that spans the writes and no pause on the writer's side forces it. It puts that view on the file while the test holds the claim, and checks the other name records the new checksum.
+	- Branch: round-20261102
+	- Test case: des6h, `scan::tests::a_half_written_set_is_not_read`.
+	- Verified:
+		- des6h failed before the fix, with the old checksum recorded for the new content, and passes after.
+		- Unit tests (92), clippy, and `--backlog-run-quick`, the integration test on ext4 and ZFS included.
+	- Swept: `OnFile::read` and `write_b3` callers. `accept` reads and writes one name under the database lock, so it can't overlap a scan's claim. `skipped_links_count_down` still holds, with the count-down moved out of `claim`.
+	- Closed: 20261102-113301
 
 - A burst of dogfood builds pushes the week and day versions out of the pool before the newer hour ones.
 	- ID: 2026102814341441
