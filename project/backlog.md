@@ -68,7 +68,7 @@
 - A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
 	- ID: 2026102814341407
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 7
@@ -82,6 +82,21 @@
 	- Sweep: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, and `accept.rs`'s `hands_off_at` call.
 	- Note: `STATX_MNT_ID` needs kernel 5.8. The release builds run on Debian 10, whose 4.19 kernel has neither it nor `openat2`, so the table fallback stays and keeps this gap there.
 	- Note: Integration check `deeby` already runs a scan under `unshare --user --map-root-user --mount`. Both repros fit there, with the same skip on ZFS and where user namespaces are off.
+	- Reproduced [Bug]: Yes, both, with the build from `dfc7936`: the first read 1 file and exited 0, the second scanned the folder on the tmpfs and exited 0.
+	- Actual cause [Bug]: As above. The mount table was taken whole, so a covered mount and anything mounted on it still counted.
+	- Actual fix [Bug]:
+		- The mount table drops what no path reaches: a mount with another on top at its point, a mount on a folder that a later mount above it hides, and anything mounted on either. It goes by the table's own mount and parent IDs.
+		- Every caller gets the table that way, so the walk's mount points, a root's type and disks, the database's lock check and `accept` all see only the mounts in effect.
+		- A root under a tmpfs that covers ext4 now takes the tmpfs's type, so it's refused like any tmpfs root.
+	- Decisions:
+		- The table's parent IDs, not `STATX_MNT_ID`. Same answer on every kernel, Debian 10's 4.19 included, with no extra call per folder. So the gap the note expected on 4.19 isn't there.
+	- Branch: round-20261102
+	- Commit: `81d8d8f`
+	- Test case: `des5f`, `des5g` and `des5h` (unit, the table), `des5j` and `des5k` (integration, the two repros in a user namespace, skipped on ZFS).
+	- Verified: `des5j` and `des5k` fail against the build from HEAD before the fix, with "0 hashed 1" and "0 0", and pass after on ext4. Making the filter keep everything turns `des5f`, `des5g` and `des5h` red, dropping the rule for a mount on a hidden folder turns `des5h` red, and dropping the one that lets a mount on top of its parent through turns all 3 red. On this box the filter hides only the autofs under `/proc/sys/fs/binfmt_misc`. `--backlog-run-quick` passed in 1m 37s.
+	- Swept: `scan::walk`, `scan::plan`, `scan::hands_off`, `scan::lock`, `accept`'s `hands_off_at` call and `main.rs`'s prune lock all read the table through `read_mounts`. `disks_for`'s loop file lookup does too.
+	- Acceptance signoff: Self-closed: as reported, tests fail before and pass after.
+	- Closed: 20261102-110336
 
 - A file or folder beside the database whose name starts with the database's file name is skipped with no event.
 	- ID: 2026102814341408
@@ -224,7 +239,7 @@
 - A `fuseblk` mount with a subtype isn't treated as hands-off.
 	- ID: 2026102814341416
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 21
@@ -233,6 +248,14 @@
 	- Expected behavior [Bug]: design.md, "Attributes": `fuseblk` counts.
 	- Probable fix [Bug]: Take `fuseblk` and anything starting `fuseblk.` as hands-off, before the `fuse.` strip.
 	- Note: A unit test beside the `hands_off` cases in `src/mounts.rs`, with `fuseblk.ntfs-3g` and `fuseblk.exfat`.
+	- Actual fix [Bug]: Any type starting `fuseblk.` is hands-off too. design.md, "Attributes", says so.
+	- Branch: round-20261102
+	- Commit: `81d8d8f`
+	- Test case: `des5e`.
+	- Verified: `des5e` fails without the new rule and passes with it.
+	- Swept: `hands_off` is the only place a type is matched for this. `hands_off_at` shows the type as it is, such as `fuseblk.ntfs-3g`.
+	- Acceptance signoff: Self-closed: the fix as proposed, tested.
+	- Closed: 20261102-110336
 
 - 3 integration checks pass whether or not what they check holds.
 	- ID: 2026102814341420
