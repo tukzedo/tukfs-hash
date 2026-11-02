@@ -196,6 +196,7 @@
 		- 2026-11-02: Every open, read only or not, turns `trusted_schema` off and checks `sqlite_schema` against what the program makes before anything else reads the file. Anything else is refused with its type and name.
 		- 2026-11-02: Integration step 16 made a row fail with a trigger, which the check now refuses. It uses a CHECK constraint on `files` instead, and ddy8s greps for the constraint's name, `refused_by_the_test`, rather than the trigger's message, 'refused by the test'.
 		- 2026-11-02: Sizes, built in the release image. x86_64 2,712,136 to 2,258,312 bytes, 17% less. arm64 2,419,960 to 1,984,808, 18% less. A host build went from 3,058,056 to 2,494,568.
+		- 2026-11-02: 30,000 small files, 3 rounds, load 7 on 32 cores: first scan user 0.54 to 0.57 s before against 0.51 to 0.55 after, rescan 0.69 to 0.75 against 0.71 to 0.75. The same within the noise.
 		- Verified: `des6s`, `des6t` and `des6v` fail with the vet calls taken out and `.cargo/config.toml` moved aside, and pass with them. `--backlog-run-quick` passed in 1m 45s, ext4 and ZFS integration runs included. The release image built both targets, the arm64 unit tests passed under qemu, and the ASan run and the advisories check passed.
 	- Decisions:
 		- The flags go in `.cargo/config.toml` rather than in cicd, so a plain `cargo build` gets them too. `des6s` fails in any build they don't reach.
