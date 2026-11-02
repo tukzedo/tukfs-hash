@@ -298,6 +298,16 @@ check ddx1d "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_
 skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2 || true)"
 st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect ddx1e "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
 check ddx1f "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
+# The same in a new database, where only the attributes know the damaged file
+# and no row says the stopped part reached it (2026102814341415).
+"${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
+pid=$!
+st=0; { wait_started "${work}/stop.txt" && wait_reached "${pid}" "${tree}/many"; } || st=1
+expect des7k "new database: scan got past the top folder" "scan never opened a file in many/" "${st}"
+kill -INT "${pid}"
+rc=0; wait "${pid}" || rc=$?
+rc2=0; "${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --resume --progress 3600 > "${work}/out.txt" 2>&1 || rc2=$?
+check des7m "new database: resume didn't report it twice" "${rc} ${rc2} $(sqlite3 "${work}/db/r5.sqlite" "SELECT count(*) FROM events WHERE path = '${tree}/rm-stale.txt'")" "6 4 1"
 
 # 6. snapdiff: same size and time, different bytes.
 mkdir -p "${work}/old" "${work}/new"
@@ -833,3 +843,4 @@ fi
 ##		  folder with .git.
 ##		- 20261102: A CHECK in place of the trigger that refuses a row, and a
 ##		  planted trigger refused.
+##		- 20261102: Step 5 also stops and resumes over a new database.

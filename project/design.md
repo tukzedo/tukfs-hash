@@ -108,6 +108,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A resumed run keeps its original skip date. Anything it already read counts as fresh even when `--since` is later than when it began.
 
+- A mismatch writes no row, so a file with no row at its size and time has nothing there to say an earlier part reached it. For `resume-seen` the run's own mismatch events stand in. Such a path is skipped only when its ctime is from before the run began, since then nothing has touched it since that part read it.
+
 ## Runs and exit codes
 
 - `--resume` only continues the newest scan, and only when it didn't finish and has the same roots. An older stopped run would bring back its old skip date, and 2 wrappers share one database, so one could finish the other's run over the wrong roots. Roots are compared as `plan` keeps them, so the order they're given in doesn't matter. Runs from before the root list was kept can't be resumed.

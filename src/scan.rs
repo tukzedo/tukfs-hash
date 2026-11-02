@@ -134,6 +134,8 @@ struct Resumed {
 	cutoff_us: i64,
 	started_us: i64,
 	summary: Option<String>,
+	// Mismatches the earlier parts reported.
+	reported: HashSet<Vec<u8>>,
 }
 
 // Only the newest unfinished scan, same roots and mode. See design.md, Runs and exit codes.
@@ -150,6 +152,7 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<
 						cutoff_us: r.get(2)?,
 						started_us: r.get(3)?,
 						summary: r.get(5)?,
+						reported: HashSet::new(),
 					},
 					r.get::<_, String>(1)?,
 					r.get::<_, Option<Vec<u8>>>(4)?,
@@ -295,6 +298,9 @@ struct Shared {
 	mode: Mode,
 	// Never skipped until read clean or accepted.
 	open_misses: HashSet<Vec<u8>>,
+	reported: HashSet<Vec<u8>>,
+	// The first part's start.
+	run_started_us: i64,
 	tx: SyncSender<Msg>,
 }
 
@@ -539,6 +545,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		cutoff_us,
 		started_us: run_started,
 		summary: earlier,
+		reported,
 	} = begin(&conn, o, &roots_key(&planned), started)?;
 
 	let faults = Arc::new(Faults::default());
@@ -573,6 +580,8 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		rmlint: o.rmlint,
 		mode: o.mode,
 		open_misses,
+		reported,
+		run_started_us: run_started,
 		tx,
 	});
 	// Not read, so not clean either.
@@ -622,7 +631,9 @@ fn begin(
 ) -> Result<Resumed, String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	let r = if o.resume {
-		pick_resume(conn, roots, o.mode)?
+		let mut r = pick_resume(conn, roots, o.mode)?;
+		r.reported = db::run_misses(conn, r.id)?;
+		r
 	} else {
 		// Killed, since the lock is held. See design.md, Runs and exit codes.
 		conn.execute(
@@ -653,6 +664,7 @@ fn begin(
 			cutoff_us: cutoff,
 			started_us: started,
 			summary: None,
+			reported: HashSet::new(),
 		}
 	};
 	conn.execute(
@@ -1610,6 +1622,19 @@ impl<'a> Worker<'a> {
 	// `resume-seen`.
 	fn judged_already(&self, job: &Job, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
+		// Row `resume-seen` for a mismatch with no row at this size and time. A
+		// ctime from before the run means nothing touched the file since.
+		if !sh.reported.is_empty()
+			&& md.ctime() * 1_000_000 + md.ctime_nsec() / 1000 < sh.run_started_us
+			&& sh.reported.contains(job.path.as_os_str().as_bytes())
+		{
+			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+				send(sh, Msg::Seen(p.id));
+			}
+			st.skip_db.fetch_add(1, Relaxed);
+			self.links.passed(md);
+			return true;
+		}
 		let Some(p) = prior else {
 			return false;
 		};
@@ -1969,6 +1994,8 @@ mod tests {
 			rmlint: false,
 			mode: Mode::Full,
 			open_misses: HashSet::new(),
+			reported: HashSet::new(),
+			run_started_us: 0,
 			tx,
 		};
 		(sh, rx)
@@ -2354,6 +2381,45 @@ mod tests {
 			eprintln!("no user xattrs here; c went through the claim");
 		}
 		assert_eq!(left(&links), 0);
+		drop(sh);
+		drain.join().unwrap();
+	}
+
+	// Row `resume-seen`, with no row at the file's size and time to say so.
+	#[test]
+	fn a_reported_miss_is_not_read_again() {
+		let _id = test_id("des7n");
+		let d = scratch("scan_resume_seen");
+		fs::write(d.join("a"), "damaged").unwrap();
+		let md = fs::metadata(d.join("a")).unwrap();
+		let older = Prior {
+			id: 1,
+			bytes: md.len() as i64 - 1,
+			mtime_us: mtime_us(&md),
+			ino: md.ino() as i64,
+			hashed_us: 0,
+			seen_run: 1,
+			b3: vec![0; 32],
+		};
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		let r = Arc::new(Root::open(&d).unwrap());
+		let a = job(&r, "a");
+		sh.reported.insert(a.path.as_os_str().as_bytes().to_vec());
+		sh.run_started_us = now_us() + 1;
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let g = test_group(&d);
+		let links = Links::default();
+		read_one(&g, &sh, &a, None, &links);
+		read_one(&g, &sh, &a, Some(&older), &links);
+		assert_eq!(g.stats.skip_db.load(Relaxed), 2);
+		assert_eq!(g.stats.hashed.load(Relaxed), 0);
+		// Changed since the run began, or never reported.
+		sh.run_started_us = 0;
+		read_one(&g, &sh, &a, None, &links);
+		sh.run_started_us = now_us() + 1;
+		fs::write(d.join("b"), "fine").unwrap();
+		read_one(&g, &sh, &job(&r, "b"), None, &links);
+		assert_eq!(g.stats.hashed.load(Relaxed), 2);
 		drop(sh);
 		drain.join().unwrap();
 	}

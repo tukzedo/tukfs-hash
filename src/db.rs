@@ -334,24 +334,44 @@ pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prio
 /// its read date alone would skip the file again. See design.md, "Skipping",
 /// row `db-mismatch`.
 pub fn open_misses(conn: &Connection) -> Result<HashSet<Vec<u8>>, String> {
+	miss_paths(
+		conn,
+		"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
+		WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
+		None,
+	)
+}
+
+/// Paths an earlier part of this run reported a mismatch for. A path with no
+/// row at its size and time has nothing else to say it was reached. See
+/// design.md, "Skipping", row `resume-seen`.
+pub fn run_misses(conn: &Connection, run_id: i64) -> Result<HashSet<Vec<u8>>, String> {
+	miss_paths(
+		conn,
+		"SELECT DISTINCT path FROM events WHERE kind IN (?1, ?2, ?3) AND run_id = ?4",
+		Some(run_id),
+	)
+}
+
+fn miss_paths(
+	conn: &Connection,
+	sql: &str,
+	run_id: Option<i64>,
+) -> Result<HashSet<Vec<u8>>, String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
-	let mut st = conn
-		.prepare(
-			"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
-			WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
-		)
-		.map_err(e)?;
-	let rows = st
-		.query_map(
-			[Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch],
-			|r| {
-				Ok(match r.get_ref(0)? {
-					ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
-					_ => Vec::new(),
-				})
-			},
-		)
-		.map_err(e)?;
+	let mut st = conn.prepare(sql).map_err(e)?;
+	let kinds = [Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch];
+	let row = |r: &rusqlite::Row<'_>| {
+		Ok(match r.get_ref(0)? {
+			ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
+			_ => Vec::new(),
+		})
+	};
+	let rows = match run_id {
+		Some(id) => st.query_map(params![kinds[0], kinds[1], kinds[2], id], row),
+		None => st.query_map(kinds, row),
+	}
+	.map_err(e)?;
 	rows.collect::<rusqlite::Result<_>>().map_err(e)
 }
 
@@ -915,6 +935,26 @@ mod tests {
 		let mut got: Vec<_> = open_misses(&conn).unwrap().into_iter().collect();
 		got.sort();
 		assert_eq!(got, [&b"/a"[..], b"/c", b"/e\xff"]);
+		close_rw(conn).unwrap();
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn run_misses_are_this_runs() {
+		let _id = test_id("des7p");
+		let (_dir, p) = temp_db("runmisses");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO events (run_id, at_us, kind, path) VALUES
+				(2, 200, 'b3-xattr-mismatch', '/a'), (2, 300, 'b3-xattr-mismatch', '/a'),
+				(2, 200, 'b2b-rmlint-mismatch', x'2f62ff'), (2, 200, 'b3-db-mismatch', '/c'),
+				(2, 200, 'cache-mismatch', '/d'), (2, 200, 'read-error', '/e'),
+				(1, 100, 'b3-xattr-mismatch', '/f');",
+		)
+		.unwrap();
+		let mut got: Vec<_> = run_misses(&conn, 2).unwrap().into_iter().collect();
+		got.sort();
+		assert_eq!(got, [&b"/a"[..], b"/b\xff", b"/c"]);
 		close_rw(conn).unwrap();
 	}
 

@@ -299,7 +299,7 @@
 - A resumed run reads and reports again a mismatch an earlier part found, when the file has no current database row.
 	- ID: 2026102814341415
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 20
@@ -311,6 +311,17 @@
 	- Sweep: a row at an older size or time with a current attribute set goes the same way.
 	- Note: design.md, "Skipping", row `resume-seen`.
 	- Note: Step 5 of `tests/integration.bash` does a stop and resume with a damaged file that has a row. The same with a file known only by its attributes is the test.
+	- Reproduced [Bug]: Yes, on ext4: the new check got 2 events for the path where 1 was wanted.
+	- Actual cause [Bug]: `resume-seen` went only by the row's `seen_run`, size, time and inode. A mismatch writes no row, so with none at the file's size and time nothing said the earlier part had reached it.
+	- Decisions:
+		- The run's own mismatch events stand in for the row, loaded once by `db::run_misses` when a run is resumed. No schema change.
+		- The events keep no size, time or inode, so a path is skipped only when its ctime is from before the run began. A file touched since then is read again, which at worst reports it twice.
+		- `cache-mismatch` isn't loaded, since it ends in a clean read that writes a row.
+	- Actual fix [Bug]: `judged_already` skips a path an earlier part reported a mismatch for when its ctime is from before the run began, with or without a row. design.md, "Skipping", says so under the table.
+	- Branch: round-20261102
+	- Test case: des7k and des7m in step 5 of `tests/integration.bash`, a stop and resume over a new database. Unit tests des7n `a_reported_miss_is_not_read_again`, which also covers a row at an older size, and des7p `run_misses_are_this_runs`. des7m and des7n failed before the fix and pass after.
+	- Swept: `judged_already` and `skip_unread`, the only skips. The `link-done` path calls `keep` with its own name's row, so each name is judged by its own events. `--verify` resumes go through the same check.
+	- Closed: 20261102-120951
 
 - A `fuseblk` mount with a subtype isn't treated as hands-off.
 	- ID: 2026102814341416
