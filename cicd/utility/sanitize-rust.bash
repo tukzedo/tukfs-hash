@@ -80,7 +80,10 @@ fInstrumented(){   ## fInstrumented DIR SAN
 }
 
 fSanitizer(){   ## fSanitizer address|thread
-	local san="$1" short="${mode}" dir="${LEAK_DIR}/${mode}" log="${scratch}/${mode}.log" rc=0 cc="" sym="" n=""
+	local san="$1" short="${mode}" dir="${LEAK_DIR}/${mode}" log="${scratch}/${mode}.log" rc=0 cc="" sym="" n="" lean=""
+	## A set LIBSQLITE3_FLAGS replaces .cargo/config.toml's, so they go first.
+	lean="$(sed -n 's/^LIBSQLITE3_FLAGS *= *"\(.*\)"$/\1/p' "${root}/.cargo/config.toml")"
+	[[ -n "${lean}" ]] || { echo "sanitize-rust: no LIBSQLITE3_FLAGS in .cargo/config.toml" >&2; exit 2; }
 	for cc in clang-{24..14} clang; do command -v "${cc}" >/dev/null 2>&1 && break; done
 	command -v "${cc}" >/dev/null 2>&1 || { echo "sanitize-rust: no clang to build the bundled SQLite with" >&2; exit 2; }
 	## LLVM's runtime prints bare addresses unless it finds a symbolizer.
@@ -91,7 +94,7 @@ fSanitizer(){   ## fSanitizer address|thread
 	## it's empty, so a planted leak shows it hides nothing of ours.
 	env RUSTFLAGS="-Zsanitizer=${san} -Cforce-frame-pointers=yes" \
 		"CC_x86_64_unknown_linux_gnu=${cc}" "CFLAGS_x86_64_unknown_linux_gnu=-fsanitize=${san} -fno-omit-frame-pointer -g" \
-		LIBSQLITE3_FLAGS="-DSQLITE_DEFAULT_LOOKASIDE=0,0 -DSQLITE_DEFAULT_PCACHE_INITSZ=0" \
+		LIBSQLITE3_FLAGS="${lean} -DSQLITE_DEFAULT_LOOKASIDE=0,0 -DSQLITE_DEFAULT_PCACHE_INITSZ=0" \
 		ASAN_OPTIONS="exitcode=77:detect_leaks=1:strict_string_checks=1:check_initialization_order=1${sym:+:external_symbolizer_path=${sym}}" \
 		LSAN_OPTIONS="exitcode=77:suppressions=${here}/utility/lsan.supp:print_suppressions=0" \
 		TSAN_OPTIONS="exitcode=77:halt_on_error=0:second_deadlock_stack=1${sym:+:external_symbolizer_path=${sym}}" \
@@ -158,3 +161,4 @@ esac
 ##		- 2026-10-23: Copied from shcl's, with TSan, clang's SQLite build, and
 ##		  the leak check image.
 ##		- 2026-10-25: A quarter of the cores by default.
+##		- 2026-11-02: The build's own LIBSQLITE3_FLAGS go first.

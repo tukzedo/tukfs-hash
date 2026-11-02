@@ -1,0 +1,6 @@
+# Every cargo build in the tree, cicd's included, gets these. They take out
+# parts of the bundled SQLite nothing here uses, so that way a database handed
+# back to its user can't reach them under sudo (2026102814341423). cicd's leak
+# check adds its own after these, so keep them on one line.
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION"

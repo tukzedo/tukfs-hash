@@ -512,18 +512,24 @@ printf 'one\n' > "${wf}/a"; printf 'two\n' > "${wf}/b"
 fdb="${work}/db/wf.sqlite"
 fscan() { local rc=0; "${bin}" scan --db "${fdb}" --root "${wf}" --no-xattrs --progress 3600 "${@}" > "${work}/wf.txt" 2>&1 || rc=$?; echo "${rc}"; }
 fq() { sqlite3 "${fdb}" "${1}"; }
+fqSchema() { sqlite3 -cmd '.dbconfig defensive off' "${fdb}" "PRAGMA writable_schema = ON; ${1}" > /dev/null; }
 fscan > /dev/null
 fFlipByte "${wf}/a" 0 1
 sleep 0.01; printf 'two, edited\n' > "${wf}/b"
-fq "CREATE TRIGGER refuse BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;"
+# A trigger would be refused when the database opens, so it's a CHECK the
+# rows already there pass. b's new content is 12 bytes.
+fqSchema "UPDATE sqlite_schema SET sql = substr(sql, 1, length(sql) - 1) || ', CONSTRAINT refused_by_the_test CHECK (bytes < 10))' WHERE name = 'files';"
 check ddy8p "a refused row fails the run" "$(fscan --since "${tomorrow}") $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "1 failed"
 check ddy8q "its events kept" "$(fq "SELECT group_concat(kind || ' ' || path) FROM events WHERE run_id = (SELECT max(id) FROM runs)")" "b3-db-mismatch ${wf}/a"
 expect ddy8r "summary kept" "summary: $(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')" grep -q 'events in the whole run: b3-db-mismatch 1$' <<< "$(fq 'SELECT summary FROM runs ORDER BY id DESC LIMIT 1')"
-expect ddy8s "says why" "output: $(cat "${work}/wf.txt")" grep -q 'refused by the test' "${work}/wf.txt"
+expect ddy8s "says why" "output: $(cat "${work}/wf.txt")" grep -q 'refused_by_the_test' "${work}/wf.txt"
 check ddy8t "failed run left in rollback mode" "$(fq 'PRAGMA journal_mode')" delete
-fq "DROP TRIGGER refuse"
+fqSchema "UPDATE sqlite_schema SET sql = replace(sql, ', CONSTRAINT refused_by_the_test CHECK (bytes < 10))', ')') WHERE name = 'files';"
 check ddy8v "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
 check ddy8w "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${wf}/b' AND f.bytes = 12")" 1
+fq "CREATE TRIGGER planted AFTER INSERT ON runs BEGIN SELECT 1; END;"
+check des6w "a planted trigger refused" "$(fscan) $(grep -c 'holds trigger "planted"' "${work}/wf.txt")" "1 1"
+fq "DROP TRIGGER planted"
 
 # 17. --verify reads every file with a stored checksum again, even the same
 # day, and nothing else. It leaves no attributes and records no new files.
@@ -825,3 +831,5 @@ fi
 ##		  inside another root.
 ##		- 20261102: Names that start with the database's, and a root below a
 ##		  folder with .git.
+##		- 20261102: A CHECK in place of the trigger that refuses a row, and a
+##		  planted trigger refused.

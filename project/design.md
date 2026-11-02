@@ -25,6 +25,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
 
+- Every open checks the schema first, and refuses anything the program doesn't make, such as a trigger, a view or a virtual table, without reading further. `trusted_schema` is off on every connection. Under sudo the file is one its user can write, so nothing in it should run code the program didn't put there (2026102814341423).
+
 - A database inside a root leaves out only its own names, the file and its `-wal`, `-shm`, `-journal` and `.lock`. Anything else beside it is read, whatever its name starts with.
 
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
@@ -198,6 +200,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	- In the 3 check-only modes a missing tool fails the run. The check scripts see this as `TUKFS_GATE_STRICT`. A check that needs the leak check image, on a box with no docker and without the tool, is a skip instead, and the run doesn't record its tree (2026102814341405).
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
+
+- The bundled SQLite is built without FTS3, FTS5, R-Tree and extension loading, none of which the program uses, by `LIBSQLITE3_FLAGS` in `.cargo/config.toml`. Every cargo build in the tree reads it, the release image's and the leak checks' included, and a unit test fails when they're missing (2026102814341423).
 
 - Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The debug build, clippy, the unit tests and the release build the integration test runs are built in the same image, into `target/ctr`, so they use its pinned toolchain, the merge gate included, and the integration test can run that build on any box. Without docker, or when the image can't be set up, they build on the box with one note line, and `--no-container` does that on purpose. The integration test and the soak run on the box, since they scan its real disks.
 	- The release stage does the same, so a box without docker still gets a release build, and the run doesn't fail on it, the merge gate included. Only x86_64 builds then, into `target/release-host`, since the box has no arm64 cross gcc. It needs the box's glibc, so the floor check gives a note rather than failing. Such a run doesn't record its tree for the pre-push hook, the same as one with a missing tool (2026102509342993).

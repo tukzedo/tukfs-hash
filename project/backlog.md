@@ -177,7 +177,7 @@
 - The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
 	- ID: 2026102814341423
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 13
@@ -189,6 +189,24 @@
 	- Note: CVE-2025-7709 reads a tombstone size from the file with no bound. `give_back` hands the database to the user, so a planted FTS5 table runs that code as root on the next `sudo` scan. cargo-deny only checks RustSec, which doesn't list C CVEs in bundled code.
 	- Note: A newer rusqlite has to keep `rust-version = "1.88"` and build in the Debian 10 release image for both targets. `LIBSQLITE3_FLAGS` has to reach the release, leak check and host builds alike.
 	- Note: The release build should shrink with FTS and RTREE out. Check the size against the release set before and after.
+	- Actual effort: Avg
+	- Progress log:
+		- 2026-11-02: rusqlite 0.40.2 and `libsqlite3-sys` 0.38.2, which bundles SQLite 3.53.2. rusqlite 0.41 needs Rust 1.89, so it isn't taken. The lock still resolves for Rust 1.88.
+		- 2026-11-02: `.cargo/config.toml` sets `LIBSQLITE3_FLAGS` for every cargo build in the tree, taking out FTS3, FTS5, RTREE and extension loading. The leak check's own flags now go after these rather than replacing them.
+		- 2026-11-02: Every open, read only or not, turns `trusted_schema` off and checks `sqlite_schema` against what the program makes before anything else reads the file. Anything else is refused with its type and name.
+		- 2026-11-02: Integration step 16 made a row fail with a trigger, which the check now refuses. It uses a CHECK constraint on `files` instead, and ddy8s greps for the constraint's name, `refused_by_the_test`, rather than the trigger's message, 'refused by the test'.
+		- 2026-11-02: Sizes, built in the release image. x86_64 2,712,136 to 2,258,312 bytes, 17% less. arm64 2,419,960 to 1,984,808, 18% less. A host build went from 3,058,056 to 2,494,568.
+		- Verified: `des6s`, `des6t` and `des6v` fail with the vet calls taken out and `.cargo/config.toml` moved aside, and pass with them. `--backlog-run-quick` passed in 1m 45s, ext4 and ZFS integration runs included. The release image built both targets, the arm64 unit tests passed under qemu, and the ASan run and the advisories check passed.
+	- Decisions:
+		- The flags go in `.cargo/config.toml` rather than in cicd, so a plain `cargo build` gets them too. `des6s` fails in any build they don't reach.
+		- The check matches each row's type, name and table against a list, and wants SQL that starts with SQLite's own `CREATE TABLE ` or `CREATE INDEX `. A row can claim any type, and a planted `CREATE VIRTUAL TABLE` can't pass the prefix.
+		- `sqlite_stat1` and `sqlite_stat4` are refused too. Nothing here runs ANALYZE, and stat4 is parsed from the file as well.
+		- The read-only opens are checked too, since `report` and `gone` read the same file under sudo.
+	- Swept: every `Connection::open` in `src`. Outside the tests there are only `open_rw` and `open_ro`. The only other `LIBSQLITE3_FLAGS` in the repo was the leak check's. The trigger in integration step 16 was the only schema object a test or private tool adds to a database before the program opens it.
+	- Branch: round-20261102
+	- Test case: `des6s` (SQLite version, compile options, no FTS or RTREE module), `des6t` (planted trigger, view, table, index, virtual table and a changed `meta` row, refused by both opens), `des6v` (`trusted_schema` off, page size still set), and `des6w` (a scan refuses a planted trigger, integration step 16).
+	- Acceptance signoff: Self-closed per memory.md's close policy. A database with anything extra in it is now refused, which a user would notice, so it's in questions.md as a Check.
+	- Closed: 20261102-115543
 
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
