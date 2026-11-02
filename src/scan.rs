@@ -1180,10 +1180,9 @@ impl Links {
 		let mut m = locked(&self.map);
 		loop {
 			match m.entries.get(&key) {
+				// Counted down by `passed`, however the name is dealt with.
 				Some(Some((v, _))) if v.bytes == bytes && v.mtime_us == mt => {
-					let v = *v;
-					m.count_down(key);
-					return Claim::Done(v);
+					return Claim::Done(*v);
 				}
 				Some(None) => m = self.cv.wait(m).unwrap_or_else(PoisonError::into_inner),
 				_ => {
@@ -1198,7 +1197,7 @@ impl Links {
 		}
 	}
 
-	// A name skipped without a claim still counts as seen.
+	// Every name but the one that read it counts down once.
 	fn passed(&self, md: &fs::Metadata) {
 		if md.nlink() > 1 {
 			locked(&self.map).count_down((md.dev(), md.ino()));
@@ -1553,33 +1552,39 @@ impl<'a> Worker<'a> {
 		let Some((file, before)) = self.open(job, rel) else {
 			return;
 		};
+		let (bytes, mt) = (before.len() as i64, mtime_us(&before));
+		// Claimed before the attributes are read, and filled only once its set
+		// is written, so no name reads half of one. Row `link-writing`.
+		let claim = (before.nlink() > 1).then(|| {
+			self.links
+				.claim((before.dev(), before.ino()), before.nlink(), bytes, mt)
+		});
 		let fd = file.as_raw_fd();
 		let onfile = OnFile::read(fd);
 		let refs = Refs::new(&onfile, prior, &before);
 		if self.skip_unread(job, prior, &refs, &onfile, &before) {
 			return;
 		}
-		let Some((sums, claim)) = self.read_judged(job, prior, &refs, &file, &before) else {
+		let Some((sums, claim)) = self.read_judged(job, prior, &refs, &file, &before, claim) else {
 			return;
 		};
 		refs.tally(&sums, &self.g.stats);
 
 		let sh = self.sh;
 		let hashed_us = now_us();
-		if let Some(c) = claim {
-			c.fill(LinkVal {
-				bytes: before.len() as i64,
-				mtime_us: mtime_us(&before),
-				sums,
-			});
-		}
 		// Once nothing more can be recorded, an attribute would vouch for a read
 		// the database never got.
 		let pbytes = job.path.as_os_str().as_bytes();
-		if !send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) || sh.faults.any.load(Relaxed) {
-			return;
+		if send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) && !sh.faults.any.load(Relaxed) {
+			self.write_attrs(job, &refs, &sums, fd, &before, hashed_us);
 		}
-		self.write_attrs(job, &refs, &sums, fd, &before, hashed_us);
+		if let Some(c) = claim {
+			c.fill(LinkVal {
+				bytes,
+				mtime_us: mt,
+				sums,
+			});
+		}
 	}
 
 	fn stat(&self, job: &Job, rel: &Path) -> Option<fs::Metadata> {
@@ -1710,28 +1715,28 @@ impl<'a> Worker<'a> {
 		refs: &Refs,
 		file: &File,
 		before: &fs::Metadata,
+		link: Option<Claim<'a>>,
 	) -> Option<(Sums, Option<ClaimGuard<'a>>)> {
-		let (sh, st, links, path) = (self.sh, &self.g.stats, self.links, &job.path);
+		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
 		let (bytes, mt) = (before.len() as i64, mtime_us(before));
-		let mut claim = None;
-		if before.nlink() > 1 {
-			match links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt) {
-				// Read once, but each name is held to its own records.
-				Claim::Done(LinkVal { sums, .. }) => {
-					st.links.fetch_add(1, Relaxed);
-					let misses = refs.misses(&sums);
-					if !misses.is_empty() {
-						keep(sh, st, path, prior, misses, "");
-						return None;
-					}
-					refs.tally(&sums, st);
-					let pbytes = path.as_os_str().as_bytes();
-					send(sh, hashed_msg(pbytes, &sums, before, now_us()));
+		let claim = match link {
+			// Read once, but each name is held to its own records.
+			Some(Claim::Done(LinkVal { sums, .. })) => {
+				st.links.fetch_add(1, Relaxed);
+				self.links.passed(before);
+				let misses = refs.misses(&sums);
+				if !misses.is_empty() {
+					keep(sh, st, path, prior, misses, "");
 					return None;
 				}
-				Claim::Mine(g) => claim = Some(g),
+				refs.tally(&sums, st);
+				let pbytes = path.as_os_str().as_bytes();
+				send(sh, hashed_msg(pbytes, &sums, before, now_us()));
+				return None;
 			}
-		}
+			Some(Claim::Mine(g)) => Some(g),
+			None => None,
+		};
 
 		let want_b2b = sh.rmlint || refs.b2b.is_some();
 		let first = match read_sums(file, before, want_b2b, &mut self.buf, &sh.stop, &st.bytes) {
@@ -2351,6 +2356,70 @@ mod tests {
 		assert_eq!(left(&links), 0);
 		drop(sh);
 		drain.join().unwrap();
+	}
+
+	// Row `link-writing`. The claimant is part way through its set after an
+	// edit: the old checksum and inode value, the new size and time. A read
+	// across those writes sees just that.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
+	fn a_half_written_set_is_not_read() {
+		let _id = test_id("des6h");
+		let d = scratch("scan_link_writing");
+		fs::write(d.join("a"), "edited").unwrap();
+		fs::hard_link(d.join("a"), d.join("b")).unwrap();
+		let fd = File::open(d.join("a")).unwrap();
+		let md = fd.metadata().unwrap();
+		let (bytes, mt, id) = (md.len() as i64, mtime_us(&md), (md.dev(), md.ino()));
+		let old = *blake3::hash(b"before").as_bytes();
+		let new = *blake3::hash(b"edited").as_bytes();
+		let set = |digest| {
+			xattr::write_b3(
+				fd.as_raw_fd(),
+				digest,
+				bytes,
+				mt,
+				now_us(),
+				id,
+				xattr::B3Write::All,
+			)
+		};
+		if set(&old).is_err() {
+			eprintln!("no user xattrs here; skipped");
+			return;
+		}
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let links = Links::default();
+		std::thread::scope(|s| {
+			let Claim::Mine(mine) = links.claim(id, 2, bytes, mt) else {
+				panic!("not claimed");
+			};
+			let other = s.spawn(|| read_one(&g, &sh, &job(&r, "b"), None, &links));
+			for _ in 0..30 {
+				if other.is_finished() {
+					break;
+				}
+				std::thread::sleep(Duration::from_millis(10));
+			}
+			set(&new).unwrap();
+			mine.fill(LinkVal {
+				bytes,
+				mtime_us: mt,
+				sums: Sums { b3: new, b2b: None },
+			});
+		});
+		drop(sh);
+		let got: Vec<_> = rx
+			.iter()
+			.filter_map(|m| match m {
+				Msg::Hashed(h) => Some(h.b3),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(got, [new]);
 	}
 
 	// Whichever read of the mount table fails, no run is left running, and a

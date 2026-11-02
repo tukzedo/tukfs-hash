@@ -419,7 +419,7 @@
 - A second name of a hard-linked file can read a half-written attribute set from the worker that claimed it.
 	- ID: 2026102814341429
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 29
@@ -429,6 +429,19 @@
 	- Note: Read and write orders differ, so after an edit a name can see the new size, time and date with the old inode value. That stores the old checksum for the new content, a false `b3-db-mismatch` from then on.
 	- Note: design.md, "Skipping", row `link-writing`.
 	- Note: Hard to hit by chance. A test-only pause between the claimant's attribute writes, in the style of `db::PANIC_ON`, can make it happen every time.
+	- Actual effort: Low
+	- Decisions:
+		- The claim is taken before the attributes are read, and filled only after the claimant's set is written. A `Done` claim now means the set is whole, so no re-read is needed. Re-reading alone wouldn't have covered the attribute skip, which runs before the claim.
+		- `Claim::Done` no longer counts down inside `claim`. The name counts down once through `passed`, by whichever path deals with it, since the attribute skip now runs while a `Done` claim is held.
+		- A name that could skip by its attributes now waits while another name of the inode is being read. Those names share one set, so that's rare.
+		- The test doesn't pause between writes, since the bad view comes from a read that spans the writes and no pause on the writer's side forces it. It puts that view on the file while the test holds the claim, and checks the other name records the new checksum.
+	- Branch: round-20261102
+	- Test case: des6h, `scan::tests::a_half_written_set_is_not_read`.
+	- Verified:
+		- des6h failed before the fix, with the old checksum recorded for the new content, and passes after.
+		- Unit tests (92), clippy, and `--backlog-run-quick`, the integration test on ext4 and ZFS included.
+	- Swept: `OnFile::read` and `write_b3` callers. `accept` reads and writes one name under the database lock, so it can't overlap a scan's claim. `skipped_links_count_down` still holds, with the count-down moved out of `claim`.
+	- Closed: 20261102-113301
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
