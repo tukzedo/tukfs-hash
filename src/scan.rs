@@ -2387,6 +2387,7 @@ mod tests {
 
 	// Row `resume-seen`, with no row at the file's size and time to say so.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_reported_miss_is_not_read_again() {
 		let _id = test_id("des7n");
 		let d = scratch("scan_resume_seen");
