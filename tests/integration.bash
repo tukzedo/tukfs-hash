@@ -758,6 +758,19 @@ else
 	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
 fi
 
+# 28. Beside a database inside the root, only its own 5 names are left out,
+# not every name that starts with it (2026102814341408). A root below a
+# folder with .git is in a git work tree, as the folder with .git is
+# (2026102814341413).
+dn="${work}/dn"; mkdir -p "${dn}/tree/tukdir" "${dn}/repo/.git" "${dn}/repo/src"
+printf 'n\n' > "${dn}/tree/tuk-notes.txt"; printf 'd\n' > "${dn}/tree/tuk.d"; printf 'i\n' > "${dn}/tree/tukdir/f"
+printf 'c\n' > "${dn}/repo/src/a.c"
+rc=0; "${bin}" scan --db "${dn}/tree/tuk" --root "${dn}/tree" --no-xattrs --progress 3600 > "${dn}/out.txt" 2>&1 || rc=$?
+check des65 "names that start with the database's" "${rc} $(sqlite3 "${dn}/tree/tuk" 'SELECT count(*) FROM paths')" "0 3"
+check des66 "the database's own names left out" "$(sqlite3 "${dn}/tree/tuk" "SELECT count(*) FROM paths WHERE path LIKE '%/tuk' OR path LIKE '%/tuk.lock' OR path LIKE '%/tuk-%al'")" 0
+rc=0; "${bin}" scan --db "${dn}/g.sqlite" --root "${dn}/repo/src" --progress 3600 > "${dn}/g.txt" 2>&1 || rc=$?
+check des67 "root below a git folder: no attributes" "${rc} $(sqlite3 "${dn}/g.sqlite" 'SELECT count(*) FROM paths') $(xget "${dn}/repo/src/a.c" user.blake3.b64u)" "0 1 "
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -810,3 +823,5 @@ fi
 ##		- 20261102: Mounts that have been mounted over.
 ##		- 20261102: A root that can't be resolved, and a btrfs subvolume
 ##		  inside another root.
+##		- 20261102: Names that start with the database's, and a root below a
+##		  folder with .git.

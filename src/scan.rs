@@ -868,13 +868,25 @@ fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
 	);
 }
 
-// The database, its journal files and its lock all start with its name.
+// The database, its journal files and its lock. Anything else that only
+// starts with its name is read like any other file.
 fn excluded(sh: &Shared, p: &Path) -> bool {
 	let own = p.parent() == sh.db.parent()
-		&& p.file_name()
-			.zip(sh.db.file_name())
-			.is_some_and(|(n, d)| n.as_bytes().starts_with(d.as_bytes()));
+		&& p.file_name().zip(sh.db.file_name()).is_some_and(|(n, d)| {
+			n.as_bytes()
+				.strip_prefix(d.as_bytes())
+				.is_some_and(|sfx| matches!(sfx, b"" | b"-wal" | b"-shm" | b"-journal" | b".lock"))
+		});
 	own || sh.excludes.iter().any(|x| p.starts_with(x))
+}
+
+// git looks for `.git` up from the work folder until the filesystem changes,
+// so this does too. The root's own folder is the walk's to check.
+fn git_tree_above(root: &Path, dev: u64) -> bool {
+	root.ancestors()
+		.skip(1)
+		.take_while(|a| fs::symlink_metadata(a).is_ok_and(|m| m.dev() == dev))
+		.any(|a| fs::symlink_metadata(a.join(".git")).is_ok())
 }
 
 // A dead writer means nothing more can be recorded, so stop rather than read
@@ -931,7 +943,7 @@ fn walk(
 		}
 	};
 	let mut stack: Vec<Frame> = Vec::new();
-	let mut next = Some((root.path.clone(), false));
+	let mut next = Some((root.path.clone(), git_tree_above(&root.path, root.dev)));
 	while !sh.stop.load(Relaxed) {
 		if let Some((dir, git_above)) = next.take() {
 			match list_dir(&root, dir, git_above, sh, stats, look, jobs) {
@@ -2219,6 +2231,65 @@ mod tests {
 		assert_eq!(events, vec![(Kind::DbError, row(2).into_bytes())]);
 		assert_eq!(stats.other_err.load(Relaxed), 1);
 		assert!(look.is_autocommit());
+	}
+
+	#[test]
+	fn only_the_databases_own_names_are_left_out() {
+		let _id = test_id("des63");
+		let (sh, _rx) = test_shared(PathBuf::from("/x/tree/tuk"));
+		let out = |name: &str| excluded(&sh, &Path::new("/x/tree").join(name));
+		for name in ["tuk", "tuk-wal", "tuk-shm", "tuk-journal", "tuk.lock"] {
+			assert!(out(name), "{name}");
+		}
+		for name in [
+			"tuk-notes.txt",
+			"tuk.d",
+			"tukdir",
+			"tuk.lock2",
+			"tuk-wal.1",
+			"tu",
+			"Tuk",
+		] {
+			assert!(!out(name), "{name}");
+		}
+		assert!(
+			!excluded(&sh, Path::new("/x/tree/sub/tuk")),
+			"another folder"
+		);
+	}
+
+	// design.md, Attributes: none in a git work tree, however deep the root.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn a_root_below_a_git_folder_is_in_git() {
+		let _id = test_id("des64");
+		let d = scratch("scan_gitabove");
+		let d = fs::canonicalize(&*d).unwrap();
+		for top in ["repo", "wt", "plain"] {
+			fs::create_dir_all(d.join(top).join("src/deep")).unwrap();
+			fs::write(d.join(top).join("src/deep/a.c"), "x").unwrap();
+			fs::write(d.join(top).join("src/b.c"), "x").unwrap();
+		}
+		fs::create_dir(d.join("repo/.git")).unwrap();
+		// A linked work tree or a submodule has a .git file.
+		fs::write(d.join("wt/.git"), "gitdir: elsewhere\n").unwrap();
+		let look = db::open_rw(&d.join("t.sqlite")).unwrap();
+		for (top, git) in [("repo", true), ("wt", true), ("plain", false)] {
+			let root = d.join(top).join("src");
+			let dev = fs::metadata(&root).unwrap().dev();
+			assert_eq!(git_tree_above(&root, dev), git, "{top}");
+			assert!(
+				!git_tree_above(&root, dev + 1),
+				"{top}: past the filesystem"
+			);
+			let (sh, _rx) = test_shared(d.join("t.sqlite"));
+			let (jtx, jrx) = sync_channel(64);
+			walk(&root, &sh, &Stats::default(), &look, &jtx);
+			drop((jtx, sh));
+			let jobs: Vec<(PathBuf, bool)> = jrx.iter().map(|j| (j.path, j.in_git)).collect();
+			assert_eq!(jobs.len(), 2, "{top}");
+			assert!(jobs.iter().all(|(_, g)| *g == git), "{top}: {jobs:?}");
+		}
 	}
 
 	// A folder swapped for a symlink after the walk listed it.

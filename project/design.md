@@ -25,6 +25,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
 
+- A database inside a root leaves out only its own names, the file and its `-wal`, `-shm`, `-journal` and `.lock`. Anything else beside it is read, whatever its name starts with.
+
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
 
 - Pages are 16 KiB, to match the dataset's recordsize.
@@ -152,6 +154,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - The names and formats match nemo-anywhere, so either program can use what the other left. The date and inode are new; nemo-anywhere ignores them.
 
 - None are written in git work trees. Files come and go with each checkout, git checksums what it keeps, and a ctime change makes git look at each file again.
+	- A root below a folder with `.git` is in one too. The search stops where the filesystem changes, as git's does.
 
 - Dropbox folders get them like any other. Dropbox already keeps its own attribute on each file, and rmlint's attributes have sat on most of them without trouble. Other attributes on a file are left as they are.
 

@@ -129,7 +129,8 @@
 - A file or folder beside the database whose name starts with the database's file name is skipped with no event.
 	- ID: 2026102814341408
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 8
@@ -140,6 +141,12 @@
 	- Probable fix [Bug]: Match those 5 names exactly.
 	- Note: Only names in the database's own folder are hit, since `scan::excluded` also checks the parent.
 	- Note: A unit test of `excluded` over the 5 names and a few lookalikes, plus the integration repro.
+	- Actual cause [Bug]: `scan::excluded` left out every name in the database's folder that started with its name.
+	- Actual fix [Bug]: It matches only the database's name and that name plus `-wal`, `-shm`, `-journal` or `.lock`. design.md, "Database", says so.
+	- Branch: round-20261102
+	- Test case: des63 (`only_the_databases_own_names_are_left_out`), and des65 and des66 in step 28 of `tests/integration.bash`. Without the fix des63 failed and des65 got "0 0".
+	- Swept: `scan::excluded` is the only place the walk leaves a name out by the database's name. `hand_over` and `lock` already use exact names, and `gone` has no name rule of its own.
+	- Closed: 20261102-112339
 
 - A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
 	- ID: 2026102814341412
@@ -235,7 +242,8 @@
 - Attributes are written when a root is inside a git work tree.
 	- ID: 2026102814341413
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 18
@@ -245,6 +253,14 @@
 	- Expected behavior [Bug]: design.md, "Attributes": none are written in git work trees.
 	- Probable fix [Bug]: Before walking a root, look for `.git` in the folders above it, up to its mount point.
 	- Note: An integration check: a root below a folder with `.git`, expecting no `user.blake3.*` on its files.
+	- Actual cause [Bug]: The walk looked for `.git` only in the root and below it.
+	- Actual fix [Bug]: Before a root's walk, `scan::git_tree_above` looks for `.git` in each folder above it while the device stays the root's. A `.git` file, as in a linked work tree or a submodule, counts too.
+	- Decisions:
+		- Stop where the device changes, which is how git stops looking by default. That also stops at a btrfs subvolume, the same as git. git doesn't find a `.git` past a mount point unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, so it doesn't count here either.
+	- Branch: round-20261102
+	- Test case: des64 (`a_root_below_a_git_folder_is_in_git`), and des67 in step 28 of `tests/integration.bash`. Without the fix both failed, des67 with the full attribute set.
+	- Swept: The walk is the only place that writes a new set. `accept` only replaces a set already there, so it adds none in a git tree.
+	- Closed: 20261102-112339
 
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414
