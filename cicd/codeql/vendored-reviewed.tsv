@@ -4,26 +4,29 @@
 # version, so a line goes stale, and fails, when the crate moves, and gets
 # looked at again. A new finding fails too.
 # path:line	query	why
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:208	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:220	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:380	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:398	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1204	rust/access-invalid-pointer	to_front runs on an occupied entry, so the guard node exists
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1561	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1561	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1562	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1562	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1585	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1609	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1654	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1654	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1655	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1671	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1723	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1817	rust/access-invalid-pointer	a cursor's cur is always a node of the list, the guard included
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1825	rust/access-invalid-pointer	a cursor's cur is always a node of the list, the guard included
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:1865	rust/access-invalid-pointer	a cursor's cur is always a node of the list, the guard included
-vendor/hashlink-0.10.0/src/linked_hash_map.rs:2342	rust/access-invalid-pointer	it walks the free list it pushed onto, up to the saved end
-vendor/hashbrown-0.15.5/src/raw/mod.rs:1402	rust/access-invalid-pointer	a read through a reference to a live field, then mem::forget(self), to move it out
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:204	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:216	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:280	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:295	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:424	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:442	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1255	rust/access-invalid-pointer	to_front runs on an occupied entry, so the guard node exists
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1655	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1655	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1656	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1656	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1679	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1703	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1748	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1748	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1749	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1765	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1817	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1886	rust/access-invalid-pointer	current_entry returns before this when cur is the guard, and otherwise it's a node of the list
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1946	rust/access-invalid-pointer	a cursor's cur is always a node of the list, the guard included
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1954	rust/access-invalid-pointer	a cursor's cur is always a node of the list, the guard included
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1994	rust/access-invalid-pointer	a cursor's cur is always a node of the list, the guard included
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:2518	rust/access-invalid-pointer	it walks the free list it pushed onto, up to the saved end
+vendor/hashbrown-0.17.1/src/raw.rs:1464	rust/access-invalid-pointer	a read through a reference to a live field, then mem::forget(self), to move it out
 vendor/blake2b_simd-1.0.5/src/test.rs:99	rust/hard-coded-cryptographic-value	blake2b_simd's own tests, behind cfg(test), with fixed inputs
 vendor/blake2b_simd-1.0.5/src/test.rs:165	rust/hard-coded-cryptographic-value	blake2b_simd's own tests, behind cfg(test), with fixed inputs
