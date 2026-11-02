@@ -703,6 +703,36 @@ check dejdr "sudo prune, lock a link" "$(ln_case .lock link)" "1 none"
 check dejds "sudo prune, -wal a link" "$(ln_case -wal link)" "1 none"
 check dejdt "sudo prune, -shm a link" "$(ln_case -shm link)" "1 none"
 
+# 25. A mount that's been mounted over is gone from the walk's view, and so is
+# what's mounted on it (2026102814341407). In a user namespace, as step 23.
+# Under a whole mnt, sub is a folder like any other. A root under a tmpfs
+# that covers ext4 takes the tmpfs's type, so it's refused as no disk.
+cat > "${ns}/over.bash" << 'EOF2'
+cd "${1}" && mkdir -p a/base/sub a/hid a/vis/sub a/mnt b/base/sub b/hid b/mnt || exit 1
+printf 'x\n' > a/vis/top; printf 'y\n' > a/vis/sub/f1; printf 'z\n' > a/hid/f0
+mount --bind a/base a/mnt && mount --bind a/hid a/mnt/sub && mount --bind a/vis a/mnt || exit 1
+mount --bind b/base b/mnt && mount --bind b/hid b/mnt/sub && mount -t tmpfs none b/mnt || exit 1
+mkdir b/mnt/sub && printf 'w\n' > b/mnt/sub/f || exit 1
+: > over.mounted
+rc=0; "${2}" scan --db a.sqlite --root a/mnt --progress 3600 > a.out 2>&1 || rc=$?
+echo "${rc} $(grep -o 'hashed [0-9]*' a.out | head -1)" > a.got
+rc=0; "${2}" scan --db b.sqlite --root b/mnt/sub --progress 3600 > b.out 2>&1 || rc=$?
+echo "${rc} $(grep -c 'is tmpfs from none' b.out)" > b.got
+EOF2
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/over.bash" "${ns}" "${bin}" 2> /dev/null || true
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip des5j "walk under a mount that's been mounted over (ZFS pools aren't seen from a user namespace)"
+	skip des5k "root's type from the mount on top (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/over.mounted" ]]; then
+	check des5j "walk under a mount that's been mounted over" "$(cat "${ns}/a.got")" "0 hashed 2"
+	check des5k "root's type from the mount on top" "$(cat "${ns}/b.got")" "1 1"
+else
+	skip des5j "walk under a mount that's been mounted over (no user namespace here)"
+	skip des5k "root's type from the mount on top (no user namespace here)"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -752,3 +782,4 @@ fi
 ##		  locked folder left by a stop or kill no longer blocks its removal.
 ##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and
 ##		  step 22 checks the exit codes.
+##		- 20261102: Mounts that have been mounted over.
