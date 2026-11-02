@@ -1227,6 +1227,7 @@
 	- Progress log:
 		- 2026-10-29: The publisher checks for rar only when the backup is on. Patched here as a block, per the n8git-backup skill. The canonical copy and shcl's are unchanged, and need a go-ahead. The draft patch and issue text are in the private upstream drafts folder, under this item's ID.
 		- 2026-10-29: Verified: `publish-check.bash REPO` passes. With the backup off and no rar on PATH, the publisher pushes, and so does a whole run with no rar. With the backup on it still asks for rar. On the code from before, the first 2 fail with "Not found in path: rar".
+		- 2026-11-02: The canonical copy and shcl's have the same fix now, with a test in shcl (shcl 2026110215202335).
 	- Actual fix [Bug]: `fMustBeInPath rar` only when `skipBackup` is 0, in `cicd/utility/n8git_backup-and-publish`.
 	- Swept: the publisher is the only copy in this tree, and rar is its only optional tool. `fStagePublish` already turns the backup off without rar.
 	- Branch: round-20261029
@@ -1262,6 +1263,8 @@
 	- Branch: round-20261029
 	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO` now runs through the launcher, and 4 of its 5 new cases failed before the fix: arguments changed by wildcards, `~` and a byte that isn't UTF-8, exit 0 on INT, and the 2 for the .ps1 alone. Verified: 29 of 29 pass after, and `dogfood-launcher-check.bash REPO` passes.
 	- Swept: `& $exe` and other native calls in both `.ps1` files. `lint-ps1.ps1` passes no user arguments. shcl's `dogfood_shcl.ps1` wasn't changed, since it needs a go-ahead.
+	- Progress log:
+		- 2026-11-02: shcl's launcher has the same bug, reproduced with a stand-in under a scratch `HOME`. Filed in shcl as 2026110215202340.
 	- Closed: 20261028-193110
 
 - A scan that fails reading the mount table after it starts leaves its run marked running.
