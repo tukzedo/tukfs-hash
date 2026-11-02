@@ -29,6 +29,17 @@
 
 ## Issues
 
+- The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
+	- ID: 2026110211132205
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261102-111322
+	- Opened by: work on 2026102814341412
+	- Related IDs: 2026102814341412
+	- Requirements [Feature]: `des5x` runs only when the test's work folder is on btrfs. `IT_ROOTS` in `cicd/config.bash` has ext4 and ZFS only, so it always skips in a run.
+	- Note: b23's `/tmp` is btrfs, but slow to fsync under load (2026102409041302). A missing test root keeps the tree from being recorded for the pre-push hook, so a btrfs root that only some boxes have needs its own rule, or a small btrfs image made by the test.
+
 - When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
 	- ID: 2026110210514819
 	- Type: Bug
@@ -52,7 +63,7 @@
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 6
@@ -64,6 +75,23 @@
 	- Sweep: `scan::plan`, and `walk`'s NotFound branch for a root that goes away after the plan.
 	- Note: The exit code a user sees changes, so it waits on UAT. The b23 scan wrapper takes 8 as a normal finish, so it needs no change.
 	- Note: An integration check with a missing root, expecting 8 and a `dir-error` that names it.
+	- Reproduced [Bug]: Yes, with the build from before `5602fb5`: "skipping root t1/nonexist: missing", exit 0, no events.
+	- Actual cause [Bug]: `plan` kept only a line of text for a root `canonicalize` refused, so nothing reached the run's events, and the walk returned quietly on a root gone since the plan.
+	- Actual fix [Bug]:
+		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and logs a `dir-error` for it once the run has begun, so the run exits 8.
+		- A root gone by the time its walk starts is a `dir-error` too, like any other error opening it.
+		- `plan` prints the real error, and still exits 0, since it reads nothing.
+		- design.md, "Reading files", says which roots are dropped and which are a `dir-error`.
+	- Decisions:
+		- The event's path is the root made absolute without resolving it, so `report` names it the same way it names other paths.
+		- No roots left at all is still "nothing to scan", exit 1, before a run begins.
+	- Branch: round-20261102
+	- Commit: `5602fb5`
+	- Test case: `des5v` (exit 8) and `des5w` (the `dir-error` with the path and error), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
+	- Verified: `des5v` and `des5w` fail against the build from before the fix, with exit 0 and no event, and pass after, on ext4 and btrfs. `--backlog-run-quick` passed in 1m 38s, ext4 and ZFS integration runs included.
+	- Swept: The only other silent skip of a root was `walk`'s NotFound branch, now an event. `--exclude`, `--no-xattr` and `--threads` paths that don't resolve stay quiet, since none of them leaves files unread. Nothing in the repo or the private tools parses "skipping root" or `plan`'s "skip" lines.
+	- Acceptance signoff: Self-closed per memory.md's close policy: README already says 8 means some folders weren't checked, and the test fails before and passes after. The exit code users see changes, so it's in questions.md as a Check.
+	- Closed: 20261102-111322
 
 - A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
 	- ID: 2026102814341407
@@ -116,7 +144,7 @@
 - A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
 	- ID: 2026102814341412
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 12
@@ -125,6 +153,19 @@
 	- Expected behavior [Bug]: design.md, "Reading files": each root is walked on its own.
 	- Probable fix [Bug]: The "inside" check also needs both folders on the same device.
 	- Note: To reproduce, `btrfs subvolume create` works for a normal user on b23's btrfs `/tmp`. Removing it needs kernel 5.7 or later, where the owner can `rmdir` an empty subvolume, or root.
+	- Reproduced [Bug]: Yes, with the build from before `5602fb5`, on `/tmp`: "skipping root .../p/sv: inside .../p", and 1 of 3 files hashed at exit 0.
+	- Actual cause [Bug]: As above.
+	- Actual fix [Bug]: A root is dropped as inside another only when both are on the same mount and the same device. The subvolume is kept as its own root, in the same group as its parent, since they share disks.
+	- Decisions:
+		- Both tests stay. Same device alone would drop a root under a bind mount of a folder of the same filesystem, which the outer walk stops at.
+		- A stopped run from before this, over such roots, has another root list, so `--resume` refuses it. A new run reads everything again.
+	- Branch: round-20261102
+	- Commit: `5602fb5`
+	- Test case: `des5x`, integration step 27. It runs only when the test's work folder is on btrfs, and skips otherwise. The pipeline's test roots are ext4 and ZFS, so it skips there until 2026110211132205.
+	- Verified: `des5x` fails against the build from before the fix ("0 hashed 1") and passes after ("0 hashed 3"), with `HOST_TEMP=/tmp` on b23's btrfs. The subvolume is removed by the test as a normal user on kernel 6.12.
+	- Swept: The `--threads` match in `plan` uses folder names only, which is right, since it picks a count. design.md, "Reading files", already said the walk stops at another device; it now says such a root is kept.
+	- Acceptance signoff: Self-closed: the probable fix as written, test fails before and passes after.
+	- Closed: 20261102-111322
 
 - The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
 	- ID: 2026102814341423
