@@ -733,6 +733,31 @@ else
 	skip des5k "root's type from the mount on top (no user namespace here)"
 fi
 
+# 26. A root that can't be resolved isn't read, so the run isn't clean: a
+# dir-error with the real error, and exit 8 (2026102814341406).
+mr="${work}/mr"
+mkdir -p "${mr}/t"
+printf 'x\n' > "${mr}/t/f"
+rc=0; "${bin}" scan --db "${mr}/t.sqlite" --root "${mr}/t" --root "${mr}/t/nonexist" --progress 3600 > "${mr}/out.txt" 2>&1 || rc=$?
+check des5v "scan with a missing root" "${rc}" 8
+check des5w "missing root's dir-error" "$(sqlite3 "${mr}/t.sqlite" "SELECT kind || ' ' || path || ' ' || detail FROM events" || true)" "dir-error ${mr}/t/nonexist No such file or directory (os error 2)"
+
+# 27. An unmounted btrfs subvolume given as a root is read on its own, though
+# it sits inside another root whose walk stops at it (2026102814341412). Only
+# on btrfs, so HOST_TEMP picks it.
+bt="${work}/bt"
+mkdir -p "${bt}/p"
+printf 'a\n' > "${bt}/p/f1"
+if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/p/sv" > /dev/null 2>&1; then
+	printf 'b\n' > "${bt}/p/sv/f2"; printf 'c\n' > "${bt}/p/sv/f3"
+	rc=0; "${bin}" scan --db "${bt}/t.sqlite" --root "${bt}/p" --root "${bt}/p/sv" --progress 3600 > "${bt}/out.txt" 2>&1 || rc=$?
+	check des5x "btrfs subvolume inside another root" "${rc} $(grep -o 'hashed [0-9]*' "${bt}/out.txt" | head -1 || true)" "0 hashed 3"
+	# rm --one-file-system leaves a subvolume behind, so it goes first.
+	rm -f -- "${bt}/p/sv/f2" "${bt}/p/sv/f3"; rmdir -- "${bt}/p/sv" || true
+else
+	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -783,3 +808,5 @@ fi
 ##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and
 ##		  step 22 checks the exit codes.
 ##		- 20261102: Mounts that have been mounted over.
+##		- 20261102: A root that can't be resolved, and a btrfs subvolume
+##		  inside another root.

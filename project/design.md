@@ -36,6 +36,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - Each root is walked on its own and the walk stops at every mount point, so bind mounts, snapshots and other filesystems are only read when they are listed.
 	- It also stops at any folder on another device than the root. That covers a btrfs subvolume that isn't mounted, and anything mounted after the mount table was read.
 	- A mount that's been mounted over isn't a mount point any more, and neither is anything mounted on it, since no path reaches them. The table's parent IDs show which those are. The same goes for which mount a root or the database is on.
+	- A root that's the same folder as another, or inside another on the same mount and device, is dropped, so nothing is read twice. A btrfs subvolume inside another root is kept, since that root's walk stops at it. A root that can't be resolved, or is gone by the time its walk starts, is a `dir-error`, so the run exits 8.
 
 - Every file and folder is opened from the root's own folder, and no symlink is followed and no mount crossed anywhere on the way. A folder swapped for a symlink after it was listed counts as gone, rather than sending the scan, which runs as root, somewhere else. Kernels before 5.6 have no `openat2`, so there it goes one folder at a time.
 

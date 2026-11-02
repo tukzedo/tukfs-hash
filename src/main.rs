@@ -323,6 +323,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			for d in &plan.dropped {
 				out!("skip {d}");
 			}
+			for (r, e) in &plan.unresolved {
+				out!("skip {}: {e}", util::show_path(r));
+			}
 			for g in &plan.groups {
 				out!("group {}, {} worker(s)", g.name, g.threads);
 				for r in &g.roots {

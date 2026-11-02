@@ -326,22 +326,29 @@ pub struct Planned {
 pub struct Plan {
 	pub groups: Vec<Planned>,
 	pub dropped: Vec<String>,
+	/// Roots that couldn't be resolved, made absolute, with the error. Nothing
+	/// under them is read, so a scan logs each as a `dir-error`.
+	pub unresolved: Vec<(PathBuf, String)>,
 	pub mounts: Vec<mounts::Mount>,
 }
 
 /// Roots that resolve to the same place, or sit inside another root on the same
-/// filesystem, are dropped, so nothing is read twice. Bind mounts are the usual
-/// cause here.
+/// mount and device, are dropped, so nothing is read twice. Bind mounts are the
+/// usual cause here.
 pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, String> {
 	let mounts = mounts::read_mounts()?;
 	let mut dropped = Vec::new();
-	let mut kept: Vec<(PathBuf, BTreeSet<String>)> = Vec::new();
+	let mut unresolved = Vec::new();
+	let mut kept: Vec<(PathBuf, u64, BTreeSet<String>)> = Vec::new();
 	let mut seen_ids: HashMap<(u64, u64), PathBuf> = HashMap::new();
 	let mut canon = Vec::new();
 	for r in roots {
 		match fs::canonicalize(r) {
 			Ok(c) => canon.push(c),
-			Err(_) => dropped.push(format!("{}: missing", r.display())),
+			Err(e) => {
+				let abs = std::path::absolute(r).unwrap_or_else(|_| r.clone());
+				unresolved.push((abs, e.to_string()));
+			}
 		}
 	}
 	// An outer folder sorts before anything inside it.
@@ -362,16 +369,21 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		}
 		let m = mounts::mount_for(&mounts, &c)
 			.ok_or_else(|| format!("{}: no mount found", c.display()))?;
-		if let Some((other, _)) = kept.iter().find(|(k, _)| {
-			c.starts_with(k) && mounts::mount_for(&mounts, k).is_some_and(|km| km.point == m.point)
+		// An unmounted btrfs subvolume shares its parent's mount, but the
+		// parent's walk stops at it, as at any other device.
+		if let Some((other, ..)) = kept.iter().find(|(k, dev, _)| {
+			*dev == md.dev()
+				&& c.starts_with(k)
+				&& mounts::mount_for(&mounts, k).is_some_and(|km| km.point == m.point)
 		}) {
 			dropped.push(format!("{}: inside {}", c.display(), other.display()));
 			continue;
 		}
 		let disks = mounts::disks_for(m, &mounts)?;
 		seen_ids.insert((md.dev(), md.ino()), c.clone());
-		kept.push((c, disks));
+		kept.push((c, md.dev(), disks));
 	}
+	let kept = kept.into_iter().map(|(c, _, disks)| (c, disks)).collect();
 	let mut groups = Vec::new();
 	for (disks, rs) in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);
@@ -391,6 +403,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 	Ok(Plan {
 		groups,
 		dropped,
+		unresolved,
 		mounts,
 	})
 }
@@ -500,10 +513,14 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let Plan {
 		groups: planned,
 		dropped,
+		unresolved,
 		mounts,
 	} = plan(&o.roots, &o.threads)?;
 	for d in &dropped {
 		err!("skipping root {d}");
+	}
+	for (r, e) in &unresolved {
+		err!("skipping root {}: {e}", r.display());
 	}
 	if planned.is_empty() {
 		return Err("nothing to scan".into());
@@ -558,6 +575,10 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		open_misses,
 		tx,
 	});
+	// Not read, so not clean either.
+	for (r, e) in unresolved {
+		event(&shared, Kind::DirError, &r, e);
+	}
 	let groups = groups(planned, &hands_off);
 
 	let mut handles = Vec::new();
@@ -902,7 +923,7 @@ fn walk(
 ) {
 	let root = match Root::open(root) {
 		Ok(r) => Arc::new(r),
-		Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+		// A root gone since the plan wasn't read either.
 		Err(e) => {
 			stats.other_err.fetch_add(1, Relaxed);
 			event(sh, Kind::DirError, root, e.to_string());
