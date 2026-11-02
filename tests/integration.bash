@@ -28,6 +28,18 @@ base="$(realpath -e -- "${HOST_TEMP:-${TMPDIR:-/tmp}}")/tukfs-hash"
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 # A TERM to this shell alone leaves its children writing into the folder.
 source "${here}/cicd/utility/include/stop-descendants.bash"
+# A Ctrl+C reaches a running scan too, which stops and exits on its own, and
+# with no trap bash would go on to the next step. A stop that comes between 2
+# command substitutions in one word makes bash 5.2 fail to parse the trap,
+# and set -e then exits 2, which still cleans up.
+fStopOnSignals
+
+# Gives back what a step made unreadable and a stop or kill kept it from
+# putting back, so the folder can be removed or looked at. find doesn't follow
+# links.
+fUnlock() {
+	find "${1}" -xdev \( -type d ! -perm -u=rwx -exec chmod u+rwx {} + \) -o \( -type f ! -perm -u=r -exec chmod u+r {} + \) 2> /dev/null || true
+}
 
 # rm -rf, but only on what can only be one of this script's work folders:
 # <base>/<stamp>_<NNN>, no links, no dots.
@@ -46,6 +58,7 @@ fSafeRm() {
 	if [[ "${real}" != "${p}" || ! -d "${p}" || -L "${p}" ]]; then
 		printf 'fSafeRm: refused, a link or not a folder: %s\n' "${p}" >&2; return 1
 	fi
+	fUnlock "${p}"
 	rm -rf --one-file-system -- "${p}"
 }
 
@@ -78,7 +91,7 @@ export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
 fCleanup() {
 	local got=''
 	fStopDescendants
-	if [[ -n "${keep}" ]]; then : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
+	if [[ -n "${keep}" ]]; then fUnlock "${work}"; : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
 	read -r got 2> /dev/null < "${work}/.test-run" || true
 	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
 	fSafeRm "${work}" || true
@@ -186,8 +199,14 @@ check ddx0n "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "${work}/o
 check ddx0p "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
 check ddx0q "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
 check ddx0r "no events" "$(q 'SELECT count(*) FROM events')" 0
-check ddx0s "file handed back readable" "$(stat -c %U "${db}")" "$(id -un)"
-st=0; [[ ! -e "${db}-wal" ]] || st=1; expect ddx0t "database left in rollback mode" "WAL file left behind" "${st}"
+# Only sudo hands the file to someone else. Without it the owner is always us.
+if [[ "$(id -u)" == 0 && "${SUDO_UID:-}" =~ ^[0-9]+$ ]]; then
+	check ddx0s "file handed back readable" "$(stat -c %u "${db}")" "${SUDO_UID}"
+else
+	skip ddx0s "file handed back readable (not run through sudo)"
+fi
+# A database still in WAL mode has no -wal file after a clean close either.
+check ddx0t "database left in rollback mode" "$(q 'PRAGMA journal_mode')" delete
 
 # 2. Same day: nothing read again.
 rc="$(scan)"
@@ -431,8 +450,6 @@ uscan() { local rc=0; "${bin}" scan --db "${work}/db/ud.sqlite" --root "${ud}" -
 uq() { sqlite3 "${work}/db/ud.sqlite" "${1}"; }
 check ddy7a "readable tree" "$(uscan)" 0
 chmod 000 "${ud}/locked" "${ud}/open/c"
-# Put back on any exit, or the cleanup can't remove them.
-trap 'chmod 755 "${ud}/locked" 2> /dev/null || true; chmod 644 "${ud}/open/c" 2> /dev/null || true; fCleanup' EXIT
 check ddy7b "unreadable folder and file" "$(uscan --since "${tomorrow}") $(uq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY path)")" "8 dir-error ${ud}/locked, open-error ${ud}/open/c"
 fFlipByte "${ud}/open/a" 0 1
 rc="$(uscan --since "${tomorrow}")"
@@ -554,7 +571,6 @@ gscan --root "${gd}/b" > /dev/null
 gscan --root "${gd}/a/sub" > /dev/null
 rm -f -- "${gd}/a/del"
 chmod 000 "${gd}/a/locked" "${gd}/a/dlock"
-trap 'chmod 755 "${gd}/a/dlock" 2> /dev/null || true; chmod 644 "${gd}/a/locked" 2> /dev/null || true; fCleanup' EXIT
 check ddya0 "gone: scan with an unreadable file and folder" "$(gscan --root "${gd}/a" --exclude "${gd}/a/sub" --since "${tomorrow}")" 8
 chmod 755 "${gd}/a/dlock"; chmod 644 "${gd}/a/locked"
 check ddya1 "gone: exit" "$(gone)" 0
@@ -629,13 +645,16 @@ expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
 check deb0e "version line alone" "${ver}" "${ver%%$'\n'*}"$'\n'
 
 # 22. Help ends with one blank line before the prompt, however it's asked
-# for. The bare command shows it too, with exit 1.
-helpBad=""
+# for. The bare command shows it too, with exit 1. The x and exit code after
+# the output keep its trailing blank line from being stripped.
+helpBad=""; helpRcs=""
 for helpArg in -h --help help ''; do
-	if [[ -n "${helpArg}" ]]; then helpOut="$("${bin}" "${helpArg}"; echo x)"; else helpOut="$("${bin}" || true; echo x)"; fi
-	[[ "${helpOut}" == *[![:space:]]$'\n\nx' ]] || helpBad+=" [${helpArg}]"
+	helpOut="$("${bin}" ${helpArg:+"${helpArg}"} && echo "x0" || echo "x$?")"
+	helpRcs+=" [${helpArg}] ${helpOut##*x}"
+	[[ "${helpOut%x*}" == *[![:space:]]$'\n\n' ]] || helpBad+=" [${helpArg}]"
 done
 check dee8e "help ends with a blank line" "${helpBad}" ""
+check des4v "help exit codes" "${helpRcs}" " [-h] 0 [--help] 0 [help] 0 [] 1"
 
 # 23. A mount point whose name isn't UTF-8 doesn't stop a scan of some other
 # root (2026102519331112). The mounts are in a user namespace, so no root is
@@ -729,3 +748,7 @@ fi
 ##		  rdscan, not a second rscan. SPDX line.
 ##		- 20261028: The stale folder sweep also needs the folder to be ours.
 ##		- 20261029: A build number marked -dirty.
+##		- 20261102: A Ctrl+C stops the test, not only the running scan. A
+##		  locked folder left by a stop or kill no longer blocks its removal.
+##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and
+##		  step 22 checks the exit codes.

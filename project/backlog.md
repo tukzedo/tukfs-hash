@@ -227,7 +227,7 @@
 - 3 integration checks pass whether or not what they check holds.
 	- ID: 2026102814341420
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 25
@@ -239,11 +239,21 @@
 	- Expected behavior [Bug]: Each fails when its claim is false.
 	- Probable fix [Bug]: Check `PRAGMA journal_mode` is `delete`, as ddy8n does. Skip ddx0s when not root. Record and check each code in step 22.
 	- Note: Each changed check has to be watched to fail: a database left in WAL mode, a file owned by someone else, and a binary that exits 0 bare.
+	- Reproduced [Bug]: 2026-11-02 on b23. With a stand-in binary that leaves each database in WAL mode, the old ddx0t passed. With one whose bare command exits 0, the old test said "all passed".
+	- Decisions:
+		- ddx0s runs only as root with `SUDO_UID` set, and compares the owner's uid with it. Run as root without sudo it would be just as always-true, so it skips then too.
+		- The exit codes get their own check, des4v, so dee8e keeps meaning only the blank line.
+	- Actual fix [Bug]: ddx0t checks `PRAGMA journal_mode` is `delete`. ddx0s skips unless run through sudo. Step 22 records each exit code, and des4v checks them: 0 for `-h`, `--help` and `help`, 1 bare.
+	- Progress log:
+		- 2026-11-02: Verified: with `it-fault-bin.bash`, ddx0t fails on a database left in WAL mode, and des4v fails on a bare command that exits 0 and on a `-h` that exits 1. As uid 0 in a user namespace with `SUDO_UID` 1000, ddx0s passes on the real binary and fails when the hand-back is skipped. All pass on the real binary, and `--backlog-run-quick` passes.
+	- Branch: round-20261102
+	- Test case: ddx0t, ddx0s and des4v in `tests/integration.bash`. `it-fault-bin.bash` in the private tools folder breaks each claim.
+	- Closed: 20261102-105100
 
 - Ctrl+C in the integration test stops only the running scan, and the test goes on.
 	- ID: 2026102814341421
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 26
@@ -253,6 +263,19 @@
 	- Probable fix [Bug]: Call `fStopOnSignals` after the `source` line.
 	- Sweep: step 9's `chmod 000` has no trap to undo it, unlike steps 13 and 18, so a stop there leaves a folder the cleanup can't empty. Plausible.
 	- Note: A test can start the integration test under a stand-in binary, send INT to its group, and expect it to stop with the work folder gone.
+	- Reproduced [Bug]: 2026-11-02 on b23. An INT to the group at 13 and 14 s, during a scan, let the test go on for 70 more checks. Earlier stops hit a python3 or sleep, which die of INT, and bash stops with them. A TERM during step 9's stand-in left the work folder with `sd/old/locked`.
+	- Actual cause [Bug]: With no INT trap, bash goes on when its child exits on its own after an INT.
+	- Actual fix [Bug]: `fStopOnSignals` after the `source` line. Step 9's sweep is fixed for every step: `fSafeRm` and a kept folder's cleanup give back a locked folder or file first, through `fUnlock`, so steps 13 and 18 lost their own EXIT traps. A killed run's folder now goes at the next run too.
+	- Decisions:
+		- One fix in the removal rather than a trap per step, since a KILL runs no trap, and a new `chmod 000` step can't miss it.
+		- A TERM to the PID alone now waits for the step running, as cicd.bash's does. The steps are short, under 3 s at the slowest seen.
+		- bash 5.2 can fail to parse the trap when the signal comes between 2 command substitutions in one word, already reported upstream (bug-bash, 2023-09). `set -e` then exits 2, and the cleanup still runs, so the stop still works with exit 2 and bash's message.
+	- Progress log:
+		- 2026-11-02: Verified: an INT to the group at 3, 6, 10, 13, 14 and 16 s, and a TERM to the PID at the same times, each stopped the test within 3 s, printed no check line after it, and left nothing. A TERM to the PID, to the group and an INT during step 9, and a KILL there swept by the next run, left nothing. A kept run's locked folder is given back. The full test passes on ext4 and ZFS, and `--backlog-run-quick` passes.
+	- Swept: steps 13 and 18 are the only other `chmod`s. `cicd.bash` and `remote-tests.bash` already call `fStopOnSignals`. The soak, fuzz, sanitizer, CodeQL, advisories and release scripts source the include without it, but none runs the binary as a step of its own, so what they start dies of INT. That part is unverified.
+	- Branch: round-20261102
+	- Test case: `it-stop-check.bash REPO [DELAY|after:ID] [TMPDIR] [pid|group|int] [BINARY]`, in the private tools folder, now with `int` and a check that no line follows the stop. `int` at 13 and 14 s failed before the fix and passes after, and so did `pid` with `after:ddy6a` and a stand-in that holds step 9.
+	- Closed: 20261102-105100
 
 - Docs disagree with the code in 3 places.
 	- ID: 2026102814341422
