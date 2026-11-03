@@ -30,6 +30,7 @@ source "${me}/include/leak-common.bash"
 trap 'fStopDescendants; fScratchGone || true' EXIT
 
 if (($#)); then echo "soak: takes no arguments (see the header)" >&2; exit 2; fi
+fLeakSandbox "${me}/soak.bash"
 start="${SECONDS}"
 art="${root}/cicd/artifacts/soak"
 mkdir -p -- "${art}" "${LEAK_DIR}"
@@ -55,3 +56,4 @@ echo "soak: OK: $(tail -n 1 "${art}/soak.txt"); the table is in cicd/artifacts/s
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-11-02: In the test sandbox.

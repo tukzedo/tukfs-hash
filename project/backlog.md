@@ -29,6 +29,22 @@
 
 ## Issues
 
+- No one-line install script.
+	- ID: 2026110218175402
+	- Type: Feature
+	- Status: Stalled
+		- Held for: a published release, and the repo going public.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261102-181754
+	- Opened by: CICD review
+	- Prereq IDs: 2026110218175401
+	- Requirements [Feature]:
+		- `install.bash`, run as a one-liner, takes the latest stable or dev release, checks its sum, and installs it for the user or the system.
+		- It says what it'll do and asks first, unless told yes. It's safe to run again.
+		- README gets an Installation section, with the packages first, then the one-liner, then building it yourself.
+	- Decisions:
+		- No `install.ps1`. The tool only runs on Linux.
+
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
@@ -38,6 +54,18 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- No step puts the release set on the git host when `dev` is merged into `main`.
+	- ID: 2026110218175401
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261102-181754
+	- Opened by: CICD review
+	- Requirements [Feature]:
+		- A release run tags the merge and uploads the binaries, packages and sums file, with their names unchanged.
+		- The newest release is easy to find, so an installer can list them.
+	- Note: Nothing to download until the repo is public, but the tag and the set can be made now.
 
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
@@ -705,6 +733,27 @@
 		- 2026-10-14 17:56, guests are no longer frozen at all, per 2026101417560000. The freeze half of this fix is gone with it. The shutdown, put-back and hangup handling stay.
 		- 2026-10-15 06:49, second root run. All 3 guests shut down together, the snapshots were taken, and all 3 were started again within a minute. The scan ran 4 h 52 m and ended with exit 4, keeping the mounts and snapshots.
 	- Acceptance signoff: Self-closed after the 2026-10-15 root run.
+
+- Run the pipeline's test steps on the host in a sandbox, so a bug in the code under test can't change other files.
+	- ID: 2026110218175400
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261102-175400
+	- Opened by: CICD review
+	- Requirements [Feature]:
+		- Every step that runs test code on the box can write only to its own temp and build folders.
+		- Nothing it runs can reach other files, other processes, or the network.
+	- Note: The build image was already closed off. The integration test, soak, fuzz tests, profiler and demo gif ran on the box with full access, and so did the build and tests when there's no docker.
+	- Progress log:
+		- `cicd/utility/sandbox.bash` runs a step under bubblewrap. design.md, "Test sandbox", has the details.
+		- ZFS hides its pools from a user namespace, so a stand-in `zpool` answers with the real output for the writable folders' pools.
+		- `--no-sandbox` turns it off, with a warning on each step. No bubblewrap fails the step.
+	- Verified: The integration test gives the same results in it as without, on ext4 and ZFS, and the demo gif the same bytes. A scan of a folder outside it fails its xattr writes, where the same scan outside writes them.
+	- Branch: pre-release
+	- Test case: desk2. It fails when the pipeline runs the test outside the sandbox, or when the folder above the test folder can be written.
+	- Acceptance signoff: Self-closed: checked here, with a planted write and a planted wide folder.
+	- Closed: 20261102-181754
 
 - CICD reset: release builds without docker
 	- ID: 2026102509342993

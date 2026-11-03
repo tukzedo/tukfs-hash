@@ -26,6 +26,7 @@ trap 'fStopDescendants; fScratchGone || true' EXIT
 
 secs="${1:-}"
 if (($# != 1)) || ! [[ "${secs}" =~ ^[0-9]+$ ]]; then echo "usage: fuzz.bash SECS" >&2; exit 2; fi
+fLeakSandbox "${me}/fuzz.bash" "$@"
 start="${SECONDS}"
 fScratchMake fuzz || exit 2
 mkdir -p -- "${scratch}/tmp"
@@ -46,3 +47,4 @@ echo "fuzz: OK: ${n} parsers, ${secs} s each ($((SECONDS - start)) s)"
 
 ##	History:
 ##		- 2026-10-26: Created.
+##		- 2026-11-02: In the test sandbox.

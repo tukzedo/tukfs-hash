@@ -47,7 +47,8 @@ work="$(realpath -e -- "${TMPDIR:-}" 2>/dev/null || true)"
 t0="${EPOCHREALTIME}"
 gif="${work}/demo_${stamp}.gif"
 rc=0
-env -u DISPLAY -u WAYLAND_DISPLAY python3 "${meDir}/gen-demo-gif.py" --scenario "${scenario}" --out "${gif}" --bin "${bin}" || rc=$?
+## The scenario runs the binary, so only the run dir is writable.
+"${meDir}/sandbox.bash" "${work}" -- env -u DISPLAY -u WAYLAND_DISPLAY python3 "${meDir}/gen-demo-gif.py" --scenario "${scenario}" --out "${gif}" --bin "${bin}" || rc=$?
 case "${rc}" in
 	0) ;;
 	2) fWarn "see the line above" ;;
@@ -122,3 +123,4 @@ fi
 ##	History:
 ##		- 2026-10-23: Created, from shcl's gif stage.
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
+##		- 2026-11-02: The scenario runs in the test sandbox.

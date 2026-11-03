@@ -3,7 +3,32 @@
 <!-- markdownlint-disable MD033 -- No inline html -->
 <!-- markdownlint-disable MD041 -- First line in a file should be a top-level heading -->
 
+<!-- TOC ignore:true -->
 # tukfs-hash design
+
+<!-- TOC ignore:true -->
+## Table of contents
+
+<!-- TOC -->
+
+- [Summary](#summary)
+- [Database](#database)
+- [Reading files](#reading-files)
+- [Mismatches](#mismatches)
+- [Skipping](#skipping)
+- [Runs and exit codes](#runs-and-exit-codes)
+- [Gone](#gone)
+- [Attributes](#attributes)
+- [Snapshot diffs](#snapshot-diffs)
+- [Build and release](#build-and-release)
+- [Test sandbox](#test-sandbox)
+- [Leak and memory checks](#leak-and-memory-checks)
+- [Profiling](#profiling)
+- [Demo gif](#demo-gif)
+- [Rejected](#rejected)
+- [Copyright and license](#copyright-and-license)
+
+<!-- /TOC -->
 
 ## Summary
 
@@ -205,7 +230,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The bundled SQLite is built without FTS3, FTS5, R-Tree and extension loading, none of which the program uses, by `LIBSQLITE3_FLAGS` in `.cargo/config.toml`. Every cargo build in the tree reads it, the release image's and the leak checks' included, and a unit test fails when they're missing (2026102814341423).
 
-- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The debug build, clippy, the unit tests and the release build the integration test runs are built in the same image, into `target/ctr`, so they use its pinned toolchain, the merge gate included, and the integration test can run that build on any box. Without docker, or when the image can't be set up, they build on the box with one note line, and `--no-container` does that on purpose. The integration test and the soak run on the box, since they scan its real disks.
+- Release builds are Linux only, since the tool reads Linux xattrs, mounts and snapshots. Both are built in a Debian 10 image, `cicd/container-release/`, so they need its glibc 2.28 and not the box's. That covers RHEL 8, Debian 10, Ubuntu 18.10 and anything newer. arm64 is cross-built there with Debian's cross gcc, which also compiles the bundled SQLite. It takes about as long as x86_64, so every run builds both. The debug build, clippy, the unit tests and the release build the integration test runs are built in the same image, into `target/ctr`, so they use its pinned toolchain, the merge gate included, and the integration test can run that build on any box. Without docker, or when the image can't be set up, they build on the box with one note line, and `--no-container` does that on purpose. The integration test and the soak run on the box, since they scan its real disks, in the test sandbox below.
 	- The release stage does the same, so a box without docker still gets a release build, and the run doesn't fail on it, the merge gate included. Only x86_64 builds then, into `target/release-host`, since the box has no arm64 cross gcc. It needs the box's glibc, so the floor check gives a note rather than failing. Such a run doesn't record its tree for the pre-push hook, the same as one with a missing tool (2026102509342993).
 
 - The release set, in `cicd/artifacts/release/`, is named `tukfs-hash-<version>-linux-x86_64` and `tukfs-hash-<version>-linux-arm64`, the same names plus `.deb` and `.rpm`, and `tukfs-hash-<version>-sha256sums.txt`. Download links depend on these, so they stay. The x86_64 name is never amd64, though the `.deb` has to say amd64 inside.
@@ -227,6 +252,18 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 	- The pool keeps at most 10 versions and at least 5, and between those only as many as fit in 1 GB. Which ones stay is a GFS rotation: the oldest, the newest, the last of each recent hour, day, week, month and year, and the few most recent. Under 10 and 1 GB, versions with none of those roles stay too, as spares. When the count or the bytes cut in, the newest and oldest stay first, then the roles from year down to frequent, newest first within each, so a burst of builds can't push out the week and day ones (2026102814341441).
 	- Each is named `tukfs-hash_<yyyyMMdd-HHmmss>_<role>`, from the build's write time in local time. Old versions go one file at a time, matched by that name, and never one that's running. Another user's run, such as one through sudo, has no exe link to read, so it's known by its name and first argument, as in the dogfood stage. A run through the fixed name holds the version that was newest when it started, by the time each came into the pool, which is the pool file's write time (2026102819305559).
 
+## Test sandbox
+
+- A scan writes xattrs, and as root it can reach every file. A bug in the code under test could do that outside its test folder. So every step that runs test code on the box runs in `cicd/utility/sandbox.bash`, through bubblewrap: the build, clippy and unit tests when there's no image, the integration test on each test root, the release check's integration test, the soak, the fuzz tests, the profiler's scans and the demo gif's commands.
+
+- Inside, the whole filesystem is read-only but the folders the step is given, which are its own temp folder and the build dirs. Home, `/tmp` and `/run` are empty, so the sockets there aren't reachable, such as docker's, ssh-agent's, tmux's and the session bus. There's no network, no other process can be seen or signaled, and sudo can't raise anything. Only the Rust toolchain and cargo's crate cache are shown from home, read-only, and cargo runs offline from a `cargo fetch` done just before.
+
+- ZFS shows no pool to a user namespace it isn't delegated to, so `zpool list` fails inside. A scan needs it to find the pool's disks. The sandbox puts a stand-in first on PATH that answers with what the real one said outside, for the pools of the writable folders only.
+
+- The integration test passes the same checks in it as without it, on ext4 and ZFS. Writing outside the folders it's given fails with "Read-only file system".
+
+- No bubblewrap, or user namespaces turned off, fails the step and says so. `--no-sandbox` runs the steps as before, with a warning on each. The build image needs none, since the container already has only the run's dirs mounted.
+
 ## Leak and memory checks
 
 - Each leak check has a length in `cicd/config.bash`, by its measured time with the image and build dirs warm. The fast ones, under a minute each, run in every run but `--backlog-run-quick`, `--quick` included: the known-advisory scan, the soak, the unit tests under ASan and LSan, then TSan, and the parser fuzz tests at 20 s each. The ones that take minutes, Miri and CodeQL, run in a run with no options, `--long`, the merge gate and `--backlog-run-full`, and in `--quick` only with `--leakcheck`. Ones that take hours run only in `--long`, which is the fuzz tests again at an hour each. `--backlog-run-quick` runs them only for a leak area or `--leakcheck`. They end the tests stage in that order, and any report fails the run (2026102517244901).
@@ -235,7 +272,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The sanitizers, Miri and CodeQL run in the image from `cicd/container/`, with the pinned nightly and CodeQL, no network, and only the run's own dirs and `target/leakcheck/` mounted. Its crates are fetched once per lock file into `target/leakcheck/cargo-home`. Without docker they run on the host with a note, and CodeQL skips.
 
-- The soak and the advisory scan run on the host. A scan finds its workers from the root's disks through `/dev`, which a container doesn't have, and cargo-deny fetches RustSec's database.
+- The soak and the advisory scan run on the host. A scan finds its workers from the root's disks through `/dev`, which a container doesn't have, and cargo-deny fetches RustSec's database. The soak, and the fuzz tests, run in the test sandbox. So do the sanitizers and Miri when there's no docker. The advisory scan only reads `Cargo.lock`, so it runs as is.
 
 - The soak, `src/soak.rs`, runs scan, change, scan, runs, report, gone and accept 20 times in one process, and holds the heap at round 20 to round 10 within 4 KB. The Rust heap is dhat's count. SQLite's is its own, since it allocates through libc, which dhat doesn't see. Both are back to 0 bytes live after every round, so the margin can be small. It's behind the `soak` feature, since dhat then counts every allocation in the test binary.
 

@@ -791,6 +791,21 @@ check des66 "the database's own names left out" "$(sqlite3 "${dn}/tree/tuk" "SEL
 rc=0; "${bin}" scan --db "${dn}/g.sqlite" --root "${dn}/repo/src" --progress 3600 > "${dn}/g.txt" 2>&1 || rc=$?
 check des67 "root below a git folder: no attributes" "${rc} $(sqlite3 "${dn}/g.sqlite" 'SELECT count(*) FROM paths') $(xget "${dn}/repo/src/a.c" user.blake3.b64u)" "0 1 "
 
+# 29. The pipeline runs this in its sandbox, where only the folder that holds
+# the work folders can be written, and docker's socket isn't there. Run by the
+# pipeline outside it, without --no-sandbox, is a failure. Home is an empty
+# tmpfs in there, which is fine to write, and a scan refuses tmpfs, so a test
+# root is never on one.
+if [[ -n "${TUKFS_SANDBOX:-}" || ( -n "${TUKFS_RUN_NAME:-}" && -z "${TUKFS_NO_SANDBOX:-}" ) ]]; then
+	probe="${base%/*}/.tukfs-hash-sandbox-probe-$$"
+	st=0; [[ -n "${TUKFS_SANDBOX:-}" ]] || st=1
+	if [[ "$(stat -f -c %T -- "${base%/*}")" != tmpfs ]] && mkdir -- "${probe}" 2> /dev/null; then rmdir -- "${probe}"; st=1; fi
+	[[ ! -e /run/docker.sock && ! -e /var/run/docker.sock ]] || st=1
+	expect desk2 "sandbox: nothing outside the test folder written" "sandbox: not in it, could write ${probe%/*}, or docker's socket is there" "${st}"
+else
+	skip desk2 "sandbox: nothing outside the test folder written (not in the sandbox)"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -838,6 +853,7 @@ fi
 ##		- 20261029: A build number marked -dirty.
 ##		- 20261102: A Ctrl+C stops the test, not only the running scan. A
 ##		  locked folder left by a stop or kill no longer blocks its removal.
+##		- 20261102: Step 29, the pipeline's sandbox.
 ##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and
 ##		  step 22 checks the exit codes.
 ##		- 20261102: Mounts that have been mounted over.
