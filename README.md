@@ -31,7 +31,7 @@ It's a utility under tukfs, part of tukzedo.
 
 - Reads each regular file once with blake3. Files that already have a current rmlint blake2b checksum get blake2b too, from the same read. With `--rmlint` every file it reads gets blake2b, kept in the database, and rmlint's own attributes are written where they're missing or out of date.
 
-- Compares the result with three earlier records, when they're there and the size and time still match:
+- Compares the result with 3 earlier records, when they're there and the size and time still match:
 	- The blake3 left on the file in extended attributes, by this program or by nemo-anywhere.
 	- rmlint's blake2b, in `user.rmlint.blake2b.*`.
 	- Its own database from earlier runs.
@@ -104,7 +104,7 @@ The integration test needs `sqlite3`, `getfattr`, `setfattr`, `b2sum` and `pytho
 
 `rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline: format, build, lint, tests, release builds for x86_64 and arm64 Linux with a `.deb` and an `.rpm` of each, dogfood, the demo gif above, and publish. The release builds run in a Debian 10 image under docker, so each one needs only glibc 2.28 or newer. The test steps that run on the box, such as the integration test, run in a bubblewrap sandbox that can write only to their own temp and build folders, so the pipeline needs `bwrap`. `--no-sandbox` runs them without it. Without docker, or with `--no-container`, only the x86_64 one builds, on the box, and it needs the box's glibc. Where an arm64 Linux test VM is set up, the arm64 build's unit and integration tests also run there. A VM that isn't there is skipped, and `--no-remote` skips it on purpose. The gif needs Pillow, and is skipped without it. `cicd/cicd.bash --merge-gate` runs every check without publishing anything, and the pre-push hook runs it on pushes to `main` after `git config core.hooksPath cicd/hooks`. Pushes that only change docs skip it. `--help` lists the rest.
 
-A full run also has the leak and memory checks: the tests under ASan, TSan and Miri on the nightly that `cicd/tool-pins.env` names, a heap soak of repeated scans, fuzz tests of the parsers, CodeQL over every crate, and `cargo deny check advisories`. The sanitizers, Miri and CodeQL run in a docker image built from `cicd/container/` the first time, which takes a few minutes and about 4 GB. Without docker they use the host's nightly, and CodeQL is skipped. `--quick` keeps the ones that take under a minute, and any that take hours run only with `--long`. `--no-leakcheck` leaves them all out, and `--no-codeql` just CodeQL.
+A full run also has the leak and memory checks: the tests under ASan, TSan and Miri on the nightly that `cicd/tool-pins.env` names, a heap soak of repeated scans, fuzz tests of the parsers, CodeQL over every crate, and `cargo deny check advisories`. The sanitizers, Miri and CodeQL run in a docker image built from `cicd/container/` the first time, which takes a few minutes and about 4 GB. Without docker they use the host's nightly, and CodeQL is skipped. `--quick` keeps the ones that take under a minute, and any that take hours run only with `--long`. `--no-leakcheck` leaves them all out, and `--no-codeql` only CodeQL.
 
 Release builds are reproducible: 2 builds of one commit give the same bytes, packages included, wherever the checkout is.
 

@@ -1731,7 +1731,7 @@ impl<'a> Worker<'a> {
 		true
 	}
 
-	// Sums worth recording, with this name's claim on the inode still to fill.
+	// Sums to record, with this name's claim on the inode still to fill.
 	// None once the file is dealt with: a failed read, a mismatch, or another
 	// name's read.
 	fn read_judged(

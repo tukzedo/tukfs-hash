@@ -182,8 +182,10 @@ source "${here}/config.bash"
 ## what gets copied, with nothing uncommitted.
 ## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count
 ## on from its.
+## TUKFS_CHECKOUT is the checkout the copy came from, for what's beside it.
 run_part="${TUKFS_RUN_PART:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
-unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV TUKFS_STEP_PLAN
+checkout="${TUKFS_CHECKOUT:-${root}}"
+unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV TUKFS_STEP_PLAN TUKFS_CHECKOUT
 case "${run_part}" in ''|build) ;; *) echo "TUKFS_RUN_PART=${run_part}: not build" >&2; exit 2 ;; esac
 if [[ -n "${plan_given}" && ! "${plan_given}" =~ ^[0-9]+( [a-z]+=[0-9]+)*$ ]]; then echo "TUKFS_STEP_PLAN=${plan_given}: not a step plan" >&2; exit 2; fi
 if [[ -n "${gate_rev}" && ! "${gate_rev}" =~ ^[0-9a-f]{40}$ ]]; then echo "TUKFS_GATE_REV=${gate_rev}: not a full commit hash" >&2; exit 2; fi
@@ -1183,6 +1185,13 @@ fStageLint(){
 		fEcho_Clean "${c%%|*}: ${c#*|}"
 		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
 	done
+	## The content scrub lives with the private project files, so a clone
+	## without them skips it. It only reports until 2026110218175403 is done.
+	if [[ -x "${checkout}/../private/hooks/scrub.bash" ]]; then
+		fEcho_Clean "content scrub: ../private/hooks/scrub.bash"
+		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"
+		else fEcho "NOTE: the content scrub found lines to look at; they're above, and in the lint log"; fi
+	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
 	((${#failed[@]} == 0)) || fDie "lint: ${failed[*]} found something; the output is above"
@@ -1599,7 +1608,7 @@ fRunFrozen(){
 	local rc=0
 	tested_tree="${frozen_tree}"
 	((record_green)) && green_tree="${frozen_tree}"
-	TUKFS_RUN_PART=build TUKFS_STEP_PLAN="${step_plan}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
+	TUKFS_RUN_PART=build TUKFS_STEP_PLAN="${step_plan}" TUKFS_CHECKOUT="${root}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
 	_wasLastEchoBlank=1
 	## A stopped run stays a stopped run, and the EXIT trap says so.
@@ -1911,3 +1920,5 @@ exit 0
 ##		  freed size off for the kept temp dir.
 ##		- 2026-11-02: The test steps on the host run in the sandbox, and
 ##		  --no-sandbox.
+##		- 2026-11-02: The content scrub in the lint stage, when the private
+##		  folder has one.
