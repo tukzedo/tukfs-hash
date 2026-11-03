@@ -42,6 +42,8 @@
 		- `install.bash`, run as a one-liner, takes the latest stable or dev release, checks its sum, and installs it for the user or the system.
 		- It says what it'll do and asks first, unless told yes. It's safe to run again.
 		- README gets an Installation section, with the packages first, then the one-liner, then building it yourself.
+	- Progress log:
+		- 2026-11-02: README has the Installation section with "Build it yourself" only. Packages and the one-liner go in above it.
 	- Decisions:
 		- No `install.ps1`. The tool only runs on Linux.
 

@@ -58,6 +58,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Pages are 16 KiB, to match the dataset's recordsize.
 
+- The database is also the start of tukfs's own. tukfs will use the `files` rows, one per distinct content, to find duplicate files, so every scan adds to the index it starts from.
+
 - Every edit leaves a `files` row no path points at. `prune` deletes those and nothing else. They're never looked up, since a lookup goes from the path. A content that comes back after a prune gets a new row. It takes the lock like a scan, and isn't a run.
 
 ## Reading files
