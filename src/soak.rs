@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The soak test: scan, change a file, scan again, then status and accept, in
+// The soak test: scan, change a file, scan again, then runs, report, gone and accept, in
 // a loop in this process, with the heap at round 2N held to round N. Only
 // with --features soak, since dhat then counts every allocation in the test
 // binary and only one profiler can run at once. cicd/utility/soak.bash runs

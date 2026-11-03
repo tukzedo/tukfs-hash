@@ -163,9 +163,11 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 			unlisted.len()
 		);
 	}
+	let more = count - shown.len() as u64;
 	for l in shown {
 		out!("{l}");
 	}
+	crate::cut_note(i64::try_from(more).unwrap_or(i64::MAX));
 	Ok(0)
 }
 

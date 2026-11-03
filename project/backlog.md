@@ -29,6 +29,24 @@
 
 ## Issues
 
+- No one-line install script.
+	- ID: 2026110218175402
+	- Type: Feature
+	- Status: Stalled
+		- Held for: a published release, and the repo going public.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261102-181754
+	- Opened by: CICD review
+	- Prereq IDs: 2026110218175401
+	- Requirements [Feature]:
+		- `install.bash`, run as a one-liner, takes the latest stable or dev release, checks its sum, and installs it for the user or the system.
+		- It says what it'll do and asks first, unless told yes. It's safe to run again.
+		- README gets an Installation section, with the packages first, then the one-liner, then building it yourself.
+	- Progress log:
+		- 2026-11-02: README has the Installation section with "Build it yourself" only. Packages and the one-liner go in above it.
+	- Decisions:
+		- No `install.ps1`. The tool only runs on Linux.
+
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
@@ -38,6 +56,18 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- No step puts the release set on the git host when `dev` is merged into `main`.
+	- ID: 2026110218175401
+	- Type: Feature
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261102-181754
+	- Opened by: CICD review
+	- Requirements [Feature]:
+		- A release run tags the merge and uploads the binaries, packages and sums file, with their names unchanged.
+		- The newest release is easy to find, so an installer can list them.
+	- Note: Nothing to download until the repo is public, but the tag and the set can be made now.
 
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
@@ -72,9 +102,9 @@
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-105148
-	- Opened by:
+	- Opened by: work on 2026102814341421
 	- Progress log:
-		- Found by the 2026102814341421 worker. fUnlock makes it rarer. Keep the marks until the last removal, or remove them last.
+		- Found while working 2026102814341421. fUnlock makes it rarer. Keep the marks until the last removal, or remove them last.
 
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414
@@ -91,20 +121,19 @@
 	- Note: The repro runs without root under `unshare -rm`, the same as check `deeby`.
 	- Related IDs: 2026102814341407
 
-- Docs disagree with the code in 3 places.
-	- ID: 2026102814341422
-	- Type: Bug
+- The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
+	- ID: 2026110218175403
+	- Type: Task
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 27
-	- Origin: `d9a4f9d` for the demo files. Not seen before. Confirmed by reading.
-	- Incorrect behavior [Bug]:
-		- `cicd/demo/script.txt` has `report --kind b3-db-mismatch`, 4 pauses and a length that `scenario.toml` doesn't match. The scenario's header says the script comes first.
-		- README's "Building" leaves python3 out of what the integration test needs.
-		- design.md and the header of `src/soak.rs` say the soak runs `status`. It runs `runs`, `report` and `gone`.
-	- Expected behavior [Bug]: They match.
-	- Note: No code changes, so it closes on reading.
+	- Opened: 20261102-181754
+	- Opened by: repo housecleaning
+	- Requirements [Feature]:
+		- Reword each hit in text written here, or add it to the scrub's allow list with a reason. Mostly "holds" as a verb, numbers spelled out, and "not X" phrasing.
+		- Leave text from a person as it is, but for spelling.
+		- Then make the lint stage fail on a hit.
+	- Note: Strings a test matches, such as "holds trigger" in `db.rs`, change with their test.
+	- Note: README and design.md are done.
 
 - The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
 	- ID: 2026110211132205
@@ -168,22 +197,6 @@
 		- Either have the scan ignore attributes on hands-off filesystems, or have `accept` say the attribute will keep the file flagged.
 	- Related IDs: 2026101409545200
 
-- `--help` and README leave out some flags and defaults.
-	- ID: 2026102814341433
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 33
-	- Origin: various. Confirmed by reading and running.
-	- Requirements [Feature]:
-		- README's usage gets `--limit`, `plan --threads` and `snapdiff --all`.
-		- `--help` says what `--limit` and `--all` do, and that `--limit` defaults to 200.
-		- Output cut at the limit says how many more there were.
-		- `report` with no `--run` says it shows the newest run of any kind, `accept` runs included.
-		- The exit code list has 130 for a second signal.
-		- The `gone` help has README's `dir-error` rule.
-
 - The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
 	- ID: 2026102814341442
 	- Type: Enhancement
@@ -201,7 +214,7 @@
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-220623
-	- Opened by:
+	- Opened by: work on 2026102814341403
 	- Related IDs: 2026102814341403
 	- Progress log:
 		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database", not the path.
@@ -420,7 +433,7 @@
 	- Note: No harness runs the engine's stage order with a stage made to fail. Adding one, such as a stand-in gif step under a test flag, is part of the fix. Watch it go red with the record moved back.
 	- Actual cause: The run on the frozen copy recorded the tree, and the gif runs after it, in the run that started it. `--no-gif` didn't set `gate_partial`.
 	- Fix: Only the starting run records, after `fStageGif` and before publish. The frozen copy's run gets no tree, and writes its skips into the starter's list through `TUKFS_GATE_SKIPS`. `--no-gif` sets `gate_partial`. `TUKFS_GREEN_TREE` is gone.
-	- Test case: `private/claude_simple/tools/gate-record-check.bash REPO`, no test ID, since private checks have none. It runs the merge gate in a scratch clone whose `config.bash` makes each stage a stand-in, with the gif failing, with `--no-gif`, and passing. Before the fix "failed gif" and "--no-gif" recorded the tree. Verified: 15 of 15 pass after.
+	- Test case: the private `gate-record-check.bash REPO`, no test ID, since private checks have none. It runs the merge gate in a scratch clone whose `config.bash` makes each stage a stand-in, with the gif failing, with `--no-gif`, and passing. Before the fix "failed gif" and "--no-gif" recorded the tree. Verified: 15 of 15 pass after.
 	- Swept: Every stage after `fRecordGreen`: dogfood, gif and publish. Dogfood is off in the check-only modes, and in a default run it fails the run before the record. Publish has to come after, since it commits the tree it pushes.
 	- Closed: 20261028-172500
 
@@ -443,7 +456,7 @@
 	- Fix: The engine exports it in the 3 check-only modes and unsets it otherwise. `demo-gif.bash` fails under it for no python3, Pillow or font. `sanitize-rust.bash` and `codeql-scan.bash` skip only when there's no image and the host lacks the tool, so under strict they add `sanitize-rust-<mode>` or `codeql` to the skip list through `fLeakHostSkip` in `leak-common.bash`, and the run passes without recording. A missing docker never fails a run, per design.md. In the image, a missing nightly is now exit 2, as codeql's already was. `fRunIt`'s wrong-filesystem warning adds `it-<label>` to the skip list.
 	- Note: `advisories.bash` now fails the check-only modes when the advisory database can't be fetched, as it was written to. An offline merge gate fails there.
 	- Note: A `TUKFS_NO_IMAGE` left in the caller's environment sends the leak checks to the host, where they still run. Only codeql and the sanitizers can then skip, and they no longer record.
-	- Test case: `private/claude_simple/tools/gate-record-check.bash REPO`, the strict cases: the lint stand-in fails unless strict reaches it, in `--backlog-run-quick lint`, `--backlog-run-full` and `--merge-gate`, and passes a run with no options. Each script runs with its tool hidden, with and without strict. Before the fix 7 cases failed. Verified: 15 of 15 pass after.
+	- Test case: the private `gate-record-check.bash REPO`, the strict cases: the lint stand-in fails unless strict reaches it, in `--backlog-run-quick lint`, `--backlog-run-full` and `--merge-gate`, and passes a run with no options. Each script runs with its tool hidden, with and without strict. Before the fix 7 cases failed. Verified: 15 of 15 pass after.
 	- Swept: `advisories.bash`, `sanitize-rust.bash`, `codeql-scan.bash`, `demo-gif.bash`, `fRunIt`, and `TUKFS_NO_IMAGE` in `leak-common.bash`. `fLintTool` already failed under strict.
 	- Closed: 20261028-172500
 
@@ -736,6 +749,28 @@
 		- 2026-10-14 17:56, guests are no longer frozen at all, per 2026101417560000. The freeze half of this fix is gone with it. The shutdown, put-back and hangup handling stay.
 		- 2026-10-15 06:49, second root run. All 3 guests shut down together, the snapshots were taken, and all 3 were started again within a minute. The scan ran 4 h 52 m and ended with exit 4, keeping the mounts and snapshots.
 	- Acceptance signoff: Self-closed after the 2026-10-15 root run.
+	- Closed: 20261015-130151
+
+- Run the pipeline's test steps on the host in a sandbox, so a bug in the code under test can't change other files.
+	- ID: 2026110218175400
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261102-175400
+	- Opened by: CICD review
+	- Requirements [Feature]:
+		- Every step that runs test code on the box can write only to its own temp and build folders.
+		- Nothing it runs can reach other files, other processes, or the network.
+	- Note: The build image was already closed off. The integration test, soak, fuzz tests, profiler and demo gif ran on the box with full access, and so did the build and tests when there's no docker.
+	- Progress log:
+		- `cicd/utility/sandbox.bash` runs a step under bubblewrap. design.md, "Test sandbox", has the details.
+		- ZFS hides its pools from a user namespace, so a stand-in `zpool` answers with the real output for the writable folders' pools.
+		- `--no-sandbox` turns it off, with a warning on each step. No bubblewrap fails the step.
+	- Verified: The integration test gives the same results in it as without, on ext4 and ZFS, and the demo gif the same bytes. A scan of a folder outside it fails its xattr writes, where the same scan outside writes them.
+	- Branch: pre-release
+	- Test case: desk2. It fails when the pipeline runs the test outside the sandbox, or when the folder above the test folder can be written.
+	- Acceptance signoff: Self-closed: checked here, with a planted write and a planted wide folder.
+	- Closed: 20261102-181754
 
 - CICD reset: release builds without docker
 	- ID: 2026102509342993
@@ -764,7 +799,8 @@
 	- Test case: none with an ID. `release-host-check.bash REPO [noctr|nodocker|image|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every use of `RELEASE_BUILD_CMD`, `RELEASE_BUILD_BIN`, `release-build.bash`, `check-release.bash glibc` and `tests_ctr` in `cicd/`, `tests/`, `utility/` and the private tools, plus design.md and README.md. On an arm64 box the host build still stops, since the native target there isn't x86_64.
 	- Verified 2026-10-25: `--backlog-run-full --no-container` passed in 9m 49s on d812cd9. The release step printed the host NOTE and the glibc 2.39 floor NOTE, built no arm64, Other hosts skipped for it, and the end said the tree wasn't recorded, skipping `release-image`.
-	- Checks settled 2026-10-25, both as the worker picked.
+	- Checks settled 2026-10-25, both as first proposed.
+	- Closed: 20261025-185111
 
 - CICD reset: other hosts and VMs
 	- ID: 2026102416215927
@@ -800,7 +836,8 @@
 	- Test case: none with an ID. `remote-check.bash REPO [plan|nohelper|busy|box|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883). The pass case needs the VM, so it's the full run's.
 	- Swept: every `no_remote`, `step_keys`, `fStepOn`, `stages 2-6` and stage number in `cicd/`, the plan's Other hosts line, `--list`'s test ID lines, the private checks that match plan text or step counts, design.md and README.md. tests/integration.bash reads `src/main.rs` and the stop include from the tree beside it, and both go to the box.
 	- Verified 2026-10-25: `--backlog-run-full` passed in 30m 00s (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). Other hosts passed on vmDebARM64 in about 5 minutes, the VM was found off and put back to off, and the end had no `Skipped:` list. The tree was recorded.
-	- Checks settled 2026-10-25, all as the worker picked.
+	- Checks settled 2026-10-25, all as first proposed.
+	- Closed: 20261025-182651
 
 - CICD reset: container cleanup
 	- ID: 2026102416215928
@@ -833,8 +870,9 @@
 	- Commit: `146545f`
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `docker run`, `docker build`, `fCtrRun`, `fCtrRunSelf`, `--label` and `builder prune` in `cicd/` and `tests/`. All 3 scripts that start containers set `ctr_step`: cicd.bash, `leak-common.bash` and `release-build.bash`.
-	- Verified 2026-10-25: `--backlog-run-full` passed in the release image (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). The cleanup line named no containers left, `docker ps -a --filter label=dev.project=tukfs-hash` was empty after, and both temp roots were empty but for the round's own run folders. Names and labels were shown by the worker's `--keep-temp` run with real docker.
-	- Checks settled 2026-10-25, all as the worker picked.
+	- Verified 2026-10-25: `--backlog-run-full` passed in the release image (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). The cleanup line named no containers left, `docker ps -a --filter label=dev.project=tukfs-hash` was empty after, and both temp roots were empty but for the round's own run folders. Names and labels were shown by a `--keep-temp` run with real docker.
+	- Checks settled 2026-10-25, all as first proposed.
+	- Closed: 20261025-182651
 
 - CICD reset: containers
 	- ID: 2026102416215926
@@ -861,12 +899,14 @@
 	- Decisions:
 		- The release image, not the leak check one. Its builds run on any box, so the integration test can take them, it's half the size, and the release builds already use it.
 		- The integration test stays on the host, like the soak. It scans real ext4 and ZFS roots, and a scan plans its workers from the disks in `/dev`.
+			- 2026-11-02: Still on the host, but in the test sandbox, which can write only to its own folder (2026110218175400).
 		- The format check stays on the host, since the default run formats in place and the image mounts the tree read only. The profiler build stays too, since it isn't a test.
 	- Branch: round-20261025
 	- Commit: `e628037`
 	- Test case: `tests-ctr-check.bash REPO`, in the private tools folder. Not in CI, since it runs the pipeline and needs docker. 2026102508462883 asks whether such checks move into the pipeline.
 	- Swept: every use of `BUILD_CMD`, `LINT_CMD`, `TEST_CMD`, `RELEASE_NATIVE_CMD` and `RELEASE_NATIVE_BIN` in `cicd/`, the plan's Containers line, the private checks that match plan text, design.md, and the soak's header. `release-build.bash` still has no host path, which is the child's.
 	- Closed 2026-10-25 with its last child, 2026102509342993.
+	- Closed: 20261025-185111
 
 - CICD reset: CPU and priority
 	- ID: 2026102416215929
@@ -891,7 +931,7 @@
 		- 2026-10-25: Verified: the check passes, and fails 5 cases with the busy rule, the check at each step, the low share, `nice` in the image, and the renice each taken out. `--gate` passes, and its cargo and rustc ran at nice 19 in the idle class. soak, advisories, and the x86_64 release build in its image pass. shellcheck passes.
 		- 2026-10-25: Verified: the round's full run, `cicd/cicd.bash --backlog-run-full` on `51644c0`, passed all 7 steps in 37m 40s at load 25 to 50. It ran at 8 of 32 jobs, a quarter, since the box was busy, with asan, tsan, Miri, CodeQL, the profiler build, both release builds and the arm64 unit tests under qemu each passing.
 	- Decisions:
-		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself carries `TUKFS_CPU_AUTO=1`, so the run on the frozen copy and the leak scripts work theirs out again.
+		- A `CPU_CAP` set by the caller still wins, for the leak checks too. A count the run worked out itself has `TUKFS_CPU_AUTO=1` beside it, so the run on the frozen copy and the leak scripts work theirs out again.
 		- With runc 1.2 or later on cgroup v2, 256 shares comes out as cpu.weight 35, against 100 for the default.
 	- Branch: round-20261025
 	- Commit: `38fd802`
@@ -930,7 +970,7 @@
 		- The 2 long modes draw the gif but don't copy it to `assets/demo.gif` or rotate it, since both are writes they may not make. Drawing it still checks the scenario. Under the hook it's drawn from the commit being pushed.
 		- The 3 modes stay strict, as `--gate` was, so a missing tool fails them. `--backlog-run-quick` writes no logs. The other 2 write the run and lint logs that `lint-report.bash` reads.
 		- The docs globs are `*.md` and `assets/*`, as before.
-	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. memory.md and CLAUDE.md say `--gate` too.
+	- Swept: every `gate_mode` and `--gate` in `cicd/`, `tests/`, the hook, README.md and design.md. `cpu-cap-check.bash` and the other private tools still pass `--gate`, which is the other name now. The private notes say `--gate` too.
 	- Branch: round-20261025
 	- Commit: `69bd3ee`
 	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder. Not in CI, since it clones the repo and stubs the engine to test the hook.
@@ -1056,13 +1096,14 @@
 	- Decisions:
 		- No freezing. A shutdown leaves nothing caught mid-write, inside programs too, and costs a few minutes of downtime per run.
 		- The lock is taken only for guests it knows, by name or name plus a suffix, like vm925w-iommu. It waits as long as a test session holds one.
-		- It's taken as the user who ran sudo, since a root-owned lock file would shut every agent session out.
+		- It's taken as the user who ran sudo, since a root-owned lock file would shut every other user of the lock out.
 		- Without sudo, or without the lock script, it warns and goes on.
 		- `--shutdown` is still accepted and does nothing.
 	- Actual fix: Freeze and thaw code removed. The lock is held from before the first shutdown until every guest is started again.
 	- Test case: Test bed `private/tests/vm-scan`, cases `order`, `nolock` and `lockbusy`, plus an order check in every case. The lock-order checks fail when the lock is taken after the shutdowns, or released before the starts. The real lock took and released all 3 hosts with the exact arguments the script uses.
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
+	- Closed: 20261015-130151
 
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
@@ -1082,20 +1123,22 @@
 	- Reproduced [Bug]: Yes, with the build from before `5602fb5`: "skipping root t1/nonexist: missing", exit 0, no events.
 	- Actual cause [Bug]: `plan` kept only a line of text for a root `canonicalize` refused, so nothing reached the run's events, and the walk returned quietly on a root gone since the plan.
 	- Actual fix [Bug]:
-		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and logs a `dir-error` for it once the run has begun, so the run exits 8.
+		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and stops before it starts, with exit 1, so no run or database is made (changed 2026-11-02, see Progress log).
 		- A root gone by the time its walk starts is a `dir-error` too, like any other error opening it.
-		- `plan` prints the real error, and still exits 0, since it reads nothing.
+		- `plan` prints the real error and says a scan won't start, and still exits 0, since it reads nothing.
 		- design.md, "Reading files", says which roots are dropped and which are a `dir-error`.
 	- Decisions:
 		- The event's path is the root made absolute without resolving it, so `report` names it the same way it names other paths.
 		- No roots left at all is still "nothing to scan", exit 1, before a run begins.
 	- Branch: round-20261102
 	- Commit: `5602fb5`
-	- Test case: `des5v` (exit 8) and `des5w` (the `dir-error` with the path and error), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
+	- Progress log:
+		- 2026-11-02: The answer to its Check in questions.md was option (b), so a scan with a root it can't resolve now refuses to start, with exit 1, rather than logging a `dir-error` and exiting 8. A root gone after the plan is still a `dir-error`. `des5v` and `des5w` fail on the code from before and pass after. design.md, README and `--help` say so.
+	- Test case: `des5v` (exit 1) and `des5w` (the root and error named, no database made), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
 	- Verified: `des5v` and `des5w` fail against the build from before the fix, with exit 0 and no event, and pass after, on ext4 and btrfs. `--backlog-run-quick` passed in 1m 38s, ext4 and ZFS integration runs included.
 	- Swept: The only other silent skip of a root was `walk`'s NotFound branch, now an event. `--exclude`, `--no-xattr` and `--threads` paths that don't resolve stay quiet, since none of them leaves files unread. Nothing in the repo or the private tools parses "skipping root" or `plan`'s "skip" lines.
 	- Acceptance signoff: Self-closed per memory.md's close policy: README already says 8 means some folders weren't checked, and the test fails before and passes after. The exit code users see changes, so it's in questions.md as a Check.
-	- Closed: 20261102-111322
+	- Closed: 20261102-164653
 
 - A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
 	- ID: 2026102814341407
@@ -1261,7 +1304,7 @@
 	- Fix: `dogfood_tukfs-hash.ps1` copies a new build in, rotates the pool and points the fixed name as before, then prints the path to run. The bash launcher takes `--no-update` out, calls it, and `exec`s that path with the rest as typed. The .ps1 alone refuses any other argument and names the launcher.
 	- Decisions: The .ps1 refuses other arguments rather than dropping them, so an old direct call fails with a message. `Get-FileArgument` went, since only `--no-update` reaches pwsh now. design.md, "Build and release", says who runs the build.
 	- Branch: round-20261029
-	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO` now runs through the launcher, and 4 of its 5 new cases failed before the fix: arguments changed by wildcards, `~` and a byte that isn't UTF-8, exit 0 on INT, and the 2 for the .ps1 alone. Verified: 29 of 29 pass after, and `dogfood-launcher-check.bash REPO` passes.
+	- Test case: none with an ID, since private checks have none. The private `dogfood-check.bash REPO` now runs through the launcher, and 4 of its 5 new cases failed before the fix: arguments changed by wildcards, `~` and a byte that isn't UTF-8, exit 0 on INT, and the 2 for the .ps1 alone. Verified: 29 of 29 pass after, and `dogfood-launcher-check.bash REPO` passes.
 	- Swept: `& $exe` and other native calls in both `.ps1` files. `lint-ps1.ps1` passes no user arguments. shcl's `dogfood_shcl.ps1` wasn't changed, since it needs a go-ahead.
 	- Progress log:
 		- 2026-11-02: shcl's launcher has the same bug, reproduced with a stand-in under a scratch `HOME`. Filed in shcl as 2026110215202340.
@@ -1337,7 +1380,7 @@
 	- Test case: none with an ID. `backup-excludes-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Acceptance signoff: Self-closed: the check passes, and fails without the exclude.
 	- Closed: 20261025-175112
-	- Checks settled 2026-10-25, all as the worker picked.
+	- Checks settled 2026-10-25, all as first proposed.
 
 - A stopped cicd run can leave its temp dir and a locked frozen copy.
 	- ID: 2026102407311809
@@ -1534,6 +1577,7 @@
 	- Test case: `unsupported_read_is_not_damage`, and a line in `exit_bits_add_up`. It fails with the new case taken out.
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
+	- Closed: 20261015-130151
 
 - The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
 	- ID: 2026102814341423
@@ -1640,6 +1684,7 @@
 	- Test case: `dej04` (`snapdiff::tests::buffers_carry_nothing_between_pairs`), one set of buffers over 4 pairs, the first leaving 5,000 bytes behind. `ddx01` reuses them too.
 	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, dej04 passed under asan, tsan and Miri in the Tests step.
+	- Closed: 20261028-105331
 
 - cicd scripts start a process per item in several loops.
 	- ID: 2026102808215748
@@ -1665,8 +1710,9 @@
 		- The `basename` calls in `lint-report.bash` that run once, on the way out, were left.
 	- Swept: `seq` polls and `$(printf` and `$(date` in loops across the cicd scripts and the integration test. A third `seq` poll in `integration.bash` was changed too. `green-tree.bash` and `cicd.bash` call `date` once per run, and were left.
 	- Branch: round-20261028
-	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/prune-cache-parity.bash OLD_CICD NEW_CICD WORKDIR [STALE_COUNT]` compares the old and new `fPruneCache`.
+	- Test case: none with an ID, since the cicd scripts have no test IDs. The private `prune-cache-parity.bash OLD_CICD NEW_CICD WORKDIR [STALE_COUNT]` compares the old and new `fPruneCache`.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Profiler, codeql-scan OK, PASS Other hosts, and the leak checks OK.
+	- Closed: 20261028-105331
 
 - The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
 	- ID: 2026102808215758
@@ -1705,7 +1751,9 @@
 	- Progress log:
 		- 2026-10-25: Split in 2, since both won't fit one sitting: the leak check lengths in 2026102517244901, and the fuzz tests in 2026102517244907. This closes with the second.
 		- 2026-10-25: 2026102517244901 is Done.
-	- 2026-10-26: 2026102517244907 is Done, so this closes with it.
+		- 2026-10-26: 2026102517244907 is Done, so this closes with it.
+	- Test case: none of its own. It was split, and 2026102517244901 and 2026102517244907 name theirs.
+	- Closed: 20261025-193507
 
 - CICD reset: fuzz tests for the parsers
 	- ID: 2026102517244907
@@ -1772,13 +1820,14 @@
 	- Test case: none with an ID. `temp-ctr-check.bash REPO [sweep|stub|image|it|all]`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Swept: every `RUN_TMP_PREFIX`, `fRunDirMake`, `fSweepStale`, `.cicd-kept`, `TMPDIR` and `itzq` in `cicd/`, `tests/`, the private tools, design.md and README.md. `scratch.bash` and box-side's folders were left as they were.
 	- Verified 2026-10-25: `--backlog-run-full` passed (the round-20261025b full run, cicd run log run_20261025-175553.log on d812cd9). Its run folder was `20261025-175553_001` under HOST_TEMP, and after it nothing was left under `/mnt/ext/wip2/wip/tmp/tukfs-hash/` or `~/tmp/tukfs-hash-zfs-it/tukfs-hash/` but the round's own run folders. vmDebARM64's work folder was `/var/tmp/tukfs-hash/20261025-182246_001`, and step 7 passed.
-	- Checks settled 2026-10-25. The killed-run folder call went the other way, filed as 2026102518150001. The rest as the worker picked.
+	- Checks settled 2026-10-25. The killed-run folder call went the other way, filed as 2026102518150001. The rest as first proposed.
+	- Closed: 20261025-182651
 
 - CICD reset: leak checks in 3 lengths
 	- ID: 2026102517244901
 	- Type: Task
 	- Status: Done
-		- It departs from the wording in one way. `--backlog-run-quick` still runs no leak checks but for a leak area or `--leakcheck`, so "every run" leaves out the worker's gate. Filed as a Check.
+		- It departs from the wording in one way. `--backlog-run-quick` still runs no leak checks but for a leak area or `--leakcheck`, so "every run" leaves out `--backlog-run-quick`. Filed as a Check.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-172449
 	- Opened by: split from 2026102416215935
@@ -1797,7 +1846,7 @@
 	- Commit: `b8ea7c0`
 	- Test case: none with an ID. `leak-lengths-check.bash REPO`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
 	- Closed: 20261025-174051
-	- Checks settled 2026-10-25, all as the worker picked.
+	- Checks settled 2026-10-25, all as first proposed.
 
 - `cicd.bash --list` prints the plan, but not the test IDs the run would print.
 	- ID: 2026102507210235
@@ -2204,24 +2253,44 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- Docs disagree with the code in 3 places.
+	- ID: 2026102814341422
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 27
+	- Origin: `d9a4f9d` for the demo files. Not seen before. Confirmed by reading.
+	- Incorrect behavior [Bug]:
+		- `cicd/demo/script.txt` has `report --kind b3-db-mismatch`, 4 pauses and a length that `scenario.toml` doesn't match. The scenario's header says the script comes first.
+		- README's "Building" leaves python3 out of what the integration test needs.
+		- design.md and the header of `src/soak.rs` say the soak runs `status`. It runs `runs`, `report` and `gone`.
+	- Expected behavior [Bug]: They match.
+	- Note: No code changes, so it closes on reading.
+	- Actual fix [Bug]: `script.txt` now has the scenario's `report` line, its pauses and about 27 seconds, which the gif measures less its 3 seconds of black. README's "Building" lists python3. design.md and `src/soak.rs` say the soak runs `runs`, `report`, `gone` and `accept`.
+	- Branch: pre-release
+	- Test case: none, docs only.
+	- Acceptance signoff: Self-closed: read against the code and the gif.
+	- Closed: 20261102-164653
+
 - In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
 	- ID: 2026102819580272
 	- Type: Bug
 	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-195802
-	- Opened by:
+	- Opened by: work on 2026102814341426
 	- Reproduced [Bug]: 2026-11-02, in a stub run with a gif stand-in that changes `assets/demo.gif`: "the files changed during the run, so it is not recorded".
 	- Actual cause [Bug]: `fRecordGreen` records the tree taken before the build, and the default run's gif stage copies a changed gif into the checkout first, so `green-tree.bash record` sees a different tree.
 	- Progress log:
-		- Seen by the worker on 2026102814341426. Not checked whether it's meant.
+		- Seen while working 2026102814341426. Not checked whether it's meant.
 		- 2026-11-02: Not meant. The default run is as thorough as the merge gate, and publish commits the new gif, so the pushed commit's tree was never on record and the hook ran the whole gate again.
 		- 2026-11-02: Verified: `gate-record-check.bash REPO` passes 21 of 21. The new cases fail on the code from before.
 	- Decisions:
 		- Record the tree with the new gif, when the gif is the only change since the tree was taken. The gif is drawn the same from the same tree, so the gate would draw those bytes too. Any other change still records nothing.
 	- Actual fix [Bug]: `fRecordGreen` takes the checkout's tree when it differs from the tested one only by the gif it wrote, the same exception publish makes. design.md, "Build and release", says so.
 	- Branch: round-20261102
-	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, cases "changed gif" and "gif and README", since private checks stay out of the pipeline (2026102508462883).
+	- Test case: none with an ID. The private `gate-record-check.bash REPO`, cases "changed gif" and "gif and README", since private checks stay out of the pipeline (2026102508462883).
 	- Swept: the publish stage's own gif exception, which this matches. No other stage compares the tree after the gif.
 	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
 	- Closed: 20261102-102849
@@ -2368,7 +2437,7 @@
 	- Progress log:
 		- 2026-11-02: Verified: `gate-record-check.bash REPO` case "--keep-temp" says "about 64 MB", and "about 69 MB" on the code from before.
 	- Branch: round-20261102
-	- Test case: none with an ID. `private/claude_simple/tools/gate-record-check.bash REPO`, case "--keep-temp".
+	- Test case: none with an ID. The private `gate-record-check.bash REPO`, case "--keep-temp".
 	- Swept: `fRunTmpGone`, the stop path, sums its own `total` and doesn't reuse `kb`.
 	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
 	- Closed: 20261102-102849
@@ -2396,7 +2465,7 @@
 		- Another user's run of any `tukfs-hash` with a bare `argv[0]`, or a path this user can't see, holds one version too, as with `fInUse`.
 		- The comm is read before anything else, so rotation costs the same CPU as before. Verified: about 2.4 s user plus system both ways, with 1564 processes on the box.
 	- Branch: round-20261029
-	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO`, with the new stand-in `nodump.c`: another user's run by a version's path, renamed since, and by the fixed name after 9 newer builds, each stays and goes once stopped, and a run of another file named `tukfs-hash` holds nothing. Verified: the 2 hold cases failed on `HEAD`, and all 38 cases pass after. A run through sudo itself wasn't done.
+	- Test case: none with an ID, since private checks have none. The private `dogfood-check.bash REPO`, with the new stand-in `nodump.c`: another user's run by a version's path, renamed since, and by the fixed name after 9 newer builds, each stays and goes once stopped, and a run of another file named `tukfs-hash` holds nothing. Verified: the 2 hold cases failed on `HEAD`, and all 38 cases pass after. A run through sudo itself wasn't done.
 	- Swept: `Get-Process` and `.Path` in both `.ps1` files. `Invoke-Rotation` is the only caller. `fInUse` in `cicd/cicd.bash` already covers the stage.
 	- Closed: 20261028-214159
 
@@ -2473,7 +2542,7 @@
 	- Fix: Where the exe link can't be read, `fInUse` matches the process's comm against the file's name, cut to 15 characters, unless `argv[0]` is a path to some other file. Both are readable for any process. sudo passes `argv[0]` as typed.
 	- Decisions: Kept the check rather than dropping it, so design.md stands, and it says how another user's run is found. No part of `/proc` a user can read gives another user's inode, so the name has to do. Another user's run of any `tukfs-hash` with a bare `argv[0]` skips the copy too, which costs a warning and a later copy.
 	- Branch: round-20261029
-	- Test case: none with an ID, since private checks have none. New `private/claude_simple/tools/in-use-check.bash REPO [REV]`: an idle file, its own running file, and 2 other-user processes, one with a bare `argv[0]` and one with a path to another file. With `HEAD` the bare one failed. Verified: 4 of 4 pass after. A scan through sudo itself wasn't run.
+	- Test case: none with an ID, since private checks have none. New private `in-use-check.bash REPO [REV]`: an idle file, its own running file, and 2 other-user processes, one with a bare `argv[0]` and one with a path to another file. With `HEAD` the bare one failed. Verified: 4 of 4 pass after. A scan through sudo itself wasn't run.
 	- Swept: `fInUse` has one caller, `fStageDogfood`. No other script reads `/proc/<pid>/exe`. The launcher's `Get-RunningPath` has the same blind spot, filed as 2026102819305559.
 	- Closed: 20261028-193110
 
@@ -2497,8 +2566,9 @@
 		- 2026-10-28: Verified: with the binary's output rewritten to "after 3s", the old scenario drew different bytes than with the real time, and the new one drew the same. 3 renders of the new scenario gave the same bytes, one with 2 busy loops running.
 	- Swept: every `[[map]]` in the scenario and every run-time print in `src/`. Only the "run N ... after Ns" line shows a duration, and the other lines in the gif have none.
 	- Branch: round-20261028
-	- Test case: none with an ID, since the pipeline's scripts have none. `private/claude_simple/tools/demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
+	- Test case: none with an ID, since the pipeline's scripts have none. The private `demo-load-check.bash REPO WORKDIR` draws with the real binary and with a stand-in that shows another time, and fails if the bytes differ. It fails on the old scenario and passes on the new one.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Demo gif.
+	- Closed: 20261028-105331
 
 - The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
 	- ID: 2026102808215799
@@ -2518,8 +2588,9 @@
 		- 2026-10-28: Verified: both lines gave the wrong time before the fix and 1.25 s and 1.2 s after, in that locale and in C.UTF-8.
 	- Swept: every `EPOCHREALTIME` in the repo. The other 3 only make a token, where a comma does no harm.
 	- Branch: round-20261028
-	- Test case: none with an ID, since the cicd scripts have no test IDs. `private/claude_simple/tools/comma-locale.bash WORKDIR` builds the locale to rerun it.
+	- Test case: none with an ID, since the cicd scripts have no test IDs. The private `comma-locale.bash WORKDIR` builds the locale to rerun it.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Profiler and PASS Demo gif.
+	- Closed: 20261028-105331
 
 - gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
 	- ID: 2026102808215809
@@ -2541,8 +2612,9 @@
 		- A gifsicle that fails is a warning, and the stage still passes, as a missing one is. It only changes the gif's size.
 	- Actual fix [Bug]: `optimize_gif` returns None once gifsicle has run, or why it didn't. FileNotFoundError is the only "no gifsicle", and anything else goes to stderr.
 	- Branch: round-20261028
-	- Test case: none with an ID, since the pipeline's Python has no test IDs. `private/claude_simple/tools/gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
+	- Test case: none with an ID, since the pipeline's Python has no test IDs. The private `gifsicle-fail-check.py GEN_DEMO_GIF_PY WORKDIR` runs missing, failing, hanging and working gifsicle shims. It failed before the fix and passes after.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Demo gif.
+	- Closed: 20261028-105331
 
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789
@@ -2560,7 +2632,7 @@
 		- No test for the loop itself: bash can't open a script path that is a loop, so the launcher never runs on one. The change is a simplification, and the check covers the chain, which old and new code both pass.
 	- Swept: `grep readlink` over `utility/`, and the `.ps1` twin has no link walk.
 	- Branch: round-20261028
-	- Test case: none with an ID. `private/claude_simple/tools/dogfood-launcher-check.bash REPO [LAUNCHER]` checks the link chain.
+	- Test case: none with an ID. The private `dogfood-launcher-check.bash REPO [LAUNCHER]` checks the link chain.
 	- Closed: 20261028-091400
 
 - `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
@@ -3080,6 +3152,27 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
 
+- `--help` and README leave out some flags and defaults.
+	- ID: 2026102814341433
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 33
+	- Origin: various. Confirmed by reading and running.
+	- Requirements [Feature]:
+		- README's usage gets `--limit`, `plan --threads` and `snapdiff --all`.
+		- `--help` says what `--limit` and `--all` do, and that `--limit` defaults to 200.
+		- Output cut at the limit says how many more there were.
+		- `report` with no `--run` says it shows the newest run of any kind, `accept` runs included.
+		- The exit code list has 130 for a second signal.
+		- The `gone` help has README's `dir-error` rule.
+	- Actual fix: README's usage has the 3 options, and a line on `--limit`'s default and `snapdiff --all`. `--help` has `report and gone options` and `snapdiff options` sections, a line for `plan --threads`, 130 in the exit codes and after Ctrl+C, and the `gone` rule. `report` and `gone` say on stderr how many lines the limit left off, so stdout stays easy to read with a script.
+	- Branch: pre-release
+	- Test case: `desgc` (report's count of lines left off). It fails on the code from before. `gone`'s line was checked by hand. The help text has no test.
+	- Acceptance signoff: Self-closed: `desgc` passes and failed before, and the help text was read against the code.
+	- Closed: 20261102-164653
+
 - A second name of a hard-linked file can read a half-written attribute set from the worker that claimed it.
 	- ID: 2026102814341429
 	- Type: Enhancement
@@ -3122,7 +3215,7 @@
 	- Progress log:
 		- 2026-10-29: `Select-Budget` takes the newest, then the oldest, then role holders from year down to frequent, newest first within each, then spares. design.md, "Build and release", says so.
 	- Branch: round-20261029
-	- Test case: none with an ID, since private checks have none. `private/claude_simple/tools/dogfood-check.bash REPO` keeps 9 versions with their roles, adds 11 builds from today, and checks that every year, month, week and day version stays. Verified: on `HEAD` 2 of 4 were dropped, and all 38 cases pass after.
+	- Test case: none with an ID, since private checks have none. The private `dogfood-check.bash REPO` keeps 9 versions with their roles, adds 11 builds from today, and checks that every year, month, week and day version stays. Verified: on `HEAD` 2 of 4 were dropped, and all 38 cases pass after.
 	- Closed: 20261028-214159
 
 - `test-ids.py check` passes on tests and checks it can't see.
@@ -3147,7 +3240,7 @@
 		- An unquoted `check`, `expect` or `skip` word that isn't a call, such as `[[ ${x} == check ]]`, is flagged too. The message says to quote it. None is in the file.
 	- Swept: every pattern in `test-ids.py`, the old `STRAY` check now on the same pattern, and `#[test]` in `cicd/` and `tests/`. Only `codeql-scan.bash` writes one, into an untracked bait file, as before.
 	- Branch: round-20261029
-	- Test case: `private/claude_simple/tools/test-ids-check.bash REPO`, no test ID, since private checks have none. Each case is a made-up tree with one form changed.
+	- Test case: the private `test-ids-check.bash REPO`, no test ID, since private checks have none. Each case is a made-up tree with one form changed.
 	- Acceptance signoff: Self-closed: a check-tool change, with its check failing on the code from before.
 	- Closed: 20261028-212700
 
@@ -3172,7 +3265,7 @@
 		- The merge gate on a pushed commit is never marked, since it builds that commit as it is.
 		- In a run with a frozen copy, the plan's Version line is worked out before the format stage, so a format that rewrites a clean tree shows there unmarked. The build itself gets the mark.
 	- Branch: round-20261029
-	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `private/claude_simple/tools/build-mark-check.bash REPO [--head] [--no-cargo|--only-cargo]`. The release stage's `native --version shows the stamped build` check also fails a dirty build that shows as clean or as a release, and deb0d takes the mark.
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). The private `build-mark-check.bash REPO [--head] [--no-cargo|--only-cargo]`. The release stage's `native --version shows the stamped build` check also fails a dirty build that shows as clean or as a release, and deb0d takes the mark.
 	- Swept: every reader of `TUKFS_HASH_BUILD`, `TUKFS_HASH_RELEASE`, `build_number`, `build_release` and `--version` in `cicd/`, `tests/`, `utility/`, `build.rs` and `src/`: the image's `-e` list, the release check, integration step 21, which vmDebARM64 runs from the same tree, design.md and the changelog. Dogfood and the gif don't read the version.
 	- Closed: 20261028-211920
 
@@ -3334,6 +3427,7 @@
 	- Branch: round-20261028
 	- Test case: none with an ID, since the cicd scripts have none. The lint stage's ruff and mypy steps are the check.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, mypy clean in PASS Lint, and the leak checks ran on the rebuilt image.
+	- Closed: 20261028-105331
 
 - Small files cost more sys CPU read direct than read plain.
 	- ID: 2026102809554675
@@ -3355,6 +3449,7 @@
 	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) now reads sizes on both sides of the 64 KiB floor, with odd tails on each path. It can't see which path was taken, so the CPU timing above is the check.
 	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, debte passed under asan, tsan and Miri in the Tests step.
+	- Closed: 20261028-105331
 
 - The Python scripts in cicd/utility depart from the Python style rules.
 	- ID: 2026102808215658
@@ -3379,6 +3474,7 @@
 	- Branch: round-20261028
 	- Test case: none with an ID. The check is the same output from the old and new scripts, above.
 	- Verified: 2026-10-28, cicd/cicd.bash --backlog-run-full on 603c897 passed, PASS Profiler and PASS Demo gif.
+	- Closed: 20261028-105331
 
 - Per-file allocations and syscalls in the scan's read path haven't been measured.
 	- ID: 2026102808215738
@@ -3399,6 +3495,7 @@
 		- 2026-10-28: The drop before the read stays even when the read goes direct. btrfs reads a compressed extent through the page cache under `O_DIRECT`, so a cached scribble could still be hashed without it.
 	- Test case: its children's tests, debte (2026102809554675) and the profile-ab timings on 2026102809554785
 	- Closed 2026-10-28 with its children. The per-file lookup cost went to 2026102810135573.
+	- Closed: 20261028-105331
 
 - PSScriptAnalyzer's Information level and its constant-string rule are off.
 	- ID: 2026102809033225
@@ -3682,7 +3779,7 @@
 	- Test case: `dee8e`.
 	- Acceptance signoff: Self-closed: `dee8e` passes, and fails on the old build.
 	- Closed: 20261025-175112
-	- Checks settled 2026-10-25, all as the worker picked.
+	- Checks settled 2026-10-25, all as first proposed.
 
 - `--version` prints a copyright line and blank lines.
 	- ID: 2026102515550001
@@ -3705,7 +3802,7 @@
 	- Test case: `deb0e`, with `deb0d` for the line itself.
 	- Acceptance signoff: Self-closed: `deb0e` passes, and fails on the old build.
 	- Closed: 20261025-175112
-	- Checks settled 2026-10-25, all as the worker picked.
+	- Checks settled 2026-10-25, all as first proposed.
 
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407
@@ -4019,11 +4116,11 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Requirements  [Feature]:
-		- `LOOKUP` returns the row id. `Msg::Seen` carries the id, and the writer updates by it, so no path is copied per file.
+		- `LOOKUP` returns the row id. `Msg::Seen` takes the id, and the writer updates by it, so no path is copied per file.
 	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
 	- Actual effort: Low
 	- Progress log:
-		- `Prior` has the `paths` row id, `Msg::Seen` carries it, and the writer updates `WHERE id`. All 3 places that send it use the id.
+		- `Prior` has the `paths` row id, `Msg::Seen` takes it along, and the writer updates `WHERE id`. All 3 places that send it use the id.
 		- A lookup error is still `db-error`, not no record. `accept` takes the new column and ignores it.
 		- Verified: release build, clippy gate, `cargo test --release` (62 passed), and the integration test on ext4 and ZFS, whose "every path seen by the run" checks cover it end to end.
 		- Verified: the new test goes red with the update made to hit every row, and green restored.
@@ -4250,6 +4347,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Against: Committed names stay as they are. New code uses names that don't clash.
+	- Closed: 20261023-072213
 
 - Errors are plain strings, converted by a local closure in about 8 functions.
 	- ID: 2026101916404115
@@ -4326,6 +4424,7 @@
 	- Decided against: `demo-gif.bash`'s `cp` follows a link at the new gif's own name. That's in the private folder.
 	- Decided against: the integration test puts paths into SQL, so a `'` in `HOST_TEMP` breaks it. Harmless here.
 	- Decided against: a reused PID keeps a stale test folder until that process ends. Harmless.
+	- Closed: 20261028-143811
 
 - vmFreeBSD is shut down for the snapshot, though its agent can freeze.
 	- ID: 2026101416080000
@@ -4347,10 +4446,10 @@
 
 	- The ID is the local time to the hundredth of a second. Opened is when it was written down, which may differ. (Use a keyboard macro and possibly something like project 'zuid' to generate.)
 
-	- Status values meaning: Testing means the fix is in and checks are running or still to run. Waiting on UAT means automated testing passed and a person has to try it. Moot means something else changed that made it irrelevant. Canceled means it still applies but was decided against. Waiting on automated testing means the fix is in and waits on a long CI run or an outside test host, with no person needed. Can't reproduce means a real attempt to reproduce it failed.
+	- Status values meaning: Testing means the fix is in and checks are running or still to run. Waiting on UAT means automated testing passed and a person has to try it. Moot means something else changed that made it irrelevant. Canceled means it still applies but was decided against. Waiting on automated testing means the fix is in and waits on a long CI run or an outside test host, with no person needed. Waiting on a full CICD run means its test is a whole pipeline run, and Waiting on a partial CICD run means only some stages, such as a quick run. Either can be started by a person or a round. Can't reproduce means a real attempt to reproduce it failed.
 
 	- As issues are worked, and statuses change, place them in correct sorting order within the list:
-		- First by status: Waiting for answers, Waiting on UAT, Testing, Waiting on automated testing, Can't reproduce, Stalled, Started, Queued, Done, Deferred, Canceled, Moot
+		- First by status: Waiting for answers, Waiting on UAT, Testing, Waiting on automated testing, Waiting on a full CICD run, Waiting on a partial CICD run, Can't reproduce, Stalled, Started, Queued, Done, Deferred, Canceled, Moot
 		- Then by severity|priority: Critical, High, Avg, Low
 		- Then by type: Bugs, [not bugs together]
 
@@ -4361,7 +4460,7 @@ Template:
 - Title
 	- ID: YYYYmmDDHHMMSSNN
 	- Type: [Bug|Feature|Enhancement|Task]
-	- Status: [Queued|Waiting for answers|Waiting on UAT|Waiting on automated testing|Started|Testing|Stalled|Can't reproduce|Moot|Canceled|Deferred|Done]
+	- Status: [Queued|Waiting for answers|Waiting on UAT|Waiting on automated testing|Waiting on a full CICD run|Waiting on a partial CICD run|Started|Testing|Stalled|Can't reproduce|Moot|Canceled|Deferred|Done]
 	- Needs local test suite run?:
 	- Needs external testing:
 	- Priority [Feature|Enhancement] | Severity [Bug]: [Critical|High|Avg|Low]

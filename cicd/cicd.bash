@@ -58,6 +58,10 @@
 ##	   --list              print the plan the other options make, and the
 ##	                       test IDs its steps would print, and run nothing
 ##	   --no-container      run the steps that use an image on the host
+##	   --no-sandbox        run the host's test steps without the sandbox,
+##	                       which otherwise lets them write only to their own
+##	                       temp and build dirs. Needed where bubblewrap
+##	                       can't run
 ##	   --no-remote         skip the other hosts, the arm64 tests on
 ##	                       vmDebARM64
 ##	   --keep-temp         keep the run's temp dirs and containers, and print
@@ -178,8 +182,10 @@ source "${here}/config.bash"
 ## what gets copied, with nothing uncommitted.
 ## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count
 ## on from its.
+## TUKFS_CHECKOUT is the checkout the copy came from, for what's beside it.
 run_part="${TUKFS_RUN_PART:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
-unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV TUKFS_STEP_PLAN
+checkout="${TUKFS_CHECKOUT:-${root}}"
+unset TUKFS_RUN_PART TUKFS_GREEN_TREE TUKFS_GATE_REV TUKFS_STEP_PLAN TUKFS_CHECKOUT
 case "${run_part}" in ''|build) ;; *) echo "TUKFS_RUN_PART=${run_part}: not build" >&2; exit 2 ;; esac
 if [[ -n "${plan_given}" && ! "${plan_given}" =~ ^[0-9]+( [a-z]+=[0-9]+)*$ ]]; then echo "TUKFS_STEP_PLAN=${plan_given}: not a step plan" >&2; exit 2; fi
 if [[ -n "${gate_rev}" && ! "${gate_rev}" =~ ^[0-9a-f]{40}$ ]]; then echo "TUKFS_GATE_REV=${gate_rev}: not a full commit hash" >&2; exit 2; fi
@@ -224,6 +230,7 @@ while (($#)); do case "$1" in
 	--quick)                  quick=1; inner_pass+=("$1"); shift ;;
 	--slow|--long)            slow=1; inner_pass+=("$1"); shift ;;
 	--no-container)           no_container=1; inner_pass+=("$1"); shift ;;
+	--no-sandbox)             export TUKFS_NO_SANDBOX=1; inner_pass+=("$1"); shift ;;
 	--no-remote)              remote_off=1; fOffWhy "$1" remote; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--keep-temp)              keep_temp=1; inner_pass+=("$1"); shift ;;
 	--list)                   list_only=1; shift ;;
@@ -862,6 +869,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fi
 	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-7 run from a copy taken after the format stage' || echo '(off)')"
 	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host; the build and tests in the release image')"
+	fEcho_Clean "Sandbox ........: $( [[ -n "${TUKFS_NO_SANDBOX:-}" ]] && echo '(off, --no-sandbox; the test steps on the host can write anywhere)' || echo 'the test steps on the host write only to their own temp and build dirs')"
 	_rh=""; for _h in "${REMOTE_HOSTS[@]}"; do _t="${_h#*|}"; _rh+="${_h%%|*} (${_t%%|*}), "; done
 	if [[ -n "${step_no[remote]:-}" ]]; then _rh="${_rh%, }: the unit and integration tests, under the host lock"
 	elif ((${#REMOTE_HOSTS[@]} == 0)); then _rh="(none in config.bash)"
@@ -1062,14 +1070,19 @@ fTestsWhere(){
 		why="its image couldn't be set up"
 	fi
 	tests_ctr=0; tests_ctr_why="${why}"
-	fEcho "NOTE: build and tests on the host, since ${why}"
+	fEcho "NOTE: build and tests on the host, in the sandbox, since ${why}"
+	## The sandbox has no network.
+	fBg cargo fetch --locked -q || fEcho "WARNING: cargo fetch failed (offline?); going on with what's cached"
 }
 ## A cargo step, where fTestsWhere said. Run fTestsWhere first, in this shell.
+## On the host it can write only to the target dir and the run's temp dir.
 fInTests(){   ## fInTests COMMAND [ARG...]
+	local tgt=""
 	if [[ "${tests_ctr}" == 1 ]]; then
 		fCtrRunSelf "${tests_ctr_work}" "${TESTS_CTR_TARGET_DIR}" "${here}/utility/in-image.bash" "$@"
 	else
-		"$@"
+		tgt="$(mkdir -p -- "${root}/target" && realpath -e -- "${root}/target")" || return 2
+		"${here}/utility/sandbox.bash" "${tgt}" "${run_tmp}" -- "$@"
 	fi
 }
 
@@ -1172,6 +1185,13 @@ fStageLint(){
 		fEcho_Clean "${c%%|*}: ${c#*|}"
 		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
 	done
+	## The content scrub lives with the private project files, so a clone
+	## without them skips it. It only reports until 2026110218175403 is done.
+	if [[ -x "${checkout}/../private/hooks/scrub.bash" ]]; then
+		fEcho_Clean "content scrub: ../private/hooks/scrub.bash"
+		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"
+		else fEcho "NOTE: the content scrub found lines to look at; they're above, and in the lint log"; fi
+	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
 	((${#failed[@]} == 0)) || fDie "lint: ${failed[*]} found something; the output is above"
@@ -1191,8 +1211,9 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
 	case "${label}" in ext4) want="ext2/ext3" ;; *) want="${label}" ;; esac
 	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; echo "it-${label}" >> "${gate_skips}"; fi
-	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real} ${RELEASE_NATIVE_BIN}"
-	HOST_TEMP="${real}" fBg "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
+	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real} ${RELEASE_NATIVE_BIN}, writing only to ${real}/${APP_NAME}"
+	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
+	HOST_TEMP="${real}" fBg "${here}/utility/sandbox.bash" "${real}/${APP_NAME}" -- "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
 	fEcho "OK: integration test on ${label}"
 }
@@ -1260,15 +1281,19 @@ fSecsSince(){ local us=$(( ${EPOCHREALTIME/[.,]/} - ${1/[.,]/} )); printf '%d.%0
 ## check or step fails the run. The report never does, and never touches the
 ## --check marker, which is the session start's.
 fStageProfile(){
-	local base="" fsType="" work="" step="" name="" cmd="" t0="" svg="" profDir="" latest=""
+	local base="" fsType="" work="" step="" name="" cmd="" t0="" svg="" profDir="" latest="" tgt=""
 	fStep profile || return 0
 	fEcho_Clean "${PROFILE_BUILD_CMD[*]}"
-	fBg "${PROFILE_BUILD_CMD[@]}" || fDie "profiling build failed"
+	tgt="$(mkdir -p -- "${root}/target" && realpath -e -- "${root}/target")" || fDie "no target dir"
+	fBg cargo fetch --locked -q || fEcho "WARNING: cargo fetch failed (offline?); going on with what's cached"
+	fBg "${here}/utility/sandbox.bash" "${tgt}" "${run_tmp}" -- "${PROFILE_BUILD_CMD[@]}" || fDie "profiling build failed"
 	export PROFILE_BIN="${root}/${PROFILE_BIN}"
 	[[ -x "${PROFILE_BIN}" ]] || fDie "no profiling binary at ${PROFILE_BIN}"
+	## The eval'd strings below run in the sandbox, through bash -c, so they
+	## see only exported variables.
 	if [[ -n "${PROFILE_CHECK}" ]]; then
 		fEcho_Clean "attribution check: ${PROFILE_CHECK}"
-		fBg eval "${PROFILE_CHECK}" || fDie "profiler attribution check failed; its graph would name the wrong code"
+		fBg "${here}/utility/sandbox.bash" "${run_tmp}" -- bash -c "${PROFILE_CHECK}" || fDie "profiler attribution check failed; its graph would name the wrong code"
 	fi
 
 	base="${PROFILE_ROOT}"
@@ -1283,13 +1308,14 @@ fStageProfile(){
 	export PROFILE_WORKLOAD="${work}" TUKFS_PROFILE_DIR="${work}/samples"
 	mkdir -- "${TUKFS_PROFILE_DIR}" || fDie "could not make ${TUKFS_PROFILE_DIR}"
 	fEcho_Clean "workload: ${PROFILE_WORKLOAD_GEN}  (in ${work})"
-	fBg eval "${PROFILE_WORKLOAD_GEN}" || fDie "the profiler workload failed"
+	fBg "${here}/utility/sandbox.bash" "${work}" "${run_tmp}" -- bash -c "${PROFILE_WORKLOAD_GEN}" || fDie "the profiler workload failed"
 	for step in "${PROFILE_TIMED[@]}"; do
 		name="${step%%|*}"; cmd="${step#*|}"
 		fEcho_Clean "profile step: ${name}"
 		t0="${EPOCHREALTIME}"
 		## In an if, so a step can test its own exit, as the rescan's 4.
-		if ! fBg eval "${cmd}"; then fDie "profiler step failed: ${name}"; fi
+		## pprof keeps its samples in a file under TMPDIR, the run's dir.
+		if ! fBg "${here}/utility/sandbox.bash" "${work}" "${run_tmp}" -- bash -c "${cmd}"; then fDie "profiler step failed: ${name}"; fi
 		fEcho_Clean "profile timing: ${name} $(fSecsSince "${t0}")"
 	done
 	svg="${TUKFS_PROFILE_DIR}/flame.svg"
@@ -1582,7 +1608,7 @@ fRunFrozen(){
 	local rc=0
 	tested_tree="${frozen_tree}"
 	((record_green)) && green_tree="${frozen_tree}"
-	TUKFS_RUN_PART=build TUKFS_STEP_PLAN="${step_plan}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
+	TUKFS_RUN_PART=build TUKFS_STEP_PLAN="${step_plan}" TUKFS_CHECKOUT="${root}" fBg bash "${frozen_root}/cicd/cicd.bash" "${inner[@]}" || rc=$?
 	## It ended on a blank line of its own.
 	_wasLastEchoBlank=1
 	## A stopped run stays a stopped run, and the EXIT trap says so.
@@ -1892,3 +1918,7 @@ exit 0
 ##		- 2026-11-02: A run with no options records the tree with the gif it
 ##		  copied in. --keep-temp's cleanup line no longer takes a cache dir's
 ##		  freed size off for the kept temp dir.
+##		- 2026-11-02: The test steps on the host run in the sandbox, and
+##		  --no-sandbox.
+##		- 2026-11-02: The content scrub in the lint stage, when the private
+##		  folder has one.

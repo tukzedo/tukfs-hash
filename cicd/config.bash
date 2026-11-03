@@ -190,7 +190,8 @@ RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
 ## Stages 2 to 4 build and test in the release image below where docker
 ## answers, into a target dir of their own, else on the host with a note.
 ## The integration test and the soak stay on the host, since they scan the
-## real disks.
+## real disks. Every test step on the host runs in utility/sandbox.bash,
+## which can write only to the folders it's given.
 TESTS_CTR_TARGET_DIR="${root}/target/ctr"
 TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 
@@ -231,8 +232,9 @@ RELEASE_CHECKS=(
 	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
 	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash "${release_glibc}" "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
 	## The release builds aren't the ones stage 4 tested, so the integration
-	## test runs again on the x86_64 one, and the unit tests on arm64.
-	'the integration test passes on the x86_64 release build|HOST_TEMP="${release_work}" "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
+	## test runs again on the x86_64 one, in the sandbox, and the unit tests on
+	## arm64.
+	'the integration test passes on the x86_64 release build|HOST_TEMP="${release_work}" cicd/utility/sandbox.bash "${release_work}" -- "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
 	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 

@@ -75,9 +75,25 @@ scan options:
 	                    are left for the next full scan. Writes no attributes.
 	--progress SECS     Seconds between progress lines. Default 30.
 
+plan takes --threads as scan does, and shows the groups a scan would use.
+
+report and gone options:
+	--run N             The run to show. report's default is the newest run of
+	                    any kind, accept runs included. gone's is the newest
+	                    finished scan.
+	--kind KIND         report only events of KIND.
+	--limit N           List at most N lines. Default 200. The counts are of
+	                    everything, and stderr says how many lines were left off.
+
+snapdiff options:
+	--all               Also list files whose time moved, and files that
+	                    compared the same.
+
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at
 once. Ctrl+C stops after the files in hand; --resume picks up from there.
+A second Ctrl+C ends it at once, with exit 130. A root that can't be
+resolved stops the scan before it starts.
 
 A file that reads differently from what was stored, at the same size and
 time, is read again with its cache dropped. If the second read matches, it's
@@ -91,9 +107,10 @@ removes rmlint's blake2b if it no longer matches, and logs an accepted event.
 Each name of a hard-linked file has its own record.
 
 gone lists names the newest finished scan, or run N, didn't see: under its
-roots, with no event of their own in that run, and not last seen by another
-run from a deeper root, which may be a mount the walk stops at. A folder
-left out with --exclude counts as not seen.
+roots, with no event of their own in that run, not under a folder it
+couldn't list, and not last seen by another run from a deeper root, which
+may be a mount the walk stops at. A folder left out with --exclude counts as
+not seen.
 
 prune removes contents no name points at any more. Each edit leaves one.
 
@@ -120,7 +137,7 @@ Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
 8 some files or folders couldn't be checked, or input wasn't understood
 (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both
 kinds found. A resumed scan counts what its earlier parts found too. accept
-exits 1 if any file wasn't taken.
+exits 1 if any file wasn't taken. 130 is a scan ended by a second signal.
 
 ";
 
@@ -324,7 +341,10 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				out!("skip {d}");
 			}
 			for (r, e) in &plan.unresolved {
-				out!("skip {}: {e}", util::show_path(r));
+				out!(
+					"can't resolve {}: {e}, so a scan won't start",
+					util::show_path(r)
+				);
 			}
 			for g in &plan.groups {
 				out!("group {}, {} worker(s)", g.name, g.threads);
@@ -512,11 +532,26 @@ fn report(
 			))
 		})
 		.map_err(e)?;
+	let mut shown = 0i64;
 	for row in rows {
 		let (k, p, d) = row.map_err(e)?;
 		out!("{k}\t{p}\t{}", d.unwrap_or_default());
+		shown += 1;
 	}
+	let total: i64 = counts
+		.iter()
+		.filter(|(k, _)| kind.is_none_or(|w| w.name() == k.as_str()))
+		.map(|(_, n)| n)
+		.sum();
+	cut_note(total - shown);
 	Ok(0)
+}
+
+/// On stderr, so the lines above stay easy to read with a script.
+fn cut_note(more: i64) {
+	if more > 0 {
+		err!("{more} more not shown, raise --limit to see them");
+	}
 }
 
 // Down here so the lines above keep their numbers, which the release build's

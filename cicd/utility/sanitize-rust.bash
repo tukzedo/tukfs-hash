@@ -49,6 +49,7 @@ case "${1:-}" in
 esac
 start="${SECONDS}"
 fLeakInImage "sanitize-rust ${mode}" "${me}/sanitize-rust.bash" "${LEAK_DIR}" "$@"
+fLeakSandbox "${me}/sanitize-rust.bash" "$@"
 
 ## Asking cargo through rustup would install a missing toolchain on the
 ## spot, so the list says whether it's here.
@@ -162,3 +163,4 @@ esac
 ##		  the leak check image.
 ##		- 2026-10-25: A quarter of the cores by default.
 ##		- 2026-11-02: The build's own LIBSQLITE3_FLAGS go first.
+##		- 2026-11-02: On the host, in the test sandbox.

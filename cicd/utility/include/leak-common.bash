@@ -77,8 +77,24 @@ fLeakInImage(){
 	return 0
 }
 
+## On the host, the script runs again in the test sandbox, which can write
+## only to the build dirs, the artifacts and TMPDIR. Miri's sysroot is kept in
+## the leak dir, since home is thrown away.
+fLeakSandbox(){   ## fLeakSandbox SCRIPT [ARG...]
+	local tgt="" art="" tmp=""
+	((in_image)) && return 0
+	[[ -z "${TUKFS_IN_SANDBOX:-}" ]] || return 0
+	mkdir -p -- "${root}/target" "${LEAK_DIR}" "${root}/cicd/artifacts" || exit 2
+	tgt="$(realpath -e -- "${root}/target")" && art="$(realpath -e -- "${root}/cicd/artifacts")" \
+		&& tmp="$(realpath -e -- "${TMPDIR:-/tmp}")" || exit 2
+	cargo fetch --locked -q || echo "note: cargo fetch failed (offline?); going on with what's cached"
+	exec "${here}/utility/sandbox.bash" "${tgt}" "${art}" "${tmp}" -- \
+		env TUKFS_IN_SANDBOX=1 XDG_CACHE_HOME="${LEAK_DIR}/xdg-cache" "$@"
+}
+
 
 ##	History:
 ##		- 2026-10-23: Created.
 ##		- 2026-10-25: A quarter of the cores, through cpu-cap.bash, at low
 ##		  priority.
+##		- 2026-11-02: fLeakSandbox.
