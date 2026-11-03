@@ -60,22 +60,22 @@ Writing an attribute changes the file's ctime, and Linux has no way to set it ba
 
 ~~~text
 tukfs-hash scan --db FILE --root DIR [--root DIR ...] [options]
-tukfs-hash plan --root DIR [--root DIR ...]
+tukfs-hash plan --root DIR [--root DIR ...] [--threads DIR=N ...]
 tukfs-hash runs --db FILE
-tukfs-hash report --db FILE [--run N] [--kind KIND]
-tukfs-hash gone --db FILE [--run N]
+tukfs-hash report --db FILE [--run N] [--kind KIND] [--limit N]
+tukfs-hash gone --db FILE [--run N] [--limit N]
 tukfs-hash accept --db FILE PATH...
 tukfs-hash prune --db FILE
-tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE)
+tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 ~~~
 
-`tukfs-hash --help` has the options. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
+`tukfs-hash --help` has the options. `report` and `gone` list 200 lines unless `--limit` says otherwise, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
 `accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. On NTFS, APFS or HFS+ only the database record changes. Each name of a hard-linked file has its own record, so name each one.
 
 `gone` takes the newest finished scan, or run N, and lists the names under its roots that it didn't see. A name with an error in that run, or under a folder it couldn't list, isn't counted, and neither is one last seen from a deeper root by another run, since that may be a mount the walk stops at. A folder left out with `--exclude` does count as not seen.
 
-Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files or folders couldn't be checked, or input wasn't understood (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both kinds found. A resumed scan counts what its earlier parts found too. `accept` exits 1 if any file wasn't taken.
+Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found, 8 some files or folders couldn't be checked, or input wasn't understood (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both kinds found. A resumed scan counts what its earlier parts found too. `accept` exits 1 if any file wasn't taken. A second Ctrl+C ends a scan at once, with 130. A root that can't be resolved is an error, and nothing is read.
 
 Names that aren't plain text are printed with `\xHH` escapes, and a backslash as `\\`, so 2 names never print the same.
 
@@ -86,7 +86,7 @@ cargo build --release
 tests/integration.bash
 ~~~
 
-The integration test needs `sqlite3`, `getfattr`, `setfattr` and `b2sum`, and a `HOST_TEMP`, or else a `TMPDIR`, on a filesystem with user xattrs. It works in a folder of its own under `tukfs-hash/` there, and `--keep-temp` keeps it.
+The integration test needs `sqlite3`, `getfattr`, `setfattr`, `b2sum` and `python3`, and a `HOST_TEMP`, or else a `TMPDIR`, on a filesystem with user xattrs. It works in a folder of its own under `tukfs-hash/` there, and `--keep-temp` keeps it.
 
 `rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline: format, build, lint, tests, release builds for x86_64 and arm64 Linux with a `.deb` and an `.rpm` of each, dogfood, the demo gif above, and publish. The release builds run in a Debian 10 image under docker, so each one needs only glibc 2.28 or newer. Without docker, or with `--no-container`, only the x86_64 one builds, on the box, and it needs the box's glibc. Where an arm64 Linux test VM is set up, the arm64 build's unit and integration tests also run there. A VM that isn't there is skipped, and `--no-remote` skips it on purpose. The gif needs Pillow, and is skipped without it. `cicd/cicd.bash --merge-gate` runs every check without publishing anything, and the pre-push hook runs it on pushes to `main` after `git config core.hooksPath cicd/hooks`. Pushes that only change docs skip it. `--help` lists the rest.
 

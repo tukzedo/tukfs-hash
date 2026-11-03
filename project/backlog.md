@@ -91,21 +91,6 @@
 	- Note: The repro runs without root under `unshare -rm`, the same as check `deeby`.
 	- Related IDs: 2026102814341407
 
-- Docs disagree with the code in 3 places.
-	- ID: 2026102814341422
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 27
-	- Origin: `d9a4f9d` for the demo files. Not seen before. Confirmed by reading.
-	- Incorrect behavior [Bug]:
-		- `cicd/demo/script.txt` has `report --kind b3-db-mismatch`, 4 pauses and a length that `scenario.toml` doesn't match. The scenario's header says the script comes first.
-		- README's "Building" leaves python3 out of what the integration test needs.
-		- design.md and the header of `src/soak.rs` say the soak runs `status`. It runs `runs`, `report` and `gone`.
-	- Expected behavior [Bug]: They match.
-	- Note: No code changes, so it closes on reading.
-
 - The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
 	- ID: 2026110211132205
 	- Type: Enhancement
@@ -167,22 +152,6 @@
 	- Requirements [Feature]:
 		- Either have the scan ignore attributes on hands-off filesystems, or have `accept` say the attribute will keep the file flagged.
 	- Related IDs: 2026101409545200
-
-- `--help` and README leave out some flags and defaults.
-	- ID: 2026102814341433
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 33
-	- Origin: various. Confirmed by reading and running.
-	- Requirements [Feature]:
-		- README's usage gets `--limit`, `plan --threads` and `snapdiff --all`.
-		- `--help` says what `--limit` and `--all` do, and that `--limit` defaults to 200.
-		- Output cut at the limit says how many more there were.
-		- `report` with no `--run` says it shows the newest run of any kind, `accept` runs included.
-		- The exit code list has 130 for a second signal.
-		- The `gone` help has README's `dir-error` rule.
 
 - The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
 	- ID: 2026102814341442
@@ -1082,20 +1051,22 @@
 	- Reproduced [Bug]: Yes, with the build from before `5602fb5`: "skipping root t1/nonexist: missing", exit 0, no events.
 	- Actual cause [Bug]: `plan` kept only a line of text for a root `canonicalize` refused, so nothing reached the run's events, and the walk returned quietly on a root gone since the plan.
 	- Actual fix [Bug]:
-		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and logs a `dir-error` for it once the run has begun, so the run exits 8.
+		- `plan` returns roots it couldn't resolve apart from the harmless drops, made absolute, with the error. A scan prints each with that error and stops before it starts, with exit 1, so no run or database is made (changed 2026-11-02, see Progress log).
 		- A root gone by the time its walk starts is a `dir-error` too, like any other error opening it.
-		- `plan` prints the real error, and still exits 0, since it reads nothing.
+		- `plan` prints the real error and says a scan won't start, and still exits 0, since it reads nothing.
 		- design.md, "Reading files", says which roots are dropped and which are a `dir-error`.
 	- Decisions:
 		- The event's path is the root made absolute without resolving it, so `report` names it the same way it names other paths.
 		- No roots left at all is still "nothing to scan", exit 1, before a run begins.
 	- Branch: round-20261102
 	- Commit: `5602fb5`
-	- Test case: `des5v` (exit 8) and `des5w` (the `dir-error` with the path and error), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
+	- Progress log:
+		- 2026-11-02: The answer to its Check in questions.md was option (b), so a scan with a root it can't resolve now refuses to start, with exit 1, rather than logging a `dir-error` and exiting 8. A root gone after the plan is still a `dir-error`. `des5v` and `des5w` fail on the code from before and pass after. design.md, README and `--help` say so.
+	- Test case: `des5v` (exit 1) and `des5w` (the root and error named, no database made), integration step 26. None for a root removed between the plan and its walk, which can't be timed from outside.
 	- Verified: `des5v` and `des5w` fail against the build from before the fix, with exit 0 and no event, and pass after, on ext4 and btrfs. `--backlog-run-quick` passed in 1m 38s, ext4 and ZFS integration runs included.
 	- Swept: The only other silent skip of a root was `walk`'s NotFound branch, now an event. `--exclude`, `--no-xattr` and `--threads` paths that don't resolve stay quiet, since none of them leaves files unread. Nothing in the repo or the private tools parses "skipping root" or `plan`'s "skip" lines.
 	- Acceptance signoff: Self-closed per memory.md's close policy: README already says 8 means some folders weren't checked, and the test fails before and passes after. The exit code users see changes, so it's in questions.md as a Check.
-	- Closed: 20261102-111322
+	- Closed: 20261102-164653
 
 - A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
 	- ID: 2026102814341407
@@ -2204,6 +2175,26 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- Docs disagree with the code in 3 places.
+	- ID: 2026102814341422
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 27
+	- Origin: `d9a4f9d` for the demo files. Not seen before. Confirmed by reading.
+	- Incorrect behavior [Bug]:
+		- `cicd/demo/script.txt` has `report --kind b3-db-mismatch`, 4 pauses and a length that `scenario.toml` doesn't match. The scenario's header says the script comes first.
+		- README's "Building" leaves python3 out of what the integration test needs.
+		- design.md and the header of `src/soak.rs` say the soak runs `status`. It runs `runs`, `report` and `gone`.
+	- Expected behavior [Bug]: They match.
+	- Note: No code changes, so it closes on reading.
+	- Actual fix [Bug]: `script.txt` now has the scenario's `report` line, its pauses and about 27 seconds, which the gif measures less its 3 seconds of black. README's "Building" lists python3. design.md and `src/soak.rs` say the soak runs `runs`, `report`, `gone` and `accept`.
+	- Branch: pre-release
+	- Test case: none, docs only.
+	- Acceptance signoff: Self-closed: read against the code and the gif.
+	- Closed: 20261102-164653
+
 - In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
 	- ID: 2026102819580272
 	- Type: Bug
@@ -3079,6 +3070,27 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- `--help` and README leave out some flags and defaults.
+	- ID: 2026102814341433
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 33
+	- Origin: various. Confirmed by reading and running.
+	- Requirements [Feature]:
+		- README's usage gets `--limit`, `plan --threads` and `snapdiff --all`.
+		- `--help` says what `--limit` and `--all` do, and that `--limit` defaults to 200.
+		- Output cut at the limit says how many more there were.
+		- `report` with no `--run` says it shows the newest run of any kind, `accept` runs included.
+		- The exit code list has 130 for a second signal.
+		- The `gone` help has README's `dir-error` rule.
+	- Actual fix: README's usage has the 3 options, and a line on `--limit`'s default and `snapdiff --all`. `--help` has `report and gone options` and `snapdiff options` sections, a line for `plan --threads`, 130 in the exit codes and after Ctrl+C, and the `gone` rule. `report` and `gone` say on stderr how many lines the limit left off, so stdout stays easy to read with a script.
+	- Branch: pre-release
+	- Test case: `desgc` (report's count of lines left off). It fails on the code from before. `gone`'s line was checked by hand. The help text has no test.
+	- Acceptance signoff: Self-closed: `desgc` passes and failed before, and the help text was read against the code.
+	- Closed: 20261102-164653
 
 - A second name of a hard-linked file can read a half-written attribute set from the worker that claimed it.
 	- ID: 2026102814341429

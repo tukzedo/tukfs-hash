@@ -6,7 +6,15 @@
 
 ## 0.1.0
 
-- First version: scan, plan, runs, report and snapdiff.
+- First version: scan, plan, runs, report, gone, accept, prune and snapdiff.
+
+- A scan checks each file against the blake3 on it, rmlint's blake2b and its own database, and reads a file again with its cache dropped before calling it a mismatch.
+
+- `--rmlint` takes blake2b too from the same read, and writes rmlint's attributes where they're missing or out of date.
+
+- `scan --verify` reads again only files with a checksum stored, and writes no attributes. `--resume` picks up a stopped scan.
+
+- Nothing is written to NTFS, APFS or HFS+, and files in git work trees get no attributes.
 
 - `--version` gives the build number, and a local pipeline builds, lints, tests and publishes it.
 

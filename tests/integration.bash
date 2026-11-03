@@ -601,6 +601,9 @@ rep() { local rc=0; "${bin}" report --db "${gdb}" "${@}" > "${work}/rep.txt" 2>&
 check dehzs "report: an unknown kind refused" "$(rep --kind read-eror) $(grep -c 'unknown kind read-eror; kinds are b3-xattr-mismatch' "${work}/rep.txt") $(rep --kind dir-error)" "1 1 0"
 check dehzt "report and gone: an unknown run refused" "$(rep --run 999) $(grep -c '^tukfs-hash: no run 999$' "${work}/rep.txt") $(gone --run 999)" "1 1 1"
 check dehzv "report and gone: a negative limit refused" "$(rep --limit -1) $(gone --limit -1) $(rep --limit 0) $(grep -c $'^dir-error\t' "${work}/rep.txt")" "1 1 0 0"
+# Lines cut at the limit are counted (2026102814341433).
+nEv="$(gq "SELECT count(*) FROM events WHERE run_id = ${last}")"
+check desgc "report: says how many the limit left off" "$(rep --run "${last}" --limit 1) $(grep -c "^$((nEv - 1)) more not shown, raise --limit to see them$" "${work}/rep.txt" || true)" "0 1"
 
 # 19. prune removes only contents no name points at.
 orphans="$(q 'SELECT count(*) FROM files WHERE id NOT IN (SELECT file_id FROM paths)')"
@@ -749,14 +752,15 @@ else
 	skip des5k "root's type from the mount on top (no user namespace here)"
 fi
 
-# 26. A root that can't be resolved isn't read, so the run isn't clean: a
-# dir-error with the real error, and exit 8 (2026102814341406).
+# 26. A root that can't be resolved stops the scan before it starts, with the
+# real error, and leaves no database behind (2026102814341406).
 mr="${work}/mr"
 mkdir -p "${mr}/t"
 printf 'x\n' > "${mr}/t/f"
 rc=0; "${bin}" scan --db "${mr}/t.sqlite" --root "${mr}/t" --root "${mr}/t/nonexist" --progress 3600 > "${mr}/out.txt" 2>&1 || rc=$?
-check des5v "scan with a missing root" "${rc}" 8
-check des5w "missing root's dir-error" "$(sqlite3 "${mr}/t.sqlite" "SELECT kind || ' ' || path || ' ' || detail FROM events" || true)" "dir-error ${mr}/t/nonexist No such file or directory (os error 2)"
+check des5v "scan with a missing root" "${rc}" 1
+mrDb=none; [[ -e "${mr}/t.sqlite" ]] && mrDb=made
+check des5w "missing root named, nothing scanned" "$(grep -cF "can't resolve root ${mr}/t/nonexist: No such file or directory (os error 2)" "${mr}/out.txt" || true) ${mrDb}" "1 none"
 
 # 27. An unmounted btrfs subvolume given as a root is read on its own, though
 # it sits inside another root whose walk stops at it (2026102814341412). Only

@@ -332,8 +332,8 @@ pub struct Planned {
 pub struct Plan {
 	pub groups: Vec<Planned>,
 	pub dropped: Vec<String>,
-	/// Roots that couldn't be resolved, made absolute, with the error. Nothing
-	/// under them is read, so a scan logs each as a `dir-error`.
+	/// Roots that couldn't be resolved, made absolute, with the error. A scan
+	/// with any refuses to start.
 	pub unresolved: Vec<(PathBuf, String)>,
 	pub mounts: Vec<mounts::Mount>,
 }
@@ -525,8 +525,13 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	for d in &dropped {
 		err!("skipping root {d}");
 	}
-	for (r, e) in &unresolved {
-		err!("skipping root {}: {e}", r.display());
+	// A mistyped root would leave a whole tree unread under a run that looks
+	// fine, so nothing starts (2026102814341406).
+	if !unresolved.is_empty() {
+		for (r, e) in &unresolved {
+			err!("can't resolve root {}: {e}", crate::util::show_path(r));
+		}
+		return Err("nothing scanned".into());
 	}
 	if planned.is_empty() {
 		return Err("nothing to scan".into());
@@ -584,10 +589,6 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		run_started_us: run_started,
 		tx,
 	});
-	// Not read, so not clean either.
-	for (r, e) in unresolved {
-		event(&shared, Kind::DirError, &r, e);
-	}
 	let groups = groups(planned, &hands_off);
 
 	let mut handles = Vec::new();

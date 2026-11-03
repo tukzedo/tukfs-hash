@@ -2,27 +2,27 @@
 @ Gif: 960x540 px, 50 fps, run against the fresh release binary.
 @ Everything anonymized: a generic user@host, and the demo home shows as /home/<user>.
 @ Typing looks like a person: variable speed, the odd fixed typo.
-@ About 25 seconds, then 3 seconds of black.
+@ About 27 seconds, then 3 seconds of black.
 
 @ Unseen: a small ~/photos folder of 6 files, with nothing scanned yet.
 
 # Checksum everything under ~/photos
 tukfs-hash scan --db photos.db --root ~/photos
-	@ pause 2.5 seconds
+	@ pause 1.4 seconds
 
 # Bad RAM flips a byte in beach.jpg. Size and time stay put.
 	@ Unseen: one byte of photos/2019/beach.jpg changed, and its mtime put back.
-	@ pause 1 second
+	@ pause 0.8 seconds
 
 tukfs-hash scan --db photos.db --root ~/photos --verify
 	@ MISMATCH 2: the file's attribute and the database both disagree with it
-	@ pause 2 seconds
+	@ pause 1.8 seconds
 
 echo $?
 	@ 4
-	@ pause 1 second
+	@ pause 0.8 seconds
 
 # Which one?
-tukfs-hash report --db photos.db --kind b3-db-mismatch
+tukfs-hash report --db photos.db
 	@ the path, what it read as before and now, and "same on a second read"
-	@ pause 4 seconds
+	@ pause 3.5 seconds
