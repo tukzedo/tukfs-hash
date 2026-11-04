@@ -84,6 +84,19 @@
 		- The newest release is easy to find, so an installer can list them.
 	- Note: Nothing to download until the repo is public, but the tag and the set can be made now.
 
+- The scan output has no percent complete.
+	- ID: 2026110407135700
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261104-071357
+	- Opened by: JC
+	- Requirements [Feature]:
+		- Each group's progress line shows a percent complete, from bytes hashed against the bytes its roots hold.
+		- The final line of a stopped run says how far it got, so `--resume` has a number to compare against.
+	- Note: A run over bf7 and zf13 took over 36 hours with no way to tell how far along it was. A file count walk before the scan would add seeks on the HDDs. The used size of the filesystem is a cheaper total, marked approximate, since compression, reflinks and snapshots make it differ from the bytes the scan reads.
+	- Estimated effort: Low
+
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
 	- Type: Enhancement
