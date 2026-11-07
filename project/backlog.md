@@ -75,13 +75,14 @@
 - The release check's integration test fails its sandbox probe when `--backlog-run-quick release` runs alone on b23.
 	- ID: 2026110709102100
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261107-091021
 	- Opened by: JC
 	- Expected behavior [Bug]: The release area passes alone, as it does inside a full run.
 	- Actual behavior [Bug]: desk2 fails: the folder it probes is the release work folder, which the sandbox is told to leave writable, so the probe always reads as an escape.
 	- Note: Same failure on `dev` at `dccfc63`, so not from a recent change. Found cutting 1.0.0-beta.1; the package checks and everything else passed.
+	- Done: The release check gives the sandbox `<release work>/tukfs-hash` as its writable folder, as the test roots do, so the probe's folder is no longer writable. Fails before, passes after, in the `release` area alone and in a full run.
 	- Estimated effort: Low
 
 - No step puts the release set on the git host when `dev` is merged into `main`.
