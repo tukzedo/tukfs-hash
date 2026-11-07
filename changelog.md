@@ -4,7 +4,7 @@
 
 # Changelog
 
-## 0.1.0
+## 1.0.0-beta.1
 
 - First version: scan, plan, runs, report, gone, accept, prune and snapdiff.
 

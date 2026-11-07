@@ -89,10 +89,13 @@ fNeeds(){   ## fNeeds BIN -> "GLIBC LIBGCC(0|1)"
 	echo "${glibc} ${gcc}"
 }
 
+tilde="~"
+
 fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
-	local deb="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" f got="" list="" deps=""
+	local dver deb="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" f got="" list="" deps=""
 	[[ -f "${deb}" ]] || fDie "no package at ${deb}"
-	for f in "Package|${name}" "Version|${ver}" "Architecture|${arch}"; do
+	dver="${4/-/${tilde}}"   ## a pre-release dash is a tilde in a package version
+	for f in "Package|${name}" "Version|${dver}" "Architecture|${arch}"; do
 		got="$(dpkg-deb -f "${deb}" "${f%%|*}")"
 		[[ "${got}" == "${f#*|}" ]] || fDie "${deb##*/}: ${f%%|*} is '${got}', not '${f#*|}'"
 	done
@@ -111,11 +114,12 @@ fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
 }
 
 fRpmCheck(){   ## fRpmCheck RPM BIN NAME VERSION ARCH GLIBC GCC DBDIR
-	local rpmf="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" db="$8" got="" reqs=""
+	local dver rpmf="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" db="$8" got="" reqs=""
 	local -a q=(rpm --dbpath "${db}" -qp)
+	dver="${4/-/${tilde}}"
 	[[ -f "${rpmf}" ]] || fDie "no package at ${rpmf}"
 	got="$("${q[@]}" --qf '%{NAME} %{VERSION} %{ARCH}' "${rpmf}")"
-	[[ "${got}" == "${name} ${ver} ${arch}" ]] || fDie "${rpmf##*/} is '${got}', not '${name} ${ver} ${arch}'"
+	[[ "${got}" == "${name} ${dver} ${arch}" ]] || fDie "${rpmf##*/} is '${got}', not '${name} ${dver} ${arch}'"
 	got="$("${q[@]}" --qf '[%{FILEMODES:perms} %{FILEUSERNAME}:%{FILEGROUPNAME} %{FILENAMES}\n]' "${rpmf}")"
 	[[ "${got}" == "-rwxr-xr-x root:root /usr/bin/${name}" ]] || fDie "${rpmf##*/} holds '${got//$'\n'/; }', not /usr/bin/${name} alone at 0755 root:root"
 	got="$(rpm2cpio "${rpmf}" | cpio -i --quiet --to-stdout "./usr/bin/${name}" | sha256sum)"

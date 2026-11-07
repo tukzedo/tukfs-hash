@@ -659,7 +659,7 @@ fi
 # commit's marks the number -dirty, and is never a release. That one line and
 # nothing else, so the x keeps a trailing blank line from being stripped.
 ver="$("${bin}" --version; echo x)"; ver="${ver%x}"
-st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(\ build\ [0-9a-hjkmnp-tv-z]+((-dirty)?\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
+st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\ build\ [0-9a-hjkmnp-tv-z]+((-dirty)?\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
 expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
 check deb0e "version line alone" "${ver}" "${ver%%$'\n'*}"$'\n'
 
