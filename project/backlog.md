@@ -72,19 +72,6 @@
 		- Don't move to a buildx builder of the project's own instead. shcl tried that on 2026-11-02. A cold build of a 2 GB image took 299 s against 266 s on the default builder, and the builder kept a second 3 GB copy of the layers for a week. shcl is going back to the default builder. (JC, me)
 	- Estimated effort: Low
 
-- The release check's integration test fails its sandbox probe when `--backlog-run-quick release` runs alone on b23.
-	- ID: 2026110709102100
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261107-091021
-	- Opened by: JC
-	- Expected behavior [Bug]: The release area passes alone, as it does inside a full run.
-	- Actual behavior [Bug]: desk2 fails: the folder it probes is the release work folder, which the sandbox is told to leave writable, so the probe always reads as an escape.
-	- Note: Same failure on `dev` at `dccfc63`, so not from a recent change. Found cutting 1.0.0-beta.1; the package checks and everything else passed.
-	- Done: The release check gives the sandbox `<release work>/tukfs-hash` as its writable folder, as the test roots do, so the probe's folder is no longer writable. Fails before, passes after, in the `release` area alone and in a full run.
-	- Estimated effort: Low
-
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -137,6 +124,21 @@
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
 	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
 
+- snapdiff keeps every listed file's names and stat results in memory until the end, about 880 bytes per name.
+	- ID: 2026110715441806
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 7
+	- Origin: `cede460`, before the last review. 2026102808215768 fixed only the buffers per pair. Confirmed.
+	- Note: Peak memory was 28 MB for 30k names, 91 MB for 100k, and 263 MB for 300k. 1M `zfs diff` lines with no matching files still peaked at 277 MB. A 10M-line diff would need about 9 GB, on a box that's often short of RAM.
+	- Requirements [Feature]:
+		- Compare each pair as soon as it's stat'd, and keep back only the pairs waiting on an inode lookup.
+		- Keep the output order, or say in design.md why it changes.
+		- A memory check with a threshold.
+	- Related IDs: 2026102808215768
+
 - When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
 	- ID: 2026110210514819
 	- Type: Bug
@@ -161,6 +163,86 @@
 	- Probable fix [Bug]: Keep mountinfo's mount root in `mounts::Mount`, and drop a root whose device and mount root fall inside another root on the same device.
 	- Note: The repro runs without root under `unshare -rm`, the same as check `deeby`.
 	- Related IDs: 2026102814341407
+
+- Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
+	- ID: 2026110715441800
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 1
+	- Origin: `81d8d8f`, the fix for 2026102814341407. A cost that fix brought in, not seen before. Confirmed.
+	- Steps to reproduce [Bug]: In `unshare -rm`, mount N tmpfs folders side by side, then run `plan --root <tree>`.
+	- Incorrect behavior [Bug]: 1.32 s of CPU at 2,116 mounts, and 5.25 s at about 4,100. The build before `81d8d8f` takes 0.00 s for both.
+	- Expected behavior [Bug]: Startup stays about flat as mounts grow. b23 has 116, but a box with lots of containers or snapshot mounts can have thousands.
+	- Possible cause [Bug]: `mounts::visible` checks every sibling of a mount for each mount, in `covered` and `shadowed`.
+	- Probable fix [Bug]: Work out `covered` once per mount, and find a shadowing sibling by a map lookup of each folder above the mount point. Keep des5f, des5g and des5h, and add a timed case with a few thousand siblings and a threshold.
+	- Related IDs: 2026102814341407
+
+- The lines that close a cicd step read `PASS Format`, not the style guide's `[ <time>: Step 1 of 9; PASS Format ]`.
+	- ID: 2026110715441801
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 2
+	- Origin: `a17da2f`, before the last review. 2026102416215931 used the short form, since it was filed before the guide had the bracketed one. Confirmed.
+	- Steps to reproduce [Bug]: Any cicd run, such as today's lint log `run_20261107-095317.log`, line 5.
+	- Incorrect behavior [Bug]: `PASS Format`, `FAIL <step>` and `SKIP <step>` with no time or step count. A bare `PASS <name>` also looks like the test lines in the same log.
+	- Expected behavior [Bug]: The CICD style guide's close line, in the same form as the open line above it.
+	- Probable fix [Bug]: `fStepPass`, `fStepFail` and `fStepSkip` in cicd.bash print the whole line. `lint-report.bash`'s FAIL pattern and the private `cicd-steps-check.bash` change with it.
+	- Related IDs: 2026102416215931
+
+- `xattr::write_b3` turns its `B3Write` back into a bool, so a new variant would be written as `DateOnly`.
+	- ID: 2026110715441802
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 3
+	- Origin: `eeee0f7`, the fix for 2026102808215688. A regression of that item. Confirmed.
+	- Incorrect behavior [Bug]: `let all = what == B3Write::All;`, then `if all` twice.
+	- Expected behavior [Bug]: Rust style: enums with an exhaustive match, and no bool for states that exclude each other.
+	- Probable fix [Bug]: Match on `what`, so a new variant fails to compile.
+	- Related IDs: 2026102808215688
+
+- The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
+	- ID: 2026110715441803
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 4
+	- Origin: `422efff`, before the last review. Not seen before. Confirmed.
+	- Incorrect behavior [Bug]: `db::batches` keeps `failed: Option<String>` and `events_ok: bool`. `events_ok` false with no `failed` can't happen.
+	- Expected behavior [Bug]: Rust style: invalid states can't be written, and no bool flags for states that exclude each other.
+	- Probable fix [Bug]: One enum with 3 states: all fine, rows dropped, all dropped.
+
+- `test-ids.py` uses strings for its lexer states and reads a 5-field tuple by position.
+	- ID: 2026110715441804
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 5
+	- Origin: The states came in `3c872b3`, the fix for 2026102814341440. The tuple came in `d6e7857` and `fb041b7`. 2026102808215658 fixed the same kind of tuple in flame-report.py only. Confirmed.
+	- Incorrect behavior [Bug]: `fShellCode`'s stack holds `"code"`, `"sq"`, `"dq"` and `"sub"`. `fScan` returns `tuple[str, str, int, str, str]`, unpacked by position in 4 places.
+	- Expected behavior [Bug]: Python style: an Enum for a fixed set of values, adn dataclasses for data.
+	- Probable fix [Bug]: An Enum for the states, and a NamedTuple for what `fScan` finds.
+	- Related IDs: 2026102808215658, 2026102814341440
+
+- `sandbox.bash`'s header repeats design.md's "Test sandbox" before pointing to it.
+	- ID: 2026110715441805
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 6
+	- Origin: `7a19ac3`, after the last review. The same kind as 2026102808215668. Confirmed.
+	- Incorrect behavior [Bug]: Purpose runs 10 lines on home, /tmp, /run, sockets, network and the toolchain folders, and the zpool stand-in gets 3 more at line 67. design.md says all of it.
+	- Expected behavior [Bug]: One line, then "See design.md, Test sandbox.", per the rule from 2026102808215668.
+	- Probable fix [Bug]: Cut Purpose to one line and the pointer. Keep Syntax, the RW_DIR limits and Exit.
+	- Related IDs: 2026102808215668
 
 - The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
 	- ID: 2026110218175403
@@ -260,6 +342,66 @@
 	- Progress log:
 		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database", not the path.
 		- Note: Found while testing 2026102814341403 as root.
+
+- The scan opens each file twice, once to stat it and once to read it, though the first is only needed when the file might be skipped.
+	- ID: 2026110715441807
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 8
+	- Origin: Before the last review, last moved in `c634e3a`. 2026102808215738 measured `read_sums` but not this. Confirmed.
+	- Note: On 20,000 small files on ext4 it cost about 1.5 to 4.5 us of CPU per file, 3 to 8% of the scan. Wall time didn't move.
+	- Requirements [Feature]:
+		- Stat first only when a skip can apply: a resume, a row already seen this run, or one hashed since the cutoff. Otherwise go straight to the read open.
+		- A FIFO swapped in after the folder was read is still refused, by the read open's own check.
+	- Related IDs: 2026102808215738
+
+- The scan's walk and worker pass the same context through 3 functions, and repeat the "seen once per run" rule at 4 sites.
+	- ID: 2026110715441808
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 9
+	- Origin: `7ec4b4e` and `3e0dd9e`, after the last review, and older sites from `f05c368`, `ce82cda` and `c634e3a`. Confirmed.
+	- Requirements [Feature]:
+		- `walk`, `list_dir` and `queue` all pass `root`, `sh`, `stats`, `look` and `jobs`, and 2 are at clippy's 7-argument limit. A small struct fits, the way `Worker` keeps the hashing side's.
+		- `Worker::one_file` takes `prior` beside the job that already has it. Read `job.prior` instead, so the tests' jobs get their own.
+		- `keep`, `judged_already` (twice) and `skip_unread` each mark a row seen if it isn't yet. Use one helper, and one exit for `judged_already`'s 2 skips. Its ctime math is the same as `mtime_us`, so share that too.
+
+- 3 lists and maps in the scan's planning still use bare tuples read by position.
+	- ID: 2026110715441809
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 10
+	- Origin: `5602fb5` after the last review, and `562a451` and `89bdbb7` before it. 2026102808215688 changed `scan::Planned` but missed these. Confirmed.
+	- Requirements [Feature]: Small structs for `plan`'s `kept` (path, device, disks), `hands_off`'s values (device, filesystem type), and the groups in `mounts::group_roots` (disks, roots).
+	- Related IDs: 2026102808215688
+
+- 4 places turn a stored path into bytes, and each one handles a value that isn't text or a blob its own way.
+	- ID: 2026110715441810
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 11
+	- Origin: `cede460` and `bed0537`. The copy in `miss_paths` came with `3e0dd9e`, after the last review. Confirmed by reading. Nothing changes today, since only an edit made outside the program can store such a value.
+	- Requirements [Feature]: One helper in db.rs that names the other value kinds in full, used by `path_text`, `miss_paths` and both sites in `gone`, with one rule for a bad row.
+
+- The demo gif's scenario takes any key, so a misspelled one is ignored without a word.
+	- ID: 2026110715441811
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 12
+	- Origin: `d9a4f9d`, before the last review. 2026102808215658 reworked the file but left the dicts. Confirmed: a scenario with `pasue = 9` and `expect_exti = 4` loaded with no error.
+	- Requirements [Feature]:
+		- Dataclasses for the scenario and its steps, refusing unknown keys.
+		- `fontsize` is read but missing from the keys listed in `load_scenario`'s comment.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1145,6 +1287,19 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 	- Closed: 20261015-130151
+
+- The release check's integration test fails its sandbox probe when `--backlog-run-quick release` runs alone on b23.
+	- ID: 2026110709102100
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261107-091021
+	- Opened by: JC
+	- Expected behavior [Bug]: The release area passes alone, as it does inside a full run.
+	- Actual behavior [Bug]: desk2 fails: the folder it probes is the release work folder, which the sandbox is told to leave writable, so the probe always reads as an escape.
+	- Note: Same failure on `dev` at `dccfc63`, so not from a recent change. Found cutting 1.0.0-beta.1; the package checks and everything else passed.
+	- Done: The release check gives the sandbox `<release work>/tukfs-hash` as its writable folder, as the test roots do, so the probe's folder is no longer writable. Fails before, passes after, in the `release` area alone and in a full run.
+	- Estimated effort: Low
 
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
@@ -4466,6 +4621,48 @@
 	- Decided against: the integration test puts paths into SQL, so a `'` in `HOST_TEMP` breaks it. Harmless here.
 	- Decided against: a reused PID keeps a stale test folder until that process ends. Harmless.
 	- Closed: 20261028-143811
+
+- Style and performance review 20261107: observations not filed.
+	- ID: 2026110715441812
+	- Type: Task
+	- Status: Canceled
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107
+	- Decided against: the scan's extra `pread` that returns 0 at the end of a file. One syscall, and it reads a size-0 pseudo file right.
+	- Decided against: turning `O_DIRECT` off before closing a file of 64 KiB or more. 2 `fcntl` calls next to a large read.
+	- Decided against: the job queue's lock held across `recv`. The flame report doesn't show it.
+	- Decided against: `mount_points.contains_key` for every folder entry. The same class as 2026102809554785.
+	- Decided against: an `Arc<Root>` clone per job. One atomic op per file.
+	- Decided against: a subfolder's path joined twice. Once per folder, not per file.
+	- Decided against: the `_` arm in `Links::claim`. Its match is on an `Option`, which can't grow a variant.
+	- Decided against: `set_direct`'s bool. The name makes both values plain where it's called.
+	- Decided against: `util::show_path` and `canonical_name` called by full path. Trivial.
+	- Decided against: the clones in `plan` and `hands_off`, and canonicalizing the `--threads` paths once per group. Setup only.
+	- Decided against: `lock` calls an fstat failure on the lock file "not a regular file". fstat on an open file doesn't fail in practice.
+	- Decided against: tests `deawa` and `des6h` wait with sleeps, so under load they can pass without reaching the race. They never fail falsely.
+	- Decided against: `open_misses` reads the whole `events` table. 0.24 s over 2M events, once per scan.
+	- Decided against: one `write` per output line. About 5% on `snapdiff --all` over a pipe.
+	- Decided against: snapdiff's `compare` stats both open files again. It reads the length of the file it opened.
+	- Decided against: `disks_for` runs `zpool list` once per root. 0.01 s for 4 roots.
+	- Decided against: a schema upgrade runs `vet` and `quick_check` on each step. Once per upgrade.
+	- Decided against: `parse_mountinfo` and `parse_zfs_diff` allocate per line. Under 0.9 s for 1M lines.
+	- Decided against: `open_ro` drops a `busy_timeout` error. It can't fail in practice.
+	- Decided against: `main.rs`'s `[..10]` with no comment. The date format always gives at least 19 bytes.
+	- Decided against: `soak.rs` wraps its comments wider than the files beside it. Cosmetic.
+	- Decided against: History blocks that miss some changes, and 2 entries out of date order in cicd.bash. git log has the full list.
+	- Decided against: unbraced names in cicd.bash's single-quoted ERR trap. Harmless.
+	- Decided against: hand-built `[ ... ]` lines in cicd.bash, before `fEcho` exists and in the EXIT trap's stderr.
+	- Decided against: "note:" in some utility scripts and "[ NOTE: ]" in others. None of them has an fEcho family.
+	- Decided against: `#` comments in `tests/integration.bash` where the other scripts use `##`, and its short names such as `ob` and `nEv`. The file's own habit.
+	- Decided against: `flame-report.py` unpacks `Frame` by position on 2 lines. The order matches the fields.
+	- Decided against: the dogfood .ps1 reads `$args` by hand with no param block, since GNU-style `--no-update` needs it. Its notes go to stderr since stdout is the path, and small functions have no `.PARAMETER` help.
+	- Decided against: ruff runs with its default thread count. 3 files.
+	- Decided against: `cargo fetch` runs again in the profiler and host leak checks. It does nothing offline with a warm cache.
+	- Decided against: 3 copies of the target folder line, and the twin ruff and mypy blocks in `fStageLint`. Small, and plain as they are.
+	- Decided against: the polling loops in integration.bash start a process every 50 ms. They're bounded waits.
+	- Decided against: stop-descendants' queue copies its array on each pop. Tens of processes at most.
+	- Decided against: `fShellCode` loops per character. `test-ids.py check` takes 74 ms.
+	- Decided against: the demo gif draws the window frame again for each frame. The whole gif takes 5.7 s.
 
 - vmFreeBSD is shut down for the snapshot, though its agent can freeze.
 	- ID: 2026101416080000
