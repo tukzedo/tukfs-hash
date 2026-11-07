@@ -1,0 +1,5 @@
+## Paths no build or test reads, one glob per line, matched against each path
+## a push changes. A push to main that changes only these isn't gated. Read by
+## hooks/pre-push. A * matches across folders.
+*.md
+assets/*

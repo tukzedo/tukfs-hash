@@ -1,0 +1,39 @@
+# nfpm config for the .deb and .rpm (https://nfpm.goreleaser.com), from shcl's.
+# cicd/utility/package.bash fills the ${TUKFS_*} names per build, since nfpm
+# doesn't expand env vars in a src path. The binary is all that goes in.
+#
+# Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+# Licensed under The MIT License (MIT). Full text at:
+#   https://mit-license.org/
+# SPDX-License-Identifier: MIT
+name: tukfs-hash
+arch: ${TUKFS_ARCH}
+platform: linux
+version: ${TUKFS_VERSION}
+section: utils
+priority: optional
+maintainer: t00mietum <73576036+t00mietum@users.noreply.github.com>
+description: |
+  Checksums every file on a Linux box, and says when a file's contents
+  changed while its size and modified time didn't.
+license: GPL-2.0-only
+# The commit's time, so two builds of one commit give the same bytes.
+mtime: ${TUKFS_MTIME}
+# Read off the binary by package.bash: the glibc floor is its newest GLIBC_
+# version, and libgcc only when libgcc_s is in NEEDED.
+overrides:
+  deb:
+    depends:
+      - libc6 (>= ${TUKFS_GLIBC})${TUKFS_DEB_LIBGCC}
+  rpm:
+    depends:
+      - glibc >= ${TUKFS_GLIBC}${TUKFS_RPM_LIBGCC}
+rpm:
+  # rpm puts the build host's name in the package.
+  buildhost: localhost
+contents:
+  - src: ${TUKFS_BIN}
+    dst: /usr/bin/tukfs-hash
+    file_info:
+      mode: 0755
+      mtime: ${TUKFS_MTIME}

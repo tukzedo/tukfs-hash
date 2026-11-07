@@ -23,15 +23,27 @@ mod gone;
 mod mounts;
 mod scan;
 mod snapdiff;
+#[cfg(all(test, feature = "soak"))]
+mod soak;
 mod util;
 mod xattr;
 
+use rusqlite::OptionalExtension;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+// The build number is empty unless the pipeline passed one in; see build.rs.
+const VERSION: &str = concat!(
+	"tukfs-hash v",
+	env!("CARGO_PKG_VERSION"),
+	env!("TUKFS_HASH_BUILD_SUFFIX")
+);
+// Empty for a release, or with no build number.
+const BUILD_MINUTES: &str = env!("TUKFS_HASH_BUILD_MINUTES");
 
 const USAGE: &str = "\
 tukfs-hash - checksum every file, remember it, and notice when one changes on its own
@@ -63,9 +75,25 @@ scan options:
 	                    are left for the next full scan. Writes no attributes.
 	--progress SECS     Seconds between progress lines. Default 30.
 
+plan takes --threads as scan does, and shows the groups a scan would use.
+
+report and gone options:
+	--run N             The run to show. report's default is the newest run of
+	                    any kind, accept runs included. gone's is the newest
+	                    finished scan.
+	--kind KIND         report only events of KIND.
+	--limit N           List at most N lines. Default 200. The counts are of
+	                    everything, and stderr says how many lines were left off.
+
+snapdiff options:
+	--all               Also list files whose time moved, and files that
+	                    compared the same.
+
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at
 once. Ctrl+C stops after the files in hand; --resume picks up from there.
+A second Ctrl+C ends it at once, with exit 130. A root that can't be
+resolved stops the scan before it starts.
 
 A file that reads differently from what was stored, at the same size and
 time, is read again with its cache dropped. If the second read matches, it's
@@ -79,9 +107,10 @@ removes rmlint's blake2b if it no longer matches, and logs an accepted event.
 Each name of a hard-linked file has its own record.
 
 gone lists names the newest finished scan, or run N, didn't see: under its
-roots, with no event of their own in that run, and not last seen by another
-run from a deeper root, which may be a mount the walk stops at. A folder
-left out with --exclude counts as not seen.
+roots, with no event of their own in that run, not under a folder it
+couldn't list, and not last seen by another run from a deeper root, which
+may be a mount the walk stops at. A folder left out with --exclude counts as
+not seen.
 
 prune removes contents no name points at any more. Each edit leaves one.
 
@@ -108,8 +137,19 @@ Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
 8 some files or folders couldn't be checked, or input wasn't understood
 (snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both
 kinds found. A resumed scan counts what its earlier parts found too. accept
-exits 1 if any file wasn't taken.
+exits 1 if any file wasn't taken. 130 is a scan ended by a second signal.
+
 ";
+
+fn version_line(minutes: &str) -> String {
+	match minutes.parse::<i64>() {
+		Ok(m) => format!(
+			"{VERSION} ({})",
+			&util::fmt_local((946_684_800 + m * 60) * 1_000_000)[..10]
+		),
+		Err(_) => VERSION.to_string(),
+	}
+}
 
 fn take_value<'a>(
 	args: &mut std::slice::Iter<'a, OsString>,
@@ -130,7 +170,7 @@ fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<St
 fn main() {
 	// Paths can be any bytes, so not env::args, which panics on them.
 	let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
-	let code = match real_main(&argv) {
+	let code = match sampled(|| real_main(&argv)) {
 		Ok(c) => c,
 		Err(e) => {
 			err!("tukfs-hash: {e}");
@@ -152,7 +192,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		return Ok(0);
 	}
 	if cmd == "--version" {
-		out!("tukfs-hash {}", env!("CARGO_PKG_VERSION"));
+		out!("{}", version_line(BUILD_MINUTES));
 		return Ok(0);
 	}
 
@@ -230,11 +270,17 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 						.map_err(|_| "--run takes a number")?,
 				);
 			}
-			"--kind" => kind = Some(take_text(&mut it, a)?),
+			"--kind" => {
+				let name = take_text(&mut it, a)?;
+				kind = Some(db::Kind::parse(&name).ok_or_else(|| {
+					let names: Vec<_> = db::Kind::ALL.iter().map(|k| k.name()).collect();
+					format!("unknown kind {name}; kinds are {}", names.join(", "))
+				})?);
+			}
 			"--limit" => {
 				limit = take_text(&mut it, a)?
 					.parse()
-					.map_err(|_| "--limit takes a number")?;
+					.map_err(|_| "--limit takes a count")?;
 			}
 			"--old" => old = Some(p(take_value(&mut it, a)?)),
 			"--new" => new = Some(p(take_value(&mut it, a)?)),
@@ -248,6 +294,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	}
 	let need_db = || db.as_deref().ok_or("--db is required");
 
+	let arg_line = || argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" ");
 	match cmd {
 		"scan" => {
 			if roots.is_empty() {
@@ -283,7 +330,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
-					args: argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
+					args: arg_line(),
 				},
 				&stop,
 			)
@@ -293,23 +340,25 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			for d in &plan.dropped {
 				out!("skip {d}");
 			}
-			for (name, rs, n) in &plan.groups {
-				out!("group {name}, {n} worker(s)");
-				for r in rs {
+			for (r, e) in &plan.unresolved {
+				out!(
+					"can't resolve {}: {e}, so a scan won't start",
+					util::show_path(r)
+				);
+			}
+			for g in &plan.groups {
+				out!("group {}, {} worker(s)", g.name, g.threads);
+				for r in &g.roots {
 					out!("\t{}", util::show_path(r));
 				}
 			}
 			Ok(0)
 		}
 		"runs" => runs(need_db()?),
-		"report" => report(need_db()?, run_id, kind.as_deref(), limit),
+		"report" => report(need_db()?, run_id, kind, limit),
 		"gone" => gone::run(need_db()?, run_id, limit),
 		"prune" => prune(need_db()?),
-		"accept" => accept::run(
-			need_db()?,
-			&files,
-			&argv.iter().map(|a| shown(a)).collect::<Vec<_>>().join(" "),
-		),
+		"accept" => accept::run(need_db()?, &files, &arg_line()),
 		"snapdiff" => {
 			let (Some(old), Some(new)) = (old, new) else {
 				return Err("snapdiff needs --old and --new".into());
@@ -333,7 +382,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 
 fn runs(db: &std::path::Path) -> Result<i32, String> {
 	let conn = db::open_ro(db)?;
-	let e = |e: rusqlite::Error| e.to_string();
+	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Until a newer version has opened it for writing.
 	let verify = if db::has_column(&conn, "runs", "verify").map_err(e)? {
 		"verify"
@@ -394,7 +443,7 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", util::show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path)?;
+	let _lock = scan::lock(&db_path, &mounts::read_mounts()?)?;
 	let conn = db::open_rw(&db_path)?;
 	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
 	if let Err(x) = db::close_rw(conn) {
@@ -428,16 +477,24 @@ fn damage_first(k: db::Kind) -> u8 {
 fn report(
 	db: &std::path::Path,
 	run: Option<i64>,
-	kind: Option<&str>,
-	limit: i64,
+	kind: Option<db::Kind>,
+	limit: u64,
 ) -> Result<i32, String> {
+	let limit = i64::try_from(limit).unwrap_or(i64::MAX);
 	let conn = db::open_ro(db)?;
-	let e = |e: rusqlite::Error| e.to_string();
+	let e = |e: rusqlite::Error| format!("database: {e}");
 	let run: i64 = match run {
-		Some(r) => r,
+		Some(r) => conn
+			.query_row("SELECT id FROM runs WHERE id = ?1", [r], |r| r.get(0))
+			.optional()
+			.map_err(e)?
+			.ok_or_else(|| format!("no run {r}"))?,
 		None => conn
-			.query_row("SELECT max(id) FROM runs", [], |r| r.get(0))
-			.map_err(|_| "no runs yet".to_string())?,
+			.query_row("SELECT max(id) FROM runs", [], |r| {
+				r.get::<_, Option<i64>>(0)
+			})
+			.map_err(e)?
+			.ok_or("no runs yet")?,
 	};
 	out!("run {run}");
 	let mut st = conn
@@ -475,20 +532,51 @@ fn report(
 			))
 		})
 		.map_err(e)?;
+	let mut shown = 0i64;
 	for row in rows {
 		let (k, p, d) = row.map_err(e)?;
 		out!("{k}\t{p}\t{}", d.unwrap_or_default());
+		shown += 1;
 	}
+	let total: i64 = counts
+		.iter()
+		.filter(|(k, _)| kind.is_none_or(|w| w.name() == k.as_str()))
+		.map(|(_, n)| n)
+		.sum();
+	cut_note(total - shown);
 	Ok(0)
 }
+
+/// On stderr, so the lines above stay easy to read with a script.
+fn cut_note(more: i64) {
+	if more > 0 {
+		err!("{more} more not shown, raise --limit to see them");
+	}
+}
+
+// Down here so the lines above keep their numbers, which the release build's
+// panic messages have in them.
+#[cfg(feature = "profiling")]
+mod profiling;
+#[cfg(feature = "profiling")]
+use profiling::sampled;
+#[cfg(not(feature = "profiling"))]
+fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
+	f()
+}
+
+#[cfg(test)]
+mod testutil;
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::test_id;
 
 	// Same order as the old `LIKE '%mismatch'`, then `read-error`.
 	#[test]
 	fn damage_sorts_first() {
+		let _id = test_id("deavz");
 		for k in db::Kind::ALL {
 			let n = k.name();
 			let was = if n.ends_with("mismatch") {
@@ -498,5 +586,20 @@ mod tests {
 			};
 			assert_eq!(damage_first(k), was, "{n}");
 		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call localtime_r")]
+	fn version_dates_only_between_releases() {
+		let _id = test_id("debjn");
+		assert_eq!(version_line(""), VERSION);
+		// 2026-10-23 12:00 UTC, which is the 23rd or 24th in every time zone.
+		let noon = version_line("14101200");
+		let day = noon.strip_prefix(VERSION).unwrap();
+		assert!([" (2026-10-23)", " (2026-10-24)"].contains(&day), "{noon}");
+		assert_eq!(
+			day,
+			format!(" ({})", &util::fmt_local(1_792_756_800_000_000)[..10])
+		);
 	}
 }

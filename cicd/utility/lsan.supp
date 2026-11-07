@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for sanitize-rust.bash --asan. Prebuilt
+# libraries only, by library name, as leak:libname.so. An entry matches any
+# frame in a leak's stack, so one for a library our code calls into would hide
+# our own leaks too. A leak in our code or a crate is fixed, or its test turns
+# the check off with a backlog ID beside it. Empty, since the tests link
+# nothing prebuilt but libc.

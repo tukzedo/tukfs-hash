@@ -1,0 +1,521 @@
+## dogfood_tukfs-hash.ps1
+##
+##	Picks the newest dogfood build of tukfs-hash, on Linux, under PowerShell 7,
+##	and prints its path for dogfood_tukfs-hash to run. The pool, its rotation
+##	and the fixed name are in design.md, "Build and release".
+##
+##	History: At bottom of script.
+
+##	Copyright (C) 2026 t00mietum
+##	Licensed under The MIT License (MIT). Full text at:
+##		https://mit-license.org/
+##	SPDX-License-Identifier: MIT
+
+<#
+.SYNOPSIS
+Prints the path of the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
+.DESCRIPTION
+The bash launcher, dogfood_tukfs-hash, runs what this prints with the arguments as typed, and its exit code comes back. PowerShell would expand wildcards and ~ in them, and can't carry a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
+.EXAMPLE
+dogfood_tukfs-hash.ps1 --no-update
+#>
+
+$ProgramName = 'tukfs-hash'
+$LauncherName = "dogfood_$ProgramName"
+
+## Where the pipeline's dogfood stage puts a build. The first that has one wins.
+$SourceDirs = @(
+	(Join-Path -Path $HOME -ChildPath 'synced/0-0/common/exec/util/linux/bin')
+)
+
+## Local on purpose. Versions churn with every build and don't belong in the
+## sync tree.
+$InstallDir = Join-Path -Path $HOME -ChildPath '.local/bin'
+$PoolDir = Join-Path -Path $InstallDir -ChildPath "${ProgramName}_versions"
+$LinkPath = Join-Path -Path $InstallDir -ChildPath $ProgramName
+
+$MaxVersions = 10
+$MinVersions = 5
+$MaxPoolBytes = 1GB
+
+## GFS roles, before the budget above trims them. A period role goes to the
+## last version of a period that has ended.
+$KeepFrequent = 5
+$KeepHourly = 3
+$KeepDaily = 3
+$KeepWeekly = 2
+$KeepMonthly = 1
+$KeepYearly = 1
+
+$StampFormat = 'yyyyMMdd-HHmmss'
+$VersionPattern = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
+## The kernel keeps this much of a program's name as its comm.
+$CommLength = 15
+## Written and read in one culture, or a culture with another calendar writes
+## a year the read takes as a different one.
+$Invariant = [Globalization.CultureInfo]::InvariantCulture
+
+function Write-Note {
+	<#
+	.SYNOPSIS
+	Writes a line to stderr, led by the launcher's name.
+	#>
+	[CmdletBinding()]
+	[OutputType([void])]
+	param(
+		[Parameter(Mandatory)]
+		[ValidateNotNullOrEmpty()]
+		[string]$Message
+	)
+	[Console]::Error.WriteLine("${LauncherName}: $Message")
+}
+
+function Exit-Launcher {
+	<#
+	.SYNOPSIS
+	Writes a line to stderr and exits 1.
+	#>
+	[CmdletBinding()]
+	[OutputType([void])]
+	param(
+		[Parameter(Mandatory)]
+		[ValidateNotNullOrEmpty()]
+		[string]$Message
+	)
+	Write-Note -Message $Message
+	exit 1
+}
+
+function ConvertFrom-Stamp {
+	<#
+	.SYNOPSIS
+	The stamp as a date, or nothing when it names no real one, such as a 13th month.
+	.DESCRIPTION
+	A name like that isn't one this script wrote.
+	#>
+	[CmdletBinding()]
+	[OutputType([datetime])]
+	param(
+		[Parameter(Mandatory)]
+		[string]$Stamp
+	)
+	$when = [datetime]::MinValue
+	if ([datetime]::TryParseExact($Stamp, $StampFormat, $Invariant, [Globalization.DateTimeStyles]::None, [ref]$when)) { return $when }
+	return $null
+}
+
+function Get-SourceBuild {
+	<#
+	.SYNOPSIS
+	The build in the first source dir that has one, or nothing.
+	#>
+	[CmdletBinding()]
+	[OutputType([IO.FileInfo])]
+	param()
+	foreach ($dir in $SourceDirs) {
+		$item = Get-Item -LiteralPath (Join-Path -Path $dir -ChildPath $ProgramName) -ErrorAction SilentlyContinue
+		if ($item -is [IO.FileInfo]) { return $item }
+	}
+	return $null
+}
+
+function Get-HeldVersion {
+	<#
+	.SYNOPSIS
+	Every version in the pool, as { File, Name, Stamp }, oldest first.
+	.DESCRIPTION
+	Only an exact name with a real date counts, so anything else in the dir is left alone. A version copied in this run has no role yet.
+	#>
+	[CmdletBinding()]
+	[OutputType([object[]])]
+	param()
+	if (-not (Test-Path -LiteralPath $PoolDir)) { return , @() }
+	$found = [Collections.Generic.List[object]]::new()
+	foreach ($file in Get-ChildItem -LiteralPath $PoolDir -File) {
+		if (-not ($file.Name -cmatch $VersionPattern)) { continue }
+		$stamp = ConvertFrom-Stamp -Stamp $Matches.stamp
+		if ($null -ne $stamp) { $found.Add([PSCustomObject]@{ File = $file; Name = $file.Name; Stamp = $stamp }) }
+	}
+	return , @($found | Sort-Object -Property Stamp, Name)
+}
+
+function Find-HeldTwin {
+	<#
+	.SYNOPSIS
+	A held version with the same bytes as the source build, or nothing.
+	.DESCRIPTION
+	The sync restamps what it has, so a build already held can look new.
+	#>
+	[CmdletBinding()]
+	[OutputType([PSCustomObject])]
+	param(
+		[Parameter(Mandatory)]
+		[IO.FileInfo]$Source
+	)
+	$held = Get-HeldVersion
+	$same = @($held | Where-Object -FilterScript { $_.File.Length -eq $Source.Length })
+	if ($same.Count -eq 0) { return $null }
+	$want = (Get-FileHash -LiteralPath $Source.FullName -Algorithm SHA256).Hash
+	for ($i = $same.Count - 1; $i -ge 0; $i--) {
+		if ((Get-FileHash -LiteralPath $same[$i].File.FullName -Algorithm SHA256).Hash -eq $want) { return $same[$i] }
+	}
+	return $null
+}
+
+function Copy-NewBuild {
+	<#
+	.SYNOPSIS
+	Copies the source build in when nothing held matches it. True when it took one.
+	.DESCRIPTION
+	Written to a temp name and renamed, so a copy that dies partway never passes for a version. Its write time is when it came in, since the name keeps the build's. That's how Get-RunningVersion tells which version a run through the fixed name started.
+	#>
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param()
+	$src = Get-SourceBuild
+	if (-not $src) { return $false }
+	$stamp = $src.LastWriteTime.ToString($StampFormat, $Invariant)
+	$held = Get-HeldVersion
+	if ($held.Count -gt 0 -and $held[-1].Stamp -ge (ConvertFrom-Stamp -Stamp $stamp)) { return $false }
+	if (Find-HeldTwin -Source $src) { return $false }
+
+	$null = New-Item -ItemType Directory -Force -Path $PoolDir
+	$dest = Join-Path -Path $PoolDir -ChildPath "${ProgramName}_$stamp"
+	$partial = "$dest.partial"
+	try {
+		Copy-Item -LiteralPath $src.FullName -Destination $partial -Force
+		[IO.File]::SetUnixFileMode($partial, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute, GroupRead, GroupExecute, OtherRead, OtherExecute')
+		[IO.File]::SetLastWriteTimeUtc($partial, [datetime]::UtcNow)
+		Move-Item -LiteralPath $partial -Destination $dest -Force
+		Write-Note -Message "new build $stamp from $($src.DirectoryName)"
+		return $true
+	} catch {
+		Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+		Write-Note -Message "could not copy the new build: $($_.Exception.Message)"
+		return $false
+	}
+}
+
+function Get-PeriodKey {
+	<#
+	.SYNOPSIS
+	Period keys for a date. The week is the ISO one, yyyyww.
+	#>
+	[CmdletBinding()]
+	[OutputType([hashtable])]
+	param(
+		[Parameter(Mandatory)]
+		[datetime]$When
+	)
+	return @{
+		hour = $When.ToString('yyyyMMddHH', $Invariant)
+		day = $When.ToString('yyyyMMdd', $Invariant)
+		week = '{0:D4}{1:D2}' -f [Globalization.ISOWeek]::GetYear($When), [Globalization.ISOWeek]::GetWeekOfYear($When)
+		month = $When.ToString('yyyyMM', $Invariant)
+		year = $When.ToString('yyyy', $Invariant)
+	}
+}
+
+function Get-GfsRole {
+	<#
+	.SYNOPSIS
+	Each version's role, by name. A version with none is one nothing keeps.
+	.DESCRIPTION
+	The coarser role wins where two apply; oldest and newest win over all of them.
+	#>
+	[CmdletBinding()]
+	[OutputType([hashtable])]
+	param(
+		[Parameter(Mandatory)]
+		[ValidateNotNullOrEmpty()]
+		[object[]]$Versions
+	)
+	$periods = @('year', 'month', 'week', 'day', 'hour')
+	$current = Get-PeriodKey -When (Get-Date)
+	$lastIn = @{}
+	foreach ($p in $periods) { $lastIn[$p] = @{} }
+	foreach ($v in $Versions) {
+		$keys = Get-PeriodKey -When $v.Stamp
+		foreach ($p in $periods) {
+			if ($keys[$p] -ne $current[$p]) { $lastIn[$p][$keys[$p]] = $v }
+		}
+	}
+	$roles = @{}
+	$roles[$Versions[0].Name] = 'oldest'
+	$roles[$Versions[-1].Name] = 'newest'
+	$quota = @{ year = $KeepYearly; month = $KeepMonthly; week = $KeepWeekly; day = $KeepDaily; hour = $KeepHourly }
+	foreach ($p in $periods) {
+		$keys = @($lastIn[$p].Keys | Sort-Object)
+		for ($i = [Math]::Max(0, $keys.Count - $quota[$p]); $i -lt $keys.Count; $i++) {
+			$name = $lastIn[$p][$keys[$i]].Name
+			if (-not $roles.ContainsKey($name)) { $roles[$name] = $p }
+		}
+	}
+	for ($i = [Math]::Max(0, $Versions.Count - $KeepFrequent); $i -lt $Versions.Count; $i++) {
+		if (-not $roles.ContainsKey($Versions[$i].Name)) { $roles[$Versions[$i].Name] = 'frequent' }
+	}
+	return $roles
+}
+
+function Select-Budget {
+	<#
+	.SYNOPSIS
+	The names that fit the budget.
+	.DESCRIPTION
+	The newest goes in first whatever it weighs, since the fixed name points at it, then the oldest, then those with a GFS role from year down to frequent, then those without, each newest first within its group. So a burst of builds can't push out the week and day versions. A version with no role still stays while the pool is under the count and the bytes.
+	#>
+	[CmdletBinding()]
+	[OutputType([Collections.Generic.HashSet[string]])]
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
+		[object[]]$Versions,
+		[Parameter(Mandatory)]
+		[hashtable]$Roles
+	)
+	$keep = [Collections.Generic.HashSet[string]]::new()
+	$ranked = @($Versions | Sort-Object -Property Stamp, Name -Descending)
+	if ($ranked.Count -eq 0) { return Write-Output -NoEnumerate -InputObject $keep }
+	$order = [Collections.Generic.List[object]]::new()
+	$order.Add($ranked[0])
+	if ($ranked.Count -gt 1) { $order.Add($ranked[-1]) }
+	if ($ranked.Count -gt 2) {
+		$middle = @($ranked[1..($ranked.Count - 2)])
+		$rank = @{ year = 0; month = 1; week = 2; day = 3; hour = 4; frequent = 5 }
+		$held = @($middle | Where-Object -FilterScript { $Roles.ContainsKey($_.Name) })
+		$order.AddRange(@($held | Sort-Object -Stable -Property { $rank[$Roles[$_.Name]] }))
+		$order.AddRange(@($middle | Where-Object -FilterScript { -not $Roles.ContainsKey($_.Name) }))
+	}
+	$bytes = 0
+	foreach ($v in $order) {
+		if ($keep.Count -ge $MaxVersions) { break }
+		if ($keep.Count -ge $MinVersions -and ($bytes + $v.File.Length) -gt $MaxPoolBytes) { break }
+		$null = $keep.Add($v.Name)
+		$bytes += $v.File.Length
+	}
+	return Write-Output -NoEnumerate -InputObject $keep
+}
+
+function Resolve-RealPath {
+	<#
+	.SYNOPSIS
+	The path with every link on the way resolved, the way /proc shows what a process runs.
+	.DESCRIPTION
+	Nothing when part of it isn't there, or past 100 links.
+	#>
+	[CmdletBinding()]
+	[OutputType([string])]
+	param(
+		[Parameter(Mandatory)]
+		[ValidateNotNullOrEmpty()]
+		[string]$Path,
+		[ValidateRange(0, 101)]
+		[int]$Depth = 0
+	)
+	if ($Depth -gt 100) { return $null }
+	$full = [IO.Path]::GetFullPath($Path)
+	if ($full -eq '/') { return '/' }
+	$parent = Resolve-RealPath -Path ([IO.Path]::GetDirectoryName($full)) -Depth ($Depth + 1)
+	if ($null -eq $parent) { return $null }
+	$at = Join-Path -Path $parent -ChildPath ([IO.Path]::GetFileName($full))
+	$item = Get-Item -LiteralPath $at -Force -ErrorAction SilentlyContinue
+	if ($null -eq $item) { return $null }
+	if ($item.LinkType -ne 'SymbolicLink') { return $at }
+	return Resolve-RealPath -Path ([IO.Path]::GetFullPath("$($item.Target)", $parent)) -Depth ($Depth + 1)
+}
+
+function Get-RunningVersion {
+	<#
+	.SYNOPSIS
+	The names of the versions running now.
+	.DESCRIPTION
+	One of this user's runs is found by its image path. Another user's, such as a run through sudo, has none to read, so it's found by its comm and first argument, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name in them gives its stamp, which a later rename keeps. A run through the fixed name has only that name, so it holds the version the fixed name pointed at when it started: the newest that had come in by then.
+	#>
+	[CmdletBinding()]
+	[OutputType([Collections.Generic.HashSet[string]])]
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
+		[object[]]$Versions
+	)
+	$names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	## A running one shows by its real path, which isn't the pool's when a
+	## link is on the way, such as a linked home.
+	$realPool = Resolve-RealPath -Path $PoolDir
+	$byPath = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	$byStamp = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	foreach ($v in $Versions) {
+		$byPath[$v.File.FullName] = $v.Name
+		if ($realPool) { $byPath[(Join-Path -Path $realPool -ChildPath $v.Name)] = $v.Name }
+		$byStamp[$v.Stamp.ToString($StampFormat, $Invariant)] = $v.Name
+	}
+	$fixedComm = $ProgramName.Substring(0, [Math]::Min($CommLength, $ProgramName.Length))
+	foreach ($proc in Get-Process -ErrorAction SilentlyContinue) {
+		$image = try { $proc.Path } catch { $null }
+		if ($image) {
+			if ($byPath.ContainsKey($image)) { $null = $names.Add($byPath[$image]) }
+			continue
+		}
+		## The comm first, since most processes are someone else's and few
+		## are this program.
+		try {
+			$comm = [IO.File]::ReadAllText("/proc/$($proc.Id)/comm").TrimEnd("`n")
+			if (-not $comm.StartsWith($fixedComm, [StringComparison]::Ordinal)) { continue }
+			$argv0 = [IO.File]::ReadAllText("/proc/$($proc.Id)/cmdline").Split([char]0)[0]
+		} catch { continue }
+		if (-not $argv0) { continue }
+		if ($argv0.StartsWith('/') -and (Test-Path -LiteralPath $argv0)) {
+			$real = Resolve-RealPath -Path $argv0
+			if (-not $realPool -or -not $real -or -not $real.StartsWith($realPool + '/', [StringComparison]::Ordinal)) { continue }
+		}
+		$leaf = [IO.Path]::GetFileName($argv0)
+		if ($leaf -cmatch $VersionPattern -and $comm -ceq $leaf.Substring(0, [Math]::Min($CommLength, $leaf.Length))) {
+			if ($byStamp.ContainsKey($Matches.stamp)) { $null = $names.Add($byStamp[$Matches.stamp]) }
+			continue
+		}
+		if ($comm -cne $fixedComm) { continue }
+		try { $started = $proc.StartTime.ToUniversalTime() } catch { continue }
+		## Versions come in oldest first, so the last in by then is the newest.
+		$before = @($Versions | Where-Object -FilterScript { $_.File.LastWriteTimeUtc -le $started })
+		if ($before.Count -gt 0) { $null = $names.Add($before[-1].Name) }
+	}
+	return Write-Output -NoEnumerate -InputObject $names
+}
+
+function Invoke-Rotation {
+	<#
+	.SYNOPSIS
+	Removes what the budget leaves out, unless it's running, then gives each kept version its role in its name.
+	.DESCRIPTION
+	One file at a time, never a tree.
+	#>
+	[CmdletBinding()]
+	[OutputType([void])]
+	param()
+	$versions = Get-HeldVersion
+	if ($versions.Count -eq 0) { return }
+	$roles = Get-GfsRole -Versions $versions
+	$keep = Select-Budget -Versions $versions -Roles $roles
+	$running = Get-RunningVersion -Versions $versions
+	foreach ($v in $versions) {
+		if ($keep.Contains($v.Name)) { continue }
+		if ($running.Contains($v.Name)) {
+			Write-Note -Message "$($v.Name) is running, so it stays for now"
+			continue
+		}
+		try {
+			Remove-Item -LiteralPath $v.File.FullName -Force -ErrorAction Stop
+		} catch {
+			Write-Note -Message "could not remove $($v.Name): $($_.Exception.Message)"
+		}
+	}
+	foreach ($v in $versions) {
+		if (-not $keep.Contains($v.Name)) { continue }
+		$role = if ($roles.ContainsKey($v.Name)) { $roles[$v.Name] } else { 'spare' }
+		$want = "${ProgramName}_$($v.Stamp.ToString($StampFormat, $Invariant))_$role"
+		if ($v.Name -ceq $want) { continue }
+		$wantPath = Join-Path -Path $PoolDir -ChildPath $want
+		if (Test-Path -LiteralPath $wantPath) { continue }
+		try { Move-Item -LiteralPath $v.File.FullName -Destination $wantPath -ErrorAction Stop } catch { Write-Note -Message "could not rename $($v.Name): $($_.Exception.Message)" }
+	}
+}
+
+function Test-OwnLink {
+	<#
+	.SYNOPSIS
+	True when the fixed name is a link this script made, into the pool.
+	#>
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param(
+		[Parameter(Mandatory)]
+		[AllowNull()]
+		[IO.FileSystemInfo]$Item
+	)
+	if ($null -eq $Item -or $Item.LinkType -ne 'SymbolicLink') { return $false }
+	$target = [IO.Path]::GetFullPath("$($Item.Target)", $InstallDir)
+	return $target.StartsWith($PoolDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::Ordinal)
+}
+
+function Update-FixedName {
+	<#
+	.SYNOPSIS
+	Points the fixed name at the newest version.
+	.DESCRIPTION
+	Something else there is left alone, and said so on a run that took a new build.
+	.PARAMETER Fresh
+	This run took a new build.
+	#>
+	[CmdletBinding()]
+	[OutputType([void])]
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Only touches its own link, and the launcher has no -WhatIf to pass on.')]
+	param([switch]$Fresh)
+	$versions = Get-HeldVersion
+	if ($versions.Count -eq 0) { return }
+	$target = $versions[-1].File.FullName
+	$cur = Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue
+	if ($cur -and "$($cur.Target)" -ceq $target) { return }
+	if ($cur -and -not (Test-OwnLink -Item $cur)) {
+		if ($Fresh) { Write-Note -Message "$LinkPath isn't a link into $PoolDir, so it was left alone, and a bare $ProgramName there isn't this build" }
+		return
+	}
+	try {
+		if ($cur) { Remove-Item -LiteralPath $LinkPath -Force -ErrorAction Stop }
+		$null = New-Item -ItemType SymbolicLink -Path $LinkPath -Target $target -ErrorAction Stop
+	} catch {
+		Write-Note -Message "could not update ${LinkPath}: $($_.Exception.Message)"
+		return
+	}
+	Write-Note -Message "$LinkPath -> $($versions[-1].Name)"
+}
+
+function Get-RunTarget {
+	<#
+	.SYNOPSIS
+	The fixed name when it names the newest version, else that version itself.
+	#>
+	[CmdletBinding()]
+	[OutputType([string])]
+	param()
+	$versions = Get-HeldVersion
+	if ($versions.Count -eq 0) { return $null }
+	$newest = $versions[-1].File.FullName
+	$cur = Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue
+	if ($cur -and "$($cur.Target)" -ceq $newest) { return $LinkPath }
+	return $newest
+}
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+## The flag goes on the left, since a `$true` there equals any word.
+$noUpdate = $false
+foreach ($arg in $args) {
+	if ('--no-update' -ceq $arg) { $noUpdate = $true } else { Exit-Launcher -Message "this only picks the build, so run dogfood_tukfs-hash to pass it '$arg'" }
+}
+
+if (-not $noUpdate) {
+	$fresh = Copy-NewBuild
+	Invoke-Rotation
+	Update-FixedName -Fresh:$fresh
+}
+
+$exe = Get-RunTarget
+if (-not $exe) { Exit-Launcher -Message "no $ProgramName build held, and none in $($SourceDirs -join ' or ')" }
+Write-Output -InputObject $exe
+
+
+##	History:
+##		- 2026-10-23: Created from shcl's dogfood_shcl.ps1, Linux only. The
+##		  fixed name is a link, and anything else there is left alone.
+##		- 2026-10-23: A version with no GFS role is kept while the pool is
+##		  under 10 and 1 GB, and a running one is found through a linked home.
+##		- 2026-10-28: Plain ASCII header, typed parameters and help on each
+##		  function. The pool policy moved to design.md.
+##		- 2026-10-28: Prints the build's path for the bash launcher to run,
+##		  rather than running it, so arguments and the exit code go through
+##		  as they are.
+##		- 2026-10-29: Role holders go into the budget from year down to
+##		  frequent, so a burst of builds can't push out the week and day ones.
+##		  Another user's run, such as one through sudo, is found by its comm
+##		  and first argument.

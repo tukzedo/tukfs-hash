@@ -1,0 +1,5 @@
+## Follow each source line, so a variable set in config.bash or an include
+## counts where it's read. Here rather than on the command line, so a run by
+## hand or in an editor gives the pipeline's answer.
+external-sources=true
+source-path=SCRIPTDIR

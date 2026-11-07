@@ -1,0 +1,67 @@
+# The demo gif, for cicd/utility/gen-demo-gif.py. script.txt beside this is
+# the plan; edit that, then this. Each [[step]] types show=, runs run= (or
+# show=) for real in a temp home, and shows the output. A step with no show=
+# runs unseen. {prog} is typed as the name and runs as the release binary.
+
+title = "tukfs-hash"
+prog  = "tukfs-hash"
+seed  = 23
+font  = ["Monaspace Argon SemiBold"]
+end_hold  = 0.5
+end_black = 3.0
+home_as = "/home/{user}"
+
+# The same bytes every run, so the checksums shown don't move.
+setup = '''
+mkdir -p photos/2019 photos/2021 photos/2023
+for f in 2019/beach.jpg:310000 2019/lake.jpg:265000 2021/garden.jpg:402000 2021/dog.png:188000 2023/receipt.pdf:96000 notes.txt:1200; do
+	yes "${f%%:*}" | head -c "${f##*:}" > "photos/${f%%:*}"
+done
+'''
+
+# The clock, pinned, so a render only differs when the tool's output or the
+# script does.
+[[map]]
+find = '\d{4}-\d{2}-\d{2} 00:00:00'
+put  = '2026-06-12 00:00:00'
+[[map]]
+find = '\d{4}-\d{2}-\d{2} (?!00:00:00)\d{2}:\d{2}:\d{2}'
+put  = '2026-06-12 09:41:07'
+# The disk the temp home is on, which moves between boots and boxes, and the
+# worker count, which goes with the kind of disk.
+[[map]]
+find = '^group \S+ with \d+ worker\(s\):$'
+put  = 'group sda with 2 worker(s):'
+[[map]]
+find = '^\S+(?=: files \d+ hashed )'
+put  = 'sda'
+# The scan's own run time, which moves with the box's load.
+[[map]]
+find = '(?<= after )\d+(?=s$)'
+put  = '1'
+
+[[step]]
+note  = "Checksum everything under ~/photos"
+show  = "{prog} scan --db photos.db --root ~/photos"
+pause = 1.4
+
+[[step]]
+note  = "Bad RAM flips a byte in beach.jpg. Size and time stay put."
+run   = 'f=photos/2019/beach.jpg; t="$(stat -c %y "$f")"; printf "\377" | dd of="$f" bs=1 seek=150000 conv=notrunc status=none; touch -d "$t" "$f"'
+pause = 0.8
+
+[[step]]
+show  = "{prog} scan --db photos.db --root ~/photos --verify"
+recall = true
+expect_exit = 4
+pause = 1.8
+
+[[step]]
+show  = "echo $?"
+run   = "echo $?"
+pause = 0.8
+
+[[step]]
+note  = "Which one?"
+show  = "{prog} report --db photos.db"
+pause = 3.5

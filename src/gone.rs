@@ -47,10 +47,11 @@ fn bytes_of(v: ValueRef<'_>) -> Vec<u8> {
 	}
 }
 
+/// The `gone` command: lists recorded files no longer found.
 #[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
-pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> {
+pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> {
 	let conn = db::open_ro(db_path)?;
-	let e = |e: rusqlite::Error| e.to_string();
+	let e = |e: rusqlite::Error| format!("database: {e}");
 	let none_yet = "no finished scan with a root list yet";
 	if !db::has_column(&conn, "runs", "roots").map_err(e)? {
 		return Err(none_yet.into());
@@ -147,7 +148,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> 
 			continue;
 		}
 		count += 1;
-		if (shown.len() as i64) < limit {
+		if (shown.len() as u64) < limit {
 			shown.push(format!(
 				"gone\t{}\tlast seen by run {last}",
 				db::path_text(raw)
@@ -162,18 +163,22 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: i64) -> Result<i32, String> 
 			unlisted.len()
 		);
 	}
+	let more = count - shown.len() as u64;
 	for l in shown {
 		out!("{l}");
 	}
+	crate::cut_note(i64::try_from(more).unwrap_or(i64::MAX));
 	Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::test_id;
 
 	#[test]
 	fn only_names_the_run_would_reach() {
+		let _id = test_id("ddy9f");
 		let p = Path::new;
 		let now = [p("/a"), p("/z")];
 		// Seen last from the same root, or from a shallower one.

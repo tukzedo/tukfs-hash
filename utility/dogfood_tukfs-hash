@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+##	Purpose:
+##		- Runs the newest dogfood build of tukfs-hash. dogfood_tukfs-hash.ps1
+##		  takes a new build in, rotates the pool and prints which to run, and
+##		  this runs it in its own place, with every argument but --no-update
+##		  as typed. So its exit code and a Ctrl+C reach it untouched.
+##		- Lives in util/linux/bash, and the .ps1 in util/0_crossplatform beside
+##		  it. The repo keeps both in utility/.
+##	History: At bottom of script.
+
+##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+##	Licensed under The MIT License (MIT). Full text at:
+##		https://mit-license.org/
+##	SPDX-License-Identifier: MIT
+
+set -eu
+
+## Through any links, so the lookup below works from a link on PATH too. Empty on a loop.
+self="$(readlink -f -- "${BASH_SOURCE[0]}" || true)"
+if [[ -z "${self}" ]]; then
+	echo "dogfood_tukfs-hash: can't resolve ${BASH_SOURCE[0]} (link loop?)" >&2
+	exit 1
+fi
+selfDir="$(cd -P "$(dirname "${self}")" && pwd)"
+
+ps1=""
+for candidate in \
+	"${selfDir}/../../0_crossplatform/dogfood_tukfs-hash.ps1" \
+	"${selfDir}/dogfood_tukfs-hash.ps1" \
+	"${HOME}/synced/0-0/common/exec/util/0_crossplatform/dogfood_tukfs-hash.ps1"; do
+	if [[ -f "${candidate}" ]]; then ps1="${candidate}"; break; fi
+done
+if [[ -z "${ps1}" ]]; then
+	echo "dogfood_tukfs-hash: dogfood_tukfs-hash.ps1 not found" >&2
+	exit 1
+fi
+if ! command -v pwsh >/dev/null 2>&1; then
+	echo "dogfood_tukfs-hash: needs PowerShell 7 (pwsh) on PATH" >&2
+	exit 1
+fi
+
+## Not through pwsh, which expands wildcards and ~ in a native call's
+## arguments, and turns bytes that aren't UTF-8 into U+FFFD.
+noUpdate=()
+passArgs=()
+for arg in "$@"; do
+	if [[ "${arg}" == "--no-update" ]]; then noUpdate=(--no-update); else passArgs+=("${arg}"); fi
+done
+target="$(pwsh -NoProfile -File "${ps1}" "${noUpdate[@]}")" || exit 1
+if [[ "${target}" != /* || ! -x "${target}" ]]; then
+	echo "dogfood_tukfs-hash: ${ps1} gave no build to run: ${target}" >&2
+	exit 1
+fi
+exec "${target}" "${passArgs[@]}"
+
+
+##	History:
+##		- 2026-10-23: Created from shcl's dogfood_shcl.
+##		- 2026-10-28: Resolve links with one readlink -f, so a link loop ends.
+##		- 2026-10-28: Runs the build itself, with the arguments as typed. The
+##		  .ps1 only picks it.

@@ -7,6 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Now, in microseconds since the epoch.
 pub fn now_us() -> i64 {
 	SystemTime::now()
 		.duration_since(UNIX_EPOCH)
@@ -27,6 +28,7 @@ pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
 	Ok(dir.join(name))
 }
 
+/// A path as a C string. A NUL in it is refused.
 pub fn cpath(p: &Path) -> io::Result<CString> {
 	CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }
@@ -51,6 +53,7 @@ pub fn b64u_encode(data: &[u8]) -> String {
 	out
 }
 
+/// Unpadded base64url to bytes. `None` if it isn't that.
 pub fn b64u_decode(s: &[u8]) -> Option<Vec<u8>> {
 	if s.len() % 4 == 1 {
 		return None;
@@ -82,6 +85,7 @@ fn push_hex(out: &mut String, b: u8) {
 	out.push(char::from(HEX[usize::from(b & 15)]));
 }
 
+/// Lower-case hex.
 pub fn hex(data: &[u8]) -> String {
 	let mut s = String::with_capacity(data.len() * 2);
 	for &b in data {
@@ -90,6 +94,7 @@ pub fn hex(data: &[u8]) -> String {
 	s
 }
 
+/// Hex to bytes. `None` if it isn't hex.
 pub fn unhex(s: &[u8]) -> Option<Vec<u8>> {
 	if !s.len().is_multiple_of(2) {
 		return None;
@@ -111,17 +116,21 @@ pub fn trim_value(v: &[u8]) -> &[u8] {
 
 fn tm_of(us: i64) -> libc::tm {
 	let t: libc::time_t = us.div_euclid(1_000_000) as libc::time_t;
+	// SAFETY: libc::tm is integers and one pointer, and all zeros is valid for each.
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+	// SAFETY: t and tm are live locals for the call.
 	unsafe { libc::localtime_r(&raw const t, &raw mut tm) };
 	tm
 }
 
+/// Local midnight at the start of that time's day.
 pub fn local_midnight_us(us: i64) -> i64 {
 	let mut tm = tm_of(us);
 	tm.tm_hour = 0;
 	tm.tm_min = 0;
 	tm.tm_sec = 0;
 	tm.tm_isdst = -1;
+	// SAFETY: tm is a live local.
 	unsafe { libc::mktime(&raw mut tm) as i64 * 1_000_000 }
 }
 
@@ -132,17 +141,20 @@ pub fn parse_date(s: &str) -> Option<i64> {
 	if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
 		return None;
 	}
+	// SAFETY: libc::tm is integers and one pointer, and all zeros is valid for each.
 	let mut tm: libc::tm = unsafe { std::mem::zeroed() };
 	tm.tm_year = year - 1900;
 	tm.tm_mon = month - 1;
 	tm.tm_mday = day;
 	tm.tm_isdst = -1;
+	// SAFETY: tm is a live local.
 	let t = unsafe { libc::mktime(&raw mut tm) };
 	// mktime rolls Feb 31 over into March, and says so only in tm.
 	let same_day = tm.tm_year == year - 1900 && tm.tm_mon == month - 1 && tm.tm_mday == day;
 	(t != -1 && same_day).then_some(t as i64 * 1_000_000)
 }
 
+/// A time as local `YYYY-MM-DD HH:MM:SS`.
 pub fn fmt_local(us: i64) -> String {
 	let tm = tm_of(us);
 	format!(
@@ -156,6 +168,7 @@ pub fn fmt_local(us: i64) -> String {
 	)
 }
 
+/// A size in binary units, such as 1.5 GiB.
 pub fn human_bytes(n: u64) -> String {
 	const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
 	let mut v = n as f64;
@@ -200,6 +213,7 @@ pub fn escape_name(b: &[u8]) -> String {
 	out
 }
 
+/// A path escaped for showing.
 pub fn show_path(p: &Path) -> String {
 	escape_name(p.as_os_str().as_bytes())
 }
@@ -207,9 +221,11 @@ pub fn show_path(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{fuzz, mutate, test_id};
 
 	#[test]
 	fn b64u_round_trip() {
+		let _id = test_id("ddx02");
 		for len in 0..70 {
 			let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
 			let text = b64u_encode(&data);
@@ -220,6 +236,7 @@ mod tests {
 
 	#[test]
 	fn b64u_matches_nemo_sample() {
+		let _id = test_id("ddx03");
 		// A 32-byte digest is 43 characters, as nemo-anywhere stores it.
 		let text = b"QCVLFYZQYGbOC-KOfkdZGj3e65bov-K1c1EWf3JLim0";
 		let raw = b64u_decode(text).unwrap();
@@ -229,6 +246,7 @@ mod tests {
 
 	#[test]
 	fn b64u_rejects_junk() {
+		let _id = test_id("ddx04");
 		assert!(b64u_decode(b"abc=").is_none());
 		assert!(b64u_decode(b"a").is_none());
 		assert!(b64u_decode(b"ab+/").is_none());
@@ -238,6 +256,7 @@ mod tests {
 
 	#[test]
 	fn hex_round_trip() {
+		let _id = test_id("ddx05");
 		let data = [0u8, 1, 0xab, 0xff];
 		assert_eq!(hex(&data), "0001abff");
 		assert_eq!(unhex(b"0001abff").unwrap(), data);
@@ -248,13 +267,16 @@ mod tests {
 
 	#[test]
 	fn trims_values() {
+		let _id = test_id("ddx06");
 		assert_eq!(trim_value(b"abc\0"), b"abc");
 		assert_eq!(trim_value(b"12\n"), b"12");
 		assert_eq!(trim_value(b"\0"), b"");
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
 	fn dates() {
+		let _id = test_id("ddx07");
 		let d = parse_date("2026-10-13").unwrap();
 		assert_eq!(local_midnight_us(d + 5 * 3600 * 1_000_000), d);
 		assert!(fmt_local(d).starts_with("2026-10-13 00:00:00"));
@@ -269,6 +291,7 @@ mod tests {
 
 	#[test]
 	fn escapes_names() {
+		let _id = test_id("ddy60");
 		assert_eq!(escape_name(b"plain name.txt"), "plain name.txt");
 		assert_eq!(escape_name("caf\u{e9}".as_bytes()), "caf\u{e9}");
 		assert_eq!(escape_name(b"caf\xe9"), "caf\\xe9");
@@ -280,6 +303,7 @@ mod tests {
 	// Pinned, since rmlint's xattr bytes and the listed names depend on them.
 	#[test]
 	fn hex_and_escape_pinned() {
+		let _id = test_id("deavj");
 		let all: Vec<u8> = (0..=255).collect();
 		let want = all
 			.iter()
@@ -295,5 +319,105 @@ mod tests {
 		assert_eq!(escape_name("a\u{85}b".as_bytes()), "a\\xc2\\x85b");
 		assert_eq!(escape_name(b"\xff\xfe\\x"), "\\xff\\xfe\\\\x");
 		assert_eq!(escape_name("\u{1f600}\r".as_bytes()), "\u{1f600}\\x0d");
+	}
+
+	fn days_in(year: i32, month: i32) -> i32 {
+		match month {
+			2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+			2 => 28,
+			4 | 6 | 9 | 11 => 30,
+			_ => 31,
+		}
+	}
+
+	// The date's own text, as fmt_local starts.
+	fn day_text(s: &str) -> String {
+		let mut it = s.splitn(3, '-').map(|p| p.parse::<i32>().unwrap());
+		let (y, m, d) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
+		format!("{y:04}-{m:02}-{d:02} 00:00:00")
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
+	fn fuzz_dates() {
+		let _id = test_id("deeb9");
+		fuzz("dates", |r| {
+			let mut covered = 0;
+			let year = 1960 + r.below(8100) as i32;
+			let month = r.below(15) as i32 - 1;
+			let day = r.below(34) as i32 - 1;
+			let text = if r.one_in(4) {
+				format!("{year}-{month}-{day}")
+			} else {
+				format!("{year:04}-{month:02}-{day:02}")
+			};
+			let real = (1970..=9999).contains(&year)
+				&& (1..=12).contains(&month)
+				&& (1..=days_in(year, month)).contains(&day);
+			let got = parse_date(&text);
+			assert_eq!(got.is_some(), real, "{text}");
+			covered |= if real { 1 } else { 2 };
+			if real && month == 2 && day == 29 {
+				covered |= 4;
+			}
+			// A zone that skips midnight would start the day at 01:00, so
+			// midnight is whatever local_midnight_us says it is.
+			if let Some(t) = got {
+				assert_eq!(local_midnight_us(t), t, "{text}");
+				assert_eq!(fmt_local(t)[..10], day_text(&text)[..10], "{text}");
+			}
+			// Gone bad: what still parses is the day it says, at its start.
+			let bad = String::from_utf8_lossy(&mutate(r, text.as_bytes())).into_owned();
+			if let Some(t) = parse_date(&bad) {
+				assert_eq!(local_midnight_us(t), t, "{bad:?}");
+				assert_eq!(fmt_local(t)[..10], day_text(&bad)[..10], "{bad:?}");
+				covered |= 8;
+			}
+			covered
+		})
+		.covers(0xf);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_b64u_hex_and_values() {
+		let _id = test_id("deeba");
+		fuzz("b64u and hex", |r| {
+			let mut covered = 0;
+			let data: Vec<u8> = (0..r.below(80)).map(|_| r.next_u64() as u8).collect();
+			let text = b64u_encode(&data);
+			assert_eq!(b64u_decode(text.as_bytes()).as_ref(), Some(&data));
+			assert_eq!(unhex(hex(&data).as_bytes()).as_ref(), Some(&data));
+			assert_eq!(
+				unhex(hex(&data).to_uppercase().as_bytes()).as_ref(),
+				Some(&data)
+			);
+			// One text per value, so what decodes encodes back the same.
+			let bad = mutate(r, text.as_bytes());
+			if let Some(v) = b64u_decode(&bad) {
+				assert_eq!(b64u_encode(&v).as_bytes(), bad.as_slice());
+				covered |= 1;
+			} else {
+				covered |= 2;
+			}
+			let bad = mutate(r, hex(&data).as_bytes());
+			if let Some(v) = unhex(&bad) {
+				assert_eq!(hex(&v).into_bytes(), bad.to_ascii_lowercase());
+				covered |= 4;
+			} else {
+				covered |= 8;
+			}
+			// Only NUL and white space, and only off the end.
+			let t = trim_value(&bad);
+			assert!(bad.starts_with(t));
+			assert!(
+				bad[t.len()..]
+					.iter()
+					.all(|&c| c == 0 || c.is_ascii_whitespace())
+			);
+			assert!(t.last().is_none_or(|&c| c != 0 && !c.is_ascii_whitespace()));
+			covered
+		})
+		.covers(0xf);
 	}
 }

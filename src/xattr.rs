@@ -10,6 +10,7 @@ use std::ffi::CStr;
 use std::io;
 use std::os::fd::RawFd;
 
+/// The blake3 set this writes, matching nemo-anywhere's names.
 pub const B3_DIGEST: &CStr = c"user.blake3.b64u";
 pub const B3_BYTES: &CStr = c"user.blake3.bytes";
 pub const B3_MTIME: &CStr = c"user.blake3.mtime";
@@ -23,9 +24,11 @@ pub const B3_INODE: &CStr = c"user.blake3.inode";
 pub const RM_B2B_CKSUM: &CStr = c"user.rmlint.blake2b.cksum";
 pub const RM_B2B_MTIME: &CStr = c"user.rmlint.blake2b.mtime";
 
+/// An attribute's value. `None` where it's missing or not supported.
 pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 	let mut buf = vec![0u8; 256];
 	loop {
+		// SAFETY: buf has buf.len() bytes of room, and name is NUL-terminated.
 		let n = unsafe { libc::fgetxattr(fd, name.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
 		if n >= 0 {
 			buf.truncate(n as usize);
@@ -35,6 +38,7 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 		match err.raw_os_error() {
 			Some(libc::ENODATA | libc::ENOTSUP) => return Ok(None),
 			Some(libc::ERANGE) => {
+				// SAFETY: a null buffer of size 0 only asks for the length.
 				let need = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
 				if need < 0 {
 					return Err(io::Error::last_os_error());
@@ -46,7 +50,9 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 	}
 }
 
+/// Sets an attribute.
 pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
+	// SAFETY: value is value.len() bytes, and name is NUL-terminated.
 	let r = unsafe { libc::fsetxattr(fd, name.as_ptr(), value.as_ptr().cast(), value.len(), 0) };
 	if r == 0 {
 		Ok(())
@@ -57,6 +63,7 @@ pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
 
 /// A name that isn't there is already gone.
 pub fn fremove(fd: RawFd, name: &CStr) -> io::Result<()> {
+	// SAFETY: name is NUL-terminated.
 	if unsafe { libc::fremovexattr(fd, name.as_ptr()) } == 0 {
 		return Ok(());
 	}
@@ -104,6 +111,7 @@ pub fn remove_rmlint(fd: RawFd) -> io::Result<()> {
 	fremove(fd, RM_B2B_MTIME)
 }
 
+/// The checksum attributes a file has.
 #[derive(Default, Debug, Clone)]
 pub struct OnFile {
 	pub b3: Option<[u8; 32]>,
@@ -174,7 +182,7 @@ impl OnFile {
 
 	/// Good enough to skip reading: current, read by us from this very inode,
 	/// and dated between the cutoff and now. A copy made with `cp -a` or
-	/// `rsync -aX` brings the set along but lands on another inode. Returns
+	/// `rsync -aX` brings the set along but is on another inode. Returns
 	/// the digest and its date.
 	pub fn b3_fresh(
 		&self,
@@ -200,6 +208,14 @@ impl OnFile {
 	}
 }
 
+/// What `write_b3` writes: the whole set, or only the date on a set that
+/// still matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum B3Write {
+	All,
+	DateOnly,
+}
+
 /// The time goes after the checksum, since a reader needs the time to match,
 /// and the inode goes last, since a skip needs its digest to match. A write
 /// that stops part way leaves an old value next to the new checksum and gets
@@ -211,14 +227,15 @@ pub fn write_b3(
 	mtime_us: i64,
 	date_us: i64,
 	(dev, ino): (u64, u64),
-	only_date: bool,
+	what: B3Write,
 ) -> io::Result<()> {
-	if !only_date {
+	let all = what == B3Write::All;
+	if all {
 		fset(fd, B3_DIGEST, b64u_encode(digest).as_bytes())?;
 		fset(fd, B3_BYTES, bytes.to_string().as_bytes())?;
 	}
 	fset(fd, B3_DATE, date_us.to_string().as_bytes())?;
-	if !only_date {
+	if all {
 		fset(fd, B3_MTIME, mtime_us.to_string().as_bytes())?;
 	}
 	fset(fd, B3_INODE, inode_text(dev, ino, digest).as_bytes())?;
@@ -229,9 +246,11 @@ pub fn write_b3(
 #[allow(clippy::unreadable_literal, reason = "as rmlint and stat print them")]
 mod tests {
 	use super::*;
+	use crate::testutil::{fuzz, mutate, scratch, test_id};
 
 	#[test]
 	fn rmlint_time_tolerance() {
+		let _id = test_id("ddx08");
 		let of = OnFile {
 			b2b: Some([7; 64]),
 			b2b_mtime_s: Some(1692238421.9263258),
@@ -245,6 +264,7 @@ mod tests {
 	// Expected values are from rmlint 2.10.3 and C's printf.
 	#[test]
 	fn rmlint_time_text() {
+		let _id = test_id("de5g0");
 		let t = |s: i64, ns: i64| g17(s as f64 + ns as f64 / 1e9);
 		assert_eq!(t(1620310089, 123456789), "1620310089.1234567");
 		assert_eq!(t(1704096000, 351000100), "1704096000.3510001");
@@ -260,26 +280,28 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_reads_back() {
-		let p = std::env::temp_dir().join(format!("test_tukfs-hash_rmset_{}", std::process::id()));
+		let _id = test_id("de5g1");
+		let d = scratch("xattr_rmset");
+		let p = d.join("f");
 		std::fs::write(&p, "x").unwrap();
 		let f = std::fs::File::open(&p).unwrap();
 		let fd = std::os::fd::AsRawFd::as_raw_fd(&f);
 		let mt = 1620310089.0 + 123456789.0 / 1e9;
 		if write_rmlint(fd, &[0xab; 64], mt).is_err() {
 			eprintln!("no user xattrs here; skipped");
-			std::fs::remove_file(&p).unwrap();
 			return;
 		}
 		let raw = fget(fd, RM_B2B_CKSUM).unwrap().unwrap();
 		assert_eq!(raw.len(), 129);
 		assert_eq!(raw.last(), Some(&0));
 		assert_eq!(OnFile::read(fd).b2b_current(mt), Some([0xab; 64]));
-		std::fs::remove_file(&p).unwrap();
 	}
 
 	#[test]
 	fn b3_needs_size_and_time() {
+		let _id = test_id("ddx09");
 		let of = OnFile {
 			b3: Some([1; 32]),
 			b3_bytes: Some(10),
@@ -293,6 +315,7 @@ mod tests {
 
 	#[test]
 	fn b3_fresh_needs_our_inode_and_a_sane_date() {
+		let _id = test_id("ddy59");
 		let of = OnFile {
 			b3: Some([1; 32]),
 			b3_bytes: Some(10),
@@ -324,6 +347,7 @@ mod tests {
 
 	#[test]
 	fn inode_text_round_trip() {
+		let _id = test_id("ddy5a");
 		let d = [9u8; 32];
 		let t = inode_text(u64::MAX, 3, &d);
 		assert_eq!(
@@ -332,5 +356,35 @@ mod tests {
 		);
 		assert!(inode_of(Some(b"1:2".to_vec())).is_none());
 		assert!(inode_of(Some(b"x:2:abc".to_vec())).is_none());
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_inode_values() {
+		let _id = test_id("deebb");
+		fuzz("inode", |r| {
+			let mut covered = 0;
+			let dev = r.next_u64() >> r.below(64);
+			let ino = r.next_u64() >> r.below(64);
+			let digest: [u8; 32] = std::array::from_fn(|_| r.next_u64() as u8);
+			let mut stored = inode_text(dev, ino, &digest).into_bytes();
+			if r.one_in(2) {
+				stored.push(*r.pick(&[0, b'\n']));
+				covered |= 1;
+			}
+			assert_eq!(inode_of(Some(stored.clone())), Some((dev, ino, digest)));
+			let bad = mutate(r, &stored);
+			if let Some((d, i, g)) = inode_of(Some(bad)) {
+				assert_eq!(
+					inode_of(Some(inode_text(d, i, &g).into_bytes())),
+					Some((d, i, g))
+				);
+				covered |= 2;
+			} else {
+				covered |= 4;
+			}
+			covered
+		})
+		.covers(7);
 	}
 }

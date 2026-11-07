@@ -17,13 +17,14 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::util::{escape_name, show_path};
 
+/// Where the list of changed files comes from.
 #[derive(Debug)]
 pub enum Source {
-	// `zfs diff` output, with the dataset's mount point to strip.
+	/// `zfs diff` output, with the dataset's mount point to strip.
 	ZfsDiff(PathBuf, PathBuf),
-	// `btrfs subvolume find-new` output; paths are already relative.
+	/// `btrfs subvolume find-new` output; paths are already relative.
 	FindNew(PathBuf),
-	// One relative path per line.
+	/// One relative path per line.
 	List(PathBuf),
 }
 
@@ -47,6 +48,7 @@ impl Pair {
 	}
 }
 
+/// A change list, as parsed.
 #[derive(Debug, Default, PartialEq)]
 pub struct Parsed {
 	pub pairs: Vec<Pair>,
@@ -192,6 +194,7 @@ fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
+/// Parses `btrfs subvolume find-new` output.
 pub fn parse_find_new(text: &[u8]) -> Parsed {
 	let mut parsed = Parsed::default();
 	let mut seen = BTreeMap::new();
@@ -216,6 +219,7 @@ pub fn parse_find_new(text: &[u8]) -> Parsed {
 	parsed
 }
 
+/// Parses one relative path per line.
 pub fn parse_list(text: &[u8]) -> Parsed {
 	Parsed {
 		pairs: text
@@ -234,17 +238,33 @@ fn stays_inside(p: &Path) -> bool {
 		.all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
+/// Bytes that differ, and where, as runs of start and length.
 #[derive(Debug)]
 pub struct Diff {
 	pub differing: u64,
 	pub runs: Vec<(u64, u64)>,
 }
 
+/// Read buffers for `compare`, made once per run rather than per file.
+#[derive(Debug)]
+pub struct CompareBufs {
+	a: Vec<u8>,
+	b: Vec<u8>,
+}
+
+impl Default for CompareBufs {
+	fn default() -> Self {
+		Self {
+			a: vec![0u8; 1 << 20],
+			b: vec![0u8; 1 << 20],
+		}
+	}
+}
+
 /// Byte runs that differ. Runs a few bytes apart are merged, since a scribble
 /// rarely changes every byte it touches.
-pub fn compare(mut fa: File, mut fb: File) -> io::Result<Diff> {
-	let mut ba = vec![0u8; 1 << 20];
-	let mut bb = vec![0u8; 1 << 20];
+pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result<Diff> {
+	let CompareBufs { a: ba, b: bb } = bufs;
 	let mut off: u64 = 0;
 	let mut d = Diff {
 		differing: 0,
@@ -252,8 +272,8 @@ pub fn compare(mut fa: File, mut fb: File) -> io::Result<Diff> {
 	};
 	let (la, lb) = (fa.metadata()?.len(), fb.metadata()?.len());
 	while off < la.min(lb) {
-		let na = read_full(&mut fa, &mut ba)?;
-		let nb = read_full(&mut fb, &mut bb)?;
+		let na = read_full(&mut fa, ba)?;
+		let nb = read_full(&mut fb, bb)?;
 		let n = na.min(nb);
 		if n == 0 {
 			break;
@@ -401,6 +421,7 @@ fn find_by_inode(
 	}
 }
 
+/// The `snapdiff` command.
 #[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
 pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, String> {
 	for dir in [old, new] {
@@ -496,6 +517,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 		find_by_inode(old, &mut wanted, &mut jobs, &mut tally);
 	}
 
+	let mut bufs = CompareBufs::default();
 	for job in &jobs {
 		let name = &job.name;
 		let Some((old_path, mo)) = &job.old else {
@@ -534,7 +556,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 				continue;
 			}
 		};
-		match compare(fa, fb) {
+		match compare(fa, fb, &mut bufs) {
 			Ok(d) if d.differing == 0 => {
 				if show_all {
 					out!("same\t{name}\tmetadata only");
@@ -582,6 +604,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{Rng, scratch, test_id};
 
 	fn mounts(m: &str) -> Vec<&Path> {
 		vec![Path::new(m)]
@@ -593,6 +616,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_lines() {
+		let _id = test_id("ddwzy");
 		let text = b"M\t/home/u/a\\0040b.txt\nR\t/home/u/old\t/home/u/new\n+\t/home/u/added\nM\t/other/x\n1700000000.5\tM\t/home/u/t\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(
@@ -613,6 +637,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_type_column() {
+		let _id = test_id("ddy5v");
 		let text = b"M\t/\t/home/u/\nM\tF\t/home/u/a\n R\tF\t/home/u/b\t/home/u/c\n  170000.000000001\tM\tF\t/home/u/t\n+\t@\t/home/u/link\nM\t@\t/home/u/link2\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(
@@ -629,6 +654,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_link_count() {
+		let _id = test_id("ddy5w");
 		let text = b"M\tF\t/home/u/h\t(+1)\nM\t/home/u/h2\t(-12)\nM\t/home/u/h3\t(1)\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs, vec![same("h"), same("h2")]);
@@ -637,6 +663,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_without_h() {
+		let _id = test_id("ddy5x");
 		let text = b"R\t/home/u/old\\0040x -> /home/u/new\nR\tF\t/home/u/p -> /home/u/q\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs[0].old, PathBuf::from("old x"));
@@ -647,6 +674,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_replaced_files() {
+		let _id = test_id("ddy5y");
 		let text =
 			b"-\t/home/u/saved\n+\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\nM\t/home/u/\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
@@ -655,6 +683,7 @@ mod tests {
 
 	#[test]
 	fn zfs_diff_junk_and_outside() {
+		let _id = test_id("ddwzz");
 		let text = b"X\t/home/u/a\nM\n\nM\t/home/u/a\t/home/u/b\t/home/u/c\nM\t/home/user2/a\nR\t/home/u/a\t/elsewhere/b\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert!(p.pairs.is_empty());
@@ -676,6 +705,7 @@ mod tests {
 
 	#[test]
 	fn find_new_lines() {
+		let _id = test_id("ddx00");
 		let text = b"inode 257 file offset 0 len 4096 disk start 0 offset 0 gen 9 flags INLINE dir/a file\n\
 inode 257 file offset 4096 len 4096 disk start 12 offset 0 gen 9 flags NONE dir/a file\n\
 inode 300 file offset 0 len 4096 disk start 12 offset 0 gen 9 flags COMPRESS|PREALLOC b\n\
@@ -704,6 +734,7 @@ transid marker was 12\n";
 
 	#[test]
 	fn names_stay_inside() {
+		let _id = test_id("ddy5z");
 		assert!(stays_inside(Path::new("a/b")));
 		assert!(stays_inside(Path::new("")));
 		assert!(!stays_inside(Path::new("/etc/passwd")));
@@ -711,13 +742,16 @@ transid marker was 12\n";
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "3 MB byte by byte; over 15 min under Miri, safe code")]
 	fn finds_a_scribble() {
-		let dir = std::env::temp_dir().join(format!("test_tukfs-hash_cmp_{}", std::process::id()));
-		fs::create_dir_all(&dir).unwrap();
-		let cmp = |a: &str, b: &str| {
+		let _id = test_id("ddx01");
+		let dir = scratch("snapdiff_cmp");
+		let mut bufs = CompareBufs::default();
+		let mut cmp = |a: &str, b: &str| {
 			compare(
 				File::open(dir.join(a)).unwrap(),
 				File::open(dir.join(b)).unwrap(),
+				&mut bufs,
 			)
 			.unwrap()
 		};
@@ -736,6 +770,328 @@ transid marker was 12\n";
 		fs::write(dir.join("b"), &a[..100]).unwrap();
 		let d = cmp("a", "b");
 		assert_eq!(d.differing, a.len() as u64 - 100);
-		fs::remove_dir_all(dir).unwrap();
+	}
+
+	#[test]
+	fn buffers_carry_nothing_between_pairs() {
+		let _id = test_id("dej04");
+		let dir = scratch("snapdiff_bufs");
+		let mut bufs = CompareBufs::default();
+		let mut cmp = |a: &[u8], b: &[u8]| {
+			fs::write(dir.join("a"), a).unwrap();
+			fs::write(dir.join("b"), b).unwrap();
+			compare(
+				File::open(dir.join("a")).unwrap(),
+				File::open(dir.join("b")).unwrap(),
+				&mut bufs,
+			)
+			.unwrap()
+		};
+		let big: Vec<u8> = (0..5000u32).map(|i| (i * 13) as u8).collect();
+		let other: Vec<u8> = big.iter().map(|x| !x).collect();
+		assert_eq!(cmp(&big, &other).differing, 5000);
+		assert_eq!(cmp(b"same", b"same").differing, 0);
+		let d = cmp(b"0123456789", b"0123456780");
+		assert_eq!((d.differing, d.runs), (1, vec![(9, 1)]));
+		assert_eq!(cmp(b"", b"").differing, 0);
+	}
+
+	// zfs diff's own escape: all but printable ASCII, and space and backslash.
+	fn zfs_path(base: &[u8], rel: &[u8]) -> Vec<u8> {
+		let mut full = base.to_vec();
+		if !full.ends_with(b"/") {
+			full.push(b'/');
+		}
+		full.extend_from_slice(rel);
+		let mut out = Vec::with_capacity(full.len());
+		for c in full {
+			if c > b' ' && c != b'\\' && c < 0x7f {
+				out.push(c);
+			} else {
+				out.extend(format!("\\{c:04o}").bytes());
+			}
+		}
+		out
+	}
+
+	fn fuzz_name(r: &mut Rng, newlines: bool) -> Vec<u8> {
+		const BITS: &[&[u8]] = &[
+			b"a",
+			b"file.txt",
+			b" ",
+			b"\t",
+			b"\\",
+			b"->",
+			b" -> ",
+			b"(+1)",
+			b"\xff",
+			b"caf\xc3\xa9",
+			b"-",
+			b"\\0040",
+			b"F",
+			b"\n",
+		];
+		let bits = if newlines {
+			BITS
+		} else {
+			&BITS[..BITS.len() - 1]
+		};
+		let mut name = Vec::new();
+		for i in 0..=r.below(3) {
+			if i > 0 {
+				name.push(b'/');
+			}
+			for _ in 0..=r.below(3) {
+				name.extend_from_slice(r.pick(bits));
+			}
+		}
+		name
+	}
+
+	fn rel(b: &[u8]) -> PathBuf {
+		PathBuf::from(OsStr::from_bytes(b))
+	}
+
+	// What went bad is reported by its own line number and text.
+	fn bad_lines_are_named(text: &[u8], p: &Parsed) {
+		let lines: Vec<&[u8]> = text.split(|&c| c == b'\n').collect();
+		for list in [&p.unusable, &p.outside] {
+			assert!(list.windows(2).all(|w| w[0].0 < w[1].0));
+			for (n, t) in list {
+				assert_eq!(lines[n - 1], t.as_slice());
+			}
+		}
+		assert!(
+			p.unusable
+				.iter()
+				.all(|u| p.outside.iter().all(|o| o.0 != u.0))
+		);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	#[allow(clippy::too_many_lines, reason = "one generator, top to bottom")]
+	fn fuzz_zfs_diff() {
+		let _id = test_id("deeb7");
+		let real: &[u8] = b"M\t/home/u/a\\0040b.txt\nR\t/home/u/old\t/home/u/new\n+\t/home/u/added\nM\t/other/x\n1700000000.5\tM\t/home/u/t\nM\tF\t/home/u/h\t(+1)\nR\t/home/u/old\\0040x -> /home/u/new\n-\t/home/u/saved\n+\t/home/u/saved\nX\t/home/u/a\n";
+		crate::testutil::fuzz("zfs diff", |r| {
+			let mut covered = 0;
+			let mount: &[u8] = r.pick(&[b"/home/u".as_slice(), b"/mnt/my disk", b"/"]);
+			let both = [mount, b"/real/u"];
+			let bases = if mount == b"/" {
+				&both[..1]
+			} else {
+				&both[..=r.below(2)]
+			};
+			let mounts: Vec<&Path> = bases
+				.iter()
+				.map(|b| Path::new(OsStr::from_bytes(b)))
+				.collect();
+			let (tabbed, timed, typed) = (r.one_in(2), r.one_in(3), r.one_in(2));
+			let (mut text, mut want) = (Vec::new(), Parsed::default());
+			let (mut removed, mut added, mut gone) =
+				(BTreeSet::new(), BTreeSet::new(), Vec::<Vec<u8>>::new());
+			for i in 0..r.below(16) {
+				let line_no = i + 1;
+				if r.one_in(10) {
+					text.push(b'\n');
+					continue;
+				}
+				let kind = *r.pick(b"MMR-+X");
+				let ftype = if typed { *r.pick(b"FFFF/@") } else { b'F' };
+				let name = if kind == b'+' && !gone.is_empty() && r.one_in(2) {
+					r.pick(&gone).clone()
+				} else {
+					fuzz_name(r, true)
+				};
+				let outside = mount != b"/" && r.one_in(8);
+				let base: &[u8] = if outside { b"/other" } else { r.pick(bases) };
+				let mut line = Vec::new();
+				if timed {
+					line.extend(
+						format!(
+							"{:>10}.{:09}\t",
+							r.below(2_000_000_000),
+							r.below(1_000_000_000)
+						)
+						.bytes(),
+					);
+					covered |= 1;
+				}
+				line.push(kind);
+				if typed {
+					line.extend([b'\t', ftype]);
+					covered |= 2;
+				}
+				line.push(b'\t');
+				line.extend(zfs_path(base, &name));
+				let new_name = fuzz_name(r, true);
+				if kind == b'R' {
+					line.extend_from_slice(if tabbed { b"\t" } else { b" -> " });
+					line.extend(zfs_path(r.pick(bases), &new_name));
+					covered |= if tabbed { 4 } else { 8 };
+				}
+				if kind == b'M' && r.one_in(4) {
+					line.extend(format!("\t({}{})", r.pick(&['+', '-']), 1 + r.below(20)).bytes());
+					covered |= 16;
+				}
+				text.extend_from_slice(&line);
+				text.push(b'\n');
+				if kind == b'X' {
+					want.unusable.push((line_no, line));
+					covered |= 32;
+				} else if outside {
+					want.outside.push((line_no, line));
+					covered |= 64;
+				} else if ftype != b'F' {
+				} else if kind == b'M' {
+					want.pairs.push(same_bytes(&name));
+				} else if kind == b'R' {
+					want.pairs.push(Pair {
+						old: rel(&name),
+						new: rel(&new_name),
+						ino: None,
+					});
+				} else if kind == b'-' {
+					removed.insert(rel(&name));
+					gone.push(name);
+				} else {
+					added.insert(rel(&name));
+				}
+			}
+			let replaced: Vec<_> = removed
+				.intersection(&added)
+				.cloned()
+				.map(Pair::same)
+				.collect();
+			if !replaced.is_empty() {
+				covered |= 128;
+			}
+			want.pairs.extend(replaced);
+			assert_eq!(
+				parse_zfs_diff(&text, &mounts),
+				want,
+				"{}",
+				escape_name(&text)
+			);
+			let bad = crate::testutil::mutate(r, real);
+			let p = parse_zfs_diff(&bad, &[Path::new("/home/u")]);
+			bad_lines_are_named(&bad, &p);
+			// Mount points are stripped, so no name comes out absolute. The
+			// other sources are checked for that in run.
+			assert!(
+				p.pairs
+					.iter()
+					.all(|x| !x.old.has_root() && !x.new.has_root())
+			);
+			if !p.unusable.is_empty() {
+				covered |= 256;
+			}
+			covered
+		})
+		.covers(0x1ff);
+	}
+
+	fn same_bytes(b: &[u8]) -> Pair {
+		Pair::same(rel(b))
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_find_new_and_list() {
+		let _id = test_id("deeb8");
+		let real: &[u8] = b"inode 257 file offset 0 len 4096 disk start 0 offset 0 gen 9 flags INLINE dir/a file\n\
+inode 300 file offset 0 len 4096 disk start 12 offset 0 gen 9 flags COMPRESS|PREALLOC b\n\
+inode x file offset 0 len 4096 disk start 12 offset 0 gen 9 flags NONE c\n\
+transid marker was 12\n";
+		crate::testutil::fuzz("find-new", |r| {
+			let mut covered = 0;
+			let (mut text, mut seen, mut unusable, mut names) =
+				(Vec::new(), BTreeMap::new(), Vec::new(), Vec::new());
+			for i in 0..r.below(16) {
+				// find-new prints names raw, so one with a newline can't be told apart.
+				let name = fuzz_name(r, false);
+				let ino = r.next_u64() >> r.below(64);
+				let flags = r.pick(&["NONE", "INLINE", "COMPRESS|PREALLOC"]);
+				let good = format!(
+					"inode {ino} file offset {} len 4096 disk start {} offset 0 gen {} flags {flags} ",
+					r.below(1 << 30),
+					r.below(1 << 30),
+					r.below(99)
+				);
+				let mut line = good.clone().into_bytes();
+				match r.below(8) {
+					0 => {
+						line = format!("transid marker was {ino}").into_bytes();
+						covered |= 1;
+					}
+					1 => {
+						// Each of these is one field off.
+						let off = r.below(4);
+						line = match off {
+							0 => {
+								good.replacen(&format!("inode {ino}"), &format!("inode -{ino}"), 1)
+							}
+							1 => good.replacen(" file ", " FILE ", 1),
+							2 => good.replacen(" flags ", " flagz ", 1),
+							_ => good.clone(),
+						}
+						.into_bytes();
+						// The last has no name.
+						if off < 3 {
+							line.extend_from_slice(&name);
+						}
+						unusable.push((i + 1, line.clone()));
+						covered |= 2;
+					}
+					_ => {
+						line.extend_from_slice(&name);
+						if seen.insert(rel(&name), ino).is_some() {
+							covered |= 4;
+						}
+					}
+				}
+				text.extend_from_slice(&line);
+				text.push(b'\n');
+				names.push(line);
+			}
+			let pairs = seen
+				.into_iter()
+				.map(|(p, ino)| Pair {
+					ino: Some(ino),
+					..Pair::same(p)
+				})
+				.collect();
+			assert_eq!(
+				parse_find_new(&text),
+				Parsed {
+					pairs,
+					unusable,
+					outside: Vec::new()
+				},
+				"{}",
+				escape_name(&text)
+			);
+			// Each line of a list is one name, as it stands.
+			let want: Vec<Pair> = names
+				.iter()
+				.filter(|n| !n.is_empty())
+				.map(|n| same_bytes(n))
+				.collect();
+			assert_eq!(parse_list(&text).pairs, want);
+			let bad = crate::testutil::mutate(r, real);
+			let p = parse_find_new(&bad);
+			bad_lines_are_named(&bad, &p);
+			assert!(p.pairs.windows(2).all(|w| w[0].new < w[1].new));
+			assert!(p.pairs.iter().all(|x| x.ino.is_some() && x.old == x.new));
+			let lines = bad.split(|&c| c == b'\n').filter(|l| !l.is_empty()).count();
+			assert!(p.pairs.len() + p.unusable.len() <= lines);
+			assert_eq!(parse_list(&bad).pairs.len(), lines);
+			if !p.unusable.is_empty() {
+				covered |= 8;
+			}
+			covered
+		})
+		.covers(0xf);
 	}
 }

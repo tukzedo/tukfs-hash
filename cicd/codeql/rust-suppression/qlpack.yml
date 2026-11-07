@@ -1,0 +1,9 @@
+# The pinned CodeQL has no alert-suppression query for Rust, so codeql-scan.bash
+# runs this one beside the suite. From shcl's. The dependency resolves from the bundle.
+#
+# Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
+# SPDX-License-Identifier: MIT
+name: tukfs-hash/rust-suppression
+version: 0.0.0
+dependencies:
+  codeql/rust-all: "*"

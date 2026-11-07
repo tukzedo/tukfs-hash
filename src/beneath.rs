@@ -17,6 +17,7 @@ use std::path::{Component, Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
+/// A scan root, held open so every path is opened beneath it.
 #[derive(Debug)]
 pub struct Root {
 	pub path: PathBuf,
@@ -47,6 +48,7 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 	loop {
 		let fd = f();
 		if fd >= 0 {
+			// SAFETY: the kernel just returned fd, and nothing else owns it.
 			return Ok(unsafe { File::from_raw_fd(fd as RawFd) });
 		}
 		let e = io::Error::last_os_error();
@@ -59,11 +61,13 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 	let c = cpath(Path::new(name))?;
 	retry(|| {
+		// SAFETY: c is NUL-terminated and outlives the call.
 		unsafe { libc::openat(at, c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) }.into()
 	})
 }
 
 impl Root {
+	/// Opens a root folder.
 	pub fn open(path: &Path) -> io::Result<Root> {
 		let dir = openat(
 			libc::AT_FDCWD,
@@ -78,11 +82,13 @@ impl Root {
 		})
 	}
 
+	/// A path made relative to the root, or as it was if it's outside.
 	pub fn rel<'a>(&self, p: &'a Path) -> &'a Path {
 		// An absolute path left over is refused by open_at.
 		p.strip_prefix(&self.path).unwrap_or(p)
 	}
 
+	/// Opens a relative path without leaving the root or its filesystem.
 	pub fn open_at(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
 		let rel = if rel.as_os_str().is_empty() {
 			Path::new(".")
@@ -107,6 +113,7 @@ impl Root {
 			mode: 0,
 			resolve: libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_XDEV,
 		};
+		// SAFETY: c and how outlive the call, and OpenHow has the kernel's open_how layout.
 		retry(|| unsafe {
 			libc::syscall(
 				libc::SYS_openat2,
@@ -144,16 +151,23 @@ impl Root {
 		openat(held.as_ref().unwrap_or(&self.dir).as_raw_fd(), last, flags)
 	}
 
-	// O_NOATIME needs ownership or root.
+	/// Opens a file to read without moving its atime, where allowed.
 	pub fn open_read(&self, rel: &Path) -> io::Result<File> {
 		let base = libc::O_RDONLY | libc::O_NONBLOCK;
-		match self.open_at(rel, base | libc::O_NOATIME) {
-			Err(e) if e.raw_os_error() == Some(libc::EPERM) => self.open_at(rel, base),
-			r => r,
-		}
+		with_noatime(|extra| self.open_at(rel, base | extra))
 	}
 }
 
+/// Calls `open` with `O_NOATIME`, and again without it if that's refused,
+/// since it needs ownership or root.
+pub fn with_noatime(open: impl Fn(libc::c_int) -> io::Result<File>) -> io::Result<File> {
+	match open(libc::O_NOATIME) {
+		Err(e) if e.raw_os_error() == Some(libc::EPERM) => open(0),
+		r => r,
+	}
+}
+
+/// What a folder entry is, by its type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
 	Dir,
@@ -161,6 +175,7 @@ pub enum Kind {
 	Other,
 }
 
+/// One folder entry.
 #[derive(Debug)]
 pub struct Entry {
 	pub name: Box<OsStr>,
@@ -175,10 +190,13 @@ pub struct List {
 }
 
 impl List {
+	/// Reads the entries of an open folder.
 	pub fn new(f: File) -> io::Result<List> {
 		let fd = f.into_raw_fd();
+		// SAFETY: fd came from into_raw_fd, so it's ours. On success the DIR owns it.
 		let Some(dir) = NonNull::new(unsafe { libc::fdopendir(fd) }) else {
 			let e = io::Error::last_os_error();
+			// SAFETY: fdopendir failed, so fd is still ours to close.
 			unsafe { libc::close(fd) };
 			return Err(e);
 		};
@@ -186,12 +204,14 @@ impl List {
 	}
 
 	fn fd(&self) -> RawFd {
+		// SAFETY: dir stays open until Drop.
 		unsafe { libc::dirfd(self.dir.as_ptr()) }
 	}
 
 	fn lstat(&self, name: &[u8]) -> io::Result<libc::stat64> {
 		let c = cpath(Path::new(OsStr::from_bytes(name)))?;
 		let mut st = std::mem::MaybeUninit::<libc::stat64>::uninit();
+		// SAFETY: c outlives the call, and st has room for a stat64.
 		let r = unsafe {
 			libc::fstatat64(
 				self.fd(),
@@ -203,9 +223,11 @@ impl List {
 		if r != 0 {
 			return Err(io::Error::last_os_error());
 		}
+		// SAFETY: fstatat64 returned 0, so st is filled in.
 		Ok(unsafe { st.assume_init() })
 	}
 
+	/// Whether the folder holds an entry by that name.
 	pub fn has(&self, name: &str) -> bool {
 		self.lstat(name.as_bytes()).is_ok()
 	}
@@ -213,6 +235,7 @@ impl List {
 
 impl Drop for List {
 	fn drop(&mut self) {
+		// SAFETY: dir is open, and Drop is the only close.
 		unsafe { libc::closedir(self.dir.as_ptr()) };
 	}
 }
@@ -223,12 +246,16 @@ impl Iterator for List {
 	fn next(&mut self) -> Option<io::Result<Entry>> {
 		loop {
 			// readdir says "the end" and "an error" both with null.
+			// SAFETY: errno is per thread, and any value may be stored in it.
 			unsafe { *libc::__errno_location() = 0 };
+			// SAFETY: dir is open, and &mut self keeps other readers off it.
 			let ent = unsafe { libc::readdir64(self.dir.as_ptr()) };
+			// SAFETY: readdir64 gave null or an entry that's good until the next call on dir.
 			let Some(ent) = (unsafe { ent.as_ref() }) else {
 				let e = io::Error::last_os_error();
 				return (e.raw_os_error() != Some(0)).then_some(Err(e));
 			};
+			// SAFETY: d_name is NUL-terminated within the entry.
 			let name = unsafe { CStr::from_ptr(ent.d_name.as_ptr()) }.to_bytes();
 			if name == b"." || name == b".." {
 				continue;
@@ -256,18 +283,9 @@ impl Iterator for List {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 	use std::fs;
 	use std::io::Read;
-
-	fn scratch(tag: &str) -> PathBuf {
-		let d = std::env::temp_dir().join(format!(
-			"test_tukfs-hash_beneath_{tag}_{}",
-			std::process::id()
-		));
-		_ = fs::remove_dir_all(&d);
-		fs::create_dir_all(&d).unwrap();
-		d
-	}
 
 	fn both(root: &Path) -> [Root; 2] {
 		let slow = Root::open(root).unwrap();
@@ -277,8 +295,10 @@ mod tests {
 
 	// A folder swapped for a symlink after it was listed.
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_symlink_on_the_way_is_not_followed() {
-		let d = scratch("symlink");
+		let _id = test_id("ddy91");
+		let d = scratch("beneath_symlink");
 		let (root, outside) = (d.join("root"), d.join("outside"));
 		fs::create_dir_all(root.join("real")).unwrap();
 		fs::create_dir_all(&outside).unwrap();
@@ -307,12 +327,12 @@ mod tests {
 				.unwrap_err();
 			assert!(moved(&e), "{e}");
 		}
-		fs::remove_dir_all(&d).unwrap();
 	}
 
 	// /dev/shm is its own mount on most Linux boxes; skipped where it isn't.
 	#[test]
 	fn another_filesystem_is_not_entered() {
+		let _id = test_id("ddy92");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
 		};
@@ -333,8 +353,10 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_listing_has_names_kinds_and_inodes() {
-		let d = scratch("list");
+		let _id = test_id("ddy93");
+		let d = scratch("beneath_list");
 		fs::create_dir(d.join("sub")).unwrap();
 		fs::write(d.join("f"), "x").unwrap();
 		std::os::unix::fs::symlink("f", d.join("l")).unwrap();
@@ -361,6 +383,5 @@ mod tests {
 				("sub".into(), ino("sub"), Kind::Dir),
 			]
 		);
-		fs::remove_dir_all(&d).unwrap();
 	}
 }

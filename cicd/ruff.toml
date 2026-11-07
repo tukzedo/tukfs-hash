@@ -1,0 +1,9 @@
+## The pipeline's own Python, from shclwrap's. Four spaces, and a wider line
+## since the report's tables read better unwrapped.
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ANN", "PTH", "BLE", "S110", "PERF", "RUF"]
+## SIM108 wants a long if/else as a one-line ternary, which reads worse.
+ignore = ["SIM108"]

@@ -1,1 +1,5 @@
-/target/
+# No trailing slash, so the links a frozen cicd copy has under these names
+# are ignored too.
+/target
+/target-gate
+/cicd/artifacts

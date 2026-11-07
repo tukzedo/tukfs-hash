@@ -10,10 +10,12 @@
 
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, ToSql, params};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+/// The table version this binary writes.
 pub const SCHEMA: i64 = 4;
 
 // Matches the dataset's recordsize, so a page write is one record write.
@@ -61,6 +63,55 @@ CREATE TABLE events (
 CREATE INDEX events_run_kind ON events(run_id, kind);
 ";
 
+// Everything CREATE makes, as (type, name, table), the autoindexes for its
+// UNIQUE columns included. Under sudo the file belongs to the user, so it's
+// checked against this before root reads it (2026102814341423).
+const KNOWN: [(&str, &str, &str); 9] = [
+	("table", "meta", "meta"),
+	("table", "runs", "runs"),
+	("table", "files", "files"),
+	("index", "sqlite_autoindex_files_1", "files"),
+	("table", "paths", "paths"),
+	("index", "sqlite_autoindex_paths_1", "paths"),
+	("index", "paths_file", "paths"),
+	("table", "events", "events"),
+	("index", "events_run_kind", "events"),
+];
+
+/// Turns off schema trust and refuses anything CREATE didn't make, such as a
+/// trigger, a view or a virtual table, before anything else reads the file.
+fn vet(conn: &Connection, path: &Path) -> Result<(), String> {
+	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
+	conn.pragma_update(None, "trusted_schema", false)
+		.map_err(e)?;
+	let mut st = conn
+		.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema")
+		.map_err(e)?;
+	let mut rows = st.query([]).map_err(e)?;
+	while let Some(r) = rows.next().map_err(e)? {
+		let kind: String = r.get(0).map_err(e)?;
+		let name: String = r.get(1).map_err(e)?;
+		let table: String = r.get(2).map_err(e)?;
+		let sql: Option<String> = r.get(3).map_err(e)?;
+		// SQLite writes these prefixes itself, and a type or name in the row
+		// can say anything. "CREATE VIRTUAL TABLE" can't pass.
+		let made_here = KNOWN.contains(&(kind.as_str(), name.as_str(), table.as_str()))
+			&& match (kind.as_str(), sql.as_deref()) {
+				("table", Some(q)) => q.starts_with("CREATE TABLE "),
+				("index", Some(q)) => q.starts_with("CREATE INDEX "),
+				("index", None) => name.starts_with("sqlite_autoindex_"),
+				_ => false,
+			};
+		if !made_here {
+			return Err(format!(
+				"{}: holds {kind} {name:?}, which this program doesn't make. Left as is.",
+				path.display()
+			));
+		}
+	}
+	Ok(())
+}
+
 /// Names are bytes on Linux. Most are UTF-8 and go in as text, so the sqlite3
 /// shell can match them with a plain string; the rest go in as blobs.
 #[derive(Debug)]
@@ -75,6 +126,7 @@ impl ToSql for PathKey<'_> {
 	}
 }
 
+/// A stored path, escaped for showing.
 pub fn path_text(v: ValueRef<'_>) -> String {
 	match v {
 		ValueRef::Text(t) | ValueRef::Blob(t) => crate::util::escape_name(t),
@@ -82,11 +134,35 @@ pub fn path_text(v: ValueRef<'_>) -> String {
 	}
 }
 
+/// SQLite sets itself up on first use with plain reads and writes, which race
+/// when two threads get there at once. So once, here, before any connection.
+/// The PRNG is seeded too, since the first open of a file sets its pid the
+/// same way.
+pub fn init() {
+	static ONCE: std::sync::Once = std::sync::Once::new();
+	ONCE.call_once(|| {
+		let mut b = [0u8; 1];
+		// SAFETY: neither takes a pointer but b, which outlives the call and is
+		// as long as the length passed.
+		unsafe {
+			rusqlite::ffi::sqlite3_initialize();
+			rusqlite::ffi::sqlite3_randomness(1, b.as_mut_ptr().cast());
+		}
+	});
+}
+
+/// Opens the database to write, creating it if needed.
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
+	init();
 	let fresh = !path.exists();
-	let conn = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+	// A link at the name is refused. SQLite opens `-wal` and `-shm` with
+	// O_NOFOLLOW already, so under sudo nothing is made through a link.
+	let conn =
+		Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
+			.map_err(|e| format!("{}: {e}", path.display()))?;
 	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
+	vet(&conn, path)?;
 	if fresh {
 		conn.pragma_update(None, "page_size", PAGE_SIZE)
 			.map_err(e)?;
@@ -168,25 +244,26 @@ pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 	)
 }
 
+/// Opens the database read only, for a worker's lookups.
 pub fn open_ro(path: &Path) -> Result<Connection, String> {
+	init();
 	let conn = Connection::open_with_flags(
 		path,
-		OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+		OpenFlags::SQLITE_OPEN_READ_ONLY
+			| OpenFlags::SQLITE_OPEN_NO_MUTEX
+			| OpenFlags::SQLITE_OPEN_NOFOLLOW,
 	)
 	.map_err(|e| format!("{}: {e}", path.display()))?;
 	conn.busy_timeout(Duration::from_secs(30)).ok();
+	vet(&conn, path)?;
 	Ok(conn)
 }
 
-/// Puts the file back in rollback mode, so a user without write access to the
-/// folder can still open it read-only after a run as root. Leaving WAL mode
-/// checkpoints on its own; an explicit TRUNCATE checkpoint after `quick_check`
-/// fails with "table is locked" on SQLite 3.46 to 3.50.
-///
-/// It needs the file to itself, so another reader makes it fail, at once or
-/// after the busy wait. Everything is committed by then, so the caller only
-/// warns, and a long wait would only hold up the result.
+/// Puts the file back in rollback mode. See design.md, Database. Leaving WAL
+/// mode checkpoints on its own, and an explicit TRUNCATE checkpoint after
+/// `quick_check` fails with "table is locked" on SQLite 3.46 to 3.50.
 pub fn close_rw(conn: Connection) -> Result<(), String> {
+	// Short, since a failure here only warns.
 	conn.busy_timeout(Duration::from_secs(5)).ok();
 	let mode = conn
 		.pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get::<_, String>(0))
@@ -198,6 +275,7 @@ pub fn close_rw(conn: Connection) -> Result<(), String> {
 	}
 }
 
+/// What the database holds for a path.
 #[derive(Debug, Clone)]
 pub struct Prior {
 	pub id: i64,
@@ -209,6 +287,7 @@ pub struct Prior {
 	pub b3: Vec<u8>,
 }
 
+/// The query `lookup` runs.
 pub const LOOKUP: &str = "SELECT p.id, p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
@@ -229,6 +308,74 @@ pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Resu
 	.optional()
 }
 
+/// `lookup` for each path, in one read transaction. A transaction of its own
+/// took most of each lookup's time (2026102810135573). Errors stay per path.
+pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prior>, String>> {
+	let opened = conn
+		.unchecked_transaction()
+		.and_then(|txn| Ok((txn, conn.prepare_cached(LOOKUP)?)));
+	match opened {
+		Ok((txn, mut st)) => {
+			let found = paths
+				.iter()
+				.map(|p| lookup(&mut st, p).map_err(|e| e.to_string()))
+				.collect();
+			drop(st);
+			// Only read, so nothing is lost if the end fails.
+			_ = txn.finish();
+			found
+		}
+		Err(e) => vec![Err(e.to_string()); paths.len()],
+	}
+}
+
+/// Paths whose last mismatch came after their last good read, so nothing has
+/// read them clean or accepted them since. A mismatch keeps the old row, so
+/// its read date alone would skip the file again. See design.md, "Skipping",
+/// row `db-mismatch`.
+pub fn open_misses(conn: &Connection) -> Result<HashSet<Vec<u8>>, String> {
+	miss_paths(
+		conn,
+		"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
+		WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
+		None,
+	)
+}
+
+/// Paths an earlier part of this run reported a mismatch for. A path with no
+/// row at its size and time has nothing else to say it was reached. See
+/// design.md, "Skipping", row `resume-seen`.
+pub fn run_misses(conn: &Connection, run_id: i64) -> Result<HashSet<Vec<u8>>, String> {
+	miss_paths(
+		conn,
+		"SELECT DISTINCT path FROM events WHERE kind IN (?1, ?2, ?3) AND run_id = ?4",
+		Some(run_id),
+	)
+}
+
+fn miss_paths(
+	conn: &Connection,
+	sql: &str,
+	run_id: Option<i64>,
+) -> Result<HashSet<Vec<u8>>, String> {
+	let e = |e: rusqlite::Error| format!("database: {e}");
+	let mut st = conn.prepare(sql).map_err(e)?;
+	let kinds = [Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch];
+	let row = |r: &rusqlite::Row<'_>| {
+		Ok(match r.get_ref(0)? {
+			ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
+			_ => Vec::new(),
+		})
+	};
+	let rows = match run_id {
+		Some(id) => st.query_map(params![kinds[0], kinds[1], kinds[2], id], row),
+		None => st.query_map(kinds, row),
+	}
+	.map_err(e)?;
+	rows.collect::<rusqlite::Result<_>>().map_err(e)
+}
+
+/// A file's sums and stat, as read, for the writer to store.
 #[derive(Debug)]
 pub struct Hashed {
 	pub path: Vec<u8>,
@@ -260,6 +407,7 @@ pub enum Kind {
 }
 
 impl Kind {
+	/// Every kind.
 	pub const ALL: [Kind; 13] = [
 		Kind::XattrMismatch,
 		Kind::RmlintMismatch,
@@ -276,6 +424,7 @@ impl Kind {
 		Kind::Accepted,
 	];
 
+	/// The name stored and shown.
 	pub fn name(self) -> &'static str {
 		match self {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
@@ -294,6 +443,7 @@ impl Kind {
 		}
 	}
 
+	/// The kind with that name.
 	pub fn parse(name: &str) -> Option<Kind> {
 		Kind::ALL.into_iter().find(|k| k.name() == name)
 	}
@@ -339,6 +489,7 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
+	/// Every status.
 	pub const ALL: [RunStatus; 6] = [
 		RunStatus::Running,
 		RunStatus::Stopped,
@@ -348,6 +499,7 @@ impl RunStatus {
 		RunStatus::Accept,
 	];
 
+	/// The text stored and shown.
 	pub fn text(self) -> &'static str {
 		match self {
 			RunStatus::Running => "running",
@@ -359,6 +511,7 @@ impl RunStatus {
 		}
 	}
 
+	/// The status with that text.
 	pub fn parse(text: &str) -> Option<RunStatus> {
 		RunStatus::ALL.into_iter().find(|s| s.text() == text)
 	}
@@ -372,10 +525,11 @@ impl ToSql for RunStatus {
 	}
 }
 
+/// What workers send the database writer.
 #[derive(Debug)]
 pub enum Msg {
 	Hashed(Box<Hashed>),
-	// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
+	/// A paths row id. No paths row is ever deleted, and the upsert keeps the id.
 	Seen(i64),
 	Event {
 		kind: Kind,
@@ -449,13 +603,34 @@ fn commit(conn: &mut Connection, run_id: i64, msgs: &mut Vec<Msg>) -> rusqlite::
 /// among the rest can't take a mismatch down with it.
 ///
 /// After a failure the rest are dropped, but events are still kept, until one
-/// of those fails too. `halt` is called once, to stop the workers.
+/// of those fails too. `halt` stops the workers. A panic is a failure too, and
+/// the connection still comes back, so the run can be marked failed.
 pub fn writer(
 	mut conn: Connection,
 	run_id: i64,
 	rx: &Receiver<Msg>,
 	halt: impl Fn(),
 ) -> (Connection, Result<(), String>) {
+	let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		batches(&mut conn, run_id, rx, &halt)
+	}))
+	.unwrap_or_else(|_| {
+		halt();
+		Err("the database writer panicked".into())
+	});
+	(conn, r)
+}
+
+#[cfg(test)]
+/// Writers on these databases panic at their first batch.
+pub static PANIC_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn batches(
+	conn: &mut Connection,
+	run_id: i64,
+	rx: &Receiver<Msg>,
+	halt: &impl Fn(),
+) -> Result<(), String> {
 	let mut events: Vec<Msg> = Vec::new();
 	let mut rest: Vec<Msg> = Vec::with_capacity(4096);
 	let mut failed: Option<String> = None;
@@ -480,11 +655,18 @@ pub fn writer(
 		};
 		let n = events.len() + rest.len();
 		if n > 0 && (done || n >= 20000 || last.elapsed() >= Duration::from_secs(1)) {
-			let r = commit(&mut conn, run_id, &mut events);
+			#[cfg(test)]
+			if conn
+				.path()
+				.is_some_and(|p| PANIC_ON.lock().unwrap().iter().any(|q| q == p))
+			{
+				panic!("test fault");
+			}
+			let r = commit(conn, run_id, &mut events);
 			if r.is_err() {
 				events_ok = false;
 			}
-			if let Err(x) = r.and_then(|()| commit(&mut conn, run_id, &mut rest)) {
+			if let Err(x) = r.and_then(|()| commit(conn, run_id, &mut rest)) {
 				events.clear();
 				rest.clear();
 				if failed.is_none() {
@@ -495,7 +677,7 @@ pub fn writer(
 			last = Instant::now();
 		}
 		if done {
-			return (conn, failed.map_or(Ok(()), Err));
+			return failed.map_or(Ok(()), Err);
 		}
 	}
 }
@@ -503,11 +685,13 @@ pub fn writer(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::testutil::{scratch, test_id};
 	use std::sync::mpsc::sync_channel;
 
 	// What's in databases already. A new variant has to be added here too.
 	#[test]
 	fn kind_names_are_the_stored_ones() {
+		let _id = test_id("deavw");
 		let stored = |k: Kind| match k {
 			Kind::XattrMismatch => "b3-xattr-mismatch",
 			Kind::RmlintMismatch => "b2b-rmlint-mismatch",
@@ -535,6 +719,7 @@ mod tests {
 
 	#[test]
 	fn run_statuses_are_the_stored_ones() {
+		let _id = test_id("deavx");
 		let stored = |s: RunStatus| match s {
 			RunStatus::Running => "running",
 			RunStatus::Stopped => "stopped",
@@ -556,7 +741,10 @@ mod tests {
 
 	// Bound as text, so a query by the old literal still finds the row.
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn enums_are_stored_as_their_text() {
+		let _id = test_id("deavy");
+		init();
 		let c = Connection::open_in_memory().unwrap();
 		let (k, s): (String, String) = c
 			.query_row(
@@ -568,16 +756,18 @@ mod tests {
 		assert_eq!((k.as_str(), s.as_str()), ("dir-error", "killed"));
 	}
 
-	fn temp_db(tag: &str) -> std::path::PathBuf {
-		let dir =
-			std::env::temp_dir().join(format!("test_tukfs-hash_db_{tag}_{}", std::process::id()));
-		std::fs::create_dir_all(&dir).unwrap();
-		dir.join("t.sqlite")
+	// The folder goes with the Scratch, so a test holds it to its end.
+	fn temp_db(tag: &str) -> (crate::testutil::Scratch, std::path::PathBuf) {
+		let dir = scratch(&format!("db_{tag}"));
+		let p = dir.join("t.sqlite");
+		(dir, p)
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn round_trip_and_non_utf8_names() {
-		let p = temp_db("rt");
+		let _id = test_id("ddwzs");
+		let (_dir, p) = temp_db("rt");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
 		let t = std::thread::spawn(move || writer(conn, 1, &rx, || {}));
@@ -618,7 +808,6 @@ mod tests {
 		assert_eq!(typ, "text");
 		drop(st);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	fn hashed(path: &[u8], d: u8) -> Msg {
@@ -642,8 +831,10 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_bad_row_keeps_the_events() {
-		let p = temp_db("wfail");
+		let _id = test_id("ddy8d");
+		let (_dir, p) = temp_db("wfail");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
 			"CREATE TRIGGER boom BEFORE INSERT ON paths BEGIN SELECT RAISE(ABORT, 'boom'); END;",
@@ -673,12 +864,13 @@ mod tests {
 		assert_eq!(n("SELECT count(*) FROM events"), 2);
 		assert_eq!(n("SELECT count(*) FROM paths"), 0);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn close_rw_says_when_wal_stays() {
-		let p = temp_db("walstays");
+		let _id = test_id("ddy8e");
+		let (_dir, p) = temp_db("walstays");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let conn = open_rw(&p).unwrap();
 		let other = Connection::open(&p).unwrap();
@@ -690,12 +882,13 @@ mod tests {
 		drop(other);
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		assert!(!p.with_extension("sqlite-wal").exists());
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn seen_marks_only_its_row() {
-		let p = temp_db("seen");
+		let _id = test_id("deaw2");
+		let (_dir, p) = temp_db("seen");
 		let conn = open_rw(&p).unwrap();
 		let (tx, rx) = sync_channel(16);
 		let t = std::thread::spawn(move || writer(conn, 1, &rx, || {}));
@@ -719,12 +912,57 @@ mod tests {
 		assert_eq!(lookup(&mut st, b"/x/b").unwrap().unwrap().seen_run, 1);
 		drop(st);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	// design.md, "Skipping", row `db-mismatch`: open until a later good read.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn open_misses_are_the_unread_ones() {
+		let _id = test_id("dejdf");
+		let (_dir, p) = temp_db("misses");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 3);
+			INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run) VALUES
+				('/a', 1, 3, 9, 1, 100, 1), ('/b', 1, 3, 9, 1, 300, 1), ('/d', 1, 3, 9, 1, 100, 1);
+			INSERT INTO events (run_id, at_us, kind, path) VALUES
+				(1, 200, 'b3-db-mismatch', '/a'), (1, 200, 'b3-xattr-mismatch', '/a'),
+				(1, 200, 'b3-db-mismatch', '/b'), (1, 50, 'b3-xattr-mismatch', '/c'),
+				(1, 200, 'cache-mismatch', '/d'), (1, 200, 'read-error', '/d'),
+				(1, 50, 'b2b-rmlint-mismatch', x'2f65ff');",
+		)
+		.unwrap();
+		let mut got: Vec<_> = open_misses(&conn).unwrap().into_iter().collect();
+		got.sort();
+		assert_eq!(got, [&b"/a"[..], b"/c", b"/e\xff"]);
+		close_rw(conn).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn run_misses_are_this_runs() {
+		let _id = test_id("des7p");
+		let (_dir, p) = temp_db("runmisses");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"INSERT INTO events (run_id, at_us, kind, path) VALUES
+				(2, 200, 'b3-xattr-mismatch', '/a'), (2, 300, 'b3-xattr-mismatch', '/a'),
+				(2, 200, 'b2b-rmlint-mismatch', x'2f62ff'), (2, 200, 'b3-db-mismatch', '/c'),
+				(2, 200, 'cache-mismatch', '/d'), (2, 200, 'read-error', '/e'),
+				(1, 100, 'b3-xattr-mismatch', '/f');",
+		)
+		.unwrap();
+		let mut got: Vec<_> = run_misses(&conn, 2).unwrap().into_iter().collect();
+		got.sort();
+		assert_eq!(got, [&b"/a"[..], b"/b\xff", b"/c"]);
+		close_rw(conn).unwrap();
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn lookup_error_is_not_no_row() {
-		let p = temp_db("lookup");
+		let _id = test_id("ddy6g");
+		let (_dir, p) = temp_db("lookup");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
 			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 3);
@@ -736,13 +974,18 @@ mod tests {
 		assert!(lookup(&mut st, b"/x/none").unwrap().is_none());
 		assert!(lookup(&mut st, b"/x/junk").is_err());
 		drop(st);
+		let got = lookup_each(&conn, &[b"/x/none", b"/x/junk", b"/x/none"]);
+		assert!(matches!(got[..], [Ok(None), Err(_), Ok(None)]), "{got:?}");
+		// Each batch's transaction ends, so the writer isn't held back.
+		assert!(conn.is_autocommit());
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_1_forward() {
-		let p = temp_db("schema1");
+		let _id = test_id("ddy78");
+		let (_dir, p) = temp_db("schema1");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		// Was only roots dropped. Schema 1 had neither column.
@@ -769,12 +1012,13 @@ mod tests {
 			.unwrap();
 		assert_eq!(schema, SCHEMA);
 		close_rw(c).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_2_forward() {
-		let p = temp_db("schema2");
+		let _id = test_id("ddy79");
+		let (_dir, p) = temp_db("schema2");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		c.execute_batch(
@@ -795,12 +1039,13 @@ mod tests {
 			.unwrap();
 		assert_eq!((roots, verify), (b"/a".to_vec(), 0));
 		close_rw(c).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn takes_schema_3_forward() {
-		let p = temp_db("schema3");
+		let _id = test_id("de5k3");
+		let (_dir, p) = temp_db("schema3");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		c.execute_batch(
@@ -826,12 +1071,13 @@ mod tests {
 			.unwrap();
 		assert_eq!(kinds, "b2b-rmlint-mismatch read-error");
 		close_rw(c).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn prune_drops_only_unnamed_contents() {
-		let p = temp_db("prune");
+		let _id = test_id("ddy9e");
+		let (_dir, p) = temp_db("prune");
 		let conn = open_rw(&p).unwrap();
 		conn.execute_batch(
 			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 1), (2, x'02', 2), (3, x'03', 3);
@@ -850,18 +1096,103 @@ mod tests {
 		assert_eq!(ids, [1, 3]);
 		assert_eq!(prune(&conn).unwrap(), 0);
 		close_rw(conn).unwrap();
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+	}
+
+	// .cargo/config.toml's LIBSQLITE3_FLAGS reached the build.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn sqlite_is_built_lean() {
+		let _id = test_id("des6s");
+		assert!(
+			rusqlite::version_number() >= 3_050_003,
+			"{}",
+			rusqlite::version()
+		);
+		init();
+		let c = Connection::open_in_memory().unwrap();
+		let opts: Vec<String> = c
+			.prepare("PRAGMA compile_options")
+			.unwrap()
+			.query_map([], |r| r.get(0))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		for gone in [
+			"ENABLE_FTS3",
+			"ENABLE_FTS5",
+			"ENABLE_RTREE",
+			"ENABLE_LOAD_EXTENSION",
+		] {
+			assert!(!opts.iter().any(|o| o == gone), "{gone} in {opts:?}");
+		}
+		assert!(opts.iter().any(|o| o == "OMIT_LOAD_EXTENSION"), "{opts:?}");
+		for module in ["fts3", "fts4", "fts5", "rtree"] {
+			let err = c
+				.execute_batch(&format!(
+					"CREATE VIRTUAL TABLE v_{module} USING {module}(a)"
+				))
+				.unwrap_err()
+				.to_string();
+			assert!(err.contains("no such module"), "{module}: {err}");
+		}
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn refuses_what_it_didnt_make() {
+		let _id = test_id("des6t");
+		let plants = [
+			"CREATE TRIGGER t AFTER INSERT ON runs BEGIN SELECT 1; END;",
+			"CREATE VIEW v AS SELECT * FROM runs;",
+			"CREATE TABLE extra (a);",
+			"CREATE INDEX extra_i ON files(bytes);",
+			// What a planted FTS5 table looks like to a build that has it.
+			"PRAGMA writable_schema = ON;
+			INSERT INTO sqlite_schema VALUES ('table', 'f', 'f', 0, 'CREATE VIRTUAL TABLE f USING fts5(a)');",
+			// A row can name a known object and still hold something else.
+			"PRAGMA writable_schema = ON;
+			UPDATE sqlite_schema SET sql = 'CREATE  TABLE meta (key TEXT PRIMARY KEY, value) WITHOUT ROWID' WHERE name = 'meta';",
+		];
+		for (n, plant) in plants.iter().enumerate() {
+			let (_dir, p) = temp_db(&format!("vet{n}"));
+			close_rw(open_rw(&p).unwrap()).unwrap();
+			let c = Connection::open(&p).unwrap();
+			c.execute_batch(plant).unwrap();
+			drop(c);
+			for err in [open_rw(&p).unwrap_err(), open_ro(&p).unwrap_err()] {
+				assert!(err.contains("doesn't make"), "{plant}: {err}");
+			}
+		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn schema_is_not_trusted() {
+		let _id = test_id("des6v");
+		let (_dir, p) = temp_db("trust");
+		let trusted = |c: &Connection| -> i64 {
+			c.query_row("PRAGMA trusted_schema", [], |r| r.get(0))
+				.unwrap()
+		};
+		let rw = open_rw(&p).unwrap();
+		assert_eq!(trusted(&rw), 0);
+		// The check reads before a new file's page size is set.
+		let page: i64 = rw.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
+		assert_eq!(page, PAGE_SIZE);
+		assert_eq!(trusted(&open_ro(&p).unwrap()), 0);
+		close_rw(rw).unwrap();
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn refuses_other_schema() {
-		let p = temp_db("schema");
+		let _id = test_id("ddwzt");
+		let (_dir, p) = temp_db("schema");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
 		c.execute("UPDATE meta SET value = 99 WHERE key = 'schema'", [])
 			.unwrap();
 		drop(c);
 		assert!(open_rw(&p).unwrap_err().contains("version"));
-		std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
 	}
 }
