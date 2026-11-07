@@ -234,7 +234,7 @@ RELEASE_CHECKS=(
 	## The release builds aren't the ones stage 4 tested, so the integration
 	## test runs again on the x86_64 one, in the sandbox, and the unit tests on
 	## arm64.
-	'the integration test passes on the x86_64 release build|HOST_TEMP="${release_work}" cicd/utility/sandbox.bash "${release_work}" -- "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
+	'the integration test passes on the x86_64 release build|mkdir -p -- "${release_work}/${APP_NAME}" && HOST_TEMP="${release_work}" cicd/utility/sandbox.bash "${release_work}/${APP_NAME}" -- "${IT_CMD[@]}" "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"'
 	'the unit tests pass on arm64, under qemu|if [[ " ${staged_osarchs[*]} " == *" linux-arm64 "* ]]; then cicd/utility/release-build.bash test aarch64-unknown-linux-gnu; else echo "no arm64 build in this run"; fi'
 )
 
