@@ -72,6 +72,18 @@
 		- Don't move to a buildx builder of the project's own instead. shcl tried that on 2026-11-02. A cold build of a 2 GB image took 299 s against 266 s on the default builder, and the builder kept a second 3 GB copy of the layers for a week. shcl is going back to the default builder. (JC, me)
 	- Estimated effort: Low
 
+- The release check's integration test fails its sandbox probe when `--backlog-run-quick release` runs alone on b23.
+	- ID: 2026110709102100
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261107-091021
+	- Opened by: JC
+	- Expected behavior [Bug]: The release area passes alone, as it does inside a full run.
+	- Actual behavior [Bug]: desk2 fails: the folder it probes is the release work folder, which the sandbox is told to leave writable, so the probe always reads as an escape.
+	- Note: Same failure on `dev` at `dccfc63`, so not from a recent change. Found cutting 1.0.0-beta.1; the package checks and everything else passed.
+	- Estimated effort: Low
+
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
