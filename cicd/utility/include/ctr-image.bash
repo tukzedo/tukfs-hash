@@ -38,8 +38,9 @@
 ##		ctr_step, which the caller sets. cicd.bash removes a run's
 ##		containers by that label at its end.
 ##		A build keeps the new tag and the one before it, once the new one has
-##		answered, and then prunes build cache over a week old and any <none>
-##		image of ours.
+##		answered, and then removes any <none> image of ours. Docker's build
+##		cache is left to the daemon's own gc, since every project shares it.
+##		b23 sets that in /etc/docker/daemon.json, under builder.gc.
 ##		From shcl's cicd/utility/include/ctr-image.bash.
 ##	History: At bottom of script.
 
@@ -134,7 +135,7 @@ fCtrGB(){ awk -v b="${1:-0}" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 
 ## The label is what finds a <none> image of ours, and only ours.
 fCtrBuild(){   ## fCtrBuild TAG DIR
-	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" prev="" id="" have="" bytes=0 freed=0 pruned=""
+	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" prev="" id="" have="" bytes=0 freed=0
 	local -a gone=() args=()
 	fCtrLabels
 	if [[ "${ctr_kind}" == leak ]]; then
@@ -166,14 +167,12 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 		bytes="$(fCtrSize "${old}")"
 		if "${engine}" rmi "${old}" >/dev/null 2>&1; then gone+=("${old}"); freed=$((freed + bytes)); else echo "ctr-image: kept ${old}, which is in use"; fi
 	done < <("${engine}" image ls "${CTR_IMAGE}" --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' 2>/dev/null | LC_ALL=C sort -r || true)
-	## A week of every project's cache stays, since a cold one costs minutes.
-	pruned="$("${engine}" builder prune -f --filter until=168h 2>/dev/null | sed -n 's/^Total\( reclaimed space\)\{0,1\}:[[:space:]]*//p' || true)"
 	while IFS= read -r id; do
 		[[ -n "${id}" ]] || continue
 		bytes="$(fCtrSize "${id}")"
 		if "${engine}" rmi "${id}" >/dev/null 2>&1; then gone+=("<none> ${id:0:12}"); freed=$((freed + bytes)); fi
 	done < <("${engine}" image ls -q --filter dangling=true --filter "label=${CTR_IMAGE}" 2>/dev/null || true)
-	echo "ctr-image: built ${tag} ($(fCtrGB "$(fCtrSize "${tag}")")); kept ${prev:-no older tag}; removed ${gone[*]:-no old image}, freeing $(fCtrGB "${freed}"), and ${pruned:-0B} of build cache"
+	echo "ctr-image: built ${tag} ($(fCtrGB "$(fCtrSize "${tag}")")); kept ${prev:-no older tag}; removed ${gone[*]:-no old image}, freeing $(fCtrGB "${freed}")"
 	return 0
 }
 
@@ -248,3 +247,5 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		  build keeps the tag before the new one, and the cache prune keeps a
 ##		  week.
 ##		- 2026-10-29: The dirty flag goes in with the build number.
+##		- 2026-11-07: No build cache prune. It reached every project's cache,
+##		  and the daemon's gc trims it now.

@@ -60,7 +60,7 @@
 - The pipeline prunes every project's docker build cache
 	- ID: 2026110311291911
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261103-112919
 	- Opened by: JC
@@ -70,7 +70,16 @@
 		- Do it once b23's `/etc/docker/daemon.json` has the `builder.gc` block. `grep -q '"gc"' /etc/docker/daemon.json` checks. Until then the prune stays.
 	- Decisions:
 		- Don't move to a buildx builder of the project's own instead. shcl tried that on 2026-11-02. A cold build of a 2 GB image took 299 s against 266 s on the default builder, and the builder kept a second 3 GB copy of the layers for a week. shcl is going back to the default builder. (JC, me)
+		- No prune on any box, not only b23. A box without `builder.gc` keeps its cache until docker's default gc or a person trims it, since a run can't tell whose cache is whose.
 	- Estimated effort: Low
+	- Progress log:
+		- 2026-11-07: b23's `/etc/docker/daemon.json` has the `builder.gc` block. `fCtrBuild` no longer runs `docker builder prune`, and its line no longer gives a build cache size. It still removes old tags and our `<none>` images by label. design.md "Build and release" says so.
+		- 2026-11-07: Verified: `temp-ctr-check.bash REPO image` passes, and its new case fails on the code from before, which called `builder prune`. `cicd/cicd.bash --backlog-run-quick` passed.
+	- Branch: round-20261108
+	- Test case: none with an ID. `temp-ctr-check.bash REPO image`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `builder`, `buildx`, `system df` and `of build cache` in `cicd/`, `tests/`, `utility/`, design.md, README.md and the private tools. `fCtrBuild` was the only prune. The other match is a lint log from 2026-10-23.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261107-180247
 
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
