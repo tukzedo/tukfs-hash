@@ -625,6 +625,15 @@ pub fn writer(
 /// Writers on these databases panic at their first batch.
 pub static PANIC_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// What the writer still writes. A failure only moves it down, and the first
+/// one's reason stays.
+#[derive(Debug)]
+enum Kept {
+	All,
+	EventsOnly(String),
+	Nothing(String),
+}
+
 fn batches(
 	conn: &mut Connection,
 	run_id: i64,
@@ -633,19 +642,18 @@ fn batches(
 ) -> Result<(), String> {
 	let mut events: Vec<Msg> = Vec::new();
 	let mut rest: Vec<Msg> = Vec::with_capacity(4096);
-	let mut failed: Option<String> = None;
-	let mut events_ok = true;
+	let mut kept = Kept::All;
 	let mut last = Instant::now();
 	loop {
 		let done = match rx.recv_timeout(Duration::from_millis(250)) {
 			Ok(m @ Msg::Event { .. }) => {
-				if events_ok {
+				if !matches!(kept, Kept::Nothing(_)) {
 					events.push(m);
 				}
 				false
 			}
 			Ok(m) => {
-				if failed.is_none() {
+				if matches!(kept, Kept::All) {
 					rest.push(m);
 				}
 				false
@@ -662,22 +670,30 @@ fn batches(
 			{
 				panic!("test fault");
 			}
-			let r = commit(conn, run_id, &mut events);
-			if r.is_err() {
-				events_ok = false;
-			}
-			if let Err(x) = r.and_then(|()| commit(conn, run_id, &mut rest)) {
-				events.clear();
-				rest.clear();
-				if failed.is_none() {
-					failed = Some(format!("database write: {x}"));
+			kept = match (kept, commit(conn, run_id, &mut events)) {
+				(Kept::All, Err(x)) => {
 					halt();
+					Kept::Nothing(format!("database write: {x}"))
 				}
-			}
+				(Kept::EventsOnly(why) | Kept::Nothing(why), Err(_)) => Kept::Nothing(why),
+				(Kept::All, Ok(())) => match commit(conn, run_id, &mut rest) {
+					Ok(()) => Kept::All,
+					Err(x) => {
+						halt();
+						Kept::EventsOnly(format!("database write: {x}"))
+					}
+				},
+				(other, Ok(())) => other,
+			};
+			events.clear();
+			rest.clear();
 			last = Instant::now();
 		}
 		if done {
-			return failed.map_or(Ok(()), Err);
+			return match kept {
+				Kept::All => Ok(()),
+				Kept::EventsOnly(why) | Kept::Nothing(why) => Err(why),
+			};
 		}
 	}
 }
@@ -862,6 +878,44 @@ mod tests {
 		assert_eq!(halts.load(std::sync::atomic::Ordering::Relaxed), 1);
 		let n = |q: &str| -> i64 { conn.query_row(q, [], |r| r.get(0)).unwrap() };
 		assert_eq!(n("SELECT count(*) FROM events"), 2);
+		assert_eq!(n("SELECT count(*) FROM paths"), 0);
+		close_rw(conn).unwrap();
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn a_bad_event_drops_the_rest_for_good() {
+		let _id = test_id("df1pa");
+		let (_dir, p) = temp_db("evfail");
+		let conn = open_rw(&p).unwrap();
+		conn.execute_batch(
+			"CREATE TRIGGER boom BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+		)
+		.unwrap();
+		let halts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+		let halts_seen = halts.clone();
+		let (tx, rx) = sync_channel(16);
+		let t = std::thread::spawn(move || {
+			writer(conn, 1, &rx, move || {
+				halts_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			})
+		});
+		tx.send(hashed(b"/x/a", 1)).unwrap();
+		tx.send(ev(b"/x/b")).unwrap();
+		std::thread::sleep(Duration::from_millis(1500));
+		// Even with the cause gone, nothing more is written.
+		Connection::open(&p)
+			.unwrap()
+			.execute_batch("DROP TRIGGER boom;")
+			.unwrap();
+		tx.send(hashed(b"/x/c", 2)).unwrap();
+		tx.send(ev(b"/x/d")).unwrap();
+		drop(tx);
+		let (conn, r) = t.join().unwrap();
+		assert!(r.unwrap_err().contains("boom"));
+		assert_eq!(halts.load(std::sync::atomic::Ordering::Relaxed), 1);
+		let n = |q: &str| -> i64 { conn.query_row(q, [], |r| r.get(0)).unwrap() };
+		assert_eq!(n("SELECT count(*) FROM events"), 0);
 		assert_eq!(n("SELECT count(*) FROM paths"), 0);
 		close_rw(conn).unwrap();
 	}
