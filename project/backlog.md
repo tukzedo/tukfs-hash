@@ -357,7 +357,7 @@
 - A link at the database's name, `-wal` or `-shm` is refused as "unable to open database file", which doesn't say it's a link.
 	- ID: 2026102822062342
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-220623
 	- Opened by: work on 2026102814341403
@@ -365,6 +365,17 @@
 	- Progress log:
 		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database" rather than the path.
 		- Note: Found while testing 2026102814341403 as root.
+		- 2026-11-08: `open_rw` checks the database's name, `-wal` and `-shm` for a link before SQLite opens it, and refuses one as `<path>: is a symbolic link; refused`, as the lock does. `open_ro` checks only the name, since a read only open makes neither WAL file. design.md, "Database", says so.
+		- Verified: `df1qd` fails with the checks taken out ("unable to open database file") and passes with them. `df1qe` fails against the build from before ("0100") and passes after. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD. The user-namespace root stand-in passed.
+	- Decisions:
+		- A check by name before the open gives the message. `SQLITE_OPEN_NOFOLLOW` and SQLite's own `O_NOFOLLOW` on the WAL files still do the refusing, so a link swapped in after the check is refused too, with the old message.
+		- The other `database:` prefixes stay. With the link named up front they no longer come from a link, and every command uses the same prefix for its database errors.
+	- Actual effort: Low
+	- Branch: round-20261108b
+	- Test case: `df1qd` (unit, a link at each of the 3 names refused by name, nothing made), `df1qe` (integration step 24, each of the 4 links named in `prune`'s refusal).
+	- Swept: `open_rw` and `open_ro` are the only SQLite opens outside the tests, and `scan::lock` already named its link. `hand_over` says "it's a symbolic link". `sudo-links-standin.bash` passed with no change.
+	- Acceptance signoff: Self-closed: the refusal now names the link, and the tests fail before and pass after.
+	- Closed: 20261108-132552
 
 - The scan opens each file twice, once to stat it and once to read it, though the first is only needed when the file might be skipped.
 	- ID: 2026110715441807

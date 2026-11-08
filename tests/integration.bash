@@ -790,6 +790,13 @@ check dejdq "sudo prune, database name a link" "$(ln_case "" db)" "1 none"
 check dejdr "sudo prune, lock a link" "$(ln_case .lock link)" "1 none"
 check dejds "sudo prune, -wal a link" "$(ln_case -wal link)" "1 none"
 check dejdt "sudo prune, -shm a link" "$(ln_case -shm link)" "1 none"
+# Each refusal names the link, where SQLite said only "unable to open database file"
+# (2026102822062342).
+lnSaid=''
+for sfx in '' .lock -wal -shm; do
+	lnSaid+="$(grep -cF "${work}/ln${sfx:-db}/t.sqlite${sfx}: is a symbolic link; refused" "${work}/ln${sfx:-db}/out.txt" || true)"
+done
+check df1qe "sudo prune, each link named" "${lnSaid}" 1111
 
 # 25. A mount that's been mounted over is gone from the walk's view, and so is
 # what's mounted on it (2026102814341407). In a user namespace, as step 23.
@@ -1028,3 +1035,4 @@ fi
 ##		  refused.
 ##		- 20261108: A database left by a first scan that filled the disk.
 ##		- 20261108: accept of a name no scan knows.
+##		- 20261108: A link at the database's names is named in the refusal.

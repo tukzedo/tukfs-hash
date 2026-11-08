@@ -48,7 +48,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The folder walk looks up each file's row before it queues the file, 256 at a time in one read transaction. A transaction per lookup cost most of the lookup, about a sixth of the CPU on small files. Each batch ends before it waits on the queue, so it doesn't keep the writer from checkpointing for long.
 
-- Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
+- Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The refusal names the link. A command that only reads checks the database's own name, since it makes neither WAL file. The handover goes by an fd opened without following links, and only for regular files.
 
 - Every open checks the schema first, and refuses anything the program doesn't make, such as a trigger, a view or a virtual table, without reading further. `trusted_schema` is off on every connection. Under sudo the file is one its user can write, so nothing in it should run code the program didn't put there (2026102814341423).
 

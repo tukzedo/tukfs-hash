@@ -151,6 +151,21 @@ pub fn init() {
 	});
 }
 
+/// SQLite refuses a link at any of these names with only "unable to open
+/// database file", and at `-wal` or `-shm` not until the first write, so it's
+/// named first. The lock file says the same in `scan::lock`.
+fn refuse_links(path: &Path, suffixes: &[&str]) -> Result<(), String> {
+	for sfx in suffixes {
+		let mut s = path.as_os_str().to_owned();
+		s.push(sfx);
+		let p = Path::new(&s);
+		if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+			return Err(format!("{}: is a symbolic link; refused", p.display()));
+		}
+	}
+	Ok(())
+}
+
 fn no_tables(conn: &Connection) -> rusqlite::Result<bool> {
 	conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
 		r.get::<_, i64>(0)
@@ -161,6 +176,7 @@ fn no_tables(conn: &Connection) -> rusqlite::Result<bool> {
 /// Opens the database to write, creating it if needed.
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
+	refuse_links(path, &["", "-wal", "-shm"])?;
 	// A link at the name is refused. SQLite opens `-wal` and `-shm` with
 	// O_NOFOLLOW already, so under sudo nothing is made through a link.
 	let mut conn =
@@ -259,6 +275,9 @@ pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 /// Opens the database read only, for a worker's lookups.
 pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	init();
+	// A read only open makes neither WAL file, so links there aren't its
+	// business.
+	refuse_links(path, &[""])?;
 	let conn = Connection::open_with_flags(
 		path,
 		OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -1283,6 +1302,33 @@ mod tests {
 		let want = |v: &str| format!("tables are version {v}, this program knows {SCHEMA}");
 		assert!(refused("UPDATE meta SET value = 99").ends_with(&want("99")));
 		assert!(refused("DELETE FROM meta").ends_with(&want("none")));
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn a_link_is_named() {
+		let _id = test_id("df1qd");
+		let (dir, p) = temp_db("links");
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		for sfx in ["", "-wal", "-shm"] {
+			let at = dir.join(format!("t.sqlite{sfx}"));
+			let aside = dir.join("aside.sqlite");
+			if sfx.is_empty() {
+				std::fs::rename(&p, &aside).unwrap();
+			}
+			std::os::unix::fs::symlink(dir.join("target"), &at).unwrap();
+			let want = format!("{}: is a symbolic link; refused", at.display());
+			assert_eq!(open_rw(&p).unwrap_err(), want);
+			if sfx.is_empty() {
+				assert_eq!(open_ro(&p).unwrap_err(), want);
+			}
+			std::fs::remove_file(&at).unwrap();
+			if sfx.is_empty() {
+				std::fs::rename(&aside, &p).unwrap();
+			}
+			assert!(!dir.join("target").exists());
+		}
+		close_rw(open_rw(&p).unwrap()).unwrap();
 	}
 
 	#[test]
