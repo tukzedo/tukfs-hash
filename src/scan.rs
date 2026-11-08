@@ -287,6 +287,9 @@ struct Shared {
 	run_id: i64,
 	cutoff_us: i64,
 	db: PathBuf,
+	// The database's folder by device and inode, since a bind mount can show
+	// it to a root's walk under another name.
+	db_dir: (u64, u64),
 	excludes: Vec<PathBuf>,
 	no_xattr: Vec<PathBuf>,
 	mount_points: BTreeMap<PathBuf, String>,
@@ -562,6 +565,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
 	let _lock = lock(&db_path, &mounts)?;
+	let db_dir = db_dir(&db_path)?;
 	let conn = db::open_rw(&db_path)?;
 	let open_misses = db::open_misses(&conn)?;
 
@@ -589,6 +593,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		// is later than when the run began.
 		cutoff_us: cutoff_us.min(run_started),
 		db: db_path.clone(),
+		db_dir,
 		excludes: o
 			.excludes
 			.iter()
@@ -902,10 +907,17 @@ fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
 	);
 }
 
-// The database, its journal files and its lock. Anything else that only
-// starts with its name is read like any other file.
-fn excluded(sh: &Shared, p: &Path) -> bool {
-	let own = p.parent() == sh.db.parent()
+fn db_dir(db: &Path) -> Result<(u64, u64), String> {
+	let dir = db.parent().unwrap_or(Path::new("/"));
+	fs::metadata(dir)
+		.map(|m| (m.dev(), m.ino()))
+		.map_err(|e| format!("database folder {}: {e}", dir.display()))
+}
+
+// The database, its journal files and its lock, in its folder under any name.
+// Anything else that only starts with its name is read like any other file.
+fn excluded(sh: &Shared, p: &Path, in_db_dir: bool) -> bool {
+	let own = in_db_dir
 		&& p.file_name().zip(sh.db.file_name()).is_some_and(|(n, d)| {
 			n.as_bytes()
 				.strip_prefix(d.as_bytes())
@@ -1007,12 +1019,15 @@ fn list_dir(
 ) -> Result<Option<Frame>, Closed> {
 	let opened = root
 		.open_at(root.rel(&dir), libc::O_RDONLY | libc::O_DIRECTORY)
-		.and_then(|f| Ok((f.metadata()?.dev(), f)));
-	let list = match opened.and_then(|(dev, f)| Ok((dev, beneath::List::new(f)?))) {
+		.and_then(|f| {
+			let m = f.metadata()?;
+			Ok(((m.dev(), m.ino()), f))
+		});
+	let (id, list) = match opened.and_then(|(id, f)| Ok((id, beneath::List::new(f)?))) {
 		// A btrfs subvolume, or something mounted since the scan began. The
 		// mount table only knows what was there at the start.
-		Ok((dev, _)) if dev != root.dev => return Ok(None),
-		Ok((_, l)) => l,
+		Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
+		Ok(got) => got,
 		Err(e) if beneath::moved(&e) => return Ok(None),
 		Err(e) => {
 			stats.other_err.fetch_add(1, Relaxed);
@@ -1062,7 +1077,7 @@ fn list_dir(
 			continue;
 		}
 		let p = dir.join(&*ent.name);
-		if sh.mount_points.contains_key(&p) || excluded(sh, &p) {
+		if sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
 			continue;
 		}
 		if is_dir {
@@ -2007,6 +2022,7 @@ mod tests {
 			faults: Arc::default(),
 			run_id: 1,
 			cutoff_us: 0,
+			db_dir: db_dir(&db).unwrap_or_default(),
 			db,
 			excludes: Vec::new(),
 			no_xattr: Vec::new(),
@@ -2291,7 +2307,7 @@ mod tests {
 	fn only_the_databases_own_names_are_left_out() {
 		let _id = test_id("des63");
 		let (sh, _rx) = test_shared(PathBuf::from("/x/tree/tuk"));
-		let out = |name: &str| excluded(&sh, &Path::new("/x/tree").join(name));
+		let out = |name: &str| excluded(&sh, &Path::new("/x/tree").join(name), true);
 		for name in ["tuk", "tuk-wal", "tuk-shm", "tuk-journal", "tuk.lock"] {
 			assert!(out(name), "{name}");
 		}
@@ -2307,9 +2323,48 @@ mod tests {
 			assert!(!out(name), "{name}");
 		}
 		assert!(
-			!excluded(&sh, Path::new("/x/tree/sub/tuk")),
+			!excluded(&sh, Path::new("/x/tree/sub/tuk"), false),
 			"another folder"
 		);
+	}
+
+	// The database's folder is known by device and inode, so a walk that
+	// reaches it under another name, as through a bind mount, leaves its
+	// names out there too, and a same name elsewhere is read.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn the_database_folder_under_another_name() {
+		let _id = test_id("df0qg");
+		let d = scratch("scan_dbdirid");
+		let tree = fs::canonicalize(&*d).unwrap().join("tree");
+		let sub = tree.join("sub");
+		fs::create_dir_all(&sub).unwrap();
+		for name in [
+			"t.sqlite",
+			"t.sqlite-wal",
+			"t.sqlite.lock",
+			"t.sqlite-notes",
+			"f",
+		] {
+			fs::write(sub.join(name), "x").unwrap();
+		}
+		fs::write(tree.join("t.sqlite"), "x").unwrap();
+		let look = db::open_rw(&d.join("look.sqlite")).unwrap();
+		let (mut sh, rx) = test_shared(d.join("elsewhere/t.sqlite"));
+		sh.db_dir = db_dir(&sub.join("t.sqlite")).unwrap();
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let (jtx, jrx) = sync_channel(64);
+		walk(&tree, &sh, &Stats::default(), &look, &jtx);
+		drop((jtx, sh));
+		drain.join().unwrap();
+		let jobs: BTreeSet<PathBuf> = jrx.iter().map(|j| j.path).collect();
+		let want: BTreeSet<PathBuf> = [
+			sub.join("f"),
+			sub.join("t.sqlite-notes"),
+			tree.join("t.sqlite"),
+		]
+		.into();
+		assert_eq!(jobs, want);
 	}
 
 	// design.md, Attributes: none in a git work tree, however deep the root.

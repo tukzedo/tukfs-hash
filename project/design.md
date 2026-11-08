@@ -52,7 +52,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Every open checks the schema first, and refuses anything the program doesn't make, such as a trigger, a view or a virtual table, without reading further. `trusted_schema` is off on every connection. Under sudo the file is one its user can write, so nothing in it should run code the program didn't put there (2026102814341423).
 
-- A database inside a root leaves out only its own names, the file and its `-wal`, `-shm`, `-journal` and `.lock`. Anything else beside it is read, whatever its name starts with.
+- A database inside a root leaves out only its own names, the file and its `-wal`, `-shm`, `-journal` and `.lock`. Anything else beside it is read, whatever its name starts with. Its folder is known by device and inode, so a walk that reaches it under another name, such as through a bind mount, leaves them out there too.
 
 - WAL while running, rollback mode after, so a user without write access to the folder can still open it read-only. Leaving WAL mode needs the file to itself. When something else has it open, the run warns and keeps its result, and the next run tries again.
 

@@ -813,7 +813,8 @@ else
 fi
 # A bind mount of a folder inside another root is that root's folder, wherever
 # it's mounted, so it isn't read twice (2026102814341414). One of a folder
-# outside the roots is read.
+# outside the roots is read. A database reached through such a mount still
+# leaves out only its own names in the root's walk (2026110719570617).
 cat > "${ns}/bind.bash" << 'EOF2'
 cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
 for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
@@ -823,6 +824,8 @@ mount --bind c/tree/sub c/bind && mount --bind c/tree/s2 c/tree/b && mount --bin
 rc=0; "${2}" scan --db c.sqlite --root c/tree --root c/bind --root c/tree/b --root c/ob --progress 3600 > c.out 2>&1 || rc=$?
 echo "${rc} $(grep -o 'files [0-9]* hashed [0-9]*' c.out | head -1)" > c.got
 grep -c '^skipping root .*: inside .*/c/tree, as .*/c/tree/s' c.out > c.skips
+rc=0; "${2}" scan --db c/bind/d.sqlite --root c/tree --progress 3600 > d.out 2>&1 || rc=$?
+echo "${rc}" > d.got
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -830,12 +833,16 @@ fi
 if [[ "${nsfs}" == zfs ]]; then
 	skip df0qc "bind mount of a folder inside another root read once (ZFS pools aren't seen from a user namespace)"
 	skip df0qd "bind mounts inside another root named as skipped (ZFS pools aren't seen from a user namespace)"
+	skip df0qh "database through a bind mount: own names left out, no attributes (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
+	dd="${ns}/c/tree/sub/d.sqlite"
+	check df0qh "database through a bind mount: own names left out, no attributes" "$(cat "${ns}/d.got") $(sqlite3 "${dd}" 'SELECT count(*) FROM paths') $(sqlite3 "${dd}" "SELECT count(*) FROM paths WHERE path LIKE '%/d.sqlite%'") $(xget "${dd}" user.blake3.b64u)" "0 6 0 "
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
+	skip df0qh "database through a bind mount: own names left out, no attributes (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
@@ -954,4 +961,5 @@ fi
 ##		  that fails partway leaves it for the next run's sweep.
 ##		- 20261108: TUKFS_IT_BTRFS gives step 27 a work folder on btrfs, and a
 ##		  subvolume a stop left behind is removed with its folder.
-##		- 20261108: A bind mount of a folder inside another root.
+##		- 20261108: A bind mount of a folder inside another root, and a
+##		  database reached through one.
