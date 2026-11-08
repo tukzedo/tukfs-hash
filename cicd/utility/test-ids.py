@@ -30,7 +30,9 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime
+from enum import Enum, auto
 from pathlib import Path
+from typing import NamedTuple
 
 DIGITS = "0123456789abcdefghjkmnpqrstvwxyz"
 EPOCH_2000 = 946684800
@@ -91,18 +93,33 @@ RUST_MOD = re.compile(r"^(\s*)(?:pub\s+)?mod\s+(\w+)\s*\{")
 RUST_FN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)")
 
 
+class Lex(Enum):
+    CODE = auto()
+    SQ = auto()
+    DQ = auto()
+    SUB = auto()  # $( ) or ( )
+
+
+class Found(NamedTuple):
+    tid: str
+    file: str
+    line_no: int
+    suite: str  # "" for one in no suite
+    name: str
+
+
 ##	The script's lines with only its code left, each the same length as
 ##	before: quoted text and heredoc bodies become "_", comments become spaces.
 ##	A $( ) inside double quotes stays code. Close enough for bash as this
 ##	project writes it, not a full parser.
 def fShellCode(text: str) -> list[str]:
     out = list(text)
-    stack = ["code"]
+    stack = [Lex.CODE]
     heredocs: list[tuple[str, bool]] = []
     i, size = 0, len(text)
     while i < size:
         c, top = text[i], stack[-1]
-        if c == "\n" and top != "sq":
+        if c == "\n" and top is not Lex.SQ:
             i += 1
             for word, tabs in heredocs:
                 while i < size:
@@ -115,16 +132,16 @@ def fShellCode(text: str) -> list[str]:
                         break
             heredocs = []
             continue
-        if top == "sq":
+        if top is Lex.SQ:
             if c == "'":
                 stack.pop()
             elif c != "\n":
                 out[i] = "_"
-        elif top == "dq":
+        elif top is Lex.DQ:
             if c == '"':
                 stack.pop()
             elif text.startswith("$(", i):
-                stack.append("sub")
+                stack.append(Lex.SUB)
                 i += 1
             elif c != "\n":
                 out[i] = "_"
@@ -134,9 +151,9 @@ def fShellCode(text: str) -> list[str]:
         elif c == "\\":
             i += 1
         elif c == "'":
-            stack.append("sq")
+            stack.append(Lex.SQ)
         elif c == '"':
-            stack.append("dq")
+            stack.append(Lex.DQ)
         elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
             end = text.find("\n", i)
             end = size if end < 0 else end
@@ -144,8 +161,8 @@ def fShellCode(text: str) -> list[str]:
             i = end
             continue
         elif c == "(":
-            stack.append("sub")
-        elif c == ")" and top == "sub":
+            stack.append(Lex.SUB)
+        elif c == ")" and top is Lex.SUB:
             stack.pop()
         elif c == "<" and (doc := HEREDOC.match(text, i)) and not text.startswith("<<<", i):
             heredocs.append((doc.group(3), doc.group(1) == "-"))
@@ -171,8 +188,8 @@ def fRustName(rel: str, lines: list[str], test_at: int, fn_at: int) -> str:
     return "::".join([*parts, *mods, fn.group(1) if fn else "?"])
 
 
-def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
-    found: list[tuple[str, str, int, str, str]] = []
+def fScan() -> tuple[list[Found], list[str]]:
+    found: list[Found] = []
     bad: list[str] = []
 
     main_rs = repo / "src/main.rs"
@@ -195,7 +212,7 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
             if hit is None:
                 bad.append(f"{rel}:{n + 1}: a test with no ID line under its fn line")
                 continue
-            found.append((hit.group(1), rel, m + 2, suite, fRustName(rel, lines, n, m)))
+            found.append(Found(hit.group(1), rel, m + 2, suite, fRustName(rel, lines, n, m)))
 
     tracked = (
         subprocess.run(["git", "-C", str(repo), "ls-files", "-z"], capture_output=True, check=True)
@@ -227,13 +244,13 @@ def fScan() -> tuple[list[tuple[str, str, int, str, str]], list[str]]:
                 text = name.group(1) if name else "?"
                 if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'":
                     text = text[1:-1]
-                found.append((first, IT_FILE, n + 1, "it", text))
+                found.append(Found(first, IT_FILE, n + 1, "it", text))
         bad.extend(
             f"{IT_FILE}:{n + 1}: a {hit.group(1)} this check can't read; start a statement with it, or quote it"
             for hit in IT_ANY.finditer(code)
             if hit.start(1) not in seen
         )
-    have = {tid for tid, *_ in found}
+    have = {f.tid for f in found}
     for tid, file, line_no in skips:
         if tid not in have:
             bad.append(f"{file}:{line_no}: skip {tid} is no check's ID")
@@ -244,8 +261,8 @@ def fCheck() -> int:
     found, bad = fScan()
     now = (time.time() - EPOCH_2000 + 86400) // 60
     first: dict[str, str] = {}
-    for tid, file, line_no, *_ in found:
-        at = f"{file}:{line_no}"
+    for f in found:
+        tid, at = f.tid, f"{f.file}:{f.line_no}"
         if tid in first:
             bad.append(f"{at}: ID {tid} is already used at {first[tid]}")
             continue
@@ -266,7 +283,7 @@ def fCheck() -> int:
 
 
 def fNew(count: int) -> int:
-    used = {tid for tid, *_ in fScan()[0]}
+    used = {f.tid for f in fScan()[0]}
     mins = int(time.time() - EPOCH_2000) // 60
     while count:
         tid = encode(mins)
@@ -298,7 +315,7 @@ def main() -> int:
         found = fScan()[0]
         rc = 0
         for tid in rest:
-            hits = [f"{file}:{line_no}" for t, file, line_no, *_ in found if t == tid]
+            hits = [f"{f.file}:{f.line_no}" for f in found if f.tid == tid]
             if not hits:
                 print(f"{tid}  not found", file=sys.stderr)
                 rc = 1
@@ -308,9 +325,9 @@ def main() -> int:
     if cmd == "check" and not rest:
         return fCheck()
     if cmd == "list" and len(rest) <= 1 and all(a in SUITES for a in rest):
-        for tid, _, _, suite, name in fScan()[0]:
-            if suite and (not rest or suite == rest[0]):
-                print(f"{tid} {name}")
+        for f in fScan()[0]:
+            if f.suite and (not rest or f.suite == rest[0]):
+                print(f"{f.tid} {f.name}")
         return 0
     print(f"test-ids: bad arguments: {' '.join(args)} (try --help)", file=sys.stderr)
     return 2
@@ -328,3 +345,5 @@ if __name__ == "__main__":
 ##		2026-10-25  list, for cicd.bash --list.
 ##		2026-10-28  Every pattern compiled.
 ##		2026-10-28  Flags a test attribute or a check call it can't read.
+##		2026-11-08  The lexer's states are an Enum, and what fScan finds a
+##		            NamedTuple.

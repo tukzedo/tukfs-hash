@@ -327,6 +327,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. No Pillow or font is a warning, and the run goes on.
 
+- A key the scenario doesn't know, such as a misspelled `pause`, fails the stage, and so does a value of the wrong type. Otherwise the step would fall back to the default without a word.
+
 - Every frame time is a whole number of 20 ms frames, 50 fps, which is checked after the gif is written.
 
 - Each render is GFS-rotated into `../private/demo/gif/`, outside the repo. `private` is a link, so it's resolved first, and a link below it fails the stage.

@@ -287,7 +287,7 @@
 - `test-ids.py` uses strings for its lexer states and reads a 5-field tuple by position.
 	- ID: 2026110715441804
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 5
@@ -296,6 +296,17 @@
 	- Expected behavior [Bug]: Python style: an Enum for a fixed set of values, adn dataclasses for data.
 	- Probable fix [Bug]: An Enum for the states, and a NamedTuple for what `fScan` finds.
 	- Related IDs: 2026102808215658, 2026102814341440
+	- Progress log:
+		- 2026-11-08: The lexer's states are the `Lex` Enum, and `fScan` returns `Found` NamedTuples, read by name at every site.
+		- 2026-11-08: Verified: `list`, `list unit`, `list it`, `check` and `find` print the same as the script from before, and `check` takes the same CPU time. `test-ids-check.bash REPO` passes. ruff, its format check and mypy pass.
+	- Decisions:
+		- A NamedTuple, as the item's fix says, since it's a fixed record that is still built by position. The 3-field skip tuple stays, since it's built and read in one function.
+	- Swept: every `found` and `fScan` use in `test-ids.py`, and its callers in `cicd/config.bash` and the private flags check, which read only its output.
+	- Actual fix [Bug]: `Lex` Enum for the lexer's stack, `Found` NamedTuple for `fScan`'s results.
+	- Branch: round-20261108
+	- Test case: none with an ID, since no behavior changed. The check is the same output from the old and new scripts, and `test-ids-check.bash REPO`.
+	- Acceptance signoff: Self-closed: no change in behavior, and the same output as before.
+	- Closed: 20261107-192538
 
 - `sandbox.bash`'s header repeats design.md's "Test sandbox" before pointing to it.
 	- ID: 2026110715441805
@@ -486,7 +497,7 @@
 - The demo gif's scenario takes any key, so a misspelled one is ignored without a word.
 	- ID: 2026110715441811
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 12
@@ -494,6 +505,19 @@
 	- Requirements [Feature]:
 		- Dataclasses for the scenario and its steps, refusing unknown keys.
 		- `fontsize` is read but missing from the keys listed in `load_scenario`'s comment.
+	- Progress log:
+		- 2026-11-08: The scenario loads into `Scenario`, `Step` and `MapRule` dataclasses. An unknown key at any level fails the render and names the nearest known key, such as `no such key: pasue (meant pause?)`. A value of the wrong type fails too. `fontsize` is in the comment, and design.md's "Demo gif" says so.
+		- 2026-11-08: Verified: the private `scenario-keys-check.py` passes 16 of 16. On the script from before, its 9 refusal cases fail. The repo's scenario draws the same bytes as before, both outside and inside the sandbox. `demo-pin-check.bash`, `demo-leak-check.py` and `gifsicle-fail-check.py` pass. `--backlog-run-quick` passed in 1m 50s.
+	- Decisions:
+		- A value of the wrong type is refused too, such as `pause = "2"` or `recall = 1`. A whole number is taken where a decimal one is expected. The old script turned strings into numbers, but the repo's scenario has none.
+		- `overflow` takes only `wrap` or `truncate`, since any other word fell back to wrapping without a word, the same as a misspelled key.
+		- `note` and `font` each take one string or a list. `font` as one string used to be split into letters.
+		- Each table is read a key at a time, and what's left is refused. That keeps every default in one place, the loader.
+	- Swept: every `sc` and `step` read in `gen-demo-gif.py`, and the private tools that load it. `demo-leak-check.py` and `gifsicle-fail-check.py` needed the module in `sys.modules` for the dataclasses, and the leak check now builds a `Scenario`.
+	- Branch: round-20261108
+	- Test case: the private `scenario-keys-check.py GEN_DEMO_GIF_PY WORKDIR`, no test ID, since the pipeline's Python has none. It fails on the script from before.
+	- Acceptance signoff: Self-closed: a check-tool change, with its check failing on the code from before and the gif unchanged.
+	- Closed: 20261107-192538
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
