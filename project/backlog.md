@@ -359,13 +359,21 @@
 - The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
 	- ID: 2026102814341442
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 42
 	- Origin: none. design.md claims each.
 	- Requirements [Feature]:
 		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+	- Actual effort: Low
+	- Decisions:
+		- The live file is grown a byte at a time while it's read, since a size change shows at once, where a coarse ctime might not move during a short read.
+	- Branch: round-20261108b
+	- Test case: df1rj (unstable, exit 0) and df1rk (xattr-error on a 0444 file, exit 0) in step 32 of tests/integration.bash, and df1rm (no attributes on a new file after --verify) in step 17. df1rk skips where a 0444 file takes attributes, such as under root.
+	- Verified: all 3 pass on ext4 and ZFS, by hand and in the quick gate's sandbox. Each fails when what it watches is taken away: no --verify, no appender, a writable file.
+	- Swept: design.md's exit table. `cache-mismatch`, `read-error` and `read-unsupported` still have no integration check, since each needs a failing disk, a page cache that disagrees with it, or a driver like ntfs3.
+	- Closed: 20261108-134458
 
 - A link at the database's name, `-wal` or `-shm` is refused as "unable to open database file", which doesn't say it's a link.
 	- ID: 2026102822062342

@@ -618,6 +618,7 @@ k1c="$(stat -c %z "${vt}/k1")"
 check ddy9j "verify: exit and reads" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "4 hashed 2"
 check ddy9k "verify: only the damaged file flagged" "$(vq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY kind)")" "b3-db-mismatch ${vt}/k2, b3-xattr-mismatch ${vt}/k2"
 check ddy9m "verify: new file not recorded" "$(vq "SELECT count(*) FROM paths WHERE path = '${vt}/n1'")" 0
+check df1rm "verify: no attributes on a new file" "$(getfattr -d -m '^user\.(blake3|rmlint)\.' --absolute-names "${vt}/n1" 2> /dev/null || true)" ""
 check ddy9n "verify: no attribute written" "$(stat -c %z "${vt}/k1")" "${k1c}"
 check ddy9p "verify: edited file's row left for the next scan" "$(vq "SELECT bytes FROM paths WHERE path = '${vt}/k3'")" 8
 check ddy9q "verify: every known name seen" "$(vq 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
@@ -967,6 +968,32 @@ cp "${db}" "${an}/t.sqlite"; printf 'n\n' > "${an}/new.txt"
 rc=0; "${bin}" accept --db "${an}/t.sqlite" "${an}/new.txt" "${tree}/small.txt" > "${an}/out.txt" 2>&1 || rc=$?
 check df1qc "accept of a name no scan knows says so" "${rc} $(grep -c 'no scan has a record under this name' "${an}/out.txt")" "0 1"
 
+# 32. A file that changes while it's read, and an attribute that can't be
+# written, are reported and set no exit bit (design.md, Runs and exit codes).
+us="${work}/us"; mkdir -p "${us}"
+head -c 1000000 /dev/urandom > "${us}/live"
+# Appends a byte at a time, so the size moves under every read.
+python3 -I -c '
+import os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND)
+while True:
+	os.write(fd, b"x")
+' "${us}/live" &
+appender=$!
+for ((i = 0; i < 200; i++)); do [[ "$(stat -c %s "${us}/live")" -gt 1000000 ]] && break; sleep 0.05; done
+rc=0; "${bin}" scan --db "${work}/db/us.sqlite" --root "${us}" --no-xattrs --progress 3600 > "${work}/us.txt" 2>&1 || rc=$?
+kill "${appender}"; wait "${appender}" 2> /dev/null || true
+check df1rj "a file changing while read: reported, exit 0" "${rc} $(sqlite3 "${work}/db/us.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 unstable ${us}/live"
+ro="${work}/ro"; mkdir -p "${ro}"
+printf 'read only\n' > "${ro}/f"; chmod 444 "${ro}/f"
+# Root, or a sandbox that kept its capabilities, can write it anyway.
+if setfattr -n user.tukfs-probe -v 1 "${ro}/f" 2> /dev/null; then
+	skip df1rk "an attribute that can't be written: reported, exit 0 (a 0444 file takes attributes here)"
+else
+	rc=0; "${bin}" scan --db "${work}/db/ro.sqlite" --root "${ro}" --progress 3600 > "${work}/ro.txt" 2>&1 || rc=$?
+	check df1rk "an attribute that can't be written: reported, exit 0" "${rc} $(sqlite3 "${work}/db/ro.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 xattr-error ${ro}/f"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -1036,3 +1063,5 @@ fi
 ##		- 20261108: A database left by a first scan that filled the disk.
 ##		- 20261108: accept of a name no scan knows.
 ##		- 20261108: A link at the database's names is named in the refusal.
+##		- 20261108: A file that changes while read, an attribute that can't be
+##		  written, and no attributes on a new file after --verify.
