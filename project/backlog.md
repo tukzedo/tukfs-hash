@@ -115,7 +115,7 @@
 - `--exclude` and `--no-xattr` miss a folder that a root's walk reaches under another name, such as through a bind mount.
 	- ID: 2026110720070507
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-200705
 	- Opened by: 2026110719570617's sweep
@@ -127,6 +127,20 @@
 	- Probable fix [Bug]: Keep each folder's device and inode as well as its path. The walk knows each folder's from its fd, as `excluded` now uses for the database's folder, and `--no-xattr` passes down the frames as `in_git` does.
 	- Note: Decide first whether a path given by the user should match another name of the same folder. The `--threads` case in 2026102814341414 was left as is.
 	- Decisions: Match by device and inode, the same as the database's folder since 2026110719570617. The help text promises no attributes under a folder and no walk into it, and a second name for the folder doesn't change that intent. Writing where told not to is the worse failure. --threads stays by path, since it only sets worker counts.
+		- A file in a `--no-xattr` folder that's hard-linked from outside it can still get attributes through the outside name, as before. Finding those would mean walking every such folder first.
+		- An excluded folder that can't be opened, reached only under another name, still gives a `dir-error`, since its device and inode come from the open.
+	- Actual cause [Bug]: The walk matched `--exclude` and `--no-xattr` only by path, so a folder reached under another path, as through a bind mount, didn't match.
+	- Actual fix [Bug]:
+		- The scan takes the device and inode of each path given to `--exclude` and `--no-xattr` before it starts. The walk compares each folder's, from its fd, so an excluded folder isn't listed, and a `--no-xattr` one marks everything under it, as a git work tree does.
+		- A root inside one of them under another name is found by its parent folders. A file given to `--no-xattr` gets no attributes under any name, a hard link included.
+		- The path rules stay, so a folder given by its own path still isn't opened. design.md, "Reading files", says so.
+	- Branch: round-20261108b
+	- Commit: `91439f1`
+	- Test case: `df1ng` (unit, a walk and roots that reach the folders by another path), `df1nh` (unit, a hard link to a `--no-xattr` file), `df1nj` and `df1nk` (integration step 25, in a user namespace, skipped on ZFS).
+	- Verified: `df1nj` and `df1nk` fail against the build from before the fix (attributes under the bind mount's folder, and "files 3" and "files 1" where the excluded folder should leave 1 and 0) and pass after on ext4. `df1ng` and `df1nh` fail with the new checks taken out and pass after. `--backlog-run-quick` passed in 2m 22s, and its `miri` area in 51s.
+	- Swept: `walk`, `list_dir` and `write_attrs` are the only places that read `--exclude` and `--no-xattr`. `gone` doesn't know `--exclude`, so the folder counts as not seen under either name, as design.md says. `--threads` stays by path, per Decisions.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after. The flags' public behavior changes, so it's in questions.md as a Check.
+	- Closed: 20261108-121253
 
 - Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
 	- ID: 2026110715441800
