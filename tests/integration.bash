@@ -811,6 +811,32 @@ else
 	skip des5j "walk under a mount that's been mounted over (no user namespace here)"
 	skip des5k "root's type from the mount on top (no user namespace here)"
 fi
+# A bind mount of a folder inside another root is that root's folder, wherever
+# it's mounted, so it isn't read twice (2026102814341414). One of a folder
+# outside the roots is read.
+cat > "${ns}/bind.bash" << 'EOF2'
+cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
+for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
+printf 't\n' > c/tree/top; printf 'g\n' > c/tree/s2/g; printf 'o\n' > c/out/f
+mount --bind c/tree/sub c/bind && mount --bind c/tree/s2 c/tree/b && mount --bind c/out c/ob || exit 1
+: > bind.mounted
+rc=0; "${2}" scan --db c.sqlite --root c/tree --root c/bind --root c/tree/b --root c/ob --progress 3600 > c.out 2>&1 || rc=$?
+echo "${rc} $(grep -o 'files [0-9]* hashed [0-9]*' c.out | head -1)" > c.got
+grep -c '^skipping root .*: inside .*/c/tree, as .*/c/tree/s' c.out > c.skips
+EOF2
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip df0qc "bind mount of a folder inside another root read once (ZFS pools aren't seen from a user namespace)"
+	skip df0qd "bind mounts inside another root named as skipped (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/bind.mounted" ]]; then
+	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
+	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
+else
+	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
+	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
+fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
 # real error, and leaves no database behind (2026102814341406).
@@ -928,3 +954,4 @@ fi
 ##		  that fails partway leaves it for the next run's sweep.
 ##		- 20261108: TUKFS_IT_BTRFS gives step 27 a work folder on btrfs, and a
 ##		  subvolume a stop left behind is removed with its folder.
+##		- 20261108: A bind mount of a folder inside another root.

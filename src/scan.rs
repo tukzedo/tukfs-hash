@@ -338,14 +338,14 @@ pub struct Plan {
 	pub mounts: Vec<mounts::Mount>,
 }
 
-/// Roots that resolve to the same place, or sit inside another root on the same
-/// mount and device, are dropped, so nothing is read twice. Bind mounts are the
-/// usual cause here.
+/// Roots that resolve to the same place, or whose folder another root's walk
+/// reaches, are dropped, so nothing is read twice. Bind mounts are the usual
+/// cause here.
 pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, String> {
 	let mounts = mounts::read_mounts()?;
 	let mut dropped = Vec::new();
 	let mut unresolved = Vec::new();
-	let mut kept: Vec<(PathBuf, u64, BTreeSet<String>)> = Vec::new();
+	let mut found: Vec<(PathBuf, (u64, u64), &mounts::Mount)> = Vec::new();
 	let mut seen_ids: HashMap<(u64, u64), PathBuf> = HashMap::new();
 	let mut canon = Vec::new();
 	for r in roots {
@@ -375,21 +375,42 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		}
 		let m = mounts::mount_for(&mounts, &c)
 			.ok_or_else(|| format!("{}: no mount found", c.display()))?;
-		// An unmounted btrfs subvolume shares its parent's mount, but the
-		// parent's walk stops at it, as at any other device.
-		if let Some((other, ..)) = kept.iter().find(|(k, dev, _)| {
-			*dev == md.dev()
-				&& c.starts_with(k)
-				&& mounts::mount_for(&mounts, k).is_some_and(|km| km.point == m.point)
-		}) {
-			dropped.push(format!("{}: inside {}", c.display(), other.display()));
+		seen_ids.insert((md.dev(), md.ino()), c.clone());
+		found.push((c, (md.dev(), md.ino()), m));
+	}
+	// Against every other root, since a bind mount can sort before the root
+	// it's from. The device test keeps an unmounted btrfs subvolume, which
+	// the outer walk stops at.
+	let inside: Vec<Option<String>> = found
+		.iter()
+		.map(|(c, id, _)| {
+			found.iter().find_map(|(k, kid, _)| {
+				if k == c || kid.0 != id.0 {
+					return None;
+				}
+				let at = mounts::seen_from(&mounts, k, c)?;
+				let md = fs::symlink_metadata(&at).ok()?;
+				if (md.dev(), md.ino()) != *id {
+					return None;
+				}
+				let as_at = if at == *c {
+					String::new()
+				} else {
+					format!(", as {}", at.display())
+				};
+				Some(format!("{}: inside {}{as_at}", c.display(), k.display()))
+			})
+		})
+		.collect();
+	let mut kept = Vec::new();
+	for ((c, _, m), why) in found.into_iter().zip(inside) {
+		if let Some(why) = why {
+			dropped.push(why);
 			continue;
 		}
 		let disks = mounts::disks_for(m, &mounts)?;
-		seen_ids.insert((md.dev(), md.ino()), c.clone());
-		kept.push((c, md.dev(), disks));
+		kept.push((c, disks));
 	}
-	let kept = kept.into_iter().map(|(c, _, disks)| (c, disks)).collect();
 	let mut groups = Vec::new();
 	for (disks, rs) in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);

@@ -17,6 +17,10 @@ use std::process::Command;
 pub struct Mount {
 	pub id: u64,
 	pub parent: u64,
+	/// Major and minor, as the table gives them.
+	pub dev: String,
+	/// The folder of the filesystem that's mounted, `/` for the whole of it.
+	pub root: PathBuf,
 	pub point: PathBuf,
 	pub fstype: String,
 	pub source: String,
@@ -64,6 +68,8 @@ pub fn parse_mountinfo(text: &[u8]) -> Vec<Mount> {
 		out.push(Mount {
 			id,
 			parent,
+			dev: String::from_utf8_lossy(l[2]).into_owned(),
+			root: unescape(l[3]),
 			point: unescape(l[4]),
 			fstype: String::from_utf8_lossy(r[0]).into_owned(),
 			source: String::from_utf8_lossy(r[1]).into_owned(),
@@ -156,6 +162,37 @@ pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
 		}
 	}
 	best
+}
+
+/// The path in `outer`'s tree that's `inner`'s folder of the same filesystem,
+/// where a walk from `outer` gets to it and stops at no mount below it that a
+/// walk from `inner` doesn't (2026102814341414). A bind mount of a folder
+/// inside another root is the case. Only the table is read, so the caller
+/// still checks the device and inode.
+pub fn seen_from(mounts: &[Mount], outer: &Path, inner: &Path) -> Option<PathBuf> {
+	let om = mount_for(mounts, outer)?;
+	let im = mount_for(mounts, inner)?;
+	if om.dev != im.dev {
+		return None;
+	}
+	let place = |m: &Mount, p: &Path| p.strip_prefix(&m.point).ok().map(|r| m.root.join(r));
+	let (op, ip) = (place(om, outer)?, place(im, inner)?);
+	let at = outer.join(ip.strip_prefix(&op).ok()?);
+	if mount_for(mounts, &at)?.id != om.id {
+		return None;
+	}
+	let below = |base: &Path| {
+		mounts
+			.iter()
+			.filter_map(|m| m.point.strip_prefix(base).ok())
+			.filter(|r| !r.as_os_str().is_empty())
+			.collect::<Vec<_>>()
+	};
+	let stops = below(inner);
+	below(&at)
+		.iter()
+		.all(|r| stops.iter().any(|s| r.starts_with(s)))
+		.then_some(at)
 }
 
 fn kname_of(dev: &str) -> Option<String> {
@@ -422,6 +459,8 @@ mod tests {
 		let m = |t: &str, src: &str| Mount {
 			id: 1,
 			parent: 0,
+			dev: "8:1".into(),
+			root: PathBuf::from("/"),
 			point: PathBuf::from("/m"),
 			fstype: t.into(),
 			source: src.into(),
@@ -572,6 +611,47 @@ mod tests {
 		);
 	}
 
+	// tree/sub bound on bind and on tree/b, and another disk on tree/m.
+	const BIND: &[u8] = b"1 0 8:1 / / rw - ext4 /dev/sda1 rw
+2 1 8:1 /t/tree/sub /t/bind rw - ext4 /dev/sda1 rw
+3 1 8:1 /t/tree/sub /t/tree/b rw - ext4 /dev/sda1 rw
+4 1 8:2 / /t/tree/m rw - ext4 /dev/sdb1 rw
+5 1 8:1 /u/x /t/ux rw - ext4 /dev/sda1 rw
+6 1 8:3 /t/tree/sub /t/other rw - ext4 /dev/sdc1 rw
+";
+
+	#[test]
+	fn bind_of_a_folder_inside_another_root() {
+		let _id = test_id("df0qb");
+		let seen = |extra: &str, outer: &str, inner: &str| {
+			let text = [BIND, extra.as_bytes()].concat();
+			let all = visible(parse_mountinfo(&text));
+			seen_from(&all, Path::new(outer), Path::new(inner))
+		};
+		let sub = Some(PathBuf::from("/t/tree/sub"));
+		assert_eq!(seen("", "/t/tree", "/t/bind"), sub);
+		assert_eq!(seen("", "/t/tree", "/t/tree/b"), sub);
+		assert_eq!(
+			seen("", "/t", "/t/bind/d"),
+			Some(PathBuf::from("/t/tree/sub/d"))
+		);
+		assert_eq!(
+			seen("", "/t/tree", "/t/tree/a"),
+			Some(PathBuf::from("/t/tree/a"))
+		);
+		assert_eq!(seen("", "/t/bind", "/t/tree"), None);
+		assert_eq!(seen("", "/t/tree", "/t/ux"), None);
+		assert_eq!(seen("", "/t/tree", "/t/other"), None);
+		assert_eq!(seen("", "/t/tree", "/t/tree/m"), None);
+		// The outer walk would stop where the inner one doesn't.
+		let deep = "7 1 8:4 / /t/tree/sub/deep rw - ext4 /dev/sdd1 rw\n";
+		assert_eq!(seen(deep, "/t/tree", "/t/bind"), None);
+		let both = format!("{deep}8 2 8:4 / /t/bind/deep rw - ext4 /dev/sdd1 rw\n");
+		assert_eq!(seen(&both, "/t/tree", "/t/bind"), sub);
+		let over = "7 1 8:4 / /t/tree/sub rw - ext4 /dev/sdd1 rw\n";
+		assert_eq!(seen(over, "/t/tree", "/t/bind"), None);
+	}
+
 	#[test]
 	fn mount_point_not_utf8() {
 		let _id = test_id("deebw");
@@ -654,8 +734,9 @@ mod tests {
 				let source =
 					*r.pick(&["/dev/sdc1", "zf10/a/b", "none", "UUID=1-2", "//host/share"]);
 				let optional = [" shared:1", " master:3", " propagate_from:2", " unbindable"];
-				let mut left = format!("{} {} 0:{i} /", 20 + i, 1 + i).into_bytes();
-				left.extend(mangle(r.pick(BITS)));
+				let root = [&b"/"[..], r.pick(BITS)].concat();
+				let mut left = format!("{} {} 0:{i} ", 20 + i, 1 + i).into_bytes();
+				left.extend(mangle(&root));
 				left.push(b' ');
 				left.extend(mangle(&point));
 				left.extend_from_slice(b" rw,noatime");
@@ -676,6 +757,8 @@ mod tests {
 					_ => {
 						want.push((
 							(20 + i as u64, 1 + i as u64),
+							format!("0:{i}"),
+							PathBuf::from(OsString::from_vec(root)),
 							PathBuf::from(OsString::from_vec(point.clone())),
 							fstype,
 							source,
@@ -701,6 +784,8 @@ mod tests {
 				.map(|m| {
 					(
 						(m.id, m.parent),
+						m.dev.clone(),
+						m.root.clone(),
 						m.point.clone(),
 						m.fstype.as_str(),
 						m.source.as_str(),
