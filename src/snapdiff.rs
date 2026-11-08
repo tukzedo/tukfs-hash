@@ -969,6 +969,7 @@ transid marker was 12\n";
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn the_inode_comes_before_the_name() {
 		let _id = test_id("df0pp");
 		let dir = scratch("snapdiff_mv");
@@ -1010,6 +1011,7 @@ transid marker was 12\n";
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_symlinked_folder_is_not_followed() {
 		let _id = test_id("df0qt");
 		let dir = scratch("snapdiff_link");

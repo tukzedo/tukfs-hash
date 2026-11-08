@@ -475,6 +475,7 @@
 	- Note: With `lo/dir -> /etc` and a list line `dir/hostname`, it compared the live `/etc/hostname` and said "same".
 	- Progress log:
 		- 2026-11-08: Every file in both snapshots is now looked up and opened through `beneath::Root`, with no symlink followed and no mount crossed below `--old` and `--new`. The inode walk's finds are opened the same way.
+		- 2026-11-08: The round's full run failed Miri on df0qt and df0pp, since snapdiff's `run` now reaches openat2, which Miri doesn't have. Both are marked to skip Miri, as the scan tests that open through `beneath::Root` are. They are the only snapdiff tests that call `run`. `--backlog-run-quick miri` passed, 50 of 101 run.
 	- Decisions:
 		- A name that goes through a symlinked folder, or onto another mount, counts as missing on that side, like a name that isn't there. On `--new` that leads to "nothing compared" and exit 8 when nothing else was compared, rather than a quiet exit 0.
 		- `--old` and `--new` themselves may be symlinks, and are resolved once, since a person names them. design.md, Snapshot diffs, says so.
