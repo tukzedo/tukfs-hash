@@ -133,7 +133,7 @@
 		- The help text and README say both.
 	- Decisions:
 		- `plan` refuses `scan`'s other options too, as the requirement says, since it doesn't use them. The b23 wrapper's `--plan` breaks on that. Filed as a Check in questions.md.
-		- Help after a command is the whole help, not the command's part of it, since the help is short and each part points at the others.
+		- Help after a command prints the whole help, since the help is short and each part points at the others.
 		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
 	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
 	- Branch: round-20261108b
