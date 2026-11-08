@@ -32,16 +32,44 @@
 - A database reached through a bind mount is hashed by the walk of a root that holds its folder under another name, with attributes written on it.
 	- ID: 2026110719570617
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-195706
 	- Opened by: 2026102814341414's sweep
-	- Related IDs: 2026102814341414, 2026102814341408
+	- Related IDs: 2026102814341414, 2026102814341408, 2026110720070507
 	- Steps to reproduce [Bug]: In `unshare -rm`, bind `tree/sub` on `bind`, then `scan --db bind/t.sqlite --root tree`.
 	- Incorrect behavior [Bug]: `tree/sub/t.sqlite`, its `-wal`, `-shm` and `.lock` are read as files: 5 path rows for 1 file, and attributes written on the live database.
 	- Expected behavior [Bug]: design.md, "Database": a database inside a root leaves out only its own names.
 	- Origin: `excluded` in `scan.rs`, from 2026102814341408. Confirmed.
 	- Probable fix [Bug]: Compare the folder's device and inode with the database folder's, not its path.
+	- Reproduced [Bug]: Yes, with the build from before the fix: 6 path rows for 2 files, 4 of them the database's names, and a blake3 attribute on `tree/sub/t.sqlite`.
+	- Actual cause [Bug]: `scan::excluded` matched the database's folder by path. Through a bind mount the root's walk reaches it under another path.
+	- Actual fix [Bug]:
+		- The scan takes the database folder's device and inode before the run begins. The walk already reads each folder's metadata from its fd, so it compares that, with no extra call, and leaves out the 5 names only in that folder.
+		- design.md, "Database", says so.
+	- Branch: round-20261108
+	- Commit: `6100218`
+	- Test case: `df0qg` (unit, a walk that reaches the database folder by another path), `df0qh` (integration step 25, in a user namespace, skipped on ZFS). `des63` keeps its cases.
+	- Verified: `df0qh` fails against the build from before the fix ("0 10 4" and an attribute on the database) and passes after on ext4. `df0qg` fails with the old path rule put back and passes after. `--backlog-run-quick` passed in 2m 00s.
+	- Swept: `excluded` is the only place the walk leaves a name out by the database's name. `hand_over` and `lock` go by the database's own path, which is right there. `--exclude` and `--no-xattr` also match by path and miss a folder reached under another name, filed as 2026110720070507. `mount_points` goes by the mount table's paths, which is what the walk sees.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261107-200705
+
+- `--exclude` and `--no-xattr` miss a folder that a root's walk reaches under another name, such as through a bind mount.
+	- ID: 2026110720070507
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-200705
+	- Opened by: 2026110719570617's sweep
+	- Related IDs: 2026110719570617, 2026102814341414
+	- Steps to reproduce [Bug]: In `unshare -rm`, bind `tree/sub` on `bind`, then `scan --root tree --no-xattr bind`, and `scan --root tree --exclude bind`.
+	- Incorrect behavior [Bug]: `tree/sub/f` gets a blake3 attribute in the first, and is read in the second.
+	- Expected behavior [Bug]: The help text: `--exclude DIR` doesn't go into DIR, and `--no-xattr DIR` leaves no attributes under it, whatever name the walk reaches it by.
+	- Reproduced [Bug]: Yes, with `6100218`.
+	- Probable fix [Bug]: Keep each folder's device and inode as well as its path. The walk knows each folder's from its fd, as `excluded` now uses for the database's folder, and `--no-xattr` passes down the frames as `in_git` does.
+	- Note: Decide first whether a path given by the user should match another name of the same folder. The `--threads` case in 2026102814341414 was left as is.
 
 - 2 private cicd checks fail on dev: build-mark-check.bash and gate-record-check.bash's strict image case.
 	- ID: 2026110718460111
