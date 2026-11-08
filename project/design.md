@@ -96,7 +96,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Otherwise the attribute and the database row are left as they were and nothing new is written. The next run reads the file again and reports it again. Writing the new checksum would make the next run call the damaged file clean, and a crash before the event was saved would leave no trace at all.
 
-- `accept` is the one way to replace a stored checksum with a different one. It reads the file twice and wants both reads to agree, so a fault during that read isn't what gets kept. It logs an `accepted` event under its own run, with status `accept`, which `scan --resume` never picks up.
+- `accept` is the one way to replace a stored checksum with a different one. It reads the file twice and wants both reads to agree, so a fault during that read isn't what gets kept. It logs an `accepted` event under its own run, with status `accept`, which `scan --resume` never picks up. A name the database has no row for gets one, and a note that no scan knows it by that name. A scan may know the file by another, such as through a bind mount, and its row there is left as it was.
 
 - A database lookup that fails for any reason but a missing row is a `db-error` event, and the file isn't recorded. Taking it for "no record" would overwrite the row unseen.
 

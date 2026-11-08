@@ -953,6 +953,13 @@ else
 	skip df1qb "database left by a full disk taken as new (no user namespace here)"
 fi
 
+# 31. accept of a name no scan has a row for says so, since a scan may know
+# the file by another name and go on reporting it (2026102814341431).
+an="${work}/an"; mkdir -p "${an}"
+cp "${db}" "${an}/t.sqlite"; printf 'n\n' > "${an}/new.txt"
+rc=0; "${bin}" accept --db "${an}/t.sqlite" "${an}/new.txt" "${tree}/small.txt" > "${an}/out.txt" 2>&1 || rc=$?
+check df1qc "accept of a name no scan knows says so" "${rc} $(grep -c 'no scan has a record under this name' "${an}/out.txt")" "0 1"
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -1020,3 +1027,4 @@ fi
 ##		- 20261108: Help after a command, and an option another command takes
 ##		  refused.
 ##		- 20261108: A database left by a first scan that filled the disk.
+##		- 20261108: accept of a name no scan knows.

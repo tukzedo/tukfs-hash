@@ -301,7 +301,7 @@
 		- 2026-11-08: `open_rw` takes a file with no tables as new, and makes the tables and the version row in one transaction. `open_ro` calls such a file empty. The version shows as a number or "none". design.md, "Database", says so.
 		- Verified: `df1qb` fails against the build from before ("1 1 1 1", the second scans refused with "no such table: meta" and "tables are version None") and passes after, on ext4. A first scan on a tmpfs of 16k to 160k left a 0-byte file after the fix, where before it left 0 to 131072 bytes that every later scan refused. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
 	- Decisions:
-		- Any file with no tables is new, not only a 0-byte one. A first scan that failed partway can leave a few pages with nothing in them, and there's nothing in such a file to keep.
+		- A file with no tables is new, whatever its size. A first scan that failed partway can leave a few pages with nothing in them, and there's nothing in such a file to keep.
 	- Branch: round-20261108b
 	- Test case: `df1q9` (a 0-byte file is new, and `report` calls it empty), `df1qa` (version shown as 99 or none), `df1qb` (integration step 30, a first scan on a full 8k and 96k tmpfs, then a scan of what it left, skipped on ZFS).
 	- Swept: `open_rw` is the only place tables are made. `open_ro`, which `report`, `gone` and the scan's workers use, said "no such table" on an empty file too, and now says it's empty. The version message was the only `{:?}` of an `Option` in a message.
@@ -311,7 +311,7 @@
 - `accept` says "accepted" with no note when the database has no row under that name.
 	- ID: 2026102814341431
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 31
@@ -319,6 +319,17 @@
 	- Requirements [Feature]:
 		- When there's no prior row, say no scan knows this name, and that a scan may have it under another name.
 	- Note: A name reached through a bind mount, or spelled differently from the scan's root, gets a new row, and the scan keeps reporting its own.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-08: After "accepted", a name with no row gets a line saying no scan has a record under it, and one may have it under another, such as through a bind mount. design.md, "Mismatches", says so.
+		- Verified: `df1qc` fails against the build from before ("0 0") and passes after, on ext4 and ZFS. `--backlog-run-quick fmt build unit it` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
+	- Decisions:
+		- A note line after the "accepted" line, as the one for other hard-linked names, rather than a warning on stderr. The accept did happen, and exit stays 0.
+	- Branch: round-20261108b
+	- Test case: `df1qc` (integration step 31, accept of a new name and a scanned one, the note once).
+	- Swept: `accept::one` is the only place a name is taken as good. `scan` and `snapdiff` don't write by a name the user gives.
+	- Acceptance signoff: Self-closed: the requirement, and the test fails before and passes after.
+	- Closed: 20261108-131758
 
 - On NTFS, APFS or HFS+, `accept` can't clear an attribute set an older build wrote, so the file is reported on every scan.
 	- ID: 2026102814341432
