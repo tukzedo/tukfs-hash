@@ -182,13 +182,19 @@
 - The content scrub finds about 100 lines in the backlog that break the writing rules.
 	- ID: 2026110811422129
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261108-114221
 	- Opened by: split from 2026110218175403
 	- Parent ID: 2026110218175403
 	- Requirements [Feature]: Reword each hit in backlog text written here, or add it to the scrub's allow list with a reason. Text a person wrote stays as it is but for spelling.
 	- Note: Mostly a banned verb, spelled numbers, "not X" phrasing and fillers.
+	- Decisions:
+		- Reworded 80 lines. The banned verb became has, contains, takes, pins or enforces by what the line means, numbers became digits, and "not X" became "rather than X" or "as well as X".
+		- Allowed, with a reason in `scrub-allow.txt`: zfs's own hold, the words quoted by the items that reword them, the `shipped.txt` name, Python's tuple unpacking, and the template's notes and placeholder rows as written.
+		- The allow entry for the template's placeholder rows used `\t`, which grep's extended regex doesn't read as a tab, so it never matched. It uses `[[:space:]]` now.
+	- Verified: `private/hooks/scrub.bash` reports clean.
+	- Closed: 20261108-115016
 
 - The lint stage only reports content scrub hits, rather than failing on them.
 	- ID: 2026110811422141
