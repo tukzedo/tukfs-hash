@@ -126,12 +126,24 @@ impl ToSql for PathKey<'_> {
 	}
 }
 
-/// A stored path, escaped for showing.
-pub fn path_text(v: ValueRef<'_>) -> String {
-	match v {
-		ValueRef::Text(t) | ValueRef::Blob(t) => crate::util::escape_name(t),
-		_ => String::new(),
+/// A stored path's bytes. Only text and blobs go in, so anything else is a bad
+/// row, refused the same as a wrong type in any other column.
+pub fn path_at<'r>(r: &'r rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<&'r [u8]> {
+	match r.get_ref(idx)? {
+		ValueRef::Text(t) | ValueRef::Blob(t) => Ok(t),
+		v @ (ValueRef::Null | ValueRef::Integer(_) | ValueRef::Real(_)) => {
+			Err(rusqlite::Error::InvalidColumnType(
+				idx,
+				r.as_ref().column_name(idx)?.to_owned(),
+				v.data_type(),
+			))
+		}
 	}
+}
+
+/// A stored path, escaped for showing.
+pub fn path_text(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> {
+	path_at(r, idx).map(crate::util::escape_name)
 }
 
 /// SQLite sets itself up on first use with plain reads and writes, which race
@@ -398,12 +410,7 @@ fn miss_paths(
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	let mut st = conn.prepare(sql).map_err(e)?;
 	let kinds = [Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch];
-	let row = |r: &rusqlite::Row<'_>| {
-		Ok(match r.get_ref(0)? {
-			ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
-			_ => Vec::new(),
-		})
-	};
+	let row = |r: &rusqlite::Row<'_>| path_at(r, 0).map(<[u8]>::to_vec);
 	let rows = match run_id {
 		Some(id) => st.query_map(params![kinds[0], kinds[1], kinds[2], id], row),
 		None => st.query_map(kinds, row),
@@ -739,6 +746,7 @@ fn batches(
 mod tests {
 	use super::*;
 	use crate::testutil::{scratch, test_id};
+	use rusqlite::types::Type;
 	use std::sync::mpsc::sync_channel;
 
 	// What's in databases already. A new variant has to be added here too.
@@ -807,6 +815,38 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!((k.as_str(), s.as_str()), ("dir-error", "killed"));
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn only_text_and_blobs_are_paths() {
+		let _id = test_id("df1sw");
+		init();
+		let c = Connection::open_in_memory().unwrap();
+		let mut st = c
+			.prepare("SELECT 'a\\b', x'ff2f', 5, 1.5, NULL AS path")
+			.unwrap();
+		st.query_row([], |r| {
+			assert_eq!(path_at(r, 0).unwrap(), b"a\\b");
+			assert_eq!(path_text(r, 0).unwrap(), "a\\\\b");
+			assert_eq!(path_at(r, 1).unwrap(), b"\xff/");
+			assert_eq!(path_text(r, 1).unwrap(), "\\xff/");
+			for (i, t) in [(2, Type::Integer), (3, Type::Real), (4, Type::Null)] {
+				match path_at(r, i) {
+					Err(rusqlite::Error::InvalidColumnType(at, _, got)) => {
+						assert_eq!((at, got), (i, t));
+					}
+					other => panic!("column {i}: {other:?}"),
+				}
+				assert!(path_text(r, i).is_err());
+			}
+			let Err(rusqlite::Error::InvalidColumnType(_, name, _)) = path_at(r, 4) else {
+				unreachable!()
+			};
+			assert_eq!(name, "path");
+			Ok(())
+		})
+		.unwrap();
 	}
 
 	// The folder goes with the Scratch, so a test keeps it to its end.

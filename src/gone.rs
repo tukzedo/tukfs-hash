@@ -5,7 +5,6 @@
 
 use crate::db::{self, Kind, RunStatus};
 use rusqlite::OptionalExtension;
-use rusqlite::types::ValueRef;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -37,13 +36,6 @@ fn reachable(now: &[&Path], last: Option<&[&Path]>, p: &Path) -> bool {
 	match last.and_then(|rs| deepest(rs, p)) {
 		Some(there) => here.starts_with(there),
 		None => true,
-	}
-}
-
-fn bytes_of(v: ValueRef<'_>) -> Vec<u8> {
-	match v {
-		ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
-		_ => Vec::new(),
 	}
 }
 
@@ -118,7 +110,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 		let mut rows = st.query([id]).map_err(e)?;
 		while let Some(r) = rows.next().map_err(e)? {
 			let unlisted = r.get_ref(0).map_err(e)?.as_str().ok() == Some(Kind::DirError.name());
-			events.push((unlisted, bytes_of(r.get_ref(1).map_err(e)?)));
+			events.push((unlisted, db::path_at(r, 1).map_err(e)?.to_vec()));
 		}
 	}
 	let reached: HashSet<&[u8]> = events.iter().map(|(_, b)| b.as_slice()).collect();
@@ -135,12 +127,8 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 	let mut count = 0u64;
 	let mut shown = Vec::new();
 	while let Some(r) = rows.next().map_err(e)? {
-		let raw = r.get_ref(0).map_err(e)?;
+		let p = Path::new(OsStr::from_bytes(db::path_at(r, 0).map_err(e)?));
 		let last: i64 = r.get(1).map_err(e)?;
-		let p = Path::new(OsStr::from_bytes(match raw {
-			ValueRef::Text(t) | ValueRef::Blob(t) => t,
-			_ => continue,
-		}));
 		if !reachable(&now, earlier.get(&last).map(Vec::as_slice), p)
 			|| reached.contains(p.as_os_str().as_bytes())
 			|| unlisted.iter().any(|d| p.starts_with(d))
@@ -151,7 +139,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 		if (shown.len() as u64) < limit {
 			shown.push(format!(
 				"gone\t{}\tlast seen by run {last}",
-				db::path_text(raw)
+				crate::util::escape_name(p.as_os_str().as_bytes())
 			));
 		}
 	}

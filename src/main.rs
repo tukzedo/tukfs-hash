@@ -565,7 +565,7 @@ fn report(
 		.query_map(rusqlite::params![run, kind, limit], |r| {
 			Ok((
 				r.get::<_, String>(0)?,
-				db::path_text(r.get_ref(1)?),
+				db::path_text(r, 1)?,
 				r.get::<_, Option<String>>(2)?,
 			))
 		})

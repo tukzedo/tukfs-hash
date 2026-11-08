@@ -467,12 +467,22 @@
 - 4 places turn a stored path into bytes, and each one handles a value that isn't text or a blob its own way.
 	- ID: 2026110715441810
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 11
 	- Origin: `cede460` and `bed0537`. The copy in `miss_paths` came with `3e0dd9e`, after the last review. Confirmed by reading. Nothing changes today, since only an edit made outside the program can store such a value.
 	- Requirements [Feature]: One helper in db.rs that names the other value kinds in full, used by `path_text`, `miss_paths` and both sites in `gone`, with one rule for a bad row.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-08: `db::path_at` reads a stored path, and refuses null, a number or a real as a wrong column type, with the column's name. `path_text`, `miss_paths` and both sites in `gone` go through it. design.md, "Database", says so.
+		- Verified: unit tests, clippy, `--backlog-run-quick` with every area, and its `miri` area. A path set to 42 by hand made `gone` say "gone: 0" and `report` show a blank name before, and both now stop with "Invalid column type Integer at index: 1, name: path".
+	- Decisions:
+		- A bad row stops the command, as a wrong type in any other column of the same query already did, such as `seen_run` in `gone`. Before, `gone` left the name out and counted it as not gone, `report` showed a blank name, and a resumed scan's miss set and `gone`'s reached set took an empty name. Silently skipping one would hide damage in a database whose job is to notice it.
+	- Test case: `df1sw` (`only_text_and_blobs_are_paths`).
+	- Swept: every `get_ref` and `ValueRef` in `src/`. The other `get_ref` is `gone`'s event kind, read as text and compared, which isn't a path.
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
+	- Closed: 20261108-142602
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902

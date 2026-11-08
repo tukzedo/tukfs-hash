@@ -40,7 +40,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - `runs` has one row per scan, with its skip date and a summary. `events` has every mismatch, read error, unstable file and failed attribute write, by run.
 
-- Names go in as text when they're UTF-8 and as blobs when they aren't, so the sqlite3 shell can match most of them with a plain string.
+- Names go in as text when they're UTF-8 and as blobs when they aren't, so the sqlite3 shell can match most of them with a plain string. A name stored as anything else, such as a number from an edit made with the sqlite3 shell, stops the command that reads it with the column's name, as a wrong type in any other column does.
 
 - Unlike nemo-anywhere's cache, this one is never thrown away and rebuilt. A damaged file, or one with another table version, is refused and left alone, since it's the only record of what files used to read as. An empty one is taken as new, such as the 0-byte file a first scan leaves when the disk fills, and the tables and their version go in as one transaction, so a failed first scan can't leave them half made.
 
