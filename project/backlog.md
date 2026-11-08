@@ -285,7 +285,7 @@
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 30
@@ -296,6 +296,17 @@
 		- Print the version as a number or "none", not `Some(99)`.
 	- Note: A full disk during the first scan left a 0-byte file, and every run after said "no such table: meta" and exited 1.
 	- Note: The repro needs a tiny full filesystem, which `unshare -rm` and an 8 KiB tmpfs give without root.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-08: `open_rw` takes a file with no tables as new, and makes the tables and the version row in one transaction. `open_ro` calls such a file empty. The version shows as a number or "none". design.md, "Database", says so.
+		- Verified: `df1qb` fails against the build from before ("1 1 1 1", the second scans refused with "no such table: meta" and "tables are version None") and passes after, on ext4. A first scan on a tmpfs of 16k to 160k left a 0-byte file after the fix, where before it left 0 to 131072 bytes that every later scan refused. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
+	- Decisions:
+		- Any file with no tables is new, not only a 0-byte one. A first scan that failed partway can leave a few pages with nothing in them, and there's nothing in such a file to keep.
+	- Branch: round-20261108b
+	- Test case: `df1q9` (a 0-byte file is new, and `report` calls it empty), `df1qa` (version shown as 99 or none), `df1qb` (integration step 30, a first scan on a full 8k and 96k tmpfs, then a scan of what it left, skipped on ZFS).
+	- Swept: `open_rw` is the only place tables are made. `open_ro`, which `report`, `gone` and the scan's workers use, said "no such table" on an empty file too, and now says it's empty. The version message was the only `{:?}` of an `Option` in a message.
+	- Acceptance signoff: Self-closed: the 3 requirements, and tests fail before and pass after.
+	- Closed: 20261108-131205
 
 - `accept` says "accepted" with no note when the database has no row under that name.
 	- ID: 2026102814341431

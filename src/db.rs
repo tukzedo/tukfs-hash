@@ -151,24 +151,35 @@ pub fn init() {
 	});
 }
 
+fn no_tables(conn: &Connection) -> rusqlite::Result<bool> {
+	conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
+		r.get::<_, i64>(0)
+	})
+	.map(|n| n == 0)
+}
+
 /// Opens the database to write, creating it if needed.
 pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
-	let fresh = !path.exists();
 	// A link at the name is refused. SQLite opens `-wal` and `-shm` with
 	// O_NOFOLLOW already, so under sudo nothing is made through a link.
-	let conn =
+	let mut conn =
 		Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
 			.map_err(|e| format!("{}: {e}", path.display()))?;
 	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
 	vet(&conn, path)?;
-	if fresh {
+	// Empty, such as the 0-byte file a full disk left on a first run, is new.
+	// One transaction, so a failed first run leaves it empty again rather
+	// than half made.
+	if no_tables(&conn).map_err(e)? {
 		conn.pragma_update(None, "page_size", PAGE_SIZE)
 			.map_err(e)?;
-		conn.execute_batch(CREATE).map_err(e)?;
-		conn.execute("INSERT INTO meta VALUES ('schema', ?1)", [SCHEMA])
+		let tx = conn.transaction().map_err(e)?;
+		tx.execute_batch(CREATE).map_err(e)?;
+		tx.execute("INSERT INTO meta VALUES ('schema', ?1)", [SCHEMA])
 			.map_err(e)?;
+		tx.commit().map_err(e)?;
 	}
 	let check: String = conn
 		.query_row("PRAGMA quick_check", [], |r| r.get(0))
@@ -210,8 +221,9 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		return open_rw(path);
 	}
 	if schema != Some(SCHEMA) {
+		let had = schema.map_or_else(|| "none".into(), |v| v.to_string());
 		return Err(format!(
-			"{}: tables are version {schema:?}, this program knows {SCHEMA}",
+			"{}: tables are version {had}, this program knows {SCHEMA}",
 			path.display()
 		));
 	}
@@ -256,6 +268,12 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	.map_err(|e| format!("{}: {e}", path.display()))?;
 	conn.busy_timeout(Duration::from_secs(30)).ok();
 	vet(&conn, path)?;
+	if no_tables(&conn).map_err(|e| format!("{}: {e}", path.display()))? {
+		return Err(format!(
+			"{}: empty; no scan has written to it",
+			path.display()
+		));
+	}
 	Ok(conn)
 }
 
@@ -1248,5 +1266,43 @@ mod tests {
 			.unwrap();
 		drop(c);
 		assert!(open_rw(&p).unwrap_err().contains("version"));
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn version_shown_plainly() {
+		let _id = test_id("df1qa");
+		let (_dir, p) = temp_db("version");
+		close_rw(open_rw(&p).unwrap()).unwrap();
+		let refused = |sql: &str| {
+			let c = Connection::open(&p).unwrap();
+			c.execute_batch(sql).unwrap();
+			drop(c);
+			open_rw(&p).unwrap_err()
+		};
+		let want = |v: &str| format!("tables are version {v}, this program knows {SCHEMA}");
+		assert!(refused("UPDATE meta SET value = 99").ends_with(&want("99")));
+		assert!(refused("DELETE FROM meta").ends_with(&want("none")));
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn empty_file_is_new() {
+		let _id = test_id("df1q9");
+		let (_dir, p) = temp_db("empty");
+		std::fs::File::create(&p).unwrap();
+		assert!(
+			open_ro(&p)
+				.unwrap_err()
+				.ends_with("empty; no scan has written to it")
+		);
+		let c = open_rw(&p).unwrap();
+		let schema: i64 = c
+			.query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| {
+				r.get(0)
+			})
+			.unwrap();
+		assert_eq!(schema, SCHEMA);
+		close_rw(c).unwrap();
 	}
 }

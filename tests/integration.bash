@@ -923,6 +923,36 @@ else
 	skip desk2 "sandbox: nothing outside the test folder written (not in the sandbox)"
 fi
 
+# 30. A first scan that fills the disk leaves a database the next run can
+# still use (2026102814341430). The tmpfs that fills is in a user namespace,
+# as step 23. 8k fails before a page is written, 96k partway through making
+# the tables.
+cat > "${ns}/full.bash" << 'EOF2'
+cd "${1}" && mkdir -p full fr && printf 'x\n' > fr/f || exit 1
+for sz in 8k 96k; do
+	mount -t tmpfs -o "size=${sz}" none full || exit 1
+	rc=0; "${2}" scan --db full/t.sqlite --root fr --progress 3600 > /dev/null 2>&1 || rc=$?
+	echo "${rc}" > "full-${sz}.rc"
+	cp full/t.sqlite "full-${sz}.sqlite" && umount full || exit 1
+done
+: > full.mounted
+EOF2
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/full.bash" "${ns}" "${bin}" 2> /dev/null || true
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip df1qb "database left by a full disk taken as new (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/full.mounted" ]]; then
+	fullGot=''
+	for sz in 8k 96k; do
+		rc=0; "${bin}" scan --db "${ns}/full-${sz}.sqlite" --root "${ns}/fr" --progress 3600 > /dev/null 2>&1 || rc=$?
+		fullGot+="$(cat "${ns}/full-${sz}.rc") ${rc} "
+	done
+	check df1qb "database left by a full disk taken as new" "${fullGot}" "1 0 1 0 "
+else
+	skip df1qb "database left by a full disk taken as new (no user namespace here)"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -989,3 +1019,4 @@ fi
 ##		  database reached through one.
 ##		- 20261108: Help after a command, and an option another command takes
 ##		  refused.
+##		- 20261108: A database left by a first scan that filled the disk.

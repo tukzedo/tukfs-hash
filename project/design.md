@@ -42,7 +42,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Names go in as text when they're UTF-8 and as blobs when they aren't, so the sqlite3 shell can match most of them with a plain string.
 
-- Unlike nemo-anywhere's cache, this one is never thrown away and rebuilt. A damaged file, or one with another table version, is refused and left alone, since it's the only record of what files used to read as.
+- Unlike nemo-anywhere's cache, this one is never thrown away and rebuilt. A damaged file, or one with another table version, is refused and left alone, since it's the only record of what files used to read as. An empty one is taken as new, such as the 0-byte file a first scan leaves when the disk fills, and the tables and their version go in as one transaction, so a failed first scan can't leave them half made.
 
 - One writer thread commits at most a second apart. Events go in first, in their own transaction, so a row the database refuses can't take a mismatch with it.
 
