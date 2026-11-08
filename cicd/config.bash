@@ -124,6 +124,13 @@ IT_ROOTS=(
 	"ext4|${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}"
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
 )
+## A folder on btrfs for the btrfs subvolume check, des5x, given to each run
+## above as TUKFS_IT_BTRFS. That check makes 3 small files there, and the run
+## can write only to <folder>/tukfs-hash. Few boxes have btrfs, so when it
+## isn't there or isn't on btrfs, des5x skips with a note, and the tree is
+## still recorded for the pre-push hook. TUKFS_CICD_IT_BTRFS overrides it, and
+## an empty one turns it off.
+IT_BTRFS="${TUKFS_CICD_IT_BTRFS-/tmp}"
 
 ## Stage 4, last: the leak and memory checks, eval'd in order, each
 ## "length|command", with length fast, mid or long. Any report fails. See
@@ -361,3 +368,4 @@ RELEASE_BRANCH="main"
 ##		- 2026-10-29: BUILD_DIRTY_ENV_NAME, and the release check takes the
 ##		  marked build number.
 ##		- 2026-11-08: The release upload, from main.
+##		- 2026-11-08: IT_BTRFS, for des5x.

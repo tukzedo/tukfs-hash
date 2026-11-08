@@ -901,7 +901,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff, mypy$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
 	_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*} (${_r#*|}), "; done
 	fEcho_Clean "Tests ..........: $( ((tests_off || unit_off)) && echo '(skipped)' || echo "${TEST_CMD[*]}")"
-	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }")"
+	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }${IT_BTRFS:+; des5x in ${IT_BTRFS} when on btrfs}")"
 	fEcho_Clean "Leak checks ....: $( ((${#LEAKCHECK_STEPS[@]})) && echo "${#LEAKCHECK_STEPS[@]}, at the end of the tests" || echo '(none in this run)')"
 	fEcho_Clean "Profiler .......: $(fOnOff "${PROFILE_ENABLE}" "${#PROFILE_TIMED[@]} step(s) on a tree under ${PROFILE_ROOT:-the temp dir} -> ${PROFILE_OUT_DIR:-(nowhere)}/")"
 	if ((release_off)); then
@@ -1266,8 +1266,9 @@ fStageLint(){
 
 ## The integration test once on ROOT, which makes its own dir under it, and
 ## sweeps its own stale ones.
+it_btrfs=""
 fRunIt(){   ## fRunIt LABEL ROOT
-	local label="$1" itRoot="$2" real="" fsType="" want="" rc=0
+	local label="$1" itRoot="$2" real="" fsType="" want="" rc=0 btRw=()
 	if [[ ! -d "${itRoot}" ]]; then
 		fEcho "NOTE: integration test on ${label} skipped, since ${itRoot} isn't there"
 		echo "it-${label}" >> "${gate_skips}"
@@ -1277,11 +1278,25 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
 	case "${label}" in ext4) want="ext2/ext3" ;; *) want="${label}" ;; esac
 	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; echo "it-${label}" >> "${gate_skips}"; fi
-	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real} ${RELEASE_NATIVE_BIN}, writing only to ${real}/${APP_NAME}"
+	if [[ -n "${it_btrfs}" ]]; then btRw=("${it_btrfs}/${APP_NAME}"); fi
+	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real}${it_btrfs:+ TUKFS_IT_BTRFS=${it_btrfs}} ${RELEASE_NATIVE_BIN}, writing only to ${real}/${APP_NAME}${it_btrfs:+ and ${it_btrfs}/${APP_NAME}}"
 	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
-	HOST_TEMP="${real}" fBg "${here}/utility/sandbox.bash" "${real}/${APP_NAME}" -- "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
+	HOST_TEMP="${real}" TUKFS_IT_BTRFS="${it_btrfs}" fBg "${here}/utility/sandbox.bash" "${real}/${APP_NAME}" "${btRw[@]}" -- "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
 	fEcho "OK: integration test on ${label}"
+}
+
+## The folder for des5x, from IT_BTRFS, in it_btrfs, or empty with a note when
+## it isn't a folder on btrfs. Not a gate skip, since few boxes have btrfs.
+fItBtrfs(){
+	local real="" fsType=""
+	it_btrfs=""
+	[[ -n "${IT_BTRFS}" ]] || { fEcho_Clean "btrfs subvolume check (des5x): turned off, since IT_BTRFS is empty"; return 0; }
+	real="$(realpath -e -- "${IT_BTRFS}" 2>/dev/null)" || { fEcho_Clean "btrfs subvolume check (des5x): skips, since ${IT_BTRFS} isn't there"; return 0; }
+	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
+	[[ "${fsType}" == btrfs ]] || { fEcho_Clean "btrfs subvolume check (des5x): skips, since ${IT_BTRFS} is ${fsType:-unknown}, not btrfs"; return 0; }
+	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
+	it_btrfs="${real}"
 }
 
 ## Stage 4: tests, then the slow leak checks.
@@ -1299,6 +1314,7 @@ fStageTests(){
 		fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
 		fBg fInTests "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
 		[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
+		fItBtrfs
 		for r in "${IT_ROOTS[@]}"; do fRunIt "${r%%|*}" "${r#*|}"; done
 	fi
 	## Last, since the slow ones take a long time and the rest should report first.
@@ -2019,3 +2035,5 @@ exit 0
 ##		  puts on before the build. --no-upload.
 ##		- 2026-11-08: A step closes with a timed, numbered PASS, FAIL or SKIP line,
 ##		  in the same form as its Starting line.
+##		- 2026-11-08: IT_BTRFS, a btrfs folder for the integration test's
+##		  subvolume check, given to each run as TUKFS_IT_BTRFS.
