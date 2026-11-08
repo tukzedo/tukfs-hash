@@ -2,7 +2,7 @@
 // Licensed under GPL-2.0-only. No warranty.
 
 // Which disks are under which folder, so that no two workers read the same
-// disk at once. Two readers on one hard drive make it seek between them, and
+// disk at once. 2 readers on one hard drive make it seek between them, and
 // both go slower than one would alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The checksum left on a file. The first three names and their formats are
+// The checksum left on a file. The first 3 names and their formats are
 // the ones nemo-anywhere reads and writes, so either program can trust what
 // the other left. The date and inode are ours; nemo-anywhere ignores them.
 

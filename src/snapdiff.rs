@@ -42,7 +42,7 @@ pub struct Pair {
 impl Pair {
 	fn same(p: PathBuf) -> Pair {
 		Pair {
-			// Owned per side, since a rename gives two names.
+			// Owned per side, since a rename gives 2 names.
 			old: p.clone(),
 			new: p,
 			ino: None,
@@ -68,7 +68,7 @@ enum Entry {
 	Outside(usize, Vec<u8>),
 }
 
-// zfs diff writes odd bytes as a backslash and four octal digits, \0040 for a
+// zfs diff writes odd bytes as a backslash and 4 octal digits, \0040 for a
 // space.
 fn zfs_unescape(s: &[u8]) -> Vec<u8> {
 	let mut out = Vec::with_capacity(s.len());
@@ -541,7 +541,7 @@ impl Checker<'_> {
 				return;
 			}
 		};
-		// The old name can hold some other file, as after `mv c a`.
+		// The old name can be some other file, as after `mv c a`.
 		if let Some(ino) = pair.ino
 			&& by_name.as_ref().is_none_or(|(_, m)| m.ino() != ino)
 		{

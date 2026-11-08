@@ -12,14 +12,14 @@ vendor/hashlink-0.12.2/src/linked_hash_map.rs:424	rust/access-invalid-pointer	th
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:442	rust/access-invalid-pointer	the guard node is set on the first insert, and is_empty() returns before this
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1255	rust/access-invalid-pointer	to_front runs on an occupied entry, so the guard node exists
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1655	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.12.2/src/linked_hash_map.rs:1655	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1655	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life; no local is involved
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1656	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.12.2/src/linked_hash_map.rs:1656	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1656	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life; no local is involved
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1679	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1703	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1748	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
-vendor/hashlink-0.12.2/src/linked_hash_map.rs:1748	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
-vendor/hashlink-0.12.2/src/linked_hash_map.rs:1749	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life, not a local's
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1748	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life; no local is involved
+vendor/hashlink-0.12.2/src/linked_hash_map.rs:1749	rust/access-after-lifetime-ended	the nodes are the map's, borrowed for the iterator's life; no local is involved
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1765	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1817	rust/access-invalid-pointer	remaining counts the nodes left, so head and tail never run past the list
 vendor/hashlink-0.12.2/src/linked_hash_map.rs:1886	rust/access-invalid-pointer	current_entry returns before this when cur is the guard, and otherwise it's a node of the list

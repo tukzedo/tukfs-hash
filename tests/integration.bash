@@ -38,7 +38,7 @@ if [[ -n "${TUKFS_IT_BTRFS:-}" ]]; then
 		echo "TUKFS_IT_BTRFS isn't a folder on btrfs, so step 27 uses the work folder: ${TUKFS_IT_BTRFS}" >&2
 	fi
 fi
-# The exit trap removes it only while the marker holds this run's token, so
+# The exit trap removes it only while the marker has this run's token, so
 # a folder this run didn't make is never touched.
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 # A TERM to this shell alone leaves its children writing into the folder.
@@ -261,7 +261,7 @@ rc="$(scan)"
 check ddx0v "second scan exit" "${rc}" 0
 check ddx0w "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed 0"
 
-# 3. Change bytes, put the time back. All three references must notice.
+# 3. Change bytes, put the time back. All 3 references must notice.
 digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${1}'"; }
 x_before="$(xget "${tree}/big.bin" user.blake3.b64u)"
 db_before="$(digest_of "${tree}/big.bin")"
@@ -598,7 +598,7 @@ fqSchema "UPDATE sqlite_schema SET sql = replace(sql, ', CONSTRAINT refused_by_t
 check ddy8v "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
 check ddy8w "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${wf}/b' AND f.bytes = 12")" 1
 fq "CREATE TRIGGER planted AFTER INSERT ON runs BEGIN SELECT 1; END;"
-check des6w "a planted trigger refused" "$(fscan) $(grep -c 'holds trigger "planted"' "${work}/wf.txt")" "1 1"
+check des6w "a planted trigger refused" "$(fscan) $(grep -c 'has trigger "planted"' "${work}/wf.txt")" "1 1"
 fq "DROP TRIGGER planted"
 
 # 17. --verify reads every file with a stored checksum again, even the same
@@ -656,7 +656,7 @@ last="$(gq 'SELECT max(id) FROM runs')"
 gq "UPDATE runs SET status = 'stopped' WHERE id = ${last}"
 check ddya4 "gone: a stopped run refused" "$(gone --run "${last}")" 1
 check ddya5 "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gone.txt") $(grep -c '^gone' "${work}/gone.txt")" "0 run $((last - 1)) 0"
-# A typo or a run that isn't there is an error, not an empty list.
+# A typo or a run that isn't there is an error rather than an empty list.
 rep() { local rc=0; "${bin}" report --db "${gdb}" "${@}" > "${work}/rep.txt" 2>&1 || rc=$?; echo "${rc}"; }
 check dehzs "report: an unknown kind refused" "$(rep --kind read-eror) $(grep -c 'unknown kind read-eror; kinds are b3-xattr-mismatch' "${work}/rep.txt") $(rep --kind dir-error)" "1 1 0"
 check dehzt "report and gone: an unknown run refused" "$(rep --run 999) $(grep -c '^tukfs-hash: no run 999$' "${work}/rep.txt") $(gone --run 999)" "1 1 1"
@@ -884,7 +884,7 @@ check des66 "the database's own names left out" "$(sqlite3 "${dn}/tree/tuk" "SEL
 rc=0; "${bin}" scan --db "${dn}/g.sqlite" --root "${dn}/repo/src" --progress 3600 > "${dn}/g.txt" 2>&1 || rc=$?
 check des67 "root below a git folder: no attributes" "${rc} $(sqlite3 "${dn}/g.sqlite" 'SELECT count(*) FROM paths') $(xget "${dn}/repo/src/a.c" user.blake3.b64u)" "0 1 "
 
-# 29. The pipeline runs this in its sandbox, where only the folder that holds
+# 29. The pipeline runs this in its sandbox, where only the folder that has
 # the work folders can be written, and docker's socket isn't there. Run by the
 # pipeline outside it, without --no-sandbox, is a failure. Home is an empty
 # tmpfs in there, which is fine to write, and a scan refuses tmpfs, so a test
@@ -915,7 +915,7 @@ fi
 ##		- 20261019: --rmlint and rmlint's blake2b xattrs, b2b names.
 ##		- 20261023: Header and history. Old commented-out checks dropped, every
 ##		  expansion braced, and the work folder is removed only when its marker
-##		  holds the run's token.
+##		  has the run's token.
 ##		- 20261023: expect takes a status for [[ ]] checks, one fFlipByte, and
 ##		  step 5's 400 files from one python3.
 ##		- 20261023: fSafeRm guards the work folder's rm -rf, and the folder moved
@@ -941,10 +941,10 @@ fi
 ##		  namespace.
 ##		- 20261028: ddx1e and de5gd fail on their own line when they find
 ##		  nothing, rather than ending the script. Step 20's scan helper is
-##		  rdscan, not a second rscan. SPDX line.
+##		  rdscan, where it was a second rscan. SPDX line.
 ##		- 20261028: The stale folder sweep also needs the folder to be ours.
 ##		- 20261029: A build number marked -dirty.
-##		- 20261102: A Ctrl+C stops the test, not only the running scan. A
+##		- 20261102: A Ctrl+C stops the test as well as the running scan. A
 ##		  locked folder left by a stop or kill no longer blocks its removal.
 ##		- 20261102: Step 29, the pipeline's sandbox.
 ##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and

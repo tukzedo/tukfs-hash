@@ -168,6 +168,39 @@
 		- Then make the lint stage fail on a hit.
 	- Note: Strings a test matches, such as "holds trigger" in `db.rs`, change with their test.
 	- Note: README and design.md are done.
+	- Progress log:
+		- 2026-11-08: Code, scripts, config and design.md are clean: 127 hits reworded or allowed. The backlog's 101 are in child 2026110811422129, and the fail switch in child 2026110811422141.
+	- Decisions:
+		- Reworded where the line is prose. The banned verb became has, keeps or locks, numbers became digits, and "not X" lines say what is.
+		- Allowed, with a reason in `scrub-allow.txt`: arithmetic read as a dash, test data, a loop counter's name, codeql-scan's set of built crates, refusal messages, and the README's idiom for one reader per disk.
+		- The planted-trigger message reads `has trigger` now, and des6w matches it.
+	- Branch: round-20261108b
+	- Test case: des6w for the one message a test matches. The rest is wording.
+	- Verified: the scrub reports nothing outside the backlog, and `cicd/cicd.bash --backlog-run-quick` passes.
+	- Swept: every scrub hit outside `project/backlog.md`, and the repo and private tools for the old strings.
+
+- The content scrub finds about 100 lines in the backlog that break the writing rules.
+	- ID: 2026110811422129
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261108-114221
+	- Opened by: split from 2026110218175403
+	- Parent ID: 2026110218175403
+	- Requirements [Feature]: Reword each hit in backlog text written here, or add it to the scrub's allow list with a reason. Text a person wrote stays as it is but for spelling.
+	- Note: Mostly a banned verb, spelled numbers, "not X" phrasing and fillers.
+
+- The lint stage only reports content scrub hits, rather than failing on them.
+	- ID: 2026110811422141
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261108-114221
+	- Opened by: split from 2026110218175403
+	- Parent ID: 2026110218175403
+	- Prereq IDs: 2026110811422129
+	- Requirements [Feature]: Once the scrub reports 0 hits, the lint stage fails on a hit, as with the other linters.
+	- Estimated effort: Low
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430

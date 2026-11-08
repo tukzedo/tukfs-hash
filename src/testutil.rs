@@ -155,7 +155,7 @@ fn sweep(base: &Path) {
 }
 
 /// `remove_dir_all`, but only on what can only be a scratch folder: a name
-/// `scratch()` gives, right under BASE, not a link, where its path says, ours,
+/// `scratch()` gives, right under BASE, no link, where its path says, ours,
 /// and nothing past the filesystem it's on.
 fn safe_rm(dir: &Path, base: &Path) -> io::Result<()> {
 	let refuse = |why: &str| Err(io::Error::other(format!("not removed, {why}")));

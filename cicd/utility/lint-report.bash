@@ -3,7 +3,7 @@
 ##	Purpose:
 ##		Show the warnings and errors from the newest cicd run log. cicd tees each
 ##		run to cicd/artifacts/lint/run_<ts>.log (gitignored, GFS-rotated); this
-##		greps out the warning and error lines so they can be dealt with. Two modes:
+##		greps out the warning and error lines so they can be dealt with. 2 modes:
 ##		plain, which reports on the newest log, and --check, for a look at session
 ##		start that says nothing new until a new run has happened.
 ##		- --check prints one "SEEN ..." line when the newest log is the one the
@@ -91,7 +91,7 @@ if ((check)) && ((! force)) && [[ -z "${file}" ]]; then
 fi
 
 ## Finished means the last line is the done line, or the run printed one of the
-## two abort lines.
+## 2 abort lines.
 lastLine="$(grep -v '^[[:space:]]*$' "${log}" 2>/dev/null | tail -n 1 || true)"
 finished=0
 if [[ "${lastLine}" == *"CI/CD: done."* ]] || grep -qE '^\[ FAILED: |CICD ABORTED' "${log}" 2>/dev/null; then finished=1; fi
@@ -105,7 +105,7 @@ fi
 ## a finding.
 archived='^[0-9]+:(Adding|Updating)  '
 
-## Warnings. Drop the "0 warnings" noise, and the echoed command lines that hold
+## Warnings. Drop the "0 warnings" noise, and the echoed command lines that have
 ## the word, such as clippy's `-D warnings`.
 warns="$(grep -inE 'warning|rustsec-|vulnerab|unmaintained|yanked' "${log}" 2>/dev/null | grep -vE "${archived}" \
 	| grep -viE 'generated 0 warnings|: 0 warnings|no warnings|0 warnings emitted|-D warnings' || true)"

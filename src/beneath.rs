@@ -48,7 +48,7 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 	loop {
 		let fd = f();
 		if fd >= 0 {
-			// SAFETY: the kernel just returned fd, and nothing else owns it.
+			// SAFETY: the kernel returned fd, and nothing else owns it.
 			return Ok(unsafe { File::from_raw_fd(fd as RawFd) });
 		}
 		let e = io::Error::last_os_error();
@@ -227,7 +227,7 @@ impl List {
 		Ok(unsafe { st.assume_init() })
 	}
 
-	/// Whether the folder holds an entry by that name.
+	/// Whether the folder has an entry by that name.
 	pub fn has(&self, name: &str) -> bool {
 		self.lstat(name.as_bytes()).is_ok()
 	}

@@ -227,7 +227,7 @@ CROSS_TARGETS=(
 ## the run's temp dir.
 RELEASE_ARTIFACT_DIR="cicd/artifacts/release"
 ## A .deb and an .rpm per build, from cicd/packaging/nfpm.yaml, into the stage
-## dir before the checks run. The binary is all they hold.
+## dir before the checks run. The binary is all that's in them.
 PACKAGE_ENABLE=1
 PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_work}"'
 ## Over the stage dir, once everything's built and packaged; "label|command",
@@ -236,7 +236,7 @@ PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_wo
 RELEASE_CHECKS=(
 	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}${build_mark}" "${build_release}"'
 	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
-	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
+	'each package has the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
 	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash "${release_glibc}" "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
 	## The release builds aren't the ones stage 4 tested, so the integration
 	## test runs again on the x86_64 one, in the sandbox, and the unit tests on

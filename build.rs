@@ -23,7 +23,7 @@ fn main() {
 		"TUKFS_HASH_RELEASE must be empty or 1, got {release:?}"
 	);
 	// Set when the tree built isn't the commit's, so the number names a commit
-	// that doesn't hold what was built. Such a build is never a release.
+	// that isn't what was built. Such a build is never a release.
 	let dirty = std::env::var("TUKFS_HASH_DIRTY").unwrap_or_default();
 	assert!(
 		dirty.is_empty() || dirty == "1",

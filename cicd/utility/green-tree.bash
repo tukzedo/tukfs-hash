@@ -3,11 +3,11 @@
 ##	Purpose:
 ##		Remember the trees a gate passed, so the pre-push hook can let through a
 ##		commit with the same tree instead of running the gate on it again. A tree
-##		hash covers every tracked byte and file mode, so two commits that share
+##		hash covers every tracked byte and file mode, so 2 commits that share
 ##		one can't differ in anything the gate reads from the repo.
 ##	Syntax:
 ##		green-tree.bash tree DIR          the tree `git add --all` would commit in DIR
-##		green-tree.bash record DIR TREE   remember TREE, if DIR still holds it
+##		green-tree.bash record DIR TREE   remember TREE, if DIR still has it
 ##		green-tree.bash passed DIR TREE   is TREE remembered?
 ##	Exit: 0 = done or remembered, 1 = not recorded or not remembered, 2 = usage or git failure.
 ##	History: At bottom of script.

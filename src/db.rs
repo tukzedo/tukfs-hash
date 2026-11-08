@@ -104,7 +104,7 @@ fn vet(conn: &Connection, path: &Path) -> Result<(), String> {
 			};
 		if !made_here {
 			return Err(format!(
-				"{}: holds {kind} {name:?}, which this program doesn't make. Left as is.",
+				"{}: has {kind} {name:?}, which this program doesn't make. Left as is.",
 				path.display()
 			));
 		}
@@ -135,7 +135,7 @@ pub fn path_text(v: ValueRef<'_>) -> String {
 }
 
 /// SQLite sets itself up on first use with plain reads and writes, which race
-/// when two threads get there at once. So once, here, before any connection.
+/// when 2 threads get there at once. So once, here, before any connection.
 /// The PRNG is seeded too, since the first open of a file sets its pid the
 /// same way.
 pub fn init() {
@@ -275,7 +275,7 @@ pub fn close_rw(conn: Connection) -> Result<(), String> {
 	}
 }
 
-/// What the database holds for a path.
+/// What the database has for a path.
 #[derive(Debug, Clone)]
 pub struct Prior {
 	pub id: i64,
@@ -756,7 +756,7 @@ mod tests {
 		assert_eq!((k.as_str(), s.as_str()), ("dir-error", "killed"));
 	}
 
-	// The folder goes with the Scratch, so a test holds it to its end.
+	// The folder goes with the Scratch, so a test keeps it to its end.
 	fn temp_db(tag: &str) -> (crate::testutil::Scratch, std::path::PathBuf) {
 		let dir = scratch(&format!("db_{tag}"));
 		let p = dir.join("t.sqlite");
@@ -794,7 +794,7 @@ mod tests {
 		let n: i64 = conn
 			.query_row("SELECT count(*) FROM files", [], |r| r.get(0))
 			.unwrap();
-		assert_eq!(n, 2, "two names with one content share a files row");
+		assert_eq!(n, 2, "2 names with one content share a files row");
 		let mut st = conn.prepare(LOOKUP).unwrap();
 		assert_eq!(lookup(&mut st, &odd).unwrap().unwrap().b3, vec![2u8; 32]);
 		assert_eq!(lookup(&mut st, b"/x/a").unwrap().unwrap().hashed_us, 100);
@@ -1149,7 +1149,7 @@ mod tests {
 			// What a planted FTS5 table looks like to a build that has it.
 			"PRAGMA writable_schema = ON;
 			INSERT INTO sqlite_schema VALUES ('table', 'f', 'f', 0, 'CREATE VIRTUAL TABLE f USING fts5(a)');",
-			// A row can name a known object and still hold something else.
+			// A row can name a known object and still be something else.
 			"PRAGMA writable_schema = ON;
 			UPDATE sqlite_schema SET sql = 'CREATE  TABLE meta (key TEXT PRIMARY KEY, value) WITHOUT ROWID' WHERE name = 'meta';",
 		];

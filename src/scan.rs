@@ -296,7 +296,7 @@ struct Shared {
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
-	// blake2b for every file read, not only ones with a current rmlint set.
+	// blake2b for every file read, also ones without a current rmlint set.
 	rmlint: bool,
 	mode: Mode,
 	// Never skipped until read clean or accepted.
@@ -859,7 +859,7 @@ impl Drop for DoneOnDrop<'_> {
 	}
 }
 
-// A panic is a fault, not a hang: it stops the run and marks it failed.
+// A panic is a fault rather than a hang: it stops the run and marks it failed.
 fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
 	if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
 		sh.faults.add(&sh.stop, format!("{who} panicked"));
@@ -869,7 +869,7 @@ fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
 fn run_group(g: &Group, sh: &Shared) {
 	let _done = DoneOnDrop(&g.done);
 	let (jtx, jrx) = sync_channel::<Job>(1024);
-	// Only the workers hold the receiver, so once the last one is gone the
+	// Only the workers have the receiver, so once the last one is gone the
 	// walk's send fails, rather than waiting on a full queue forever.
 	let jrx = Arc::new(Mutex::new(jrx));
 	let links = Links::default();
@@ -2039,7 +2039,7 @@ mod tests {
 		(sh, rx)
 	}
 
-	// More files than the job queue holds, and no worker to take them. Workers
+	// More files than the job queue has room for, and no worker to take them. Workers
 	// stopped opening the database in 2026102810135573, so a missing one now
 	// stops the walk alone, and no workers is asked for outright.
 	#[test]
@@ -2504,7 +2504,7 @@ mod tests {
 
 	// Row `link-writing`. The claimant is part way through its set after an
 	// edit: the old checksum and inode value, the new size and time. A read
-	// across those writes sees just that.
+	// across those writes sees that.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn a_half_written_set_is_not_read() {
@@ -2858,7 +2858,7 @@ mod tests {
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
 	}
 
-	// rmlint takes plain unkeyed blake2b-512. The first two are RFC 7693's,
+	// rmlint takes plain unkeyed blake2b-512. The first 2 are RFC 7693's,
 	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
 	#[test]
 	fn b2b_matches_known_digests() {

@@ -192,7 +192,7 @@ mod tests {
 		assert!(!reachable(&now, None, p("/ab/f")));
 		// No root list to go by.
 		assert!(reachable(&now, None, p("/a/f")));
-		// A deeper root of this run counts, not the shallow one.
+		// A deeper root of this run counts, and the shallow one doesn't.
 		let now = [p("/a"), p("/a/m")];
 		assert!(reachable(&now, Some(&[p("/a/m")]), p("/a/m/f")));
 		assert_eq!(split_roots(b"/a\0/a/m"), now);
