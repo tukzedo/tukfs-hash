@@ -229,14 +229,14 @@ pub fn write_b3(
 	(dev, ino): (u64, u64),
 	what: B3Write,
 ) -> io::Result<()> {
-	let all = what == B3Write::All;
-	if all {
-		fset(fd, B3_DIGEST, b64u_encode(digest).as_bytes())?;
-		fset(fd, B3_BYTES, bytes.to_string().as_bytes())?;
-	}
-	fset(fd, B3_DATE, date_us.to_string().as_bytes())?;
-	if all {
-		fset(fd, B3_MTIME, mtime_us.to_string().as_bytes())?;
+	match what {
+		B3Write::All => {
+			fset(fd, B3_DIGEST, b64u_encode(digest).as_bytes())?;
+			fset(fd, B3_BYTES, bytes.to_string().as_bytes())?;
+			fset(fd, B3_DATE, date_us.to_string().as_bytes())?;
+			fset(fd, B3_MTIME, mtime_us.to_string().as_bytes())?;
+		}
+		B3Write::DateOnly => fset(fd, B3_DATE, date_us.to_string().as_bytes())?,
 	}
 	fset(fd, B3_INODE, inode_text(dev, ino, digest).as_bytes())?;
 	Ok(())

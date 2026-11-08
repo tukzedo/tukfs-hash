@@ -345,7 +345,7 @@
 - `xattr::write_b3` turns its `B3Write` back into a bool, so a new variant would be written as `DateOnly`.
 	- ID: 2026110715441802
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 3
@@ -354,6 +354,13 @@
 	- Expected behavior [Bug]: Rust style: enums with an exhaustive match, and no bool for states that exclude each other.
 	- Probable fix [Bug]: Match on `what`, so a new variant fails to compile.
 	- Related IDs: 2026102808215688
+	- Needs local test suite run?: No, the quick gate covers it.
+	- Actual fix [Bug]: `write_b3` matches on `what`. `All` writes the digest, bytes, date and time, `DateOnly` only the date, then the inode text for both. The write order is as before.
+	- Branch: round-20261108
+	- Test case: none new, a refactor with the same writes. The integration steps that read the attributes back cover both variants.
+	- Verified: clippy with all targets, the xattr unit tests, and `--backlog-run-quick` passed.
+	- Swept: all 3 `write_b3` callers pass a `B3Write`, and no other `B3Write` is turned into a bool.
+	- Acceptance signoff: Self-closed: mechanical.
 
 - The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
 	- ID: 2026110715441803
