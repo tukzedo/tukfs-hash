@@ -29,6 +29,20 @@
 
 ## Issues
 
+- A database reached through a bind mount is hashed by the walk of a root that holds its folder under another name, with attributes written on it.
+	- ID: 2026110719570617
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-195706
+	- Opened by: 2026102814341414's sweep
+	- Related IDs: 2026102814341414, 2026102814341408
+	- Steps to reproduce [Bug]: In `unshare -rm`, bind `tree/sub` on `bind`, then `scan --db bind/t.sqlite --root tree`.
+	- Incorrect behavior [Bug]: `tree/sub/t.sqlite`, its `-wal`, `-shm` and `.lock` are read as files: 5 path rows for 1 file, and attributes written on the live database.
+	- Expected behavior [Bug]: design.md, "Database": a database inside a root leaves out only its own names.
+	- Origin: `excluded` in `scan.rs`, from 2026102814341408. Confirmed.
+	- Probable fix [Bug]: Compare the folder's device and inode with the database folder's, not its path.
+
 - 2 private cicd checks fail on dev: build-mark-check.bash and gate-record-check.bash's strict image case.
 	- ID: 2026110718460111
 	- Type: Bug
@@ -233,7 +247,7 @@
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 19
@@ -244,6 +258,23 @@
 	- Probable fix [Bug]: Keep mountinfo's mount root in `mounts::Mount`, and drop a root whose device and mount root fall inside another root on the same device.
 	- Note: The repro runs without root under `unshare -rm`, the same as check `deeby`.
 	- Related IDs: 2026102814341407
+	- Reproduced [Bug]: Yes, with the build from before `2ee45ae`: `plan` kept both roots, and `scan` saw 60 files for 40.
+	- Actual cause [Bug]: `plan` dropped a root only when it sat inside another by path on the same mount. A bind mount is its own mount at another path, so it was kept.
+	- Actual fix [Bug]:
+		- `Mount` keeps the table's device and mount root. `mounts::seen_from` maps a root to its folder in another root's tree, when that walk gets there on its own mount and stops at no mount below it that the root's own walk doesn't.
+		- `plan` drops a root whose folder another root's walk reaches, with the same device and inode, checked against every other root, since a bind mount can sort first. The old "inside" rule is the case where the 2 paths are the same. The skip line names the path it's read as.
+		- design.md, "Reading files", says so.
+	- Decisions:
+		- A root is kept when the other root's walk would stop at a mount under the folder that its own walk doesn't, so a partial overlap is read twice rather than part of it missed.
+		- A `--threads` given for a root that's dropped this way no longer matches, since its path isn't under the kept root. Left as is, since the disks are the same and the default count applies.
+		- As in 2026102814341412, a stopped run over such roots has another root list now, so `--resume` refuses it.
+	- Branch: round-20261108
+	- Commit: `2ee45ae`
+	- Test case: `df0qb` (unit, the table), `df0qc` and `df0qd` (integration step 25, in a user namespace, skipped on ZFS).
+	- Verified: `df0qc` and `df0qd` fail against the build from before the fix ("0 files 12 hashed 7" and 0 skips) and pass after on ext4. `des5f` to `des5k` and `des5x` still pass. `--backlog-run-quick` passed in 1m 52s.
+	- Swept: `plan` is the only place that drops roots. The `--threads` match, `gone`'s root rules and the resume root list go by the kept roots' paths. `excluded`'s own-database test goes by path, which 2026110719570617 covers.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261107-195744
 
 - Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
 	- ID: 2026110715441800
