@@ -292,6 +292,9 @@ struct Shared {
 	db_dir: (u64, u64),
 	excludes: Vec<PathBuf>,
 	no_xattr: Vec<PathBuf>,
+	// --exclude and --no-xattr by device and inode too, for the same reason.
+	exclude_ids: HashSet<(u64, u64)>,
+	no_xattr_ids: HashSet<(u64, u64)>,
 	mount_points: BTreeMap<PathBuf, String>,
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
@@ -318,6 +321,7 @@ struct Group {
 struct Job {
 	path: PathBuf,
 	in_git: bool,
+	no_xattr: bool,
 	root: Arc<Root>,
 	prior: Option<Prior>,
 }
@@ -604,6 +608,8 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			.iter()
 			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
 			.collect(),
+		exclude_ids: ids_of(&o.excludes),
+		no_xattr_ids: ids_of(&o.no_xattr),
 		mount_points: mounts::mount_points(mounts),
 		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
 		// A quick check leaves ctimes alone.
@@ -914,6 +920,25 @@ fn db_dir(db: &Path) -> Result<(u64, u64), String> {
 		.map_err(|e| format!("database folder {}: {e}", dir.display()))
 }
 
+// A path that isn't there yet matches by path only.
+fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
+	paths
+		.iter()
+		.filter_map(|p| fs::metadata(p).ok())
+		.map(|m| (m.dev(), m.ino()))
+		.collect()
+}
+
+// A root inside one of the folders under another name. The root's own folder
+// is the walk's to check.
+fn inside_any(root: &Path, ids: &HashSet<(u64, u64)>) -> bool {
+	!ids.is_empty()
+		&& root
+			.ancestors()
+			.skip(1)
+			.any(|a| fs::metadata(a).is_ok_and(|m| ids.contains(&(m.dev(), m.ino()))))
+}
+
 // The database, its journal files and its lock, in its folder under any name.
 // Anything else that only starts with its name is read like any other file.
 fn excluded(sh: &Shared, p: &Path, in_db_dir: bool) -> bool {
@@ -960,10 +985,17 @@ pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
 // so its list doesn't grow without end.
 const FILES_BATCH: usize = 1 << 20;
 
+// What a folder hands down to everything under it.
+#[derive(Clone, Copy)]
+struct Marks {
+	in_git: bool,
+	no_xattr: bool,
+}
+
 // Subfolders still to walk, last name first, so each pop frees one.
 struct Frame {
 	dir: PathBuf,
-	in_git: bool,
+	marks: Marks,
 	subdirs: Vec<Box<OsStr>>,
 }
 
@@ -979,6 +1011,9 @@ fn walk(
 	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) {
+	if inside_any(root, &sh.exclude_ids) {
+		return;
+	}
 	let root = match Root::open(root) {
 		Ok(r) => Arc::new(r),
 		// A root gone since the plan wasn't read either.
@@ -989,10 +1024,14 @@ fn walk(
 		}
 	};
 	let mut stack: Vec<Frame> = Vec::new();
-	let mut next = Some((root.path.clone(), git_tree_above(&root.path, root.dev)));
+	let above = Marks {
+		in_git: git_tree_above(&root.path, root.dev),
+		no_xattr: inside_any(&root.path, &sh.no_xattr_ids),
+	};
+	let mut next = Some((root.path.clone(), above));
 	while !sh.stop.load(Relaxed) {
-		if let Some((dir, git_above)) = next.take() {
-			match list_dir(&root, dir, git_above, sh, stats, look, jobs) {
+		if let Some((dir, above)) = next.take() {
+			match list_dir(&root, dir, above, sh, stats, look, jobs) {
 				Ok(Some(f)) => stack.push(f),
 				Ok(None) => {}
 				Err(Closed) => return,
@@ -1002,7 +1041,7 @@ fn walk(
 			return;
 		};
 		match top.subdirs.pop() {
-			Some(name) => next = Some((top.dir.join(&*name), top.in_git)),
+			Some(name) => next = Some((top.dir.join(&*name), top.marks)),
 			None => _ = stack.pop(),
 		}
 	}
@@ -1011,7 +1050,7 @@ fn walk(
 fn list_dir(
 	root: &Arc<Root>,
 	dir: PathBuf,
-	git_above: bool,
+	above: Marks,
 	sh: &Shared,
 	stats: &Stats,
 	look: &rusqlite::Connection,
@@ -1027,6 +1066,8 @@ fn list_dir(
 		// A btrfs subvolume, or something mounted since the scan began. The
 		// mount table only knows what was there at the start.
 		Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
+		// --exclude under another name, as through a bind mount.
+		Ok((id, _)) if sh.exclude_ids.contains(&id) => return Ok(None),
 		Ok(got) => got,
 		Err(e) if beneath::moved(&e) => return Ok(None),
 		Err(e) => {
@@ -1037,7 +1078,10 @@ fn list_dir(
 	};
 	// Asked first, since a big folder's files are queued before the listing
 	// ends.
-	let mut in_git = git_above || list.has(".git");
+	let mut marks = Marks {
+		in_git: above.in_git || list.has(".git"),
+		no_xattr: above.no_xattr || sh.no_xattr_ids.contains(&id),
+	};
 	let mut files: Vec<(u64, PathBuf)> = Vec::new();
 	let mut subdirs = Vec::new();
 	for (seen, ent) in list.enumerate() {
@@ -1057,7 +1101,7 @@ fn list_dir(
 			}
 		};
 		if &*ent.name == ".git" {
-			in_git = true;
+			marks.in_git = true;
 		}
 		let kind = match ent.kind {
 			Ok(k) => k,
@@ -1086,14 +1130,14 @@ fn list_dir(
 		}
 		files.push((ent.ino, p));
 		if files.len() >= FILES_BATCH {
-			queue(root, &mut files, in_git, sh, stats, look, jobs)?;
+			queue(root, &mut files, marks, sh, stats, look, jobs)?;
 		}
 	}
-	queue(root, &mut files, in_git, sh, stats, look, jobs)?;
+	queue(root, &mut files, marks, sh, stats, look, jobs)?;
 	subdirs.sort_unstable_by(|a, b| b.cmp(a));
 	Ok(Some(Frame {
 		dir,
-		in_git,
+		marks,
 		subdirs,
 	}))
 }
@@ -1105,7 +1149,7 @@ const LOOKUP_BATCH: usize = 256;
 fn queue(
 	root: &Arc<Root>,
 	files: &mut Vec<(u64, PathBuf)>,
-	in_git: bool,
+	marks: Marks,
 	sh: &Shared,
 	stats: &Stats,
 	look: &rusqlite::Connection,
@@ -1131,7 +1175,8 @@ fn queue(
 			};
 			let job = Job {
 				path,
-				in_git,
+				in_git: marks.in_git,
+				no_xattr: marks.no_xattr,
 				root: root.clone(),
 				prior,
 			};
@@ -1859,8 +1904,10 @@ impl<'a> Worker<'a> {
 		// No xattrs in git work trees. See design.md, Attributes.
 		if !sh.write_xattrs
 			|| job.in_git
+			|| job.no_xattr
 			|| sh.no_write_devs.contains(&before.dev())
 			|| sh.no_xattr.iter().any(|x| path.starts_with(x))
+			|| sh.no_xattr_ids.contains(&(before.dev(), before.ino()))
 		{
 			return;
 		}
@@ -2026,6 +2073,8 @@ mod tests {
 			db,
 			excludes: Vec::new(),
 			no_xattr: Vec::new(),
+			exclude_ids: HashSet::new(),
+			no_xattr_ids: HashSet::new(),
 			mount_points: BTreeMap::new(),
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
@@ -2209,6 +2258,7 @@ mod tests {
 		Job {
 			path: root.path.join(rel),
 			in_git: false,
+			no_xattr: false,
 			root: root.clone(),
 			prior: None,
 		}
@@ -2365,6 +2415,82 @@ mod tests {
 		]
 		.into();
 		assert_eq!(jobs, want);
+	}
+
+	// --exclude and --no-xattr know their folders by device and inode too, so
+	// a walk that reaches one under another name, as through a bind mount,
+	// still leaves it out or marks it, and so does a root inside one.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn excluded_and_no_xattr_folders_under_another_name() {
+		let _id = test_id("df1ng");
+		let d = scratch("scan_exclids");
+		let tree = fs::canonicalize(&*d).unwrap().join("tree");
+		for sub in ["ex", "ex/deep", "nx", "nx/deep", "plain"] {
+			fs::create_dir_all(tree.join(sub)).unwrap();
+			fs::write(tree.join(sub).join("f"), "x").unwrap();
+		}
+		fs::write(tree.join("top"), "x").unwrap();
+		let look = db::open_rw(&d.join("look.sqlite")).unwrap();
+		let walked = |root: &Path| {
+			let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+			sh.excludes = vec![d.join("elsewhere/ex")];
+			sh.no_xattr = vec![d.join("elsewhere/nx")];
+			sh.exclude_ids = ids_of(&[tree.join("ex")]);
+			sh.no_xattr_ids = ids_of(&[tree.join("nx")]);
+			let drain = std::thread::spawn(move || rx.iter().count());
+			let (jtx, jrx) = sync_channel(64);
+			walk(root, &sh, &Stats::default(), &look, &jtx);
+			drop((jtx, sh));
+			drain.join().unwrap();
+			jrx.iter()
+				.map(|j| (j.path, j.no_xattr))
+				.collect::<BTreeMap<_, _>>()
+		};
+		let want = |l: &[(&str, bool)]| -> BTreeMap<PathBuf, bool> {
+			l.iter().map(|(p, n)| (tree.join(p), *n)).collect()
+		};
+		assert_eq!(
+			walked(&tree),
+			want(&[
+				("nx/deep/f", true),
+				("nx/f", true),
+				("plain/f", false),
+				("top", false),
+			])
+		);
+		assert_eq!(walked(&tree.join("ex/deep")), want(&[]));
+		assert_eq!(walked(&tree.join("nx/deep")), want(&[("nx/deep/f", true)]));
+		assert_eq!(walked(&tree.join("plain")), want(&[("plain/f", false)]));
+	}
+
+	// A file given to --no-xattr gets none under another name either, a hard
+	// link included, since the attributes are the inode's.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
+	fn no_xattr_file_under_another_name() {
+		let _id = test_id("df1nh");
+		let d = scratch("scan_nxfile");
+		fs::write(d.join("given"), "x").unwrap();
+		fs::hard_link(d.join("given"), d.join("other")).unwrap();
+		fs::write(d.join("plain"), "x").unwrap();
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		sh.no_xattr_ids = ids_of(&[d.join("given")]);
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		read_one(&g, &sh, &job(&r, "plain"), None, &Links::default());
+		read_one(&g, &sh, &job(&r, "other"), None, &Links::default());
+		drop(sh);
+		drain.join().unwrap();
+		let b3 = |name: &str| OnFile::read(File::open(d.join(name)).unwrap().as_raw_fd()).b3;
+		if b3("plain").is_none() {
+			eprintln!("no user xattrs here; skipped");
+			return;
+		}
+		assert_eq!(g.stats.files.load(Relaxed), 2);
+		assert_eq!(b3("given"), None);
 	}
 
 	// design.md, Attributes: none in a git work tree, however deep the root.
