@@ -58,6 +58,9 @@ Usage:
 	tukfs-hash prune --db FILE
 	tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 
+Each command refuses an option that isn't shown for it. -h or --help after a
+command shows this help.
+
 scan options:
 	--exclude DIR       Don't go into DIR. Repeatable.
 	--no-xattr DIR      Checksum files under DIR, but leave no attributes on them. Repeatable.
@@ -167,6 +170,27 @@ fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<St
 		.ok_or_else(|| format!("{flag}: {} isn't text", util::escape_name(v.as_bytes())))
 }
 
+const COMMANDS: [&str; 8] = [
+	"scan", "plan", "runs", "report", "gone", "accept", "prune", "snapdiff",
+];
+
+// The commands that take each option. One that isn't listed for the command
+// is refused by name, so a filter asked for is never quietly left out.
+fn takers(flag: &str) -> Option<&'static [&'static str]> {
+	Some(match flag {
+		"--db" => &["scan", "runs", "report", "gone", "accept", "prune"],
+		"--root" | "--threads" => &["scan", "plan"],
+		"--exclude" | "--no-xattr" | "--no-xattrs" | "--rmlint" | "--since" | "--resume"
+		| "--verify" | "--progress" => &["scan"],
+		"--run" | "--limit" => &["report", "gone"],
+		"--kind" => &["report"],
+		"--old" | "--new" | "--zfs-diff" | "--mount" | "--find-new" | "--list" | "--all" => {
+			&["snapdiff"]
+		}
+		_ => return None,
+	})
+}
+
 fn main() {
 	// Paths can be any bytes, so not env::args, which panics on them.
 	let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -194,6 +218,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	if cmd == "--version" {
 		out!("{}", version_line(BUILD_MINUTES));
 		return Ok(0);
+	}
+	if !COMMANDS.contains(&cmd) {
+		return Err(format!("unknown command {}; see --help", shown(&argv[0])));
 	}
 
 	let mut db = None;
@@ -230,6 +257,17 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 		}
 		let a = arg.to_str().unwrap_or_default();
+		if a == "-h" || a == "--help" {
+			let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+			return Ok(0);
+		}
+		match takers(a) {
+			None => return Err(format!("unknown option {}; see --help", shown(arg))),
+			Some(c) if !c.contains(&cmd) => {
+				return Err(format!("{cmd} doesn't take {a}; see --help"));
+			}
+			Some(_) => {}
+		}
 		match a {
 			"--db" => db = Some(p(take_value(&mut it, a)?)),
 			"--root" => roots.push(p(take_value(&mut it, a)?)),
@@ -586,6 +624,86 @@ mod tests {
 			};
 			assert_eq!(damage_first(k), was, "{n}");
 		}
+	}
+
+	fn argv(a: &[&str]) -> Vec<OsString> {
+		a.iter().map(OsString::from).collect()
+	}
+
+	#[test]
+	fn a_flag_for_another_command_is_refused() {
+		let _id = test_id("df1q2");
+		for (cmd, flag) in [
+			("gone", "--root"),
+			("report", "--since"),
+			("accept", "--rmlint"),
+			("runs", "--limit"),
+			("plan", "--exclude"),
+			("prune", "--run"),
+			("scan", "--all"),
+			("snapdiff", "--db"),
+		] {
+			assert_eq!(
+				real_main(&argv(&[cmd, flag, "x"])),
+				Err(format!("{cmd} doesn't take {flag}; see --help"))
+			);
+		}
+		assert_eq!(
+			real_main(&argv(&["scan", "--bogus"])),
+			Err("unknown option --bogus; see --help".into())
+		);
+		assert_eq!(
+			real_main(&argv(&["bogus", "--db", "x"])),
+			Err("unknown command bogus; see --help".into())
+		);
+	}
+
+	// Each command's own options get past the check and into the parser. With
+	// nothing else given, every one stops at an error before touching a file.
+	#[test]
+	fn each_command_takes_its_own_flags() {
+		let _id = test_id("df1q3");
+		let flags = [
+			"--db",
+			"--root",
+			"--exclude",
+			"--no-xattr",
+			"--no-xattrs",
+			"--rmlint",
+			"--threads",
+			"--since",
+			"--resume",
+			"--verify",
+			"--progress",
+			"--run",
+			"--kind",
+			"--limit",
+			"--old",
+			"--new",
+			"--zfs-diff",
+			"--mount",
+			"--find-new",
+			"--list",
+			"--all",
+		];
+		let mut taken = 0;
+		for cmd in COMMANDS {
+			for flag in flags {
+				let Some(cmds) = takers(flag) else {
+					panic!("{flag} has no commands");
+				};
+				if !cmds.contains(&cmd) {
+					continue;
+				}
+				taken += 1;
+				let got = real_main(&argv(&[cmd, flag])).unwrap_err();
+				assert!(
+					!got.contains("unknown") && !got.contains("doesn't take"),
+					"{cmd} {flag}: {got}"
+				);
+			}
+		}
+		assert_eq!(taken, 30);
 	}
 
 	#[test]

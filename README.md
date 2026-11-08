@@ -119,7 +119,7 @@ tukfs-hash prune --db FILE
 tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 ~~~
 
-`tukfs-hash --help` has the options. `report` and `gone` list 200 lines unless `--limit` says otherwise, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
+`tukfs-hash --help` has the options, and so does `-h` or `--help` after a command. Each command refuses an option that isn't shown for it, rather than ignore it. `report` and `gone` list 200 lines unless `--limit` says otherwise, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
 `accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. On NTFS, APFS or HFS+ only the database record changes. Each name of a hard-linked file has its own record, so name each one.
 

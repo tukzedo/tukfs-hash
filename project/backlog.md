@@ -116,7 +116,8 @@
 - Every command takes every other command's flags without a word, and `scan --help` is an error.
 	- ID: 2026102814341425
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Waiting on UAT
+		- It changes what users type. b23's scan wrapper's `--plan` now stops at `plan doesn't take --exclude`, since it hands `plan` the same list as `scan`. Its fix is to keep `--exclude` and `--no-xattr` out of the list it gives `plan`.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 15
@@ -126,6 +127,18 @@
 		- `-h` and `--help` after a command print the help.
 	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
 	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
+	- Actual fix:
+		- Each option has a list of the commands that take it. Any other command refuses it with `<command> doesn't take <option>; see --help`, exit 1. An unknown command is refused before its options are read.
+		- `-h` and `--help` anywhere after a command print the help, exit 0. After `accept --`, they're file names.
+		- The help text and README say both.
+	- Decisions:
+		- `plan` refuses `scan`'s other options too, as the requirement says, since it doesn't use them. The b23 wrapper's `--plan` breaks on that. Filed as a Check in questions.md.
+		- Help after a command is the whole help, not the command's part of it, since the help is short and each part points at the others.
+		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
+	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
+	- Branch: round-20261108b
+	- Test case: `df1q2` (unit, 8 options refused by name), `df1q3` (unit, each command's own options get past the check), `df1q4` to `df1q7` (integration step 22: help after `scan` and `accept`, and `gone --root`, `report --since` and `accept --rmlint` refused).
+	- Verified: `df1q4` to `df1q7` fail against the installed build from before and pass after. `df1q2` fails with the refusal taken out and passes after. `--backlog-run-quick` passed in 3m 05s, and its `miri` area in 1m 02s.
 
 - `--exclude` and `--no-xattr` miss a folder that a root's walk reaches under another name, such as through a bind mount.
 	- ID: 2026110720070507

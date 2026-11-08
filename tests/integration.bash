@@ -735,6 +735,15 @@ done
 check dee8e "help ends with a blank line" "${helpBad}" ""
 check des4v "help exit codes" "${helpRcs}" " [-h] 0 [--help] 0 [help] 0 [] 1"
 
+# After a command too. And a command refuses another's option by name, rather
+# than leave out the filter it asked for (2026102814341425).
+helpWant="$("${bin}" --help && echo x0)"
+check df1q4 "help after a command" "$("${bin}" scan --root "${tree}" --help && echo x0 || echo "x$?")|$("${bin}" accept --db "${db}" -h && echo x0 || echo "x$?")" "${helpWant}|${helpWant}"
+refused() { local rc=0 msg=''; msg="$("${bin}" "${@}" 2>&1 > /dev/null)" || rc=$?; echo "${rc} ${msg}"; }
+check df1q5 "gone refuses --root" "$(refused gone --db "${db}" --root "${tree}")" "1 tukfs-hash: gone doesn't take --root; see --help"
+check df1q6 "report refuses --since" "$(refused report --db "${db}" --since "${tomorrow}")" "1 tukfs-hash: report doesn't take --since; see --help"
+check df1q7 "accept refuses --rmlint" "$(refused accept --db "${db}" --rmlint "${tree}/small.txt")" "1 tukfs-hash: accept doesn't take --rmlint; see --help"
+
 # 23. A mount point whose name isn't UTF-8 doesn't stop a scan of some other
 # root (2026102519331112). The mounts are in a user namespace, so no root is
 # needed, and they go when it ends. A box that won't make one skips, and so
@@ -978,3 +987,5 @@ fi
 ##		  subvolume a stop left behind is removed with its folder.
 ##		- 20261108: A bind mount of a folder inside another root, and a
 ##		  database reached through one.
+##		- 20261108: Help after a command, and an option another command takes
+##		  refused.
