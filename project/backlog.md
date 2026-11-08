@@ -145,7 +145,7 @@
 - Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
 	- ID: 2026110715441800
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 1
@@ -156,6 +156,19 @@
 	- Possible cause [Bug]: `mounts::visible` checks every sibling of a mount for each mount, in `covered` and `shadowed`.
 	- Probable fix [Bug]: Work out `covered` once per mount, and find a shadowing sibling by a map lookup of each folder above the mount point. Keep des5f, des5g and des5h, and add a timed case with a few thousand siblings and a threshold.
 	- Related IDs: 2026102814341407
+	- Reproduced [Bug]: Yes. In `unshare -rm` with 2,215 mounts, `plan --root` took 1.53 s of user CPU with the build from before the fix, and 0.00 s after.
+	- Actual cause [Bug]: As above. `covered` was worked out again for each child of a mount, and `shadowed` looked at every sibling, so a folder of N mounts took N squared steps.
+	- Actual fix [Bug]: `covered` is worked out once per mount, from a map of mounts by parent and point. `shadowed` looks up each folder above the mount point in that map, and stops at the depth of the shallowest sibling, so a chain of nested mounts stays linear too.
+	- Decisions:
+		- The old filter stays in the tests as the model, and a fuzz test checks the new one gives the same answer on random tables, with repeated IDs, missing parents and loops.
+		- Only for an empty mount point, which the kernel never writes, can the 2 differ. The old one took it as above every folder.
+	- Branch: round-20261108b
+	- Commit: `ff4d96f`
+	- Test case: `df1nz` (unit, 8,000 siblings and 1,000 nested mounts under 1 s each), `df1ny` (fuzz, same answer as the old filter). `des5f`, `des5g` and `des5h` keep their cases.
+	- Verified: `df1nz` fails with the old filter, at 8.8 s for the flat table, and passes after. `df1ny` turns red when `covered` counts a mount as its own cover, when the shadow check drops its parent test, or when the depth stop is one short. `--backlog-run-quick` passed in 2m 04s, and its `miri` area too.
+	- Swept: the rest of `mounts.rs` for loops over the table inside loops over the table. `mount_for`, `mount_points`, `hands_off_at` and `disks_under` take one pass per call, a few times per root. `seen_from` checks the mounts below one path against those below another, but only for 2 roots on one device, one reached from the other. Not filed, since it needs thousands of mounts below both.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261108-122450
 
 - The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
 	- ID: 2026110715441803
