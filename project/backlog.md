@@ -401,7 +401,8 @@
 - The scan opens each file twice, once to stat it and once to read it, though the first is only needed when the file might be skipped.
 	- ID: 2026110715441807
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Canceled
+		- Not worth the change. The saving was under the noise of 35 paired timing rounds.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 8
@@ -411,6 +412,13 @@
 		- Stat first only when a skip can apply: a resume, a row already seen this run, or one hashed since the cutoff. Otherwise go straight to the read open.
 		- A FIFO swapped in after the folder was read is still refused, by the read open's own check.
 	- Related IDs: 2026102808215738
+	- Needs local test suite run?: No
+	- Progress log:
+		- 2026-11-08: Tried it: a stat first only for a resume-listed path or a row seen this run or hashed since the cutoff, else straight to the read open, which counts the file and refuses a FIFO or socket itself. On 20,000 files of 1 to 4 KB, over 35 paired rounds at load 5 to 28, user plus sys CPU went from a median of 1.55 to 1.56 s on a first scan and 1.64 to 1.62 s on a `--rmlint` rescan. Paired, the change was faster in 17 and 20 of the 35 rounds. The middle half of the rounds spread over about 0.25 s.
+	- Decisions:
+		- Left the code as it was. The saving, if any, is under 2% and lost in the noise, and the split adds a second place that counts files and refuses what isn't one.
+	- Test case: none, no code change.
+	- Closed: 20261108-140748
 
 - The scan's walk and worker pass the same context through 3 functions, and repeat the "seen once per run" rule at 4 sites.
 	- ID: 2026110715441808
