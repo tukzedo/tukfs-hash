@@ -199,7 +199,7 @@
 	- Actual cause [Bug]: One state of 3 values was held in 2 variables, from 2026101406340916's fix.
 	- Decisions:
 		- The enum is `Kept`, private to `db.rs`: `All`, `EventsOnly(reason)` and `Nothing(reason)`. It only moves down, and keeps the first failure's reason, as before. No behavior change.
-	- Actual fix [Bug]: `batches` holds one `Kept` and moves it with one match on the state and the events' commit. The rows are only written from `All`.
+	- Actual fix [Bug]: `batches` keeps one `Kept` and moves it with one match on the state and the events' commit. The rows are only written from `All`.
 	- Branch: round-20261108b
 	- Commit: `a99cae6`
 	- Test case: `ddy8d` (a bad row keeps the events), and new `df1pa` (a bad event drops events and rows for good, even once the cause is gone). Not a test that fails before, since the old code did the same.
