@@ -80,6 +80,8 @@ The first scan reads every file and records it. Run the same scan again on a lat
 
 - Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again. `--resume` only takes the newest scan, and only with the same roots and the same `--verify` or not, so 2 scripts sharing one database can't finish each other's runs.
 
+- Progress lines and the summary show roughly how far each group has got, as a share of the space used on its filesystems. That's only shown when every root in the group is a whole filesystem, and it's a rough figure, since compression, reflinks and snapshots make the space used differ from what gets read.
+
 - `scan --verify` is a quicker check between full runs. It reads again only the files with a checksum stored at their current size and time, even ones read earlier that day, and leaves no attributes. New and edited files wait for the next full scan.
 
 - `gone` lists the names a finished scan didn't see, which mostly means deleted files. `prune` drops the contents no name points at any more, since every edit leaves one behind.

@@ -88,7 +88,7 @@
 - The scan output has no percent complete.
 	- ID: 2026110407135700
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261104-071357
 	- Opened by: JC
@@ -97,6 +97,21 @@
 		- The final line of a stopped run says how far it got, so `--resume` has a number to compare against.
 	- Note: A run over bf7 and zf13 took over 36 hours with no way to tell how far along it was. A file count walk before the scan would add seeks on the HDDs. The used size of the filesystem is a cheaper total, marked approximate, since compression, reflinks and snapshots make it differ from the bytes the scan reads.
 	- Estimated effort: Low
+	- Actual effort: Low
+	- Progress log:
+		- Progress and summary lines end with `| ~N% of SIZE` against the used space of the group's filesystems, from `statvfs`. Files skipped unread count by size, a hard link's names by their share.
+		- Verified: unit tests, clippy, the quick gate's unit and integration areas on ext4 and ZFS, and Miri. The lint area fails only on a scrub hit in 2026110715441803's `Actual fix` row, not part of this item.
+		- Verified: `skips_count_toward_the_percent` goes red with the skipped sizes left out.
+		- Not run on a real mount root, since one can't be made without root here. `only_a_whole_filesystem_has_a_size` reads `/`.
+		- Swept: every `skip_*` counter site (2 `db-fresh` paths, `skip_unknown`, `skip_xattr`). The hard link `Done` path adds nothing, since the read counted it.
+	- Decisions:
+		- Done counts files skipped unread as well as bytes hashed, so a resumed run's percent goes on from the stopped one's, which is what the second requirement needs. It departs from the wording "bytes hashed".
+		- The total is the filesystems' used space, once per device, per the note. A group with a root that's a folder inside its filesystem gets no percent, since the rest of the filesystem would keep it near 0.
+		- It goes at the end of the line, so the demo's summary line map still matches. The demo's root is a folder, so the gif is unchanged.
+		- It stops at 100, since compression can make the bytes read outrun the space used.
+	- Test case: `df1ph` (`skips_count_toward_the_percent`), `df1pj` (`the_percent_needs_a_size`), `df1pk` (`only_a_whole_filesystem_has_a_size`).
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule. A `Check:` entry in questions.md gives the folder rule and the other options.
+	- Closed: 20261108-124211
 
 - Every command takes every other command's flags without a word, and `scan --help` is an error.
 	- ID: 2026102814341425

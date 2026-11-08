@@ -152,6 +152,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A resumed run doesn't read again what an earlier part already judged at the same size and time, mismatches included, so it doesn't report them twice.
 
+- A group's progress lines and its summary line end with a percent done, against the used space of the filesystems its roots are on, from `statvfs`. Counting the bytes first would take a second walk, and on hard drives that's a lot of seeks. Done is the bytes read plus the sizes of files skipped unread, so a resumed run starts near where the stopped one ended. A skipped name counts its share of a hard link's size. The percent is approximate: compression and reflinks can make the bytes read outrun the space used, so it stops at 100, and snapshots keep it low. A group with a root that's a folder inside its filesystem gets no percent, since the rest of the filesystem would keep it near 0.
+
 - The exit code comes from the run's events in the database, not from the counters of the process that ends it. A file reported by 2 parts counts once, so a resume doesn't double it.
 
 - Each event kind sets one exit code bit, and the bits add up with 2 for a stop. This table is the rule:

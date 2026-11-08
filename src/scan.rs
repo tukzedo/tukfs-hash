@@ -219,6 +219,9 @@ struct Stats {
 	skip_unknown: AtomicU64,
 	links: AtomicU64,
 	bytes: AtomicU64,
+	// Sizes of files skipped unread, so a resumed run's percent picks up
+	// where the stopped part left off.
+	skipped_bytes: AtomicU64,
 	b3_ok: AtomicU64,
 	b2b_ok: AtomicU64,
 	db_ok: AtomicU64,
@@ -252,6 +255,12 @@ impl Stats {
 			g(&self.xattr_fail),
 			g(&self.rmlint_set),
 		)
+	}
+
+	// A hard link's names share its size, so a skip counts each name's part.
+	fn skipped(&self, md: &fs::Metadata) {
+		self.skipped_bytes
+			.fetch_add(md.len() / md.nlink().max(1), Relaxed);
 	}
 }
 
@@ -316,6 +325,21 @@ struct Group {
 	threads: usize,
 	stats: Stats,
 	done: AtomicBool,
+	// Approximate bytes under the roots, from the filesystems' used space.
+	size: Option<u64>,
+}
+
+impl Group {
+	fn line(&self) -> String {
+		let line = self.stats.line();
+		let Some(size) = self.size.filter(|&n| n > 0) else {
+			return line;
+		};
+		let done = self.stats.bytes.load(Relaxed) + self.stats.skipped_bytes.load(Relaxed);
+		// Compression and reflinks can put the bytes read past the space used.
+		let pct = (done.saturating_mul(100) / size).min(100);
+		format!("{line} | ~{pct}% of {}", human_bytes(size))
+	}
 }
 
 struct Job {
@@ -739,6 +763,7 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -
 		.into_iter()
 		.map(|p| {
 			Arc::new(Group {
+				size: used_under(&p.roots),
 				name: p.name,
 				roots: p.roots,
 				threads: p.threads,
@@ -760,6 +785,39 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -
 	groups
 }
 
+// Used space on the roots' filesystems, which stands in for the bytes under
+// them, since counting them first would mean a second walk. None when a root
+// is a folder inside its filesystem, where the rest would keep the percent
+// low. See design.md, Runs and exit codes.
+fn used_under(roots: &[PathBuf]) -> Option<u64> {
+	let mut devs = BTreeSet::new();
+	let mut total = 0u64;
+	for r in roots {
+		let md = fs::metadata(r).ok()?;
+		let up = fs::metadata(r.join("..")).ok()?;
+		if up.dev() == md.dev() && up.ino() != md.ino() {
+			return None;
+		}
+		if devs.insert(md.dev()) {
+			total += fs_used(r)?;
+		}
+	}
+	Some(total)
+}
+
+fn fs_used(p: &Path) -> Option<u64> {
+	let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
+	let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+	// SAFETY: c is NUL-terminated and outlives the call, and st is only read
+	// after the call says it filled it.
+	if unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) } != 0 {
+		return None;
+	}
+	// SAFETY: statvfs returned 0, so st is filled.
+	let st = unsafe { st.assume_init() };
+	Some(st.f_blocks.saturating_sub(st.f_bfree) * st.f_frsize)
+}
+
 fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 	let mut last = Instant::now();
 	while !groups.iter().all(|g| g.done.load(Relaxed)) {
@@ -774,7 +832,7 @@ fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 					fmt_local(now_us()),
 					g.name,
 					human_bytes(rate as u64),
-					g.stats.line()
+					g.line()
 				);
 			}
 		}
@@ -802,7 +860,7 @@ fn finish(
 	// part's. The events line is the whole run's either way.
 	let mut part = String::new();
 	for g in p.groups {
-		let _ = writeln!(part, "{}: {}", g.name, g.stats.line());
+		let _ = writeln!(part, "{}: {}", g.name, g.line());
 	}
 	let counts = run_events(&conn, run_id)
 		.map_err(|x| why.push(format!("database: {x}")))
@@ -1714,6 +1772,7 @@ impl<'a> Worker<'a> {
 				send(sh, Msg::Seen(p.id));
 			}
 			st.skip_db.fetch_add(1, Relaxed);
+			st.skipped(md);
 			self.links.passed(md);
 			return true;
 		}
@@ -1735,6 +1794,7 @@ impl<'a> Worker<'a> {
 				send(sh, Msg::Seen(p.id));
 			}
 			st.skip_db.fetch_add(1, Relaxed);
+			st.skipped(md);
 			self.links.passed(md);
 			return true;
 		}
@@ -1776,6 +1836,7 @@ impl<'a> Worker<'a> {
 		// The next full scan reads it.
 		if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
 			st.skip_unknown.fetch_add(1, Relaxed);
+			st.skipped(before);
 			self.links.passed(before);
 			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
 				send(sh, Msg::Seen(p.id));
@@ -1804,6 +1865,7 @@ impl<'a> Worker<'a> {
 			return false;
 		}
 		st.skip_xattr.fetch_add(1, Relaxed);
+		st.skipped(before);
 		self.links.passed(before);
 		send(
 			sh,
@@ -2110,6 +2172,7 @@ mod tests {
 				threads,
 				stats: Stats::default(),
 				done: AtomicBool::new(false),
+				size: None,
 			};
 			let (dtx, drx) = std::sync::mpsc::channel();
 			std::thread::spawn(move || {
@@ -2239,6 +2302,7 @@ mod tests {
 			threads: 1,
 			stats: Stats::default(),
 			done: AtomicBool::new(false),
+			size: None,
 		}
 	}
 
@@ -2586,6 +2650,70 @@ mod tests {
 		assert_eq!(left(&links), 0);
 		drop(sh);
 		drain.join().unwrap();
+	}
+
+	// A skipped name counts its share of the size, so a resumed run's percent
+	// goes on from the stopped one's (2026110407135700).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn skips_count_toward_the_percent() {
+		let _id = test_id("df1ph");
+		let d = scratch("scan_percent");
+		fs::write(d.join("a"), "linked").unwrap();
+		fs::hard_link(d.join("a"), d.join("b")).unwrap();
+		fs::hard_link(d.join("a"), d.join("c")).unwrap();
+		let md = fs::metadata(d.join("a")).unwrap();
+		let fresh = Prior {
+			id: 1,
+			bytes: md.len() as i64,
+			mtime_us: mtime_us(&md),
+			ino: md.ino() as i64,
+			hashed_us: now_us(),
+			seen_run: 0,
+			b3: blake3::hash(b"linked").as_bytes().to_vec(),
+		};
+		let (sh, rx) = test_shared(d.join("t.sqlite"));
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let mut g = test_group(&d);
+		g.size = Some(24);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let links = Links::default();
+		read_one(&g, &sh, &job(&r, "b"), Some(&fresh), &links);
+		assert_eq!(g.stats.skipped_bytes.load(Relaxed), 2);
+		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		assert_eq!(g.stats.bytes.load(Relaxed), 6);
+		assert!(g.line().ends_with(" | ~33% of 24 B"), "{}", g.line());
+		drop(sh);
+		drain.join().unwrap();
+	}
+
+	#[test]
+	fn the_percent_needs_a_size() {
+		let _id = test_id("df1pj");
+		let mut g = test_group(Path::new("/"));
+		g.stats.bytes.store(300, Relaxed);
+		assert!(!g.line().contains('%'));
+		g.size = Some(0);
+		assert!(!g.line().contains('%'));
+		g.size = Some(1200);
+		assert!(g.line().ends_with(" | ~25% of 1.2 KiB"), "{}", g.line());
+		// Compressed files can read as more than the space they use.
+		g.stats.skipped_bytes.store(5000, Relaxed);
+		assert!(g.line().ends_with(" | ~100% of 1.2 KiB"), "{}", g.line());
+	}
+
+	// A folder inside a filesystem would show the whole filesystem's share.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
+	fn only_a_whole_filesystem_has_a_size() {
+		let _id = test_id("df1pk");
+		let d = scratch("scan_fs_used");
+		assert_eq!(used_under(&[d.to_path_buf()]), None);
+		assert!(used_under(&[PathBuf::from("/")]).is_some_and(|n| n > 0));
+		// One filesystem counts once, however many roots are on it.
+		let once = used_under(&[PathBuf::from("/")]).unwrap();
+		let twice = used_under(&[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
+		assert!(twice < once + once / 2, "{once} then {twice}");
 	}
 
 	// Row `resume-seen`, with no row at the file's size and time to say so.
