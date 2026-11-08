@@ -29,6 +29,34 @@
 
 ## Issues
 
+- Every command takes every other command's flags without a word, and `scan --help` is an error.
+	- ID: 2026102814341425
+	- Type: Enhancement
+	- Status: Waiting on UAT
+		- It changes what users type. b23's scan wrapper's `--plan` now stops at `plan doesn't take --exclude`, since it hands `plan` the same list as `scan`. Its fix is to keep `--exclude` and `--no-xattr` out of the list it gives `plan`.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 15
+	- Origin: `f05c368` and `cede460`. Confirmed.
+	- Requirements [Feature]:
+		- Each command refuses, by name, a flag it doesn't use.
+		- `-h` and `--help` after a command print the help.
+	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
+	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
+	- Actual fix:
+		- Each option has a list of the commands that take it. Any other command refuses it with `<command> doesn't take <option>; see --help`, exit 1. An unknown command is refused before its options are read.
+		- `-h` and `--help` anywhere after a command print the help, exit 0. After `accept --`, they're file names.
+		- The help text and README say both.
+	- Decisions:
+		- `plan` refuses `scan`'s other options too, as the requirement says, since it doesn't use them. The b23 wrapper's `--plan` breaks on that. Filed as a Check in questions.md.
+		- Help after a command prints the whole help, since the help is short and each part points at the others.
+		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
+	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
+	- Branch: round-20261108b
+	- Commit: `864712f`
+	- Test case: `df1q2` (unit, 8 options refused by name), `df1q3` (unit, each command's own options get past the check), `df1q4` to `df1q7` (integration step 22: help after `scan` and `accept`, and `gone --root`, `report --since` and `accept --rmlint` refused).
+	- Verified: `df1q4` to `df1q7` fail against the installed build from before and pass after. `df1q2` fails with the refusal taken out and passes after. `--backlog-run-quick` passed in 3m 05s, and its `miri` area in 1m 02s.
+
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -84,405 +112,6 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
-
-- The scan output has no percent complete.
-	- ID: 2026110407135700
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261104-071357
-	- Opened by: JC
-	- Requirements [Feature]:
-		- Each group's progress line shows a percent complete, from bytes hashed against the bytes under its roots.
-		- The final line of a stopped run says how far it got, so `--resume` has a number to compare against.
-	- Note: A run over bf7 and zf13 took over 36 hours with no way to tell how far along it was. A file count walk before the scan would add seeks on the HDDs. The used size of the filesystem is a cheaper total, marked approximate, since compression, reflinks and snapshots make it differ from the bytes the scan reads.
-	- Estimated effort: Low
-	- Actual effort: Low
-	- Progress log:
-		- Progress and summary lines end with `| ~N% of SIZE` against the used space of the group's filesystems, from `statvfs`. Files skipped unread count by size, a hard link's names by their share.
-		- Verified: unit tests, clippy, the quick gate's unit and integration areas on ext4 and ZFS, and Miri. The lint area fails only on a scrub hit in 2026110715441803's `Actual fix` row, not part of this item.
-		- Verified: `skips_count_toward_the_percent` goes red with the skipped sizes left out.
-		- Not run on a real mount root, since one can't be made without root here. `only_a_whole_filesystem_has_a_size` reads `/`.
-		- Swept: every `skip_*` counter site (2 `db-fresh` paths, `skip_unknown`, `skip_xattr`). The hard link `Done` path adds nothing, since the read counted it.
-	- Decisions:
-		- Done counts files skipped unread as well as bytes hashed, so a resumed run's percent goes on from the stopped one's, which is what the second requirement needs. It departs from the wording "bytes hashed".
-		- The total is the filesystems' used space, once per device, per the note. A group with a root that's a folder inside its filesystem gets no percent, since the rest of the filesystem would keep it near 0.
-		- It goes at the end of the line, so the demo's summary line map still matches. The demo's root is a folder, so the gif is unchanged.
-		- It stops at 100, since compression can make the bytes read outrun the space used.
-	- Test case: `df1ph` (`skips_count_toward_the_percent`), `df1pj` (`the_percent_needs_a_size`), `df1pk` (`only_a_whole_filesystem_has_a_size`).
-	- Acceptance signoff: Self-closed under the 2026-10-14 rule. A `Check:` entry in questions.md gives the folder rule and the other options.
-	- Closed: 20261108-124211
-
-- Every command takes every other command's flags without a word, and `scan --help` is an error.
-	- ID: 2026102814341425
-	- Type: Enhancement
-	- Status: Waiting on UAT
-		- It changes what users type. b23's scan wrapper's `--plan` now stops at `plan doesn't take --exclude`, since it hands `plan` the same list as `scan`. Its fix is to keep `--exclude` and `--no-xattr` out of the list it gives `plan`.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 15
-	- Origin: `f05c368` and `cede460`. Confirmed.
-	- Requirements [Feature]:
-		- Each command refuses, by name, a flag it doesn't use.
-		- `-h` and `--help` after a command print the help.
-	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
-	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
-	- Actual fix:
-		- Each option has a list of the commands that take it. Any other command refuses it with `<command> doesn't take <option>; see --help`, exit 1. An unknown command is refused before its options are read.
-		- `-h` and `--help` anywhere after a command print the help, exit 0. After `accept --`, they're file names.
-		- The help text and README say both.
-	- Decisions:
-		- `plan` refuses `scan`'s other options too, as the requirement says, since it doesn't use them. The b23 wrapper's `--plan` breaks on that. Filed as a Check in questions.md.
-		- Help after a command prints the whole help, since the help is short and each part points at the others.
-		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
-	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
-	- Branch: round-20261108b
-	- Commit: `864712f`
-	- Test case: `df1q2` (unit, 8 options refused by name), `df1q3` (unit, each command's own options get past the check), `df1q4` to `df1q7` (integration step 22: help after `scan` and `accept`, and `gone --root`, `report --since` and `accept --rmlint` refused).
-	- Verified: `df1q4` to `df1q7` fail against the installed build from before and pass after. `df1q2` fails with the refusal taken out and passes after. `--backlog-run-quick` passed in 3m 05s, and its `miri` area in 1m 02s.
-
-- `--exclude` and `--no-xattr` miss a folder that a root's walk reaches under another name, such as through a bind mount.
-	- ID: 2026110720070507
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-200705
-	- Opened by: 2026110719570617's sweep
-	- Related IDs: 2026110719570617, 2026102814341414
-	- Steps to reproduce [Bug]: In `unshare -rm`, bind `tree/sub` on `bind`, then `scan --root tree --no-xattr bind`, and `scan --root tree --exclude bind`.
-	- Incorrect behavior [Bug]: `tree/sub/f` gets a blake3 attribute in the first, and is read in the second.
-	- Expected behavior [Bug]: The help text: `--exclude DIR` doesn't go into DIR, and `--no-xattr DIR` leaves no attributes under it, whatever name the walk reaches it by.
-	- Reproduced [Bug]: Yes, with `6100218`.
-	- Probable fix [Bug]: Keep each folder's device and inode as well as its path. The walk knows each folder's from its fd, as `excluded` now uses for the database's folder, and `--no-xattr` passes down the frames as `in_git` does.
-	- Note: Decide first whether a path given by the user should match another name of the same folder. The `--threads` case in 2026102814341414 was left as is.
-	- Decisions: Match by device and inode, the same as the database's folder since 2026110719570617. The help text promises no attributes under a folder and no walk into it, and a second name for the folder doesn't change that intent. Writing where told not to is the worse failure. --threads stays by path, since it only sets worker counts.
-		- A file in a `--no-xattr` folder that's hard-linked from outside it can still get attributes through the outside name, as before. Finding those would mean walking every such folder first.
-		- An excluded folder that can't be opened, reached only under another name, still gives a `dir-error`, since its device and inode come from the open.
-	- Actual cause [Bug]: The walk matched `--exclude` and `--no-xattr` only by path, so a folder reached under another path, as through a bind mount, didn't match.
-	- Actual fix [Bug]:
-		- The scan takes the device and inode of each path given to `--exclude` and `--no-xattr` before it starts. The walk compares each folder's, from its fd, so an excluded folder isn't listed, and a `--no-xattr` one marks everything under it, as a git work tree does.
-		- A root inside one of them under another name is found by its parent folders. A file given to `--no-xattr` gets no attributes under any name, a hard link included.
-		- The path rules stay, so a folder given by its own path still isn't opened. design.md, "Reading files", says so.
-	- Branch: round-20261108b
-	- Commit: `91439f1`
-	- Test case: `df1ng` (unit, a walk and roots that reach the folders by another path), `df1nh` (unit, a hard link to a `--no-xattr` file), `df1nj` and `df1nk` (integration step 25, in a user namespace, skipped on ZFS).
-	- Verified: `df1nj` and `df1nk` fail against the build from before the fix (attributes under the bind mount's folder, and "files 3" and "files 1" where the excluded folder should leave 1 and 0) and pass after on ext4. `df1ng` and `df1nh` fail with the new checks taken out and pass after. `--backlog-run-quick` passed in 2m 22s, and its `miri` area in 51s.
-	- Swept: `walk`, `list_dir` and `write_attrs` are the only places that read `--exclude` and `--no-xattr`. `gone` doesn't know `--exclude`, so the folder counts as not seen under either name, as design.md says. `--threads` stays by path, per Decisions.
-	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after. The flags' public behavior changes, so it's in questions.md as a Check.
-	- Closed: 20261108-121253
-
-- Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
-	- ID: 2026110715441800
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-154418
-	- Opened by: style and performance review 20261107, item 1
-	- Origin: `81d8d8f`, the fix for 2026102814341407. A cost that fix brought in, not seen before. Confirmed.
-	- Steps to reproduce [Bug]: In `unshare -rm`, mount N tmpfs folders side by side, then run `plan --root <tree>`.
-	- Incorrect behavior [Bug]: 1.32 s of CPU at 2,116 mounts, and 5.25 s at about 4,100. The build before `81d8d8f` takes 0.00 s for both.
-	- Expected behavior [Bug]: Startup stays about flat as mounts grow. b23 has 116, but a box with lots of containers or snapshot mounts can have thousands.
-	- Possible cause [Bug]: `mounts::visible` checks every sibling of a mount for each mount, in `covered` and `shadowed`.
-	- Probable fix [Bug]: Work out `covered` once per mount, and find a shadowing sibling by a map lookup of each folder above the mount point. Keep des5f, des5g and des5h, and add a timed case with a few thousand siblings and a threshold.
-	- Related IDs: 2026102814341407
-	- Reproduced [Bug]: Yes. In `unshare -rm` with 2,215 mounts, `plan --root` took 1.53 s of user CPU with the build from before the fix, and 0.00 s after.
-	- Actual cause [Bug]: As above. `covered` was worked out again for each child of a mount, and `shadowed` looked at every sibling, so a folder of N mounts took N squared steps.
-	- Actual fix [Bug]: `covered` is worked out once per mount, from a map of mounts by parent and point. `shadowed` looks up each folder above the mount point in that map, and stops at the depth of the shallowest sibling, so a chain of nested mounts stays linear too.
-	- Decisions:
-		- The old filter stays in the tests as the model, and a fuzz test checks the new one gives the same answer on random tables, with repeated IDs, missing parents and loops.
-		- Only for an empty mount point, which the kernel never writes, can the 2 differ. The old one took it as above every folder.
-	- Branch: round-20261108b
-	- Commit: `ff4d96f`
-	- Test case: `df1nz` (unit, 8,000 siblings and 1,000 nested mounts under 1 s each), `df1ny` (fuzz, same answer as the old filter). `des5f`, `des5g` and `des5h` keep their cases.
-	- Verified: `df1nz` fails with the old filter, at 8.8 s for the flat table, and passes after. `df1ny` turns red when `covered` counts a mount as its own cover, when the shadow check drops its parent test, or when the depth stop is one short. `--backlog-run-quick` passed in 2m 04s, and its `miri` area too.
-	- Swept: the rest of `mounts.rs` for loops over the table inside loops over the table. `mount_for`, `mount_points`, `hands_off_at` and `disks_under` take one pass per call, a few times per root. `seen_from` checks the mounts below one path against those below another, but only for 2 roots on one device, one reached from the other. Not filed, since it needs thousands of mounts below both.
-	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
-	- Closed: 20261108-122450
-
-- The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
-	- ID: 2026110715441803
-	- Type: Bug
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-154418
-	- Opened by: style and performance review 20261107, item 4
-	- Origin: `422efff`, before the last review. Not seen before. Confirmed.
-	- Incorrect behavior [Bug]: `db::batches` keeps `failed: Option<String>` and `events_ok: bool`. `events_ok` false with no `failed` can't happen.
-	- Expected behavior [Bug]: Rust style: invalid states can't be written, and no bool flags for states that exclude each other.
-	- Probable fix [Bug]: One enum with 3 states: all fine, rows dropped, all dropped.
-	- Actual cause [Bug]: One state of 3 values was held in 2 variables, from 2026101406340916's fix.
-	- Decisions:
-		- The enum is `Kept`, private to `db.rs`: `All`, `EventsOnly(reason)` and `Nothing(reason)`. It only moves down, and keeps the first failure's reason, as before. No behavior change.
-	- Actual fix [Bug]: `batches` keeps one `Kept` and moves it with one match on the state and the events' commit. The rows are only written from `All`.
-	- Branch: round-20261108b
-	- Commit: `a99cae6`
-	- Test case: `ddy8d` (a bad row keeps the events), and new `df1pa` (a bad event drops events and rows for good, even once the cause is gone). Not a test that fails before, since the old code did the same.
-	- Verified: `df1pa` fails with the `Nothing` state made to keep events, and passes after. `--backlog-run-quick` passed in 2m 10s, and its `miri` area in 1m 03s.
-	- Swept: `batches` is the only place with the pair. `accept` and the other writers have no failure state.
-	- Acceptance signoff: Self-closed: the probable fix, no behavior change.
-	- Closed: 20261108-123119
-
-- The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
-	- ID: 2026110218175403
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261102-181754
-	- Opened by: repo housecleaning
-	- Requirements [Feature]:
-		- Reword each hit in text written here, or add it to the scrub's allow list with a reason. Mostly "holds" as a verb, numbers spelled out, and "not X" phrasing.
-		- Leave text from a person as it is, but for spelling.
-		- Then make the lint stage fail on a hit.
-	- Note: Strings a test matches, such as "holds trigger" in `db.rs`, change with their test.
-	- Note: README and design.md are done.
-	- Progress log:
-		- 2026-11-08: Code, scripts, config and design.md are clean: 127 hits reworded or allowed. The backlog's 101 are in child 2026110811422129, and the fail switch in child 2026110811422141.
-	- Decisions:
-		- Reworded where the line is prose. The banned verb became has, keeps or locks, numbers became digits, and "not X" lines say what is.
-		- Allowed, with a reason in `scrub-allow.txt`: arithmetic read as a dash, test data, a loop counter's name, codeql-scan's set of built crates, refusal messages, and the README's idiom for one reader per disk.
-		- The planted-trigger message reads `has trigger` now, and des6w matches it.
-	- Branch: round-20261108b
-	- Test case: its children's: 2026110811422129: none named; 2026110811422141: none with an ID. Checked by planting a banned word in `project/design.md`.
-	- Verified: the scrub reports nothing outside the backlog, and `cicd/cicd.bash --backlog-run-quick` passes.
-	- Swept: every scrub hit outside `project/backlog.md`, and the repo and private tools for the old strings.
-	- Closed: 20261108-115622
-
-- The content scrub finds about 100 lines in the backlog that break the writing rules.
-	- ID: 2026110811422129
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261108-114221
-	- Opened by: split from 2026110218175403
-	- Parent ID: 2026110218175403
-	- Requirements [Feature]: Reword each hit in backlog text written here, or add it to the scrub's allow list with a reason. Text a person wrote stays as it is but for spelling.
-	- Note: Mostly a banned verb, spelled numbers, "not X" phrasing and fillers.
-	- Decisions:
-		- Reworded 80 lines. The banned verb became has, contains, takes, pins or enforces by what the line means, numbers became digits, and "not X" became "rather than X" or "as well as X".
-		- Allowed, with a reason in `scrub-allow.txt`: zfs's own hold, the words quoted by the items that reword them, the `shipped.txt` name, Python's tuple unpacking, and the template's notes and placeholder rows as written.
-		- The allow entry for the template's placeholder rows used `\t`, which grep's extended regex doesn't read as a tab, so it never matched. It uses `[[:space:]]` now.
-	- Verified: `private/hooks/scrub.bash` reports clean.
-	- Closed: 20261108-115016
-
-- The lint stage only reports content scrub hits, rather than failing on them.
-	- ID: 2026110811422141
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261108-114221
-	- Opened by: split from 2026110218175403
-	- Parent ID: 2026110218175403
-	- Prereq IDs: 2026110811422129
-	- Requirements [Feature]: Once the scrub reports 0 hits, the lint stage fails on a hit, as with the other linters.
-	- Estimated effort: Low
-	- Decisions: A hit adds `scrub` to the stage's failed list, so the stage ends like any other linter's failure and every linter still runs first. A clone without the private folder still skips the scrub.
-	- Branch: round-20261108b
-	- Test case: none with an ID. Checked by planting a banned word in `project/design.md`.
-	- Verified: with the plant, `cicd/cicd.bash --backlog-run-quick lint` printed the hit and failed the stage (exit 1). With the plant removed, `cicd/cicd.bash --backlog-run-quick` passes, "content scrub: clean".
-	- Swept: the only caller of the scrub is the lint stage in `cicd/cicd.bash`. No doc says it only reports, except the memory.md note.
-	- Closed: 20261108-115523
-
-- A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
-	- ID: 2026102814341430
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 30
-	- Origin: `f05c368`. Confirmed.
-	- Requirements [Feature]:
-		- Create the tables and the meta row in one transaction.
-		- Take a 0-byte file as new.
-		- Print the version as a number or "none", not `Some(99)`.
-	- Note: A full disk during the first scan left a 0-byte file, and every run after said "no such table: meta" and exited 1.
-	- Note: The repro needs a tiny full filesystem, which `unshare -rm` and an 8 KiB tmpfs give without root.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-08: `open_rw` takes a file with no tables as new, and makes the tables and the version row in one transaction. `open_ro` calls such a file empty. The version shows as a number or "none". design.md, "Database", says so.
-		- Verified: `df1qb` fails against the build from before ("1 1 1 1", the second scans refused with "no such table: meta" and "tables are version None") and passes after, on ext4. A first scan on a tmpfs of 16k to 160k left a 0-byte file after the fix, where before it left 0 to 131072 bytes that every later scan refused. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
-	- Decisions:
-		- A file with no tables is new, whatever its size. A first scan that failed partway can leave a few pages with nothing in them, and there's nothing in such a file to keep.
-	- Branch: round-20261108b
-	- Test case: `df1q9` (a 0-byte file is new, and `report` calls it empty), `df1qa` (version shown as 99 or none), `df1qb` (integration step 30, a first scan on a full 8k and 96k tmpfs, then a scan of what it left, skipped on ZFS).
-	- Swept: `open_rw` is the only place tables are made. `open_ro`, which `report`, `gone` and the scan's workers use, said "no such table" on an empty file too, and now says it's empty. The version message was the only `{:?}` of an `Option` in a message.
-	- Acceptance signoff: Self-closed: the 3 requirements, and tests fail before and pass after.
-	- Closed: 20261108-131205
-
-- `accept` says "accepted" with no note when the database has no row under that name.
-	- ID: 2026102814341431
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 31
-	- Origin: `eb111ff`. Confirmed.
-	- Requirements [Feature]:
-		- When there's no prior row, say no scan knows this name, and that a scan may have it under another name.
-	- Note: A name reached through a bind mount, or spelled differently from the scan's root, gets a new row, and the scan keeps reporting its own.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-08: After "accepted", a name with no row gets a line saying no scan has a record under it, and one may have it under another, such as through a bind mount. design.md, "Mismatches", says so.
-		- Verified: `df1qc` fails against the build from before ("0 0") and passes after, on ext4 and ZFS. `--backlog-run-quick fmt build unit it` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
-	- Decisions:
-		- A note line after the "accepted" line, as the one for other hard-linked names, rather than a warning on stderr. The accept did happen, and exit stays 0.
-	- Branch: round-20261108b
-	- Test case: `df1qc` (integration step 31, accept of a new name and a scanned one, the note once).
-	- Swept: `accept::one` is the only place a name is taken as good. `scan` and `snapdiff` don't write by a name the user gives.
-	- Acceptance signoff: Self-closed: the requirement, and the test fails before and passes after.
-	- Closed: 20261108-131758
-
-- On NTFS, APFS or HFS+, `accept` can't clear an attribute set an older build wrote, so the file is reported on every scan.
-	- ID: 2026102814341432
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 32
-	- Origin: `25144d2`. The build before it wrote attributes on NTFS. Plausible, read only.
-	- Requirements [Feature]:
-		- Either have the scan ignore attributes on hands-off filesystems, or have `accept` say the attribute will keep the file flagged.
-	- Related IDs: 2026101409545200
-	- Decisions:
-		- The first option, so `accept` works there as it does anywhere else. A warning alone would leave the file flagged on every scan with no way to clear it from Linux.
-		- Narrower than the wording: on a hands-off device the attributes are left out only where the file's database row is at its size and time. Then the row alone decides. Without such a row, as on a first scan, a set written by an older build or by nemo-anywhere on its own system still gets compared. A row at that size and time catches any change since it was taken, so nothing is lost.
-		- rmlint's blake2b is left out the same way, since `accept` leaves it there too and the row has no blake2b to go by.
-	- Actual fix:
-		- `Refs` knows the file is on a hands-off device. There a row at the file's size and time means only `b3-db-mismatch` can be reported. The ok counts count only a set that agreed.
-		- design.md, "Attributes", and README.md's `accept` paragraph say so.
-	- Branch: round-20261108b
-	- Test case: `df1r9` (`the_row_decides_on_a_hands_off_device`), `df1ra` (`an_accepted_file_on_a_hands_off_device_is_clean`).
-	- Verified: `df1ra` fails with the new rule turned off and passes with it. `--backlog-run-quick` passed, all areas, and `--backlog-run-quick miri`.
-	- Swept: `Refs::new` has the one caller, `one_file`, so the link and cache paths go through it too. `write_attrs` and `accept`'s `hands_off_at` call already keep off these devices. `snapdiff` compares snapshots, which are never hands-off.
-	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
-	- Closed: 20261108-133557
-
-- The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
-	- ID: 2026102814341442
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 42
-	- Origin: none. design.md claims each.
-	- Requirements [Feature]:
-		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
-	- Actual effort: Low
-	- Decisions:
-		- The live file is grown a byte at a time while it's read, since a size change shows at once, where a coarse ctime might not move during a short read.
-	- Branch: round-20261108b
-	- Test case: df1rj (unstable, exit 0) and df1rk (xattr-error on a 0444 file, exit 0) in step 32 of tests/integration.bash, and df1rm (no attributes on a new file after --verify) in step 17. df1rk skips where a 0444 file takes attributes, such as under root.
-	- Verified: all 3 pass on ext4 and ZFS, by hand and in the quick gate's sandbox. Each fails when what it watches is taken away: no --verify, no appender, a writable file.
-	- Swept: design.md's exit table. `cache-mismatch`, `read-error` and `read-unsupported` still have no integration check, since each needs a failing disk, a page cache that disagrees with it, or a driver like ntfs3.
-	- Closed: 20261108-134458
-
-- A link at the database's name, `-wal` or `-shm` is refused as "unable to open database file", which doesn't say it's a link.
-	- ID: 2026102822062342
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261028-220623
-	- Opened by: work on 2026102814341403
-	- Related IDs: 2026102814341403
-	- Progress log:
-		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database" rather than the path.
-		- Note: Found while testing 2026102814341403 as root.
-		- 2026-11-08: `open_rw` checks the database's name, `-wal` and `-shm` for a link before SQLite opens it, and refuses one as `<path>: is a symbolic link; refused`, as the lock does. `open_ro` checks only the name, since a read only open makes neither WAL file. design.md, "Database", says so.
-		- Verified: `df1qd` fails with the checks taken out ("unable to open database file") and passes with them. `df1qe` fails against the build from before ("0100") and passes after. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD. The user-namespace root stand-in passed.
-	- Decisions:
-		- A check by name before the open gives the message. `SQLITE_OPEN_NOFOLLOW` and SQLite's own `O_NOFOLLOW` on the WAL files still do the refusing, so a link swapped in after the check is refused too, with the old message.
-		- The other `database:` prefixes stay. With the link named up front they no longer come from a link, and every command uses the same prefix for its database errors.
-	- Actual effort: Low
-	- Branch: round-20261108b
-	- Test case: `df1qd` (unit, a link at each of the 3 names refused by name, nothing made), `df1qe` (integration step 24, each of the 4 links named in `prune`'s refusal).
-	- Swept: `open_rw` and `open_ro` are the only SQLite opens outside the tests, and `scan::lock` already named its link. `hand_over` says "it's a symbolic link". `sudo-links-standin.bash` passed with no change.
-	- Acceptance signoff: Self-closed: the refusal now names the link, and the tests fail before and pass after.
-	- Closed: 20261108-132552
-
-- The scan opens each file twice, once to stat it and once to read it, though the first is only needed when the file might be skipped.
-	- ID: 2026110715441807
-	- Type: Enhancement
-	- Status: Canceled
-		- Not worth the change. The saving was under the noise of 35 paired timing rounds.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-154418
-	- Opened by: style and performance review 20261107, item 8
-	- Origin: Before the last review, last moved in `c634e3a`. 2026102808215738 measured `read_sums` but not this. Confirmed.
-	- Note: On 20,000 small files on ext4 it cost about 1.5 to 4.5 us of CPU per file, 3 to 8% of the scan. Wall time didn't move.
-	- Requirements [Feature]:
-		- Stat first only when a skip can apply: a resume, a row already seen this run, or one hashed since the cutoff. Otherwise go straight to the read open.
-		- A FIFO swapped in after the folder was read is still refused, by the read open's own check.
-	- Related IDs: 2026102808215738
-	- Needs local test suite run?: No
-	- Progress log:
-		- 2026-11-08: Tried it: a stat first only for a resume-listed path or a row seen this run or hashed since the cutoff, else straight to the read open, which counts the file and refuses a FIFO or socket itself. On 20,000 files of 1 to 4 KB, over 35 paired rounds at load 5 to 28, user plus sys CPU went from a median of 1.55 to 1.56 s on a first scan and 1.64 to 1.62 s on a `--rmlint` rescan. Paired, the change was faster in 17 and 20 of the 35 rounds. The middle half of the rounds spread over about 0.25 s.
-	- Decisions:
-		- Left the code as it was. The saving, if any, is under 2% and lost in the noise, and the split adds a second place that counts files and refuses what isn't one.
-	- Test case: none, no code change.
-	- Closed: 20261108-140748
-
-- The scan's walk and worker pass the same context through 3 functions, and repeat the "seen once per run" rule at 4 sites.
-	- ID: 2026110715441808
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-154418
-	- Opened by: style and performance review 20261107, item 9
-	- Origin: `7ec4b4e` and `3e0dd9e`, after the last review, and older sites from `f05c368`, `ce82cda` and `c634e3a`. Confirmed.
-	- Requirements [Feature]:
-		- `walk`, `list_dir` and `queue` all pass `root`, `sh`, `stats`, `look` and `jobs`, and 2 are at clippy's 7-argument limit. A small struct fits, the way `Worker` keeps the hashing side's.
-		- `Worker::one_file` takes `prior` beside the job that already has it. Read `job.prior` instead, so the tests' jobs get their own.
-		- `keep`, `judged_already` (twice) and `skip_unread` each mark a row seen if it isn't yet. Use one helper, and one exit for `judged_already`'s 2 skips. Its ctime math is the same as `mtime_us`, so share that too.
-	- Progress log:
-		- 2026-11-08: `list_dir` and `queue` are methods of a `Walker`, which `walk` builds once the root is open, as `hasher` builds its `Worker`. `one_file` reads `job.prior`, and the tests give their jobs a prior with a `known` helper. All 4 sites call `mark_seen` for the seen-once rule, `judged_already` has one skip exit, and `micros` does the math for both mtime and ctime.
-		- 2026-11-08: Verified: clippy with all targets and features, `cargo test --release`, and `cicd/cicd.bash --backlog-run-quick` passed.
-	- Decisions:
-		- `walk` keeps its 5 arguments, since `run_group` and 5 tests call it, and it's where the root opens. The struct starts there.
-	- Swept: every `Msg::Seen` send in `scan.rs`, every `one_file` and `read_one` caller, and every microsecond conversion of a ctime or mtime. `accept.rs` already calls `scan::mtime_us`.
-	- Branch: round-20261108b
-	- Test case: none new, a refactor with no change in behavior. The scan's unit tests and the quick gate's integration test cover it.
-	- Acceptance signoff: Self-closed: no change in behavior.
-	- Closed: 20261108-141429
-
-- 3 lists and maps in the scan's planning still use bare tuples read by position.
-	- ID: 2026110715441809
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-154418
-	- Opened by: style and performance review 20261107, item 10
-	- Origin: `5602fb5` after the last review, and `562a451` and `89bdbb7` before it. 2026102808215688 changed `scan::Planned` but missed these. Confirmed.
-	- Requirements [Feature]: Small structs for `plan`'s `kept` (path, device, disks), `hands_off`'s values (device, filesystem type), and the groups in `mounts::group_roots` (disks, roots).
-	- Related IDs: 2026102808215688
-	- Progress log:
-		- 2026-11-08: `mounts::group_roots` takes `RootDisks` (root, disks) and gives `DiskGroup`s (disks, roots), and `plan`'s `kept` is a list of `RootDisks`. `hands_off`'s values are `HandsOff` (dev, fstype).
-		- 2026-11-08: Verified: clippy with all targets and features, `cargo test --release`, and `cicd/cicd.bash --backlog-run-quick` passed.
-	- Decisions:
-		- `kept` had only the path and disks, no device, so `RootDisks` has those 2. The device is in `found`'s (device, inode) pair, which the item didn't name, and stays as it was.
-	- Swept: every caller of `group_roots`, which are `plan` and `ddwzx`, and every read of `hands_off`'s map, in `run` and `groups`.
-	- Branch: round-20261108b
-	- Test case: none new, a refactor with no change in behavior. `ddwzx` covers `group_roots`, and the quick gate's integration test the rest.
-	- Acceptance signoff: Self-closed: no change in behavior.
-	- Closed: 20261108-141847
-
-- 4 places turn a stored path into bytes, and each one handles a value that isn't text or a blob its own way.
-	- ID: 2026110715441810
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261107-154418
-	- Opened by: style and performance review 20261107, item 11
-	- Origin: `cede460` and `bed0537`. The copy in `miss_paths` came with `3e0dd9e`, after the last review. Confirmed by reading. Nothing changes today, since only an edit made outside the program can store such a value.
-	- Requirements [Feature]: One helper in db.rs that names the other value kinds in full, used by `path_text`, `miss_paths` and both sites in `gone`, with one rule for a bad row.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-08: `db::path_at` reads a stored path, and refuses null, a number or a real as a wrong column type, with the column's name. `path_text`, `miss_paths` and both sites in `gone` go through it. design.md, "Database", says so.
-		- Verified: unit tests, clippy, `--backlog-run-quick` with every area, and its `miri` area. A path set to 42 by hand made `gone` say "gone: 0" and `report` show a blank name before, and both now stop with "Invalid column type Integer at index: 1, name: path".
-	- Decisions:
-		- A bad row stops the command, as a wrong type in any other column of the same query already did, such as `seen_run` in `gone`. Before, `gone` left the name out and counted it as not gone, `report` showed a blank name, and a resumed scan's miss set and `gone`'s reached set took an empty name. Silently skipping one would hide damage in a database whose job is to notice it.
-	- Test case: `df1sw` (`only_text_and_blobs_are_paths`).
-	- Swept: every `get_ref` and `ValueRef` in `src/`. The other `get_ref` is `gone`'s event kind, read as text and compared, which isn't a path.
-	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
-	- Closed: 20261108-142602
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1880,6 +1509,34 @@
 	- Acceptance signoff: Self-closed.
 	- Closed: 20261015-130151
 
+- The scan output has no percent complete.
+	- ID: 2026110407135700
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261104-071357
+	- Opened by: JC
+	- Requirements [Feature]:
+		- Each group's progress line shows a percent complete, from bytes hashed against the bytes under its roots.
+		- The final line of a stopped run says how far it got, so `--resume` has a number to compare against.
+	- Note: A run over bf7 and zf13 took over 36 hours with no way to tell how far along it was. A file count walk before the scan would add seeks on the HDDs. The used size of the filesystem is a cheaper total, marked approximate, since compression, reflinks and snapshots make it differ from the bytes the scan reads.
+	- Estimated effort: Low
+	- Actual effort: Low
+	- Progress log:
+		- Progress and summary lines end with `| ~N% of SIZE` against the used space of the group's filesystems, from `statvfs`. Files skipped unread count by size, a hard link's names by their share.
+		- Verified: unit tests, clippy, the quick gate's unit and integration areas on ext4 and ZFS, and Miri. The lint area fails only on a scrub hit in 2026110715441803's `Actual fix` row, not part of this item.
+		- Verified: `skips_count_toward_the_percent` goes red with the skipped sizes left out.
+		- Not run on a real mount root, since one can't be made without root here. `only_a_whole_filesystem_has_a_size` reads `/`.
+		- Swept: every `skip_*` counter site (2 `db-fresh` paths, `skip_unknown`, `skip_xattr`). The hard link `Done` path adds nothing, since the read counted it.
+	- Decisions:
+		- Done counts files skipped unread as well as bytes hashed, so a resumed run's percent goes on from the stopped one's, which is what the second requirement needs. It departs from the wording "bytes hashed".
+		- The total is the filesystems' used space, once per device, per the note. A group with a root that's a folder inside its filesystem gets no percent, since the rest of the filesystem would keep it near 0.
+		- It goes at the end of the line, so the demo's summary line map still matches. The demo's root is a folder, so the gif is unchanged.
+		- It stops at 100, since compression can make the bytes read outrun the space used.
+	- Test case: `df1ph` (`skips_count_toward_the_percent`), `df1pj` (`the_percent_needs_a_size`), `df1pk` (`only_a_whole_filesystem_has_a_size`).
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule. A `Check:` entry in questions.md gives the folder rule and the other options.
+	- Closed: 20261108-124211
+
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
 	- Type: Enhancement
@@ -2605,6 +2262,87 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- `--exclude` and `--no-xattr` miss a folder that a root's walk reaches under another name, such as through a bind mount.
+	- ID: 2026110720070507
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-200705
+	- Opened by: 2026110719570617's sweep
+	- Related IDs: 2026110719570617, 2026102814341414
+	- Steps to reproduce [Bug]: In `unshare -rm`, bind `tree/sub` on `bind`, then `scan --root tree --no-xattr bind`, and `scan --root tree --exclude bind`.
+	- Incorrect behavior [Bug]: `tree/sub/f` gets a blake3 attribute in the first, and is read in the second.
+	- Expected behavior [Bug]: The help text: `--exclude DIR` doesn't go into DIR, and `--no-xattr DIR` leaves no attributes under it, whatever name the walk reaches it by.
+	- Reproduced [Bug]: Yes, with `6100218`.
+	- Probable fix [Bug]: Keep each folder's device and inode as well as its path. The walk knows each folder's from its fd, as `excluded` now uses for the database's folder, and `--no-xattr` passes down the frames as `in_git` does.
+	- Note: Decide first whether a path given by the user should match another name of the same folder. The `--threads` case in 2026102814341414 was left as is.
+	- Decisions: Match by device and inode, the same as the database's folder since 2026110719570617. The help text promises no attributes under a folder and no walk into it, and a second name for the folder doesn't change that intent. Writing where told not to is the worse failure. --threads stays by path, since it only sets worker counts.
+		- A file in a `--no-xattr` folder that's hard-linked from outside it can still get attributes through the outside name, as before. Finding those would mean walking every such folder first.
+		- An excluded folder that can't be opened, reached only under another name, still gives a `dir-error`, since its device and inode come from the open.
+	- Actual cause [Bug]: The walk matched `--exclude` and `--no-xattr` only by path, so a folder reached under another path, as through a bind mount, didn't match.
+	- Actual fix [Bug]:
+		- The scan takes the device and inode of each path given to `--exclude` and `--no-xattr` before it starts. The walk compares each folder's, from its fd, so an excluded folder isn't listed, and a `--no-xattr` one marks everything under it, as a git work tree does.
+		- A root inside one of them under another name is found by its parent folders. A file given to `--no-xattr` gets no attributes under any name, a hard link included.
+		- The path rules stay, so a folder given by its own path still isn't opened. design.md, "Reading files", says so.
+	- Branch: round-20261108b
+	- Commit: `91439f1`
+	- Test case: `df1ng` (unit, a walk and roots that reach the folders by another path), `df1nh` (unit, a hard link to a `--no-xattr` file), `df1nj` and `df1nk` (integration step 25, in a user namespace, skipped on ZFS).
+	- Verified: `df1nj` and `df1nk` fail against the build from before the fix (attributes under the bind mount's folder, and "files 3" and "files 1" where the excluded folder should leave 1 and 0) and pass after on ext4. `df1ng` and `df1nh` fail with the new checks taken out and pass after. `--backlog-run-quick` passed in 2m 22s, and its `miri` area in 51s.
+	- Swept: `walk`, `list_dir` and `write_attrs` are the only places that read `--exclude` and `--no-xattr`. `gone` doesn't know `--exclude`, so the folder counts as not seen under either name, as design.md says. `--threads` stays by path, per Decisions.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after. The flags' public behavior changes, so it's in questions.md as a Check.
+	- Closed: 20261108-121253
+
+- Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
+	- ID: 2026110715441800
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 1
+	- Origin: `81d8d8f`, the fix for 2026102814341407. A cost that fix brought in, not seen before. Confirmed.
+	- Steps to reproduce [Bug]: In `unshare -rm`, mount N tmpfs folders side by side, then run `plan --root <tree>`.
+	- Incorrect behavior [Bug]: 1.32 s of CPU at 2,116 mounts, and 5.25 s at about 4,100. The build before `81d8d8f` takes 0.00 s for both.
+	- Expected behavior [Bug]: Startup stays about flat as mounts grow. b23 has 116, but a box with lots of containers or snapshot mounts can have thousands.
+	- Possible cause [Bug]: `mounts::visible` checks every sibling of a mount for each mount, in `covered` and `shadowed`.
+	- Probable fix [Bug]: Work out `covered` once per mount, and find a shadowing sibling by a map lookup of each folder above the mount point. Keep des5f, des5g and des5h, and add a timed case with a few thousand siblings and a threshold.
+	- Related IDs: 2026102814341407
+	- Reproduced [Bug]: Yes. In `unshare -rm` with 2,215 mounts, `plan --root` took 1.53 s of user CPU with the build from before the fix, and 0.00 s after.
+	- Actual cause [Bug]: As above. `covered` was worked out again for each child of a mount, and `shadowed` looked at every sibling, so a folder of N mounts took N squared steps.
+	- Actual fix [Bug]: `covered` is worked out once per mount, from a map of mounts by parent and point. `shadowed` looks up each folder above the mount point in that map, and stops at the depth of the shallowest sibling, so a chain of nested mounts stays linear too.
+	- Decisions:
+		- The old filter stays in the tests as the model, and a fuzz test checks the new one gives the same answer on random tables, with repeated IDs, missing parents and loops.
+		- Only for an empty mount point, which the kernel never writes, can the 2 differ. The old one took it as above every folder.
+	- Branch: round-20261108b
+	- Commit: `ff4d96f`
+	- Test case: `df1nz` (unit, 8,000 siblings and 1,000 nested mounts under 1 s each), `df1ny` (fuzz, same answer as the old filter). `des5f`, `des5g` and `des5h` keep their cases.
+	- Verified: `df1nz` fails with the old filter, at 8.8 s for the flat table, and passes after. `df1ny` turns red when `covered` counts a mount as its own cover, when the shadow check drops its parent test, or when the depth stop is one short. `--backlog-run-quick` passed in 2m 04s, and its `miri` area too.
+	- Swept: the rest of `mounts.rs` for loops over the table inside loops over the table. `mount_for`, `mount_points`, `hands_off_at` and `disks_under` take one pass per call, a few times per root. `seen_from` checks the mounts below one path against those below another, but only for 2 roots on one device, one reached from the other. Not filed, since it needs thousands of mounts below both.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261108-122450
+
+- The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
+	- ID: 2026110715441803
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 4
+	- Origin: `422efff`, before the last review. Not seen before. Confirmed.
+	- Incorrect behavior [Bug]: `db::batches` keeps `failed: Option<String>` and `events_ok: bool`. `events_ok` false with no `failed` can't happen.
+	- Expected behavior [Bug]: Rust style: invalid states can't be written, and no bool flags for states that exclude each other.
+	- Probable fix [Bug]: One enum with 3 states: all fine, rows dropped, all dropped.
+	- Actual cause [Bug]: One state of 3 values was held in 2 variables, from 2026101406340916's fix.
+	- Decisions:
+		- The enum is `Kept`, private to `db.rs`: `All`, `EventsOnly(reason)` and `Nothing(reason)`. It only moves down, and keeps the first failure's reason, as before. No behavior change.
+	- Actual fix [Bug]: `batches` keeps one `Kept` and moves it with one match on the state and the events' commit. The rows are only written from `All`.
+	- Branch: round-20261108b
+	- Commit: `a99cae6`
+	- Test case: `ddy8d` (a bad row keeps the events), and new `df1pa` (a bad event drops events and rows for good, even once the cause is gone). Not a test that fails before, since the old code did the same.
+	- Verified: `df1pa` fails with the `Nothing` state made to keep events, and passes after. `--backlog-run-quick` passed in 2m 10s, and its `miri` area in 1m 03s.
+	- Swept: `batches` is the only place with the pair. `accept` and the other writers have no failure state.
+	- Acceptance signoff: Self-closed: the probable fix, no behavior change.
+	- Closed: 20261108-123119
 
 - A database reached through a bind mount is hashed by the walk of a root that contains its folder under another name, with attributes written on it.
 	- ID: 2026110719570617
@@ -3695,6 +3433,246 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
+	- ID: 2026110218175403
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261102-181754
+	- Opened by: repo housecleaning
+	- Requirements [Feature]:
+		- Reword each hit in text written here, or add it to the scrub's allow list with a reason. Mostly "holds" as a verb, numbers spelled out, and "not X" phrasing.
+		- Leave text from a person as it is, but for spelling.
+		- Then make the lint stage fail on a hit.
+	- Note: Strings a test matches, such as "holds trigger" in `db.rs`, change with their test.
+	- Note: README and design.md are done.
+	- Progress log:
+		- 2026-11-08: Code, scripts, config and design.md are clean: 127 hits reworded or allowed. The backlog's 101 are in child 2026110811422129, and the fail switch in child 2026110811422141.
+	- Decisions:
+		- Reworded where the line is prose. The banned verb became has, keeps or locks, numbers became digits, and "not X" lines say what is.
+		- Allowed, with a reason in `scrub-allow.txt`: arithmetic read as a dash, test data, a loop counter's name, codeql-scan's set of built crates, refusal messages, and the README's idiom for one reader per disk.
+		- The planted-trigger message reads `has trigger` now, and des6w matches it.
+	- Branch: round-20261108b
+	- Test case: its children's: 2026110811422129: none named; 2026110811422141: none with an ID. Checked by planting a banned word in `project/design.md`.
+	- Verified: the scrub reports nothing outside the backlog, and `cicd/cicd.bash --backlog-run-quick` passes.
+	- Swept: every scrub hit outside `project/backlog.md`, and the repo and private tools for the old strings.
+	- Closed: 20261108-115622
+
+- The content scrub finds about 100 lines in the backlog that break the writing rules.
+	- ID: 2026110811422129
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261108-114221
+	- Opened by: split from 2026110218175403
+	- Parent ID: 2026110218175403
+	- Requirements [Feature]: Reword each hit in backlog text written here, or add it to the scrub's allow list with a reason. Text a person wrote stays as it is but for spelling.
+	- Note: Mostly a banned verb, spelled numbers, "not X" phrasing and fillers.
+	- Decisions:
+		- Reworded 80 lines. The banned verb became has, contains, takes, pins or enforces by what the line means, numbers became digits, and "not X" became "rather than X" or "as well as X".
+		- Allowed, with a reason in `scrub-allow.txt`: zfs's own hold, the words quoted by the items that reword them, the `shipped.txt` name, Python's tuple unpacking, and the template's notes and placeholder rows as written.
+		- The allow entry for the template's placeholder rows used `\t`, which grep's extended regex doesn't read as a tab, so it never matched. It uses `[[:space:]]` now.
+	- Verified: `private/hooks/scrub.bash` reports clean.
+	- Closed: 20261108-115016
+
+- The lint stage only reports content scrub hits, rather than failing on them.
+	- ID: 2026110811422141
+	- Type: Task
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261108-114221
+	- Opened by: split from 2026110218175403
+	- Parent ID: 2026110218175403
+	- Prereq IDs: 2026110811422129
+	- Requirements [Feature]: Once the scrub reports 0 hits, the lint stage fails on a hit, as with the other linters.
+	- Estimated effort: Low
+	- Decisions: A hit adds `scrub` to the stage's failed list, so the stage ends like any other linter's failure and every linter still runs first. A clone without the private folder still skips the scrub.
+	- Branch: round-20261108b
+	- Test case: none with an ID. Checked by planting a banned word in `project/design.md`.
+	- Verified: with the plant, `cicd/cicd.bash --backlog-run-quick lint` printed the hit and failed the stage (exit 1). With the plant removed, `cicd/cicd.bash --backlog-run-quick` passes, "content scrub: clean".
+	- Swept: the only caller of the scrub is the lint stage in `cicd/cicd.bash`. No doc says it only reports, except the memory.md note.
+	- Closed: 20261108-115523
+
+- A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
+	- ID: 2026102814341430
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 30
+	- Origin: `f05c368`. Confirmed.
+	- Requirements [Feature]:
+		- Create the tables and the meta row in one transaction.
+		- Take a 0-byte file as new.
+		- Print the version as a number or "none", not `Some(99)`.
+	- Note: A full disk during the first scan left a 0-byte file, and every run after said "no such table: meta" and exited 1.
+	- Note: The repro needs a tiny full filesystem, which `unshare -rm` and an 8 KiB tmpfs give without root.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-08: `open_rw` takes a file with no tables as new, and makes the tables and the version row in one transaction. `open_ro` calls such a file empty. The version shows as a number or "none". design.md, "Database", says so.
+		- Verified: `df1qb` fails against the build from before ("1 1 1 1", the second scans refused with "no such table: meta" and "tables are version None") and passes after, on ext4. A first scan on a tmpfs of 16k to 160k left a 0-byte file after the fix, where before it left 0 to 131072 bytes that every later scan refused. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
+	- Decisions:
+		- A file with no tables is new, whatever its size. A first scan that failed partway can leave a few pages with nothing in them, and there's nothing in such a file to keep.
+	- Branch: round-20261108b
+	- Test case: `df1q9` (a 0-byte file is new, and `report` calls it empty), `df1qa` (version shown as 99 or none), `df1qb` (integration step 30, a first scan on a full 8k and 96k tmpfs, then a scan of what it left, skipped on ZFS).
+	- Swept: `open_rw` is the only place tables are made. `open_ro`, which `report`, `gone` and the scan's workers use, said "no such table" on an empty file too, and now says it's empty. The version message was the only `{:?}` of an `Option` in a message.
+	- Acceptance signoff: Self-closed: the 3 requirements, and tests fail before and pass after.
+	- Closed: 20261108-131205
+
+- `accept` says "accepted" with no note when the database has no row under that name.
+	- ID: 2026102814341431
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 31
+	- Origin: `eb111ff`. Confirmed.
+	- Requirements [Feature]:
+		- When there's no prior row, say no scan knows this name, and that a scan may have it under another name.
+	- Note: A name reached through a bind mount, or spelled differently from the scan's root, gets a new row, and the scan keeps reporting its own.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-08: After "accepted", a name with no row gets a line saying no scan has a record under it, and one may have it under another, such as through a bind mount. design.md, "Mismatches", says so.
+		- Verified: `df1qc` fails against the build from before ("0 0") and passes after, on ext4 and ZFS. `--backlog-run-quick fmt build unit it` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD.
+	- Decisions:
+		- A note line after the "accepted" line, as the one for other hard-linked names, rather than a warning on stderr. The accept did happen, and exit stays 0.
+	- Branch: round-20261108b
+	- Test case: `df1qc` (integration step 31, accept of a new name and a scanned one, the note once).
+	- Swept: `accept::one` is the only place a name is taken as good. `scan` and `snapdiff` don't write by a name the user gives.
+	- Acceptance signoff: Self-closed: the requirement, and the test fails before and passes after.
+	- Closed: 20261108-131758
+
+- On NTFS, APFS or HFS+, `accept` can't clear an attribute set an older build wrote, so the file is reported on every scan.
+	- ID: 2026102814341432
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 32
+	- Origin: `25144d2`. The build before it wrote attributes on NTFS. Plausible, read only.
+	- Requirements [Feature]:
+		- Either have the scan ignore attributes on hands-off filesystems, or have `accept` say the attribute will keep the file flagged.
+	- Related IDs: 2026101409545200
+	- Decisions:
+		- The first option, so `accept` works there as it does anywhere else. A warning alone would leave the file flagged on every scan with no way to clear it from Linux.
+		- Narrower than the wording: on a hands-off device the attributes are left out only where the file's database row is at its size and time. Then the row alone decides. Without such a row, as on a first scan, a set written by an older build or by nemo-anywhere on its own system still gets compared. A row at that size and time catches any change since it was taken, so nothing is lost.
+		- rmlint's blake2b is left out the same way, since `accept` leaves it there too and the row has no blake2b to go by.
+	- Actual fix:
+		- `Refs` knows the file is on a hands-off device. There a row at the file's size and time means only `b3-db-mismatch` can be reported. The ok counts count only a set that agreed.
+		- design.md, "Attributes", and README.md's `accept` paragraph say so.
+	- Branch: round-20261108b
+	- Test case: `df1r9` (`the_row_decides_on_a_hands_off_device`), `df1ra` (`an_accepted_file_on_a_hands_off_device_is_clean`).
+	- Verified: `df1ra` fails with the new rule turned off and passes with it. `--backlog-run-quick` passed, all areas, and `--backlog-run-quick miri`.
+	- Swept: `Refs::new` has the one caller, `one_file`, so the link and cache paths go through it too. `write_attrs` and `accept`'s `hands_off_at` call already keep off these devices. `snapdiff` compares snapshots, which are never hands-off.
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
+	- Closed: 20261108-133557
+
+- The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
+	- ID: 2026102814341442
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 42
+	- Origin: none. design.md claims each.
+	- Requirements [Feature]:
+		- One check each. A 0444 file gives exit 0 and one `xattr-error` today, which matches design.md.
+	- Actual effort: Low
+	- Decisions:
+		- The live file is grown a byte at a time while it's read, since a size change shows at once, where a coarse ctime might not move during a short read.
+	- Branch: round-20261108b
+	- Test case: df1rj (unstable, exit 0) and df1rk (xattr-error on a 0444 file, exit 0) in step 32 of tests/integration.bash, and df1rm (no attributes on a new file after --verify) in step 17. df1rk skips where a 0444 file takes attributes, such as under root.
+	- Verified: all 3 pass on ext4 and ZFS, by hand and in the quick gate's sandbox. Each fails when what it watches is taken away: no --verify, no appender, a writable file.
+	- Swept: design.md's exit table. `cache-mismatch`, `read-error` and `read-unsupported` still have no integration check, since each needs a failing disk, a page cache that disagrees with it, or a driver like ntfs3.
+	- Closed: 20261108-134458
+
+- A link at the database's name, `-wal` or `-shm` is refused as "unable to open database file", which doesn't say it's a link.
+	- ID: 2026102822062342
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261028-220623
+	- Opened by: work on 2026102814341403
+	- Related IDs: 2026102814341403
+	- Progress log:
+		- Note: The lock file's refusal says "is a symbolic link; refused". The other 3 names come back from SQLite as `SQLITE_CANTOPEN`, and `accept` names only "database" rather than the path.
+		- Note: Found while testing 2026102814341403 as root.
+		- 2026-11-08: `open_rw` checks the database's name, `-wal` and `-shm` for a link before SQLite opens it, and refuses one as `<path>: is a symbolic link; refused`, as the lock does. `open_ro` checks only the name, since a read only open makes neither WAL file. design.md, "Database", says so.
+		- Verified: `df1qd` fails with the checks taken out ("unable to open database file") and passes with them. `df1qe` fails against the build from before ("0100") and passes after. `--backlog-run-quick fmt build unit it miri` passed. The lint area failed only on a scrub hit in another item's line, already in HEAD. The user-namespace root stand-in passed.
+	- Decisions:
+		- A check by name before the open gives the message. `SQLITE_OPEN_NOFOLLOW` and SQLite's own `O_NOFOLLOW` on the WAL files still do the refusing, so a link swapped in after the check is refused too, with the old message.
+		- The other `database:` prefixes stay. With the link named up front they no longer come from a link, and every command uses the same prefix for its database errors.
+	- Actual effort: Low
+	- Branch: round-20261108b
+	- Test case: `df1qd` (unit, a link at each of the 3 names refused by name, nothing made), `df1qe` (integration step 24, each of the 4 links named in `prune`'s refusal).
+	- Swept: `open_rw` and `open_ro` are the only SQLite opens outside the tests, and `scan::lock` already named its link. `hand_over` says "it's a symbolic link". `sudo-links-standin.bash` passed with no change.
+	- Acceptance signoff: Self-closed: the refusal now names the link, and the tests fail before and pass after.
+	- Closed: 20261108-132552
+
+- The scan's walk and worker pass the same context through 3 functions, and repeat the "seen once per run" rule at 4 sites.
+	- ID: 2026110715441808
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 9
+	- Origin: `7ec4b4e` and `3e0dd9e`, after the last review, and older sites from `f05c368`, `ce82cda` and `c634e3a`. Confirmed.
+	- Requirements [Feature]:
+		- `walk`, `list_dir` and `queue` all pass `root`, `sh`, `stats`, `look` and `jobs`, and 2 are at clippy's 7-argument limit. A small struct fits, the way `Worker` keeps the hashing side's.
+		- `Worker::one_file` takes `prior` beside the job that already has it. Read `job.prior` instead, so the tests' jobs get their own.
+		- `keep`, `judged_already` (twice) and `skip_unread` each mark a row seen if it isn't yet. Use one helper, and one exit for `judged_already`'s 2 skips. Its ctime math is the same as `mtime_us`, so share that too.
+	- Progress log:
+		- 2026-11-08: `list_dir` and `queue` are methods of a `Walker`, which `walk` builds once the root is open, as `hasher` builds its `Worker`. `one_file` reads `job.prior`, and the tests give their jobs a prior with a `known` helper. All 4 sites call `mark_seen` for the seen-once rule, `judged_already` has one skip exit, and `micros` does the math for both mtime and ctime.
+		- 2026-11-08: Verified: clippy with all targets and features, `cargo test --release`, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- `walk` keeps its 5 arguments, since `run_group` and 5 tests call it, and it's where the root opens. The struct starts there.
+	- Swept: every `Msg::Seen` send in `scan.rs`, every `one_file` and `read_one` caller, and every microsecond conversion of a ctime or mtime. `accept.rs` already calls `scan::mtime_us`.
+	- Branch: round-20261108b
+	- Test case: none new, a refactor with no change in behavior. The scan's unit tests and the quick gate's integration test cover it.
+	- Acceptance signoff: Self-closed: no change in behavior.
+	- Closed: 20261108-141429
+
+- 3 lists and maps in the scan's planning still use bare tuples read by position.
+	- ID: 2026110715441809
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 10
+	- Origin: `5602fb5` after the last review, and `562a451` and `89bdbb7` before it. 2026102808215688 changed `scan::Planned` but missed these. Confirmed.
+	- Requirements [Feature]: Small structs for `plan`'s `kept` (path, device, disks), `hands_off`'s values (device, filesystem type), and the groups in `mounts::group_roots` (disks, roots).
+	- Related IDs: 2026102808215688
+	- Progress log:
+		- 2026-11-08: `mounts::group_roots` takes `RootDisks` (root, disks) and gives `DiskGroup`s (disks, roots), and `plan`'s `kept` is a list of `RootDisks`. `hands_off`'s values are `HandsOff` (dev, fstype).
+		- 2026-11-08: Verified: clippy with all targets and features, `cargo test --release`, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- `kept` had only the path and disks, no device, so `RootDisks` has those 2. The device is in `found`'s (device, inode) pair, which the item didn't name, and stays as it was.
+	- Swept: every caller of `group_roots`, which are `plan` and `ddwzx`, and every read of `hands_off`'s map, in `run` and `groups`.
+	- Branch: round-20261108b
+	- Test case: none new, a refactor with no change in behavior. `ddwzx` covers `group_roots`, and the quick gate's integration test the rest.
+	- Acceptance signoff: Self-closed: no change in behavior.
+	- Closed: 20261108-141847
+
+- 4 places turn a stored path into bytes, and each one handles a value that isn't text or a blob its own way.
+	- ID: 2026110715441810
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 11
+	- Origin: `cede460` and `bed0537`. The copy in `miss_paths` came with `3e0dd9e`, after the last review. Confirmed by reading. Nothing changes today, since only an edit made outside the program can store such a value.
+	- Requirements [Feature]: One helper in db.rs that names the other value kinds in full, used by `path_text`, `miss_paths` and both sites in `gone`, with one rule for a bad row.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-08: `db::path_at` reads a stored path, and refuses null, a number or a real as a wrong column type, with the column's name. `path_text`, `miss_paths` and both sites in `gone` go through it. design.md, "Database", says so.
+		- Verified: unit tests, clippy, `--backlog-run-quick` with every area, and its `miri` area. A path set to 42 by hand made `gone` say "gone: 0" and `report` show a blank name before, and both now stop with "Invalid column type Integer at index: 1, name: path".
+	- Decisions:
+		- A bad row stops the command, as a wrong type in any other column of the same query already did, such as `seen_run` in `gone`. Before, `gone` left the name out and counted it as not gone, `report` showed a blank name, and a resumed scan's miss set and `gone`'s reached set took an empty name. Silently skipping one would hide damage in a database whose job is to notice it.
+	- Test case: `df1sw` (`only_text_and_blobs_are_paths`).
+	- Swept: every `get_ref` and `ValueRef` in `src/`. The other `get_ref` is `gone`'s event kind, read as text and compared, which isn't a path.
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
+	- Closed: 20261108-142602
 
 - The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
 	- ID: 2026110211132205
@@ -4944,6 +4922,28 @@
 		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
 		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
 	- Closed: 20261025
+
+- The scan opens each file twice, once to stat it and once to read it, though the first is only needed when the file might be skipped.
+	- ID: 2026110715441807
+	- Type: Enhancement
+	- Status: Canceled
+		- Not worth the change. The saving was under the noise of 35 paired timing rounds.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-154418
+	- Opened by: style and performance review 20261107, item 8
+	- Origin: Before the last review, last moved in `c634e3a`. 2026102808215738 measured `read_sums` but not this. Confirmed.
+	- Note: On 20,000 small files on ext4 it cost about 1.5 to 4.5 us of CPU per file, 3 to 8% of the scan. Wall time didn't move.
+	- Requirements [Feature]:
+		- Stat first only when a skip can apply: a resume, a row already seen this run, or one hashed since the cutoff. Otherwise go straight to the read open.
+		- A FIFO swapped in after the folder was read is still refused, by the read open's own check.
+	- Related IDs: 2026102808215738
+	- Needs local test suite run?: No
+	- Progress log:
+		- 2026-11-08: Tried it: a stat first only for a resume-listed path or a row seen this run or hashed since the cutoff, else straight to the read open, which counts the file and refuses a FIFO or socket itself. On 20,000 files of 1 to 4 KB, over 35 paired rounds at load 5 to 28, user plus sys CPU went from a median of 1.55 to 1.56 s on a first scan and 1.64 to 1.62 s on a `--rmlint` rescan. Paired, the change was faster in 17 and 20 of the 35 rounds. The middle half of the rounds spread over about 0.25 s.
+	- Decisions:
+		- Left the code as it was. The saving, if any, is under 2% and lost in the noise, and the split adds a second place that counts files and refuses what isn't one.
+	- Test case: none, no code change.
+	- Closed: 20261108-140748
 
 - 4 functions still run past 100 lines: `real_main`, `snapdiff::run`, `gone::run` and `accept::one`.
 	- ID: 2026102308220558
