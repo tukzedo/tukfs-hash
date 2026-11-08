@@ -1087,9 +1087,16 @@ fn walk(
 		no_xattr: inside_any(&root.path, &sh.no_xattr_ids),
 	};
 	let mut next = Some((root.path.clone(), above));
+	let w = Walker {
+		root,
+		sh,
+		stats,
+		look,
+		jobs,
+	};
 	while !sh.stop.load(Relaxed) {
 		if let Some((dir, above)) = next.take() {
-			match list_dir(&root, dir, above, sh, stats, look, jobs) {
+			match w.list_dir(dir, above) {
 				Ok(Some(f)) => stack.push(f),
 				Ok(None) => {}
 				Err(Closed) => return,
@@ -1105,140 +1112,139 @@ fn walk(
 	}
 }
 
-fn list_dir(
-	root: &Arc<Root>,
-	dir: PathBuf,
-	above: Marks,
-	sh: &Shared,
-	stats: &Stats,
-	look: &rusqlite::Connection,
-	jobs: &SyncSender<Job>,
-) -> Result<Option<Frame>, Closed> {
-	let opened = root
-		.open_at(root.rel(&dir), libc::O_RDONLY | libc::O_DIRECTORY)
-		.and_then(|f| {
-			let m = f.metadata()?;
-			Ok(((m.dev(), m.ino()), f))
-		});
-	let (id, list) = match opened.and_then(|(id, f)| Ok((id, beneath::List::new(f)?))) {
-		// A btrfs subvolume, or something mounted since the scan began. The
-		// mount table only knows what was there at the start.
-		Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
-		// --exclude under another name, as through a bind mount.
-		Ok((id, _)) if sh.exclude_ids.contains(&id) => return Ok(None),
-		Ok(got) => got,
-		Err(e) if beneath::moved(&e) => return Ok(None),
-		Err(e) => {
-			stats.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::DirError, &dir, e.to_string());
-			return Ok(None);
-		}
-	};
-	// Asked first, since a big folder's files are queued before the listing
-	// ends.
-	let mut marks = Marks {
-		in_git: above.in_git || list.has(".git"),
-		no_xattr: above.no_xattr || sh.no_xattr_ids.contains(&id),
-	};
-	let mut files: Vec<(u64, PathBuf)> = Vec::new();
-	let mut subdirs = Vec::new();
-	for (seen, ent) in list.enumerate() {
-		// The rest of the folder goes unread after an error. An EIO in a
-		// damaged folder block is the case.
-		let ent = match ent {
-			Ok(ent) => ent,
-			Err(e) => {
-				stats.other_err.fetch_add(1, Relaxed);
-				event(
-					sh,
-					Kind::DirError,
-					&dir,
-					format!("{e}, after {seen} entries; the rest weren't read"),
-				);
-				break;
-			}
-		};
-		if &*ent.name == ".git" {
-			marks.in_git = true;
-		}
-		let kind = match ent.kind {
-			Ok(k) => k,
-			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-			Err(e) => {
-				stats.other_err.fetch_add(1, Relaxed);
-				event(sh, Kind::StatError, &dir.join(&*ent.name), e.to_string());
-				continue;
-			}
-		};
-		let is_dir = match kind {
-			beneath::Kind::Dir => true,
-			beneath::Kind::File => false,
-			beneath::Kind::Other => continue,
-		};
-		if is_dir && &*ent.name == ".zfs" && sh.mount_points.get(&dir).is_some_and(|t| t == "zfs") {
-			continue;
-		}
-		let p = dir.join(&*ent.name);
-		if sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
-			continue;
-		}
-		if is_dir {
-			subdirs.push(ent.name);
-			continue;
-		}
-		files.push((ent.ino, p));
-		if files.len() >= FILES_BATCH {
-			queue(root, &mut files, marks, sh, stats, look, jobs)?;
-		}
-	}
-	queue(root, &mut files, marks, sh, stats, look, jobs)?;
-	subdirs.sort_unstable_by(|a, b| b.cmp(a));
-	Ok(Some(Frame {
-		dir,
-		marks,
-		subdirs,
-	}))
-}
-
 // Looked up a batch at a time, each in its own read transaction, which ends
 // before the batch waits on the queue so the writer can checkpoint.
 const LOOKUP_BATCH: usize = 256;
 
-fn queue(
-	root: &Arc<Root>,
-	files: &mut Vec<(u64, PathBuf)>,
-	marks: Marks,
-	sh: &Shared,
-	stats: &Stats,
-	look: &rusqlite::Connection,
-	jobs: &SyncSender<Job>,
-) -> Result<(), Closed> {
-	files.sort_unstable();
-	let mut rest = files.drain(..).map(|(_, p)| p);
-	loop {
-		let batch: Vec<PathBuf> = rest.by_ref().take(LOOKUP_BATCH).collect();
-		if batch.is_empty() {
-			return Ok(());
-		}
-		let keys: Vec<&[u8]> = batch.iter().map(|p| p.as_os_str().as_bytes()).collect();
-		let priors = db::lookup_each(look, &keys);
-		for (path, prior) in batch.into_iter().zip(priors) {
-			let prior = match prior {
-				Ok(p) => p,
+// One root's walk, the way Worker is one hashing thread.
+struct Walker<'a> {
+	root: Arc<Root>,
+	sh: &'a Shared,
+	stats: &'a Stats,
+	look: &'a rusqlite::Connection,
+	jobs: &'a SyncSender<Job>,
+}
+
+impl Walker<'_> {
+	fn list_dir(&self, dir: PathBuf, above: Marks) -> Result<Option<Frame>, Closed> {
+		let (root, sh, stats) = (&self.root, self.sh, self.stats);
+		let opened = root
+			.open_at(root.rel(&dir), libc::O_RDONLY | libc::O_DIRECTORY)
+			.and_then(|f| {
+				let m = f.metadata()?;
+				Ok(((m.dev(), m.ino()), f))
+			});
+		let (id, list) = match opened.and_then(|(id, f)| Ok((id, beneath::List::new(f)?))) {
+			// A btrfs subvolume, or something mounted since the scan began. The
+			// mount table only knows what was there at the start.
+			Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
+			// --exclude under another name, as through a bind mount.
+			Ok((id, _)) if sh.exclude_ids.contains(&id) => return Ok(None),
+			Ok(got) => got,
+			Err(e) if beneath::moved(&e) => return Ok(None),
+			Err(e) => {
+				stats.other_err.fetch_add(1, Relaxed);
+				event(sh, Kind::DirError, &dir, e.to_string());
+				return Ok(None);
+			}
+		};
+		// Asked first, since a big folder's files are queued before the listing
+		// ends.
+		let mut marks = Marks {
+			in_git: above.in_git || list.has(".git"),
+			no_xattr: above.no_xattr || sh.no_xattr_ids.contains(&id),
+		};
+		let mut files: Vec<(u64, PathBuf)> = Vec::new();
+		let mut subdirs = Vec::new();
+		for (seen, ent) in list.enumerate() {
+			// The rest of the folder goes unread after an error. An EIO in a
+			// damaged folder block is the case.
+			let ent = match ent {
+				Ok(ent) => ent,
 				Err(e) => {
 					stats.other_err.fetch_add(1, Relaxed);
-					event(sh, Kind::DbError, &path, e);
+					event(
+						sh,
+						Kind::DirError,
+						&dir,
+						format!("{e}, after {seen} entries; the rest weren't read"),
+					);
+					break;
+				}
+			};
+			if &*ent.name == ".git" {
+				marks.in_git = true;
+			}
+			let kind = match ent.kind {
+				Ok(k) => k,
+				Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+				Err(e) => {
+					stats.other_err.fetch_add(1, Relaxed);
+					event(sh, Kind::StatError, &dir.join(&*ent.name), e.to_string());
 					continue;
 				}
 			};
-			let job = Job {
-				path,
-				in_git: marks.in_git,
-				no_xattr: marks.no_xattr,
-				root: root.clone(),
-				prior,
+			let is_dir = match kind {
+				beneath::Kind::Dir => true,
+				beneath::Kind::File => false,
+				beneath::Kind::Other => continue,
 			};
-			jobs.send(job).map_err(|_| Closed)?;
+			if is_dir
+				&& &*ent.name == ".zfs"
+				&& sh.mount_points.get(&dir).is_some_and(|t| t == "zfs")
+			{
+				continue;
+			}
+			let p = dir.join(&*ent.name);
+			if sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
+				continue;
+			}
+			if is_dir {
+				subdirs.push(ent.name);
+				continue;
+			}
+			files.push((ent.ino, p));
+			if files.len() >= FILES_BATCH {
+				self.queue(&mut files, marks)?;
+			}
+		}
+		self.queue(&mut files, marks)?;
+		subdirs.sort_unstable_by(|a, b| b.cmp(a));
+		Ok(Some(Frame {
+			dir,
+			marks,
+			subdirs,
+		}))
+	}
+
+	fn queue(&self, files: &mut Vec<(u64, PathBuf)>, marks: Marks) -> Result<(), Closed> {
+		files.sort_unstable();
+		let mut rest = files.drain(..).map(|(_, p)| p);
+		loop {
+			let batch: Vec<PathBuf> = rest.by_ref().take(LOOKUP_BATCH).collect();
+			if batch.is_empty() {
+				return Ok(());
+			}
+			let keys: Vec<&[u8]> = batch.iter().map(|p| p.as_os_str().as_bytes()).collect();
+			let priors = db::lookup_each(self.look, &keys);
+			for (path, prior) in batch.into_iter().zip(priors) {
+				let prior = match prior {
+					Ok(p) => p,
+					Err(e) => {
+						self.stats.other_err.fetch_add(1, Relaxed);
+						event(self.sh, Kind::DbError, &path, e);
+						continue;
+					}
+				};
+				let job = Job {
+					path,
+					in_git: marks.in_git,
+					no_xattr: marks.no_xattr,
+					root: self.root.clone(),
+					prior,
+				};
+				self.jobs.send(job).map_err(|_| Closed)?;
+			}
 		}
 	}
 }
@@ -1372,13 +1378,24 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 		if sh.stop.load(Relaxed) {
 			continue;
 		}
-		w.one_file(&job, job.prior.as_ref());
+		w.one_file(&job);
 	}
 }
 
 /// The mtime in microseconds, as stored.
 pub fn mtime_us(md: &fs::Metadata) -> i64 {
-	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
+	micros(md.mtime(), md.mtime_nsec())
+}
+
+fn micros(secs: i64, nsec: i64) -> i64 {
+	secs * 1_000_000 + nsec / 1000
+}
+
+// The row's last-seen run, written once per run.
+fn mark_seen(sh: &Shared, prior: Option<&Prior>) {
+	if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+		send(sh, Msg::Seen(p.id));
+	}
 }
 
 /// rmlint's time, as it works it out.
@@ -1678,9 +1695,7 @@ fn keep(
 		st.mismatch.fetch_add(1, Relaxed);
 		event(sh, kind, path, format!("{detail}{note}"));
 	}
-	if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-		send(sh, Msg::Seen(p.id));
-	}
+	mark_seen(sh, prior);
 }
 
 fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
@@ -1705,12 +1720,13 @@ struct Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
-	fn one_file(&mut self, job: &Job, prior: Option<&Prior>) {
+	fn one_file(&mut self, job: &Job) {
+		let prior = job.prior.as_ref();
 		let rel = job.root.rel(&job.path);
 		let Some(md) = self.stat(job, rel) else {
 			return;
 		};
-		if self.judged_already(job, prior, &md) {
+		if self.judged_already(job, &md) {
 			return;
 		}
 		let Some((file, before)) = self.open(job, rel) else {
@@ -1773,45 +1789,34 @@ impl<'a> Worker<'a> {
 
 	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch` and
 	// `resume-seen`.
-	fn judged_already(&self, job: &Job, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
+	fn judged_already(&self, job: &Job, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
+		let path = job.path.as_os_str().as_bytes();
 		// Row `resume-seen` for a mismatch with no row at this size and time. A
 		// ctime from before the run means nothing touched the file since.
-		if !sh.reported.is_empty()
-			&& md.ctime() * 1_000_000 + md.ctime_nsec() / 1000 < sh.run_started_us
-			&& sh.reported.contains(job.path.as_os_str().as_bytes())
-		{
-			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-				send(sh, Msg::Seen(p.id));
-			}
-			st.skip_db.fetch_add(1, Relaxed);
-			st.skipped(md);
-			self.links.passed(md);
-			return true;
-		}
-		let Some(p) = prior else {
-			return false;
-		};
-		let fresh = || {
-			(sh.cutoff_us..=now_us()).contains(&p.hashed_us)
-				&& !sh.open_misses.contains(job.path.as_os_str().as_bytes())
-		};
+		let reported = !sh.reported.is_empty()
+			&& micros(md.ctime(), md.ctime_nsec()) < sh.run_started_us
+			&& sh.reported.contains(path);
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
-		if (p.seen_run == sh.run_id || fresh())
-			&& p.bytes == md.len() as i64
-			&& p.mtime_us == mtime_us(md)
-			&& p.ino == md.ino() as i64
-		{
-			if p.seen_run != sh.run_id {
-				send(sh, Msg::Seen(p.id));
-			}
-			st.skip_db.fetch_add(1, Relaxed);
-			st.skipped(md);
-			self.links.passed(md);
-			return true;
+		let vouched = || {
+			job.prior.as_ref().is_some_and(|p| {
+				(p.seen_run == sh.run_id
+					|| ((sh.cutoff_us..=now_us()).contains(&p.hashed_us)
+						&& !sh.open_misses.contains(path)))
+					&& p.bytes == md.len() as i64
+					&& p.mtime_us == mtime_us(md)
+					&& p.ino == md.ino() as i64
+			})
+		};
+		if !reported && !vouched() {
+			return false;
 		}
-		false
+		mark_seen(sh, job.prior.as_ref());
+		st.skip_db.fetch_add(1, Relaxed);
+		st.skipped(md);
+		self.links.passed(md);
+		true
 	}
 
 	fn open(&self, job: &Job, rel: &Path) -> Option<(File, fs::Metadata)> {
@@ -1851,9 +1856,7 @@ impl<'a> Worker<'a> {
 			st.skip_unknown.fetch_add(1, Relaxed);
 			st.skipped(before);
 			self.links.passed(before);
-			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-				send(sh, Msg::Seen(p.id));
-			}
+			mark_seen(sh, prior);
 			return true;
 		}
 
@@ -2321,7 +2324,7 @@ mod tests {
 	}
 
 	// A small buffer, so a read takes several passes.
-	fn read_one(g: &Group, sh: &Shared, j: &Job, prior: Option<&Prior>, links: &Links) {
+	fn read_one(g: &Group, sh: &Shared, j: &Job, links: &Links) {
 		let mut w = Worker {
 			g,
 			sh,
@@ -2329,7 +2332,7 @@ mod tests {
 			buf: vec![0u8; 4096],
 			xattr_fail_logged: 0,
 		};
-		w.one_file(j, prior);
+		w.one_file(j);
 	}
 
 	fn job(root: &Arc<Root>, rel: &str) -> Job {
@@ -2339,6 +2342,13 @@ mod tests {
 			no_xattr: false,
 			root: root.clone(),
 			prior: None,
+		}
+	}
+
+	fn known(root: &Arc<Root>, rel: &str, prior: &Prior) -> Job {
+		Job {
+			prior: Some(prior.clone()),
+			..job(root, rel)
 		}
 	}
 
@@ -2558,8 +2568,8 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		read_one(&g, &sh, &job(&r, "plain"), None, &Links::default());
-		read_one(&g, &sh, &job(&r, "other"), None, &Links::default());
+		read_one(&g, &sh, &job(&r, "plain"), &Links::default());
+		read_one(&g, &sh, &job(&r, "other"), &Links::default());
 		drop(sh);
 		drain.join().unwrap();
 		let b3 = |name: &str| OnFile::read(File::open(d.join(name)).unwrap().as_raw_fd()).b3;
@@ -2619,7 +2629,7 @@ mod tests {
 		let (sh, rx) = test_shared(d.join("t.sqlite"));
 		let g = test_group(&root);
 		let r = Arc::new(Root::open(&root).unwrap());
-		read_one(&g, &sh, &job(&r, "dir/f"), None, &Links::default());
+		read_one(&g, &sh, &job(&r, "dir/f"), &Links::default());
 		assert_eq!(g.stats.files.load(Relaxed), 0);
 		assert!(rx.try_recv().is_err());
 	}
@@ -2650,12 +2660,12 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		read_one(&g, &sh, &job(&r, "a"), &links);
 		let left = |l: &Links| locked(&l.map).entries.len();
 		assert_eq!(left(&links), 1);
-		read_one(&g, &sh, &job(&r, "b"), Some(&fresh), &links);
+		read_one(&g, &sh, &known(&r, "b", &fresh), &links);
 		assert_eq!(g.stats.skip_db.load(Relaxed), 1);
-		read_one(&g, &sh, &job(&r, "c"), None, &links);
+		read_one(&g, &sh, &job(&r, "c"), &links);
 		if g.stats.xattr_set.load(Relaxed) == 1 {
 			assert_eq!(g.stats.skip_xattr.load(Relaxed), 1);
 		} else {
@@ -2692,9 +2702,9 @@ mod tests {
 		g.size = Some(24);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		read_one(&g, &sh, &job(&r, "b"), Some(&fresh), &links);
+		read_one(&g, &sh, &known(&r, "b", &fresh), &links);
 		assert_eq!(g.stats.skipped_bytes.load(Relaxed), 2);
-		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		read_one(&g, &sh, &job(&r, "a"), &links);
 		assert_eq!(g.stats.bytes.load(Relaxed), 6);
 		assert!(g.line().ends_with(" | ~33% of 24 B"), "{}", g.line());
 		drop(sh);
@@ -2755,16 +2765,16 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let links = Links::default();
-		read_one(&g, &sh, &a, None, &links);
-		read_one(&g, &sh, &a, Some(&older), &links);
+		read_one(&g, &sh, &a, &links);
+		read_one(&g, &sh, &known(&r, "a", &older), &links);
 		assert_eq!(g.stats.skip_db.load(Relaxed), 2);
 		assert_eq!(g.stats.hashed.load(Relaxed), 0);
 		// Changed since the run began, or never reported.
 		sh.run_started_us = 0;
-		read_one(&g, &sh, &a, None, &links);
+		read_one(&g, &sh, &a, &links);
 		sh.run_started_us = now_us() + 1;
 		fs::write(d.join("b"), "fine").unwrap();
-		read_one(&g, &sh, &job(&r, "b"), None, &links);
+		read_one(&g, &sh, &job(&r, "b"), &links);
 		assert_eq!(g.stats.hashed.load(Relaxed), 2);
 		drop(sh);
 		drain.join().unwrap();
@@ -2809,7 +2819,7 @@ mod tests {
 			let Claim::Mine(mine) = links.claim(id, 2, bytes, mt) else {
 				panic!("not claimed");
 			};
-			let other = s.spawn(|| read_one(&g, &sh, &job(&r, "b"), None, &links));
+			let other = s.spawn(|| read_one(&g, &sh, &job(&r, "b"), &links));
 			for _ in 0..30 {
 				if other.is_finished() {
 					break;
@@ -3032,10 +3042,10 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		read_one(&g, &sh, &job(&r, "a"), &links);
 		let control = g.stats.xattr_set.load(Relaxed);
 		sh.no_write_devs.insert(fs::metadata(&d).unwrap().dev());
-		read_one(&g, &sh, &job(&r, "b"), None, &links);
+		read_one(&g, &sh, &job(&r, "b"), &links);
 		assert_eq!(g.stats.xattr_set.load(Relaxed), control);
 		assert_eq!(g.stats.xattr_fail.load(Relaxed), 0);
 		let fd = File::open(d.join("b")).unwrap();
@@ -3108,22 +3118,16 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let r = Arc::new(Root::open(&d).unwrap());
 		let control = test_group(&d);
-		read_one(
-			&control,
-			&sh,
-			&job(&r, "f"),
-			Some(&taken),
-			&Links::default(),
-		);
+		read_one(&control, &sh, &known(&r, "f", &taken), &Links::default());
 		assert_eq!(control.stats.mismatch.load(Relaxed), 1);
 		sh.no_write_devs.insert(md.dev());
 		let g = test_group(&d);
-		read_one(&g, &sh, &job(&r, "f"), Some(&taken), &Links::default());
+		read_one(&g, &sh, &known(&r, "f", &taken), &Links::default());
 		assert_eq!(g.stats.mismatch.load(Relaxed), 0);
 		assert_eq!(g.stats.hashed.load(Relaxed), 1);
 		assert_eq!(OnFile::read(raw).b3, Some(*old.as_bytes()));
 		let unrecorded = test_group(&d);
-		read_one(&unrecorded, &sh, &job(&r, "f"), None, &Links::default());
+		read_one(&unrecorded, &sh, &job(&r, "f"), &Links::default());
 		assert_eq!(unrecorded.stats.mismatch.load(Relaxed), 1);
 		drop(sh);
 		drain.join().unwrap();
@@ -3148,7 +3152,7 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		read_one(&g, &sh, &job(&r, "a"), None, &Links::default());
+		read_one(&g, &sh, &job(&r, "a"), &Links::default());
 		assert_eq!(g.stats.xattr_set.load(Relaxed), 1);
 		let on = OnFile::read(fd.as_raw_fd());
 		assert_eq!(on.b3, Some(*blake3::hash(b"synced").as_bytes()));
@@ -3181,7 +3185,7 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let go = |sh: &Shared, j: Job| {
-			read_one(&g, sh, &j, None, &Links::default());
+			read_one(&g, sh, &j, &Links::default());
 			match rx.try_recv() {
 				Ok(Msg::Hashed(h)) => h.b2b,
 				_ => panic!("nothing recorded"),

@@ -423,7 +423,7 @@
 - The scan's walk and worker pass the same context through 3 functions, and repeat the "seen once per run" rule at 4 sites.
 	- ID: 2026110715441808
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 9
@@ -432,6 +432,16 @@
 		- `walk`, `list_dir` and `queue` all pass `root`, `sh`, `stats`, `look` and `jobs`, and 2 are at clippy's 7-argument limit. A small struct fits, the way `Worker` keeps the hashing side's.
 		- `Worker::one_file` takes `prior` beside the job that already has it. Read `job.prior` instead, so the tests' jobs get their own.
 		- `keep`, `judged_already` (twice) and `skip_unread` each mark a row seen if it isn't yet. Use one helper, and one exit for `judged_already`'s 2 skips. Its ctime math is the same as `mtime_us`, so share that too.
+	- Progress log:
+		- 2026-11-08: `list_dir` and `queue` are methods of a `Walker`, which `walk` builds once the root is open, as `hasher` builds its `Worker`. `one_file` reads `job.prior`, and the tests give their jobs a prior with a `known` helper. All 4 sites call `mark_seen` for the seen-once rule, `judged_already` has one skip exit, and `micros` does the math for both mtime and ctime.
+		- 2026-11-08: Verified: clippy with all targets and features, `cargo test --release`, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- `walk` keeps its 5 arguments, since `run_group` and 5 tests call it, and it's where the root opens. The struct starts there.
+	- Swept: every `Msg::Seen` send in `scan.rs`, every `one_file` and `read_one` caller, and every microsecond conversion of a ctime or mtime. `accept.rs` already calls `scan::mtime_us`.
+	- Branch: round-20261108b
+	- Test case: none new, a refactor with no change in behavior. The scan's unit tests and the quick gate's integration test cover it.
+	- Acceptance signoff: Self-closed: no change in behavior.
+	- Closed: 20261108-141429
 
 - 3 lists and maps in the scan's planning still use bare tuples read by position.
 	- ID: 2026110715441809
