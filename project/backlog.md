@@ -158,7 +158,7 @@
 - The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
 	- ID: 2026110218175403
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-181754
 	- Opened by: repo housecleaning
@@ -175,9 +175,10 @@
 		- Allowed, with a reason in `scrub-allow.txt`: arithmetic read as a dash, test data, a loop counter's name, codeql-scan's set of built crates, refusal messages, and the README's idiom for one reader per disk.
 		- The planted-trigger message reads `has trigger` now, and des6w matches it.
 	- Branch: round-20261108b
-	- Test case: des6w for the one message a test matches. The rest is wording.
+	- Test case: its children's: 2026110811422129: none named; 2026110811422141: none with an ID. Checked by planting a banned word in `project/design.md`.
 	- Verified: the scrub reports nothing outside the backlog, and `cicd/cicd.bash --backlog-run-quick` passes.
 	- Swept: every scrub hit outside `project/backlog.md`, and the repo and private tools for the old strings.
+	- Closed: 20261108-115622
 
 - The content scrub finds about 100 lines in the backlog that break the writing rules.
 	- ID: 2026110811422129
