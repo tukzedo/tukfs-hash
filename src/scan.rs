@@ -440,10 +440,10 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			continue;
 		}
 		let disks = mounts::disks_for(m, &mounts)?;
-		kept.push((c, disks));
+		kept.push(mounts::RootDisks { root: c, disks });
 	}
 	let mut groups = Vec::new();
-	for (disks, rs) in mounts::group_roots(kept) {
+	for mounts::DiskGroup { disks, roots: rs } in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);
 		for (p, t) in threads {
 			if let Ok(c) = fs::canonicalize(p)
@@ -635,7 +635,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		exclude_ids: ids_of(&o.excludes),
 		no_xattr_ids: ids_of(&o.no_xattr),
 		mount_points: mounts::mount_points(mounts),
-		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
+		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
@@ -741,24 +741,29 @@ fn begin(
 	Ok(r)
 }
 
-// Roots on NTFS, APFS or HFS+, with their device and filesystem type.
+// A root on NTFS, APFS or HFS+.
+struct HandsOff {
+	dev: u64,
+	fstype: String,
+}
+
 fn hands_off(
 	mounts: &[mounts::Mount],
 	groups: &[Planned],
-) -> Result<BTreeMap<PathBuf, (u64, String)>, String> {
+) -> Result<BTreeMap<PathBuf, HandsOff>, String> {
 	let mut out = BTreeMap::new();
 	for r in groups.iter().flat_map(|g| &g.roots) {
-		if let Some(t) = mounts::hands_off_at(mounts, r) {
+		if let Some(fstype) = mounts::hands_off_at(mounts, r) {
 			let dev = fs::metadata(r)
 				.map_err(|e| format!("{}: {e}", r.display()))?
 				.dev();
-			out.insert(r.clone(), (dev, t));
+			out.insert(r.clone(), HandsOff { dev, fstype });
 		}
 	}
 	Ok(out)
 }
 
-fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -> Vec<Arc<Group>> {
+fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>) -> Vec<Arc<Group>> {
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|p| {
@@ -775,8 +780,8 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -
 	for g in &groups {
 		out!("group {} with {} worker(s):", g.name, g.threads);
 		for r in &g.roots {
-			if let Some((_, t)) = hands_off.get(r) {
-				out!("\t{} ({t}, no attributes written)", r.display());
+			if let Some(h) = hands_off.get(r) {
+				out!("\t{} ({}, no attributes written)", r.display(), h.fstype);
 			} else {
 				out!("\t{}", r.display());
 			}

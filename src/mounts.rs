@@ -368,22 +368,37 @@ pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	}
 }
 
+/// A root and the disks under it.
+#[derive(Debug)]
+pub struct RootDisks {
+	pub root: PathBuf,
+	pub disks: BTreeSet<String>,
+}
+
+/// Roots that share disks, and every disk under any of them.
+#[derive(Debug)]
+pub struct DiskGroup {
+	pub disks: BTreeSet<String>,
+	pub roots: Vec<PathBuf>,
+}
+
 /// Roots that share any disk end up in one group.
-pub fn group_roots(
-	roots: Vec<(PathBuf, BTreeSet<String>)>,
-) -> Vec<(BTreeSet<String>, Vec<PathBuf>)> {
-	let mut groups: Vec<(BTreeSet<String>, Vec<PathBuf>)> = Vec::new();
-	for (root, disks) in roots {
-		let mut merged = (disks, vec![root]);
+pub fn group_roots(roots: Vec<RootDisks>) -> Vec<DiskGroup> {
+	let mut groups: Vec<DiskGroup> = Vec::new();
+	for RootDisks { root, disks } in roots {
+		let mut merged = DiskGroup {
+			disks,
+			roots: vec![root],
+		};
 		let mut keep = Vec::new();
 		for g in groups.drain(..) {
-			if g.0.is_disjoint(&merged.0) {
+			if g.disks.is_disjoint(&merged.disks) {
 				keep.push(g);
 			} else {
-				merged.0.extend(g.0);
-				let mut r = g.1;
-				r.extend(merged.1);
-				merged.1 = r;
+				merged.disks.extend(g.disks);
+				let mut r = g.roots;
+				r.extend(merged.roots);
+				merged.roots = r;
 			}
 		}
 		keep.push(merged);
@@ -537,17 +552,21 @@ mod tests {
 	fn groups_share_disks() {
 		let _id = test_id("ddwzx");
 		let s = |v: &[&str]| v.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
+		let rd = |root: &str, disks: &[&str]| RootDisks {
+			root: PathBuf::from(root),
+			disks: s(disks),
+		};
 		let roots = vec![
-			(PathBuf::from("/a"), s(&["nvme0n1", "nvme1n1"])),
-			(PathBuf::from("/b"), s(&["sda"])),
-			(PathBuf::from("/c"), s(&["nvme1n1"])),
-			(PathBuf::from("/d"), s(&["sdb", "sda"])),
+			rd("/a", &["nvme0n1", "nvme1n1"]),
+			rd("/b", &["sda"]),
+			rd("/c", &["nvme1n1"]),
+			rd("/d", &["sdb", "sda"]),
 		];
 		let g = group_roots(roots);
 		assert_eq!(g.len(), 2);
-		assert_eq!(g[0].1, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
-		assert_eq!(g[1].1, vec![PathBuf::from("/b"), PathBuf::from("/d")]);
-		assert_eq!(group_name(&g[1].0), "sda+sdb");
+		assert_eq!(g[0].roots, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
+		assert_eq!(g[1].roots, vec![PathBuf::from("/b"), PathBuf::from("/d")]);
+		assert_eq!(group_name(&g[1].disks), "sda+sdb");
 	}
 
 	#[test]

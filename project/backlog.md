@@ -446,13 +446,23 @@
 - 3 lists and maps in the scan's planning still use bare tuples read by position.
 	- ID: 2026110715441809
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 10
 	- Origin: `5602fb5` after the last review, and `562a451` and `89bdbb7` before it. 2026102808215688 changed `scan::Planned` but missed these. Confirmed.
 	- Requirements [Feature]: Small structs for `plan`'s `kept` (path, device, disks), `hands_off`'s values (device, filesystem type), and the groups in `mounts::group_roots` (disks, roots).
 	- Related IDs: 2026102808215688
+	- Progress log:
+		- 2026-11-08: `mounts::group_roots` takes `RootDisks` (root, disks) and gives `DiskGroup`s (disks, roots), and `plan`'s `kept` is a list of `RootDisks`. `hands_off`'s values are `HandsOff` (dev, fstype).
+		- 2026-11-08: Verified: clippy with all targets and features, `cargo test --release`, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Decisions:
+		- `kept` had only the path and disks, no device, so `RootDisks` has those 2. The device is in `found`'s (device, inode) pair, which the item didn't name, and stays as it was.
+	- Swept: every caller of `group_roots`, which are `plan` and `ddwzx`, and every read of `hands_off`'s map, in `run` and `groups`.
+	- Branch: round-20261108b
+	- Test case: none new, a refactor with no change in behavior. `ddwzx` covers `group_roots`, and the quick gate's integration test the rest.
+	- Acceptance signoff: Self-closed: no change in behavior.
+	- Closed: 20261108-141847
 
 - 4 places turn a stored path into bytes, and each one handles a value that isn't text or a blob its own way.
 	- ID: 2026110715441810
