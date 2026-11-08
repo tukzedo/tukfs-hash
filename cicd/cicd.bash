@@ -28,6 +28,10 @@
 ##	   9. demo gif (a scenario run against the release build, drawn as a
 ##	      fake terminal, GFS-rotated, and copied to GIF_OUT when it changed)
 ##	  10. backup + publish to git
+##	  11. release upload (on main only: the release set to the git host as
+##	      release v<version>, through utility/release-upload.bash. The run
+##	      tags HEAD v<version> before it builds, when it isn't yet, and takes
+##	      the tag off again if it stops before this stage)
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
 ##	   is the second of 5 in this run. The plan at the start lists the ones
 ##	   off, with the flag or reason. Each step opens with a timed "Starting"
@@ -93,7 +97,9 @@
 ##	                       made from them
 ##	   --no-dogfood        skip the dogfood install
 ##	   --no-gif            skip the demo gif
-##	   --no-publish        skip the backup + publish
+##	   --no-publish        skip the backup + publish, and the release upload,
+##	                       which needs the commit pushed
+##	   --no-upload         skip the release upload, and the tag it makes
 ##	   --no-freeze         run stages 2-7 in the checkout, not in a copy
 ##	   -h, --help          show this help
 ##	- An area named with the --no- option that takes its step out, and a plan
@@ -170,6 +176,7 @@ TEST_ID_LIST_CMD=(); REMOTE_HOSTS=(); REMOTE_VM_WRAP=''; REMOTE_LOCK_WAIT=900
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
 PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
+UPLOAD_ENABLE=0; RELEASE_BRANCH=''
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
@@ -248,10 +255,11 @@ while (($#)); do case "$1" in
 	--no-package)             PACKAGE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-profile)             PROFILE_ENABLE=0; fOffWhy "$1" profile; gate_partial=1; inner_pass+=("$1"); shift ;;
 	## Dogfood and the gif take the release binary, so a stale one would go out.
-	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; fOffWhy "$1" release remote dogfood gif; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; UPLOAD_ENABLE=0; fOffWhy "$1" release remote dogfood gif upload; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-dogfood)             DOGFOOD_ENABLE=0; fOffWhy "$1" dogfood; shift ;;
 	--no-gif)                 GIF_ENABLE=0; fOffWhy "$1" gif; gate_partial=1; shift ;;
-	--no-publish)             GIT_PUBLISH=(); fOffWhy "$1" publish; shift ;;
+	--no-publish)             GIT_PUBLISH=(); UPLOAD_ENABLE=0; fOffWhy "$1" publish upload; shift ;;
+	--no-upload)              UPLOAD_ENABLE=0; fOffWhy "$1" upload; shift ;;
 	--no-freeze)              no_freeze=1; shift ;;
 	--message=*|--msg=*|-m=*) cli_message="${1#*=}"; shift ;;
 	-m|--message|--msg)       (($# >= 2)) || { echo "$1 needs a message (try --help)" >&2; exit 2; }; cli_message="$2"; shift 2 ;;
@@ -298,8 +306,8 @@ if ((gate_mode)); then
 	gate_strict=1
 	sync_enable=0
 	FMT_CMD=()
-	DOGFOOD_ENABLE=0; GIT_PUBLISH=()
-	fOffWhy "${mode_flag}" sync dogfood publish
+	DOGFOOD_ENABLE=0; GIT_PUBLISH=(); UPLOAD_ENABLE=0
+	fOffWhy "${mode_flag}" sync dogfood publish upload
 	## The gif is drawn, as a check, but goes nowhere the tree or the private
 	## dir would see it. A rotate dir under a parent that isn't there is a note.
 	gif_to_tmp=1
@@ -388,7 +396,7 @@ fQuickDrop(){   ## fQuickDrop ARRAY_NAME
 ## Packages stay in, since nfpm takes about a second for all of them.
 if ((quick)); then
 	## The other hosts too, since an emulated box takes several minutes.
-	PROFILE_ENABLE=0; GIF_ENABLE=0; remote_off=1; fOffWhy --quick profile remote gif
+	PROFILE_ENABLE=0; GIF_ENABLE=0; remote_off=1; UPLOAD_ENABLE=0; fOffWhy --quick profile remote gif upload
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
 ## --quick kept the fast leak checks above, and --backlog-run-quick picked its own.
@@ -403,6 +411,11 @@ fi
 ## A run at least as thorough as the merge gate records the tree it tested.
 record_green=1
 if ((quick || gate_partial)) || [[ "${mode}" == bq ]]; then record_green=0; fi
+## Only what passed every check the merge gate makes goes out, and only from
+## the release branch, since a dev to main merge is the release.
+if ((! record_green)); then UPLOAD_ENABLE=0; fOffWhy "a --no- option that drops a check" upload; fi
+cur_branch="$(git -C "${root}" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [[ -z "${RELEASE_BRANCH}" || "${cur_branch}" != "${RELEASE_BRANCH}" ]]; then UPLOAD_ENABLE=0; fOffWhy "not on ${RELEASE_BRANCH:-a release branch}" upload; fi
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -429,9 +442,10 @@ declare -A step_no=()
 cpu_shown=""
 fCpuShow(){ if [[ "${CPU_CAP}" != "${cpu_shown}" ]]; then fEcho_Clean "jobs: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}"; cpu_shown="${CPU_CAP}"; fi; }
 ## In the order they run.
-step_keys=(sync format build lint tests profile release remote dogfood gif publish)
+step_keys=(sync format build lint tests profile release remote dogfood gif publish upload)
 declare -A step_title=([sync]="Remote sync" [format]="Format" [build]="Build (debug)" [lint]="Lint" [tests]="Tests"
-	[profile]="Profiler" [release]="Release builds" [remote]="Other hosts" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish")
+	[profile]="Profiler" [release]="Release builds" [remote]="Other hosts" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish"
+	[upload]="Release upload")
 ## fStep KEY -> 1 when the plan has the step off, which then prints nothing.
 fStep(){
 	[[ -n "${step_no["$1"]:-}" ]] || return 1
@@ -705,7 +719,19 @@ fRunTmpGone(){
 	if ((! inner_run)); then printf '[ cleanup: removed this run'\''s temp files, about %s ]\n' "$(fSize "${total}")" >&2; fi
 	return 0
 }
-trap 'fRunTmpGone || true' EXIT
+## The tag fReleaseTag made, as TAG=OBJECT, until the the upload starts.
+tag_made=""
+## Only the tag this run made, and only while it's still the one it made.
+fTagUndo(){
+	local tag="${tag_made%%=*}" obj="${tag_made#*=}"
+	[[ -n "${tag_made}" ]] || return 0
+	tag_made=""
+	if [[ "$(git -C "${root}" rev-parse -q --verify "refs/tags/${tag}" 2>/dev/null)" == "${obj}" ]] && git -C "${root}" tag -d "${tag}" >/dev/null 2>&1; then
+		printf '[ took tag %s off, since the run stopped before the upload ]\n' "${tag}" >&2
+	fi
+	return 0
+}
+trap 'fTagUndo; fRunTmpGone || true' EXIT
 fStopOnSignals
 
 
@@ -772,6 +798,29 @@ fBuildStamp(){
 }
 fBuildStamp
 
+## A release is a commit tagged v<version>, so a run that uploads one tags HEAD
+## before it builds. A tag of that name anywhere else, here or on the git host,
+## means the version wasn't bumped. A stop before the upload takes the tag off
+## again, so it never names a commit that didn't pass.
+fReleaseTag(){
+	local tag at="" head out="" remote
+	[[ -n "${step_no[upload]:-}" ]] || return 0
+	tag="v$(fVersion)"; head="$(git -C "${root}" rev-parse HEAD)" || fDie "no HEAD"
+	at="$(git -C "${root}" rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
+	if [[ "${at}" == "${head}" ]]; then return 0; fi
+	if [[ -n "${at}" ]]; then fDie "${tag} is already on ${at:0:12}, not HEAD. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	remote="$(git -C "${root}" config --get "branch.${RELEASE_BRANCH}.remote" || echo origin)"
+	out="$(fGitRemote -C "${root}" ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "could not list the tags on ${remote}, to see if ${tag} is taken. Run with --no-upload to build without it."
+	if [[ -n "${out}" ]]; then fDie "${remote} already has ${tag}. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	if [[ "$("${here}/utility/green-tree.bash" tree "${root}")" != "$(git -C "${root}" rev-parse 'HEAD^{tree}')" ]]; then
+		fDie "the checkout has changes that aren't committed, so its build can't be a release. Commit them, or run with --no-upload."
+	fi
+	git -C "${root}" tag -a -m "${tag}" "${tag}" HEAD || fDie "could not tag HEAD ${tag}"
+	tag_made="${tag}=$(git -C "${root}" rev-parse "refs/tags/${tag}")"
+	fEcho "tagged HEAD ${tag}; taken off again if the run stops before the upload"
+	fBuildStamp
+}
+
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
 ## Plan, and the one question
@@ -801,6 +850,7 @@ fStepOn(){   ## fStepOn KEY -> 0 when the step runs
 		dogfood) ((DOGFOOD_ENABLE && ${#DOGFOOD_DESTS[@]})) ;;
 		gif)     ((GIF_ENABLE)) && [[ -n "${GIF_CMD}" ]] ;;
 		publish) ((${#GIT_PUBLISH[@]})) ;;
+		upload)  ((UPLOAD_ENABLE && ! release_off && ${#GIT_PUBLISH[@]})) && [[ -n "${RELEASE_ARTIFACT_DIR}" ]] ;;
 		*)       return 1 ;;
 	esac
 }
@@ -873,6 +923,12 @@ if ((list_only || (! quiet && ! inner_run))); then
 		fEcho_Clean "Publish (last) .: ${GIT_PUBLISH[*]}$( [[ -n "${publish_msg}" ]] && echo " (\"${publish_msg}\")" || echo ' (asks for the message now)')"
 	else
 		fEcho_Clean "Publish (last) .: (skipped)"
+	fi
+	if [[ -n "${step_no[upload]:-}" ]]; then
+		_tags=$'\n'"$(git -C "${root}" tag --points-at HEAD 2>/dev/null || true)"$'\n'
+		fEcho_Clean "Release upload .: v$(fVersion) to the git host, after publish$([[ "${_tags}" == *$'\n'"v$(fVersion)"$'\n'* ]] || echo "; tags HEAD v$(fVersion) before the build")"
+	else
+		fEcho_Clean "Release upload .: (off, ${off_why[upload]:-off in config.bash})"
 	fi
 	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-7 run from a copy taken after the format stage' || echo '(off)')"
 	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host; the build and tests in the release image')"
@@ -1525,6 +1581,29 @@ fStageGif(){
 	fStepPass
 }
 
+## Stage 11: the release set to the git host, from the release branch only.
+## fReleaseTag put the tag on before the build, or it was there already.
+## The set has to be this run's and a release build, so the binary's version
+## line has no date and no -dirty. The upload pushes the tag and makes the
+## release, and a rerun by hand picks up where it stopped.
+fStageUpload(){
+	local ver bin line rest
+	fStep upload || return 0
+	if [[ -s "${gate_skips}" ]]; then fDie "release not uploaded, since this run skipped: $(sort -u "${gate_skips}" | paste -sd ' ')"; fi
+	ver="$(fVersion)"; bin="${release_dir}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"
+	[[ -x "${bin}" ]] || fDie "no ${bin#"${root}/"} to upload"
+	line="$("${bin}" --version | sed -n 1p)" || fDie "${bin#"${root}/"} --version failed"
+	rest="${line#"${EXE_NAME} v${ver} build "}"
+	[[ "${rest}" != "${line}" && "${rest}" =~ ^[0-9a-z]+$ ]] || fDie "the release set isn't a release build: ${line}"
+	## From here the tag may be on the git host, so it stays.
+	tag_made=""
+	if ! fBg "${here}/utility/release-upload.bash" "${root}" "${ver}" "${release_dir}" "${line}" "${RELEASE_BRANCH}"; then
+		fDie "release upload failed. Once it's sorted out: cicd/utility/release-upload.bash \"${root}\" ${ver} \"${release_dir}\" \"${line}\" ${RELEASE_BRANCH}"
+	fi
+	fEcho "OK: release v${ver} on the git host"
+	fStepPass
+}
+
 ## Stage 10: backup + publish through the copied publisher. It commits and
 ## pushes the checkout as it is, after its own pull, so first make sure that's
 ## what was tested. The gif this run drew is the one change it makes itself.
@@ -1812,6 +1891,7 @@ if ((! inner_run)); then
 	fSweepKilled
 	if ((${#swept[@]})); then fEcho_Clean "cleanup: removed $(printf '%s, ' "${swept[@]}" | sed 's/, $//'), about $(fSize "${swept_kb}")"; fi
 	fStageSync
+	fReleaseTag
 fi
 if ((freeze)); then
 	## Rewrites the checkout, before the copy is taken. A check runs in the copy.
@@ -1837,6 +1917,7 @@ if ((! inner_run)); then
 	fStageGif
 	fRecordGreen
 	fStagePublish
+	fStageUpload
 fi
 ## Before the cleanup takes the file away.
 declare -a skipped=()
@@ -1931,3 +2012,5 @@ exit 0
 ##		  folder has one.
 ##		- 2026-11-07: A run dir's marks are removed last, so a removal that
 ##		  fails partway leaves it for the next run's sweep.
+##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it
+##		  puts on before the build. --no-upload.

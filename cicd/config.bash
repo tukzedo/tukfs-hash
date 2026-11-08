@@ -324,6 +324,11 @@ LINT_LOG_DIR="cicd/artifacts/lint"
 GIT_PUBLISH=(cicd/utility/n8git_backup-and-publish)
 PUBLISH_AUTO_MESSAGE=""
 
+## Stage 11: the release set to the git host as release v<version>, in a run
+## with no options on this branch. See design.md, Build and release.
+UPLOAD_ENABLE=1
+RELEASE_BRANCH="main"
+
 
 ##	History:
 ##		- 2026-10-23: Created from shcl's config.bash, trimmed to one crate.
@@ -355,3 +360,4 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  release check's integration test gets HOST_TEMP, which it reads first.
 ##		- 2026-10-29: BUILD_DIRTY_ENV_NAME, and the release check takes the
 ##		  marked build number.
+##		- 2026-11-08: The release upload, from main.

@@ -84,7 +84,9 @@
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
-	- Status: Queued
+	- Status: Stalled
+		- Held for: the next release run on `main`, the first with a real upload, which is the user's call.
+	- Needs external testing: the first real upload, at the next release from `main`: the tag and the release on GitHub, the 7 files under their own names, and the pre-release mark.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261102-181754
 	- Opened by: CICD review
@@ -92,6 +94,20 @@
 		- A release run tags the merge and uploads the binaries, packages and sums file, with their names unchanged.
 		- The newest release is easy to find, so an installer can list them.
 	- Note: Nothing to download until the repo is public, but the tag and the set can be made now.
+	- Progress log:
+		- 2026-11-08: A run with no options on `main` tags HEAD `v<version>` before the build when it isn't yet, and puts the release set on the git host after publish, through `cicd/utility/release-upload.bash`. The tag comes off again when the run stops before the upload. A version already tagged on another commit, here or on the git host, stops the run before the build, and so does a dirty checkout. design.md, "Build and release", says so.
+		- 2026-11-08: Verified, with a stand-in for the git host: `release-upload-check.bash REPO` passes 35 of 35. `cicd-steps-check.bash`, `cicd-flags-check.bash`, `cicd-noflags-check.bash` and `publish-check.bash` pass, and so does `cicd/cicd.bash --backlog-run-quick`.
+		- 2026-11-08: `cicd-steps-check.bash`, since the plan off `main` lists the upload as off: "default plan: none off" wants 1 line, was 0, and "quick lint: 10 off" wants 11, was 10.
+	- Decisions:
+		- The upload is the last stage of a run with no options, so a release goes out only from a run that passed every check and pushed the commit. `release-upload.bash` also runs by hand, such as after a `--no-publish` run or a failed upload.
+		- The run tags HEAD itself, since the build reads the tag to be a release. A stop before the upload takes it off again, so a tag never names a commit that didn't pass.
+		- Off with `--no-publish`, since a release has to be of a pushed commit. That's how 1.0.0-beta.1 was cut, with its tag and release made by hand.
+		- A version with a `-` is a pre-release. The latest mark is left to the git host, which picks by version, so a fix release for an older line doesn't take it. An installer reads the latest release, or the list of releases (2026110218175402).
+		- A release that's already there gets only the files it lacks, and other bytes under a name fail the run rather than replace them.
+		- A run that skipped anything doesn't upload, the same bar as recording the tree for the pre-push hook.
+	- Branch: round-20261108
+	- Test case: none with an ID. The private `release-upload-check.bash REPO`, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `GIT_PUBLISH`, `fStagePublish`, `step_keys` and `--no-publish` in `cicd/`, the hook, design.md, README.md, and the private checks that read the plan. `cicd-steps-check.bash` was the only one counting steps off.
 
 - The scan output has no percent complete.
 	- ID: 2026110407135700
