@@ -173,7 +173,7 @@
 - The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
 	- ID: 2026110715441803
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 4
@@ -181,6 +181,17 @@
 	- Incorrect behavior [Bug]: `db::batches` keeps `failed: Option<String>` and `events_ok: bool`. `events_ok` false with no `failed` can't happen.
 	- Expected behavior [Bug]: Rust style: invalid states can't be written, and no bool flags for states that exclude each other.
 	- Probable fix [Bug]: One enum with 3 states: all fine, rows dropped, all dropped.
+	- Actual cause [Bug]: One state of 3 values was held in 2 variables, from 2026101406340916's fix.
+	- Decisions:
+		- The enum is `Kept`, private to `db.rs`: `All`, `EventsOnly(reason)` and `Nothing(reason)`. It only moves down, and keeps the first failure's reason, as before. No behavior change.
+	- Actual fix [Bug]: `batches` holds one `Kept` and moves it with one match on the state and the events' commit. The rows are only written from `All`.
+	- Branch: round-20261108b
+	- Commit: `a99cae6`
+	- Test case: `ddy8d` (a bad row keeps the events), and new `df1pa` (a bad event drops events and rows for good, even once the cause is gone). Not a test that fails before, since the old code did the same.
+	- Verified: `df1pa` fails with the `Nothing` state made to keep events, and passes after. `--backlog-run-quick` passed in 2m 10s, and its `miri` area in 1m 03s.
+	- Swept: `batches` is the only place with the pair. `accept` and the other writers have no failure state.
+	- Acceptance signoff: Self-closed: the probable fix, no behavior change.
+	- Closed: 20261108-123119
 
 - The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
 	- ID: 2026110218175403
