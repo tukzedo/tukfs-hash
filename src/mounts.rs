@@ -99,49 +99,71 @@ pub fn read_mounts() -> Result<Vec<Mount>, String> {
 /// above it, hides it and all that's mounted on it (2026102814341407). Works
 /// from the table alone, so kernels without `STATX_MNT_ID` get it too.
 pub fn visible(mounts: Vec<Mount>) -> Vec<Mount> {
-	let mut kids: HashMap<u64, Vec<usize>> = HashMap::new();
-	for (i, m) in mounts.iter().enumerate() {
-		kids.entry(m.parent).or_default().push(i);
-	}
 	let index: HashMap<u64, usize> = mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
-	let on = |id: u64| kids.get(&id).map_or(&[][..], Vec::as_slice);
 	let parent_of = |i: usize| index.get(&mounts[i].parent).copied().filter(|&p| p != i);
-	let covered = |i: usize| {
-		on(mounts[i].id)
-			.iter()
-			.any(|&k| k != i && mounts[k].point == mounts[i].point)
-	};
+	// Lookups by parent and point, so a table of thousands stays linear
+	// (2026110715441800).
+	let mut at: HashMap<(u64, &Path), Vec<usize>> = HashMap::new();
+	for (i, m) in mounts.iter().enumerate() {
+		at.entry((m.parent, m.point.as_path())).or_default().push(i);
+	}
+	let covered: Vec<bool> = (0..mounts.len())
+		.map(|i| {
+			at.get(&(mounts[i].id, mounts[i].point.as_path()))
+				.is_some_and(|on| on.iter().any(|&k| k != i))
+		})
+		.collect();
+	// Each step up drops one part, and none above the shallowest sibling can
+	// match, so a chain of nested mounts doesn't look all the way up from each.
+	let depth: Vec<usize> = mounts
+		.iter()
+		.map(|m| m.point.components().count())
+		.collect();
+	let mut top: HashMap<u64, usize> = HashMap::new();
+	for (m, &d) in mounts.iter().zip(&depth) {
+		top.entry(m.parent)
+			.and_modify(|t| *t = d.min(*t))
+			.or_insert(d);
+	}
 	// A sibling on a folder above it was mounted later, or it'd be the parent.
 	let shadowed = |i: usize| {
 		let m = &mounts[i];
-		on(m.parent).iter().any(|&s| {
-			let s = &mounts[s];
-			s.id != m.id && s.id != m.parent && s.point != m.point && m.point.starts_with(&s.point)
+		let steps = top
+			.get(&m.parent)
+			.map_or(0, |&t| depth[i].saturating_sub(t));
+		m.point.ancestors().skip(1).take(steps).any(|above| {
+			at.get(&(m.parent, above)).is_some_and(|on| {
+				on.iter()
+					.any(|&s| mounts[s].id != m.id && mounts[s].id != m.parent)
+			})
 		})
 	};
 	// Whether a path gets to a mount's point at all, covered or not.
 	let mut reach: Vec<Option<bool>> = vec![None; mounts.len()];
+	let mut on_chain = vec![false; mounts.len()];
 	for start in 0..mounts.len() {
 		let mut chain = Vec::new();
-		let mut at = Some(start);
+		let mut up = Some(start);
 		// Up to one already known, the namespace's root, or a loop.
-		while let Some(i) = at
+		while let Some(i) = up
 			&& reach[i].is_none()
-			&& !chain.contains(&i)
+			&& !on_chain[i]
 		{
 			chain.push(i);
-			at = parent_of(i);
+			on_chain[i] = true;
+			up = parent_of(i);
 		}
 		while let Some(i) = chain.pop() {
+			on_chain[i] = false;
 			let through = parent_of(i).and_then(|p| {
 				let r = reach[p]?;
-				Some(r && (mounts[i].point == mounts[p].point || !covered(p)))
+				Some(r && (mounts[i].point == mounts[p].point || !covered[p]))
 			});
 			reach[i] = Some(through.unwrap_or(true) && !shadowed(i));
 		}
 	}
 	let keep: Vec<bool> = (0..mounts.len())
-		.map(|i| reach[i] == Some(true) && !covered(i))
+		.map(|i| reach[i] == Some(true) && !covered[i])
 		.collect();
 	mounts
 		.into_iter()
@@ -416,6 +438,7 @@ mod tests {
 	use crate::testutil::test_id;
 	use std::ffi::OsStr;
 	use std::os::unix::ffi::OsStrExt;
+	use std::time::Duration;
 
 	const SAMPLE: &str = "\
 22 1 0:21 /@ / rw,noatime shared:1 - btrfs /dev/mapper/luks-x rw
@@ -609,6 +632,137 @@ mod tests {
 				9 8 0:9 / /y/z rw - ext4 /dev/sdd1 rw\n"),
 			[2, 3, 8, 9]
 		);
+	}
+
+	// The filter as 2026102814341407 wrote it, which checks every sibling of
+	// each mount. Kept as the model the faster one has to match.
+	fn visible_by_siblings(mounts: Vec<Mount>) -> Vec<Mount> {
+		let mut kids: HashMap<u64, Vec<usize>> = HashMap::new();
+		for (i, m) in mounts.iter().enumerate() {
+			kids.entry(m.parent).or_default().push(i);
+		}
+		let index: HashMap<u64, usize> =
+			mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
+		let on = |id: u64| kids.get(&id).map_or(&[][..], Vec::as_slice);
+		let parent_of = |i: usize| index.get(&mounts[i].parent).copied().filter(|&p| p != i);
+		let covered = |i: usize| {
+			on(mounts[i].id)
+				.iter()
+				.any(|&k| k != i && mounts[k].point == mounts[i].point)
+		};
+		let shadowed = |i: usize| {
+			let m = &mounts[i];
+			on(m.parent).iter().any(|&s| {
+				let s = &mounts[s];
+				s.id != m.id
+					&& s.id != m.parent
+					&& s.point != m.point
+					&& m.point.starts_with(&s.point)
+			})
+		};
+		let mut reach: Vec<Option<bool>> = vec![None; mounts.len()];
+		for start in 0..mounts.len() {
+			let mut chain = Vec::new();
+			let mut at = Some(start);
+			while let Some(i) = at
+				&& reach[i].is_none()
+				&& !chain.contains(&i)
+			{
+				chain.push(i);
+				at = parent_of(i);
+			}
+			while let Some(i) = chain.pop() {
+				let through = parent_of(i).and_then(|p| {
+					let r = reach[p]?;
+					Some(r && (mounts[i].point == mounts[p].point || !covered(p)))
+				});
+				reach[i] = Some(through.unwrap_or(true) && !shadowed(i));
+			}
+		}
+		let keep: Vec<bool> = (0..mounts.len())
+			.map(|i| reach[i] == Some(true) && !covered(i))
+			.collect();
+		mounts
+			.into_iter()
+			.zip(keep)
+			.filter_map(|(m, k)| k.then_some(m))
+			.collect()
+	}
+
+	fn mount(id: u64, parent: u64, point: &str) -> Mount {
+		Mount {
+			id,
+			parent,
+			dev: format!("0:{id}"),
+			root: PathBuf::from("/"),
+			point: PathBuf::from(point),
+			fstype: "ext4".into(),
+			source: "/dev/sda1".into(),
+		}
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
+	fn fuzz_visible() {
+		let _id = test_id("df1ny");
+		let points = ["/", "/a", "/a/b", "/a/b/c", "/a/c", "/ab", "/b", "/b/a"];
+		crate::testutil::fuzz("visible", |r| {
+			let n = 1 + r.below(14);
+			let mut all = Vec::with_capacity(n);
+			let mut covered = 0;
+			for i in 1..=n as u64 {
+				// Now and then a repeated ID, a parent not in the table, or one
+				// that makes a loop.
+				let id = if r.one_in(20) {
+					1 + r.below(n) as u64
+				} else {
+					i
+				};
+				let parent = if r.one_in(10) {
+					r.below(n + 3) as u64
+				} else {
+					1 + r.below(i as usize) as u64
+				};
+				if id != i || parent >= i {
+					covered |= 4;
+				}
+				all.push(mount(id, parent, r.pick(&points)));
+			}
+			let ids = |v: &[Mount]| {
+				v.iter()
+					.map(|m| (m.id, m.parent, m.point.clone()))
+					.collect::<Vec<_>>()
+			};
+			let want = visible_by_siblings(all.clone());
+			let got = visible(all.clone());
+			assert_eq!(ids(&got), ids(&want), "{:?}", ids(&all));
+			covered | if want.len() < all.len() { 1 } else { 2 }
+		})
+		.covers(0b111);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "times thousands of mounts")]
+	fn thousands_of_mounts_stay_fast() {
+		let _id = test_id("df1nz");
+		let flat: Vec<Mount> = std::iter::once(mount(1, 0, "/"))
+			.chain((2..=8000).map(|i| mount(i, 1, &format!("/srv/c{i}"))))
+			.collect();
+		let mut deep = vec![mount(1, 0, "/")];
+		let mut point = String::new();
+		for i in 2..=1000 {
+			point.push_str("/d");
+			deep.push(mount(i, i - 1, &point));
+		}
+		for (name, table) in [("flat", flat), ("deep", deep)] {
+			let n = table.len();
+			let start = std::time::Instant::now();
+			let kept = visible(table).len();
+			let took = start.elapsed();
+			assert_eq!(kept, n, "{name}");
+			// The sibling scan took 20 s or so on the flat one.
+			assert!(took < Duration::from_secs(1), "{name}: {took:?}");
+		}
 	}
 
 	// tree/sub bound on bind and on tree/b, and another disk on tree/m.
