@@ -59,7 +59,10 @@ fSafeRm() {
 		printf 'fSafeRm: refused, a link or not a folder: %s\n' "${p}" >&2; return 1
 	fi
 	fUnlock "${p}"
-	rm -rf --one-file-system -- "${p}"
+	# The marks go last, so a removal that fails partway leaves a folder the
+	# next run's sweep still knows (2026110210514819).
+	find "${p}" -mindepth 1 -maxdepth 1 ! -name run.pid ! -name .test-run ! -name .test-kept -exec rm -rf --one-file-system -- {} + &&
+		rm -f -- "${p}/.test-kept" "${p}/run.pid" "${p}/.test-run" && rmdir -- "${p}"
 }
 
 # Ours, and its run gone, such as a killed one's. A kept one waits 2 days
@@ -864,3 +867,5 @@ fi
 ##		- 20261102: A CHECK in place of the trigger that refuses a row, and a
 ##		  planted trigger refused.
 ##		- 20261102: Step 5 also stops and resumes over a new database.
+##		- 20261107: The work folder's marks are removed last, so a removal
+##		  that fails partway leaves it for the next run's sweep.

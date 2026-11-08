@@ -151,12 +151,23 @@
 - When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
 	- ID: 2026110210514819
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-105148
 	- Opened by: work on 2026102814341421
+	- Reproduced [Bug]: Yes, 2026-11-07 here, with a stand-in `rm` on PATH that removes the marks and then fails. The folder stayed with no `run.pid` or `.test-run`, and the next run left it. cicd.bash's run folders and box-side.bash's had the same flaw.
+	- Actual cause [Bug]: One `rm -rf` on the whole folder, which can take the marks before it fails on something else.
 	- Progress log:
 		- Found while working 2026102814341421. fUnlock makes it rarer. Keep the marks until the last removal, or remove them last.
+		- 2026-11-07: Verified: `temp-ctr-check.bash partial` passes 5 cases and all 5 fail on the code from before. `remote-check.bash box` passes 16 cases, and its 2 new ones fail on the code from before. `temp-ctr-check.bash all` passes 49. `it-stop-check.bash` is clean for `int` at 13 s and `pid` after ddy6a. `--backlog-run-quick` passes in 2m 01s, shellcheck included. The markdown check is clean.
+	- Decisions:
+		- The same fix in cicd.bash and box-side.bash, since their sweeps need their marks too.
+		- Each script keeps its own copy, since box-side.bash runs on the VM and the integration test runs on its own.
+	- Actual fix [Bug]: `fSafeRm` in `tests/integration.bash` and `cicd/utility/box-side.bash`, and `fRmMarksLast` in `cicd/cicd.bash`, remove everything but the marks first, then the marks, then the empty folder. design.md, "Build and release", says so.
+	- Branch: round-20261108
+	- Test case: none with an ID. `temp-ctr-check.bash REPO partial` and `remote-check.bash REPO box`, with `rm-fail-shim.bash`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every `rm -rf` in `cicd/` and `tests/`. `scratch.bash`'s leak check folders have no sweep, since they sit in the run's folder, and `fSafeRmCache` takes build cache entries with no marks.
+	- Closed: 20261107-181045
 
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414

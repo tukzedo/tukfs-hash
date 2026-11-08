@@ -533,10 +533,17 @@ fSafeRm(){   ## fSafeRm PATH TOKEN
 		printf 'cleanup: not removed, no mark from this run: %s\n' "${p}" >&2; return 1
 	fi
 	## A test that failed can leave a dir it made read-only.
-	if ! rm -rf --one-file-system -- "${p}" 2>/dev/null; then
+	if ! fRmMarksLast "${p}" 2>/dev/null; then
 		chmod -R u+rwX -- "${p}" 2>/dev/null || true
-		rm -rf --one-file-system -- "${p}" 2>/dev/null || { printf 'cleanup: could not remove all of %s\n' "${p}" >&2; return 1; }
+		fRmMarksLast "${p}" 2>/dev/null || { printf 'cleanup: could not remove all of %s\n' "${p}" >&2; return 1; }
 	fi
+}
+
+## rm -rf DIR with its marks last, so a removal that fails partway leaves a
+## dir the next run's sweep still knows (2026110210514819).
+fRmMarksLast(){   ## fRmMarksLast DIR
+	find "$1" -mindepth 1 -maxdepth 1 ! -name run.pid ! -name "${run_mark}" ! -name "${kept_mark}" -exec rm -rf --one-file-system -- {} + &&
+		rm -f -- "$1/${kept_mark}" "$1/run.pid" "$1/${run_mark}" && rmdir -- "$1"
 }
 
 ## Make one of this run's dirs under BASE/tukfs-hash/, and set made_dir to it.
@@ -1922,3 +1929,5 @@ exit 0
 ##		  --no-sandbox.
 ##		- 2026-11-02: The content scrub in the lint stage, when the private
 ##		  folder has one.
+##		- 2026-11-07: A run dir's marks are removed last, so a removal that
+##		  fails partway leaves it for the next run's sweep.
