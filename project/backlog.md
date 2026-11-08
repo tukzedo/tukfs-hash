@@ -146,15 +146,26 @@
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 14
+	- Related IDs: 2026110715441806
 	- Origin: `cede460`. The find-new fix covered only a name missing from `--old`. Confirmed with a hard link standing in for the kept inode.
 	- Requirements [Feature]:
 		- When find-new gives an inode and the old name has another inode, look the inode up first. Fall back to the name only when it isn't found.
 	- Note: `mv c a` over an existing `a`, plus damage that keeps the mtime, gives "edited a mtime moved" and exit 0. Old `c` is never read.
 	- Note: `src/snapdiff.rs` has unit tests of its parsers. The pairing needs a fixture with 2 folders and a made-up find-new list, as the review used.
+	- Progress log:
+		- 2026-11-08: Reproduced on the old build: "edited a mtime moved", exit 0. Now old `c` is found by inode and compared, "same a".
+	- Decisions:
+		- A find-new file whose old name holds another inode waits for the inode walk, with the files missing from `--old`. If the walk doesn't find it, the file under its name is compared.
+		- Atomic saves give a new inode, so they now cost a walk too. design.md, Snapshot diffs, says so.
+	- Branch: round-20261108
+	- Test case: `df0pp` (`snapdiff::tests::the_inode_comes_before_the_name`): `mv c a` with a link keeping c's inode, and an atomic save that falls back to the name. It fails before the fix, exit 4 where 0 is wanted, and passes after.
+	- Swept: `find_by_inode` is the only inode lookup. zfs diff R lines and lists carry no inode, so the name is all they have.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick asan fuzz`.
+	- Closed: 20261107-194640
 
 - Every command takes every other command's flags without a word, and `scan --help` is an error.
 	- ID: 2026102814341425
@@ -173,7 +184,7 @@
 - snapdiff keeps every listed file's names and stat results in memory until the end, about 880 bytes per name.
 	- ID: 2026110715441806
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 7
@@ -183,7 +194,20 @@
 		- Compare each pair as soon as it's stat'd, and keep back only the pairs waiting on an inode lookup.
 		- Keep the output order, or say in design.md why it changes.
 		- A memory check with a threshold.
-	- Related IDs: 2026102808215768
+	- Related IDs: 2026102808215768, 2026102814341424
+	- Progress log:
+		- 2026-11-08: Verified: peak RSS for a 100,000-line list went from 67.6 MB to 11.5 MB, against about 11.1 MB for a 1-line list either way. 200,000 zfs diff lines naming no files went from 33.9 MB to 11.4 MB.
+	- Decisions:
+		- The list is read a line at a time, and each file compared as it's read. Only zfs diff's `-` and `+` names and the files waiting on the inode walk are held to the end.
+		- find-new output is in the list's own order, by inode, with the walk's files last. It was sorted by name, which took the whole list. design.md says why. Filed as a Check.
+		- find-new's line per extent is dropped when it follows one for the same name, as btrfs prints them, rather than by a set of every name.
+		- A refused line now stops the run where it's met, still exit 1, after what was already printed. Lines outside `--mount` are still all counted for the message.
+	- Branch: round-20261108
+	- Test case: `df0pq` in `tests/integration.bash`: a 100,000-line list's peak RSS has to be under 4 MB over a 1-line list's. It failed on the old build at 85 MB against 12 MB, and passes after.
+		- 2026-11-08: `ddx00` now wants find-new pairs in list order, `dir/a file` then `b`, where it wanted `b` first. `deeb8` models dropping a repeat that follows its own name in place of a sorted map, its generator repeats the last name a third of the time, and its "names sorted" assert is now "no 2 in a row the same".
+	- Swept: the other inputs read whole are system files under `/proc` and `/sys`. The scan walk was bounded in 2026101406340921. `root-steps.bash` reads only exit codes and flagged lines, not their order.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick asan fuzz`.
+	- Closed: 20261107-194640
 
 - When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
 	- ID: 2026110210514819

@@ -207,7 +207,11 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A path with both a `-` and a `+` line in `zfs diff` is a file replaced by a new one. rsync without `--inplace`, tar and atomic saves do that, and they keep the time, so these get compared too.
 
-- btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, the old snapshot is walked once for the inode numbers it still needs, since snapshots of one subvolume keep them. A matching birth time rules out a number used again after a delete. A walk is only paid for when a listed file is missing from the old side, which new files also cause.
+- btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, or holds another inode there, as after `mv c a`, the old snapshot is walked once for the inode numbers it still needs, since snapshots of one subvolume keep them. A matching birth time rules out a number used again after a delete. A file the walk doesn't find is compared with the one under its name, which is what an atomic save needs. A walk is only paid for when a listed file is missing from the old side or has another inode there, which new files and atomic saves also cause.
+
+- The change list is read a line at a time, and each file is compared as it's read, so that way memory doesn't grow with the list. Only zfs diff's `-` and `+` names and the files waiting on the walk are held to the end. A 100,000-line list took 66 MB before, and now takes what a 1-line one does. A refused line stops the run where it's met, with exit 1, after whatever was printed before it.
+
+- Output is in the list's order. zfs diff's replaced files come last, sorted by name. find-new's files come in its own order, which is by inode, and the ones that waited on the walk come last. They used to be sorted by name, which took the whole list in memory.
 
 ## Build and release
 

@@ -437,6 +437,18 @@ ln "${sd}/old/d" "${sd}/old/before"
 ln "${sd}/old/d" "${sd}/new/after"
 printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "${sd}/new/after")" > "${sd}/renamed"
 check ddy6c "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
+# A long list takes no more memory than a short one, since each file is
+# compared as it's read. Peak RSS, from 1 line to 100,000.
+head -c 3000 /dev/urandom > "${sd}/old/kept"; cp -p "${sd}/old/kept" "${sd}/new/kept"
+printf 'kept\n' > "${sd}/short"; printf 'kept\n%.0s' {1..100000} > "${sd}/long"
+peak() { python3 -I -c 'import resource, subprocess, sys
+r = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print(r.returncode, resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' "${bin}" snapdiff --old "${sd}/old" --new "${sd}/new" --list "${1}"; }
+rcShort='' kbShort='' rcLong='' kbLong=''
+read -r rcShort kbShort < <(peak "${sd}/short") || true
+read -r rcLong kbLong < <(peak "${sd}/long") || true
+st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 4096 )) && st=0
+expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 4 MB more" "${st}"
 
 # 10. Names that aren't plain text: arguments are taken, and output escapes
 # them so 2 names never print the same.
