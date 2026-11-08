@@ -29,6 +29,18 @@
 
 ## Issues
 
+- 2 private cicd checks fail on dev: build-mark-check.bash and gate-record-check.bash's strict image case.
+	- ID: 2026110718460111
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261107-184601
+	- Opened by:
+	- Progress log:
+		- Found 2026-11-08 by 2026110218175401's worker, failing the same way on a clone of dev without that change.
+		- build-mark-check.bash runs git tag v1.0.0-beta.1 in a clone that already has that tag since the beta.1 release.
+		- gate-record-check.bash, case 'image checks, strict=1', gets [1 0 codeql] where it wants [0 0 sanitize-rust-miri codeql]. Check whether that's a stale check or a strict-mode gap in cicd.bash.
+
 - No one-line install script.
 	- ID: 2026110218175402
 	- Type: Feature
