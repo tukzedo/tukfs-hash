@@ -1252,11 +1252,10 @@ fStageLint(){
 		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
 	done
 	## The content scrub lives with the private project files, so a clone
-	## without them skips it. It only reports until 2026110218175403 is done.
+	## without them skips it.
 	if [[ -x "${checkout}/../private/hooks/scrub.bash" ]]; then
 		fEcho_Clean "content scrub: ../private/hooks/scrub.bash"
-		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"
-		else fEcho "NOTE: the content scrub found lines to look at; they're above, and in the lint log"; fi
+		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"; else failed+=(scrub); fi
 	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
@@ -2029,6 +2028,7 @@ exit 0
 ##		  --no-sandbox.
 ##		- 2026-11-02: The content scrub in the lint stage, when the private
 ##		  folder has one.
+##		- 2026-11-08: A scrub hit fails the lint stage.
 ##		- 2026-11-07: A run dir's marks are removed last, so a removal that
 ##		  fails partway leaves it for the next run's sweep.
 ##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it

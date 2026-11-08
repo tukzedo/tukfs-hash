@@ -199,7 +199,7 @@
 - The lint stage only reports content scrub hits, rather than failing on them.
 	- ID: 2026110811422141
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261108-114221
 	- Opened by: split from 2026110218175403
@@ -207,6 +207,12 @@
 	- Prereq IDs: 2026110811422129
 	- Requirements [Feature]: Once the scrub reports 0 hits, the lint stage fails on a hit, as with the other linters.
 	- Estimated effort: Low
+	- Decisions: A hit adds `scrub` to the stage's failed list, so the stage ends like any other linter's failure and every linter still runs first. A clone without the private folder still skips the scrub.
+	- Branch: round-20261108b
+	- Test case: none with an ID. Checked by planting a banned word in `project/design.md`.
+	- Verified: with the plant, `cicd/cicd.bash --backlog-run-quick lint` printed the hit and failed the stage (exit 1). With the plant removed, `cicd/cicd.bash --backlog-run-quick` passes, "content scrub: clean".
+	- Swept: the only caller of the scrub is the lint stage in `cicd/cicd.bash`. No doc says it only reports, except the memory.md note.
+	- Closed: 20261108-115523
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
