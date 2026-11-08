@@ -35,7 +35,8 @@
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
 ##	   is the second of 5 in this run. The plan at the start lists the ones
 ##	   off, with the flag or reason. Each step opens with a timed "Starting"
-##	   line and closes with PASS or FAIL and its name. Cleanup comes last.
+##	   line and closes with a timed PASS, FAIL or SKIP line in the same form.
+##	   Cleanup comes last.
 ##	- Syntax:
 ##	  cicd/cicd.bash [options]
 ##	  Options:
@@ -450,13 +451,15 @@ declare -A step_title=([sync]="Remote sync" [format]="Format" [build]="Build (de
 fStep(){
 	[[ -n "${step_no["$1"]:-}" ]] || return 1
 	step_n="${step_no["$1"]}"; step_name="${step_title["$1"]}"; step_open=1
-	fSection "$(fNow): Step ${step_n} of ${step_total}; Starting ${step_name}"
+	fSection "$(fStepLine Starting)"
 	fCpuCap; fCpuShow
 }
-fStepPass(){ step_open=0; fEcho_Clean "PASS ${step_name}"; fEcho_Clean; }
-fStepFail(){ if ((step_open)); then step_open=0; echo "FAIL ${step_name}"; fi; }
+## The open and close lines differ only in the word, so a close reads like its open.
+fStepLine(){ printf '%s: Step %s of %s; %s %s' "$(fNow)" "${step_n}" "${step_total}" "$1" "${step_name}"; }
+fStepPass(){ step_open=0; fEcho "$(fStepLine PASS)"; fEcho_Clean; }
+fStepFail(){ if ((step_open)); then step_open=0; echo "[ $(fStepLine FAIL) ]"; fi; }
 ## A step with nothing it could run. The summary at the end lists why.
-fStepSkip(){ step_open=0; fEcho_Clean "SKIP ${step_name}"; fEcho_Clean; }
+fStepSkip(){ step_open=0; fEcho "$(fStepLine SKIP)"; fEcho_Clean; }
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 ## KB to a size a person reads.
 fSize(){ if (($1 >= 1048576)); then printf '%d.%d GB' $(($1 / 1048576)) $(($1 % 1048576 * 10 / 1048576)); else printf '%d MB' $((($1 + 512) / 1024)); fi; }
@@ -2014,3 +2017,5 @@ exit 0
 ##		  fails partway leaves it for the next run's sweep.
 ##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it
 ##		  puts on before the build. --no-upload.
+##		- 2026-11-08: A step closes with a timed, numbered PASS, FAIL or SKIP line,
+##		  in the same form as its Starting line.

@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 
 ##	Purpose:
-##		Runs a test step on the host in a bubblewrap sandbox, so a bug in what
-##		it runs can only write to the folders named. Everything else is
-##		read-only. Home, /tmp and /run are empty, so the sockets in them, such
-##		as docker's, ssh-agent's, tmux's and the session bus, aren't there to
-##		reach. No network, no other processes, and no sudo. The toolchain
-##		folders in home are shown read-only, so cargo runs offline from what
-##		an earlier step fetched. See design.md, Test sandbox.
-##		TUKFS_NO_SANDBOX=1, from cicd.bash's --no-sandbox, runs the command
-##		as is, with a warning. Inside the build image it always runs as is,
-##		since the image is the sandbox there.
+##		Runs a test step on the host in bubblewrap, writable only in RW_DIR.
+##		See design.md, Test sandbox.
 ##	Syntax:
 ##		sandbox.bash RW_DIR... -- COMMAND [ARG...]
 ##		Each RW_DIR has to be there already, and can't be /, a folder right
 ##		under it such as /tmp, home itself or a folder home is in.
+##		TUKFS_NO_SANDBOX=1, from --no-sandbox, and TUKFS_IN_IMAGE run the
+##		command as is.
 ##	Exit: the command's, or 2 when it can't run.
 ##	History: At bottom of script.
 
@@ -64,9 +58,7 @@ for d in "${rw[@]}"; do
 	if [[ "${fsType:-}" == zfs && -n "${src:-}" ]]; then pools+=("${src%%/*}"); fi
 done
 
-## ZFS shows no pool to a user namespace it isn't delegated to, so `zpool
-## list` fails in here. A scan needs it for the pool's disks, so this stand-in
-## gives back what the real one said out here, for the pools above only.
+## The zpool stand-in. See design.md, Test sandbox.
 if ((${#pools[@]})) && zpoolReal="$(command -v zpool 2>/dev/null)"; then
 	shim=$'#!/usr/bin/env bash\n## The test sandbox\'s stand-in, from sandbox.bash.\n'
 	shim+=$'if [[ "${#}" -eq 5 && "${1} ${2} ${3} ${4}" == "list -v -H -P" ]]; then case "${5}" in\n'
@@ -87,3 +79,4 @@ exec bwrap "${args[@]}" -- "$@"
 
 ##	History:
 ##		- 2026-11-02: Created.
+##		- 2026-11-08: Purpose cut to a line and a pointer to design.md.

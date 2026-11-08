@@ -239,7 +239,7 @@
 - The lines that close a cicd step read `PASS Format`, not the style guide's `[ <time>: Step 1 of 9; PASS Format ]`.
 	- ID: 2026110715441801
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 2
@@ -249,6 +249,15 @@
 	- Expected behavior [Bug]: The CICD style guide's close line, in the same form as the open line above it.
 	- Probable fix [Bug]: `fStepPass`, `fStepFail` and `fStepSkip` in cicd.bash print the whole line. `lint-report.bash`'s FAIL pattern and the private `cicd-steps-check.bash` change with it.
 	- Related IDs: 2026102416215931
+	- Actual cause [Bug]: The close lines kept 2026102416215931's short form when the guide moved to the bracketed one.
+	- Actual fix [Bug]: `fStepLine` in cicd.bash prints `<time>: Step N of M; <word> <name>` for the open line and all 3 closes, so they can't drift apart. `lint-report.bash` counts the bracketed FAIL line as an error, and still counts a bare `FAIL` at a line start, which the test scripts print.
+	- Progress log:
+		- 2026-11-08: Verified: the private `cicd-steps-check.bash REPO` passes, with new asserts for the timed PASS and FAIL lines in the checkout and the frozen copy, and none bare. It fails 10 of them on the code from before. The SKIP and FAIL lines, from the functions run alone, have the same form. `cicd/cicd.bash --backlog-run-quick` passed, steps 1 to 4 of 4, each closed by `[ <time>: Step N of 4; PASS <name> ]`.
+	- Swept: every `fStepPass`, `fStepFail` and `fStepSkip` caller goes through the 3 functions. `cicd/`, `tests/`, design.md, README.md and the private tools for anchored `PASS`, `FAIL` or `SKIP` step lines. Only `cicd-steps-check.bash` anchored them. `cicd-noflags-check.bash`, `release-host-check.bash` and `release-upload-check.bash` match `PASS <name>` inside the line, which still holds. `fuzz.bash`'s `^PASS` reads test IDs, not steps. The `SKIP <host>` line inside the Other hosts step and the `Skipped:` list at the end aren't step closes, and stay.
+	- Branch: round-20261108
+	- Test case: none with an ID. The private `cicd-steps-check.bash REPO`, since private checks stay out of the pipeline (2026102508462883).
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code from before.
+	- Closed: 20261107-185915
 
 - `xattr::write_b3` turns its `B3Write` back into a bool, so a new variant would be written as `DateOnly`.
 	- ID: 2026110715441802
@@ -291,7 +300,7 @@
 - `sandbox.bash`'s header repeats design.md's "Test sandbox" before pointing to it.
 	- ID: 2026110715441805
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 6
@@ -300,6 +309,16 @@
 	- Expected behavior [Bug]: One line, then "See design.md, Test sandbox.", per the rule from 2026102808215668.
 	- Probable fix [Bug]: Cut Purpose to one line and the pointer. Keep Syntax, the RW_DIR limits and Exit.
 	- Related IDs: 2026102808215668
+	- Actual fix [Bug]: Purpose is a line and "See design.md, Test sandbox." The zpool comment is a line and the same pointer.
+	- Decisions:
+		- `TUKFS_NO_SANDBOX` and `TUKFS_IN_IMAGE` moved under Syntax as one line, since a caller needs the names and design.md doesn't give them.
+	- Swept: no other script under `cicd/utility/` points its header to design.md. Their headers weren't read for repeats of it.
+	- Progress log:
+		- 2026-11-08: Verified: shellcheck passes, and `cicd/cicd.bash --backlog-run-quick` passed.
+	- Branch: round-20261108
+	- Test case: none, comments only.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261107-185915
 
 - The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
 	- ID: 2026110218175403
