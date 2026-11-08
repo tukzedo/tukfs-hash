@@ -337,13 +337,29 @@
 - The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
 	- ID: 2026110211132205
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-111322
 	- Opened by: work on 2026102814341412
 	- Related IDs: 2026102814341412
 	- Requirements [Feature]: `des5x` runs only when the test's work folder is on btrfs. `IT_ROOTS` in `cicd/config.bash` has ext4 and ZFS only, so it always skips in a run.
 	- Note: b23's `/tmp` is btrfs, but slow to fsync under load (2026102409041302). A missing test root keeps the tree from being recorded for the pre-push hook, so a btrfs root that only some boxes have needs its own rule, or a small btrfs image made by the test.
+	- Decisions:
+		- A btrfs folder for des5x alone, `IT_BTRFS` in `cicd/config.bash`, `/tmp` by default, rather than a third test root. Only its 3 small files go on b23's `/tmp`, which has given EIO under memory pressure. A btrfs image made by the test needs root to mount.
+		- Each test root's run gets it, as `TUKFS_IT_BTRFS`, and makes its own marked folder under `<IT_BTRFS>/tukfs-hash/`, swept and removed like its work folder. The sandbox can write there too. It costs well under a second a run.
+		- Where it isn't there or isn't btrfs, des5x skips with a note, and it's not a gate skip, so the tree is still recorded. Few boxes have btrfs. A missing ext4 or ZFS root still is one.
+		- A subvolume a stop left in a test folder is removed with the folder, since `rm --one-file-system` skips it.
+	- Branch: round-20261108
+	- Commit: `4c2a394`
+	- Test case: `des5x`, now run in the pipeline on b23, in each test root's run.
+	- Verified:
+		- `cicd/cicd.bash --backlog-run-quick` passes, with `PASS des5x` in both the ext4 and ZFS runs, and nothing left in `/tmp/tukfs-hash`. Before, the same check printed `SKIP des5x` in the sandbox.
+		- With `TUKFS_CICD_IT_BTRFS` on ext4 it prints the skip note and `SKIP des5x`, and with it empty, "turned off".
+		- A stale test folder holding a subvolume with a file in it is swept by the new test, and left behind by the old one.
+		- The it and partial cases of `temp-ctr-check.bash` pass. shellcheck passes.
+	- Swept: the release check's integration test and the arm64 VM's run have no btrfs, and still skip des5x. design.md and README.md say where it runs.
+	- Acceptance signoff: Self-closed: the pipeline now runs des5x on b23, per the requirement.
+	- Closed: 20261107-191617
 
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
