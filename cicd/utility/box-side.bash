@@ -61,7 +61,10 @@ fSafeRm(){
 	if ! fMarked "${p}"; then
 		printf 'safe-rm: refused, not one make made: %s\n' "${p}" >&2; return 1
 	fi
-	rm -rf --one-file-system -- "${p}"
+	## The mark goes last, so a removal that fails partway leaves a folder the
+	## sweep still knows (2026110210514819).
+	find "${p}" -mindepth 1 -maxdepth 1 ! -name "${mark}" -exec rm -rf --one-file-system -- {} + &&
+		rm -f -- "${p}/${mark}" && rmdir -- "${p}"
 }
 
 fMake(){
@@ -134,3 +137,5 @@ esac
 ##		- 2026-10-25: HOST_TEMP for the integration test.
 ##		- 2026-10-28: The .box-run mark and an owner check, so make's sweep and
 ##		  the removals take only folders make made.
+##		- 2026-11-07: The mark is removed last, so a removal that fails
+##		  partway leaves the folder for the sweep.

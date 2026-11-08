@@ -49,10 +49,10 @@ case "${1:-}" in
 esac
 start="${SECONDS}"
 fLeakInImage "sanitize-rust ${mode}" "${me}/sanitize-rust.bash" "${LEAK_DIR}" "$@"
-fLeakSandbox "${me}/sanitize-rust.bash" "$@"
 
 ## Asking cargo through rustup would install a missing toolchain on the
-## spot, so the list says whether it's here.
+## spot, so the list says whether it's here. Checked before the sandbox,
+## which can't write the run's skip list.
 toolchains="$(rustup toolchain list 2>/dev/null || true)"
 if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${toolchains}"; then
 	((in_image)) && { echo "sanitize-rust: the leak check image has no ${PIN_NIGHTLY}" >&2; exit 2; }
@@ -60,6 +60,7 @@ if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${toolchains}"; then
 	fLeakHostSkip "sanitize-rust-${mode}"
 	exit 0
 fi
+fLeakSandbox "${me}/sanitize-rust.bash" "$@"
 fScratchMake "${mode}" || exit 2
 mkdir -p -- "${scratch}/tmp" "${LEAK_DIR}"
 export TMPDIR="${scratch}/tmp"
@@ -164,3 +165,5 @@ esac
 ##		- 2026-10-25: A quarter of the cores by default.
 ##		- 2026-11-02: The build's own LIBSQLITE3_FLAGS go first.
 ##		- 2026-11-02: On the host, in the test sandbox.
+##		- 2026-11-08: The missing nightly is found before the sandbox, so its
+##		  skip reaches the run's list.

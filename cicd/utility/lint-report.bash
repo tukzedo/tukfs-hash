@@ -114,7 +114,7 @@ if [[ -n "${warns}" ]]; then n=$(printf '%s\n' "${warns}" | grep -c .); else n=0
 ## A failed run is never clean. Case-sensitive, since each tool says it one way
 ## and the lower-case words turn up in passing output. markdownlint says
 ## "error MD033/...", with no colon.
-errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null | grep -vE "${archived}" || true)"
+errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|^\[ [0-9.-]+: Step [0-9]+ of [0-9]+; FAIL |panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null | grep -vE "${archived}" || true)"
 if [[ -n "${errs}" ]]; then e=$(printf '%s\n' "${errs}" | grep -c .); else e=0; fi
 
 lead=""; ((check)) && lead="NEW "
@@ -145,3 +145,4 @@ fi
 ##		- 2026-10-23: Copied into tukfs-hash from shcl's cicd. Under --check every
 ##		  report that isn't SEEN starts with NEW. markdownlint's error lines count.
 ##		- 2026-10-25: rar's file list from the backup step isn't read as findings.
+##		- 2026-11-08: A step's timed FAIL close line counts as an error.

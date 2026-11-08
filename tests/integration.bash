@@ -9,6 +9,10 @@
 ##		It's removed at the end unless --keep-temp, or TUKFS_KEEP_TEMP, says
 ##		to keep it. Its own folders there whose run is gone are removed
 ##		first, but a kept one only once it's 2 days old.
+##		TUKFS_IT_BTRFS names a folder on btrfs for step 27's subvolume, which
+##		then gets a second work folder of the same kind under
+##		<TUKFS_IT_BTRFS>/tukfs-hash/. Without it, step 27 runs only when the
+##		work folder is on btrfs.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -23,6 +27,17 @@ if [[ "${1:-}" == --keep-temp ]]; then keep=1; shift; fi
 bin="${1:-${here}/target/release/tukfs-hash}"
 # Resolved, so fSafeRm can insist the path has no links in it.
 base="$(realpath -e -- "${HOST_TEMP:-${TMPDIR:-/tmp}}")/tukfs-hash"
+btBase=''
+if [[ -n "${TUKFS_IT_BTRFS:-}" ]]; then
+	# The folder below it is the one to check, since a sandbox can leave only
+	# that one on the disk, over a tmpfs /tmp.
+	if btReal="$(realpath -e -- "${TUKFS_IT_BTRFS}" 2> /dev/null)" && mkdir -p -- "${btReal}/tukfs-hash" 2> /dev/null &&
+		[[ "$(stat -f -c %T -- "${btReal}/tukfs-hash")" == btrfs ]]; then
+		btBase="${btReal}/tukfs-hash"
+	else
+		echo "TUKFS_IT_BTRFS isn't a folder on btrfs, so step 27 uses the work folder: ${TUKFS_IT_BTRFS}" >&2
+	fi
+fi
 # The exit trap removes it only while the marker holds this run's token, so
 # a folder this run didn't make is never touched.
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
@@ -41,14 +56,26 @@ fUnlock() {
 	find "${1}" -xdev \( -type d ! -perm -u=rwx -exec chmod u+rwx {} + \) -o \( -type f ! -perm -u=r -exec chmod u+r {} + \) 2> /dev/null || true
 }
 
+# rm --one-file-system skips a btrfs subvolume, which has its own device, so
+# one left by a stop in step 27 is emptied and removed first. Its own folder
+# is always inode 256.
+fDropSubvols() {
+	local sv=''
+	[[ "$(stat -f -c %T -- "${1}" 2> /dev/null)" == btrfs ]] || return 0
+	while IFS= read -r -d '' sv; do
+		find "${sv}" -xdev -mindepth 1 -delete 2> /dev/null || true
+		rmdir -- "${sv}" 2> /dev/null || true
+	done < <(find "${1}" -xdev -mindepth 1 -type d -inum 256 -print0 2> /dev/null)
+}
+
 # rm -rf, but only on what can only be one of this script's work folders:
-# <base>/<stamp>_<NNN>, no links, no dots.
+# <base>/<stamp>_<NNN>, or the same under btBase, no links, no dots.
 fSafeRm() {
 	local p="${1:-}" real='' fhs=''
 	if [[ -z "${p}" || "${p}" != /* || "${p}" == *..* || "${p}" == *//* || "${p}" == *$'\n'* ]]; then
 		printf 'fSafeRm: refused, bad path: "%s"\n' "${p}" >&2; return 1
 	fi
-	if [[ "${p%/*}" != "${base}" || ! "${p##*/}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then
+	if [[ ( "${p%/*}" != "${base}" && ( -z "${btBase}" || "${p%/*}" != "${btBase}" ) ) || ! "${p##*/}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then
 		printf 'fSafeRm: refused, not a test folder: %s\n' "${p}" >&2; return 1
 	fi
 	for fhs in / /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var "${HOME:-/}"; do
@@ -59,44 +86,65 @@ fSafeRm() {
 		printf 'fSafeRm: refused, a link or not a folder: %s\n' "${p}" >&2; return 1
 	fi
 	fUnlock "${p}"
-	rm -rf --one-file-system -- "${p}"
+	fDropSubvols "${p}"
+	# The marks go last, so a removal that fails partway leaves a folder the
+	# next run's sweep still knows (2026110210514819).
+	find "${p}" -mindepth 1 -maxdepth 1 ! -name run.pid ! -name .test-run ! -name .test-kept -exec rm -rf --one-file-system -- {} + &&
+		rm -f -- "${p}/.test-kept" "${p}/run.pid" "${p}/.test-run" && rmdir -- "${p}"
 }
 
 # Ours, and its run gone, such as a killed one's. A kept one waits 2 days
 # (2026102518150001). A folder with no marker of this script's, such as a
 # cicd run's, or another user's, isn't ours.
-mkdir -p -- "${base}"
-while IFS= read -r -d '' old; do
-	pid=''; got=''
-	read -r pid 2> /dev/null < "${old}/run.pid" || continue
-	read -r got 2> /dev/null < "${old}/.test-run" || continue
-	[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" && -O "${old}" && ! -L "${old}" ]] || continue
-	if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
-	fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
-done < <(find "${base}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
+fSweep() {   ## fSweep BASE
+	local old='' pid='' got=''
+	mkdir -p -- "${1}"
+	while IFS= read -r -d '' old; do
+		pid=''; got=''
+		read -r pid 2> /dev/null < "${old}/run.pid" || continue
+		read -r got 2> /dev/null < "${old}/.test-run" || continue
+		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" && -O "${old}" && ! -L "${old}" ]] || continue
+		if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
+		fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
+	done < <(find "${1}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
+}
 
-n=1
-printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
-printf -v work '%s/%s_%03d' "${base}" "${stamp}" "${n}"
-until mkdir -- "${work}" 2> /dev/null; do
-	[[ -e "${work}" ]] || { echo "could not make a work folder in ${base}" >&2; exit 2; }
-	n=$((n + 1)); [[ "${n}" -lt 1000 ]] || { echo "no free work folder name in ${base}" >&2; exit 2; }
-	printf -v work '%s/%s_%03d' "${base}" "${stamp}" "${n}"
-done
-printf '%s\n' "${token}" > "${work}/.test-run"
-printf '%s\n' "$$" > "${work}/run.pid"
-if [[ -n "${keep}" ]]; then : > "${work}/.test-kept"; fi
+# A work folder under BASE, with this run's marks, named in OUT.
+fNewWork() {   ## fNewWork BASE OUT
+	local -n out_nw="${2}"
+	local n=1 stamp=''
+	printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
+	printf -v out_nw '%s/%s_%03d' "${1}" "${stamp}" "${n}"
+	until mkdir -- "${out_nw}" 2> /dev/null; do
+		[[ -e "${out_nw}" ]] || { echo "could not make a work folder in ${1}" >&2; exit 2; }
+		n=$((n + 1)); [[ "${n}" -lt 1000 ]] || { echo "no free work folder name in ${1}" >&2; exit 2; }
+		printf -v out_nw '%s/%s_%03d' "${1}" "${stamp}" "${n}"
+	done
+	printf '%s\n' "${token}" > "${out_nw}/.test-run"
+	printf '%s\n' "$$" > "${out_nw}/run.pid"
+	if [[ -n "${keep}" ]]; then : > "${out_nw}/.test-kept"; fi
+}
+
+work=''; btWork=''
+fSweep "${base}"
+if [[ -n "${btBase}" ]]; then fSweep "${btBase}"; fi
+fNewWork "${base}" work
 export TMPDIR="${work}" TEMP="${work}" TMP="${work}"
 
+fCleanupOne() {
+	local w="${1}" got=''
+	if [[ -n "${keep}" ]]; then fUnlock "${w}"; : > "${w}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${w}"; return 0; fi
+	read -r got 2> /dev/null < "${w}/.test-run" || true
+	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${w}" >&2; return 0; fi
+	fSafeRm "${w}" || true
+}
 fCleanup() {
-	local got=''
 	fStopDescendants
-	if [[ -n "${keep}" ]]; then fUnlock "${work}"; : > "${work}/.test-kept" || true; printf 'kept (--keep-temp): %s\n' "${work}"; return 0; fi
-	read -r got 2> /dev/null < "${work}/.test-run" || true
-	if [[ "${got}" != "${token}" ]]; then printf 'not removed, no marker for this run: %s\n' "${work}" >&2; return 0; fi
-	fSafeRm "${work}" || true
+	fCleanupOne "${work}"
+	if [[ -n "${btWork}" ]]; then fCleanupOne "${btWork}"; fi
 }
 trap fCleanup EXIT
+if [[ -n "${btBase}" ]]; then fNewWork "${btBase}" btWork; fi
 tree="${work}/tree"
 db="${work}/db/t.sqlite"
 mkdir -p "${tree}" "${work}/db"
@@ -389,6 +437,18 @@ ln "${sd}/old/d" "${sd}/old/before"
 ln "${sd}/old/d" "${sd}/new/after"
 printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "${sd}/new/after")" > "${sd}/renamed"
 check ddy6c "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
+# A long list takes no more memory than a short one, since each file is
+# compared as it's read. Peak RSS, from 1 line to 100,000.
+head -c 3000 /dev/urandom > "${sd}/old/kept"; cp -p "${sd}/old/kept" "${sd}/new/kept"
+printf 'kept\n' > "${sd}/short"; printf 'kept\n%.0s' {1..100000} > "${sd}/long"
+peak() { python3 -I -c 'import resource, subprocess, sys
+r = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print(r.returncode, resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' "${bin}" snapdiff --old "${sd}/old" --new "${sd}/new" --list "${1}"; }
+rcShort='' kbShort='' rcLong='' kbLong=''
+read -r rcShort kbShort < <(peak "${sd}/short") || true
+read -r rcLong kbLong < <(peak "${sd}/long") || true
+st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 4096 )) && st=0
+expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 4 MB more" "${st}"
 
 # 10. Names that aren't plain text: arguments are taken, and output escapes
 # them so 2 names never print the same.
@@ -751,6 +811,39 @@ else
 	skip des5j "walk under a mount that's been mounted over (no user namespace here)"
 	skip des5k "root's type from the mount on top (no user namespace here)"
 fi
+# A bind mount of a folder inside another root is that root's folder, wherever
+# it's mounted, so it isn't read twice (2026102814341414). One of a folder
+# outside the roots is read. A database reached through such a mount still
+# leaves out only its own names in the root's walk (2026110719570617).
+cat > "${ns}/bind.bash" << 'EOF2'
+cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
+for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
+printf 't\n' > c/tree/top; printf 'g\n' > c/tree/s2/g; printf 'o\n' > c/out/f
+mount --bind c/tree/sub c/bind && mount --bind c/tree/s2 c/tree/b && mount --bind c/out c/ob || exit 1
+: > bind.mounted
+rc=0; "${2}" scan --db c.sqlite --root c/tree --root c/bind --root c/tree/b --root c/ob --progress 3600 > c.out 2>&1 || rc=$?
+echo "${rc} $(grep -o 'files [0-9]* hashed [0-9]*' c.out | head -1)" > c.got
+grep -c '^skipping root .*: inside .*/c/tree, as .*/c/tree/s' c.out > c.skips
+rc=0; "${2}" scan --db c/bind/d.sqlite --root c/tree --progress 3600 > d.out 2>&1 || rc=$?
+echo "${rc}" > d.got
+EOF2
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip df0qc "bind mount of a folder inside another root read once (ZFS pools aren't seen from a user namespace)"
+	skip df0qd "bind mounts inside another root named as skipped (ZFS pools aren't seen from a user namespace)"
+	skip df0qh "database through a bind mount: own names left out, no attributes (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/bind.mounted" ]]; then
+	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
+	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
+	dd="${ns}/c/tree/sub/d.sqlite"
+	check df0qh "database through a bind mount: own names left out, no attributes" "$(cat "${ns}/d.got") $(sqlite3 "${dd}" 'SELECT count(*) FROM paths') $(sqlite3 "${dd}" "SELECT count(*) FROM paths WHERE path LIKE '%/d.sqlite%'") $(xget "${dd}" user.blake3.b64u)" "0 6 0 "
+else
+	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
+	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
+	skip df0qh "database through a bind mount: own names left out, no attributes (no user namespace here)"
+fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
 # real error, and leaves no database behind (2026102814341406).
@@ -764,8 +857,8 @@ check des5w "missing root named, nothing scanned" "$(grep -cF "can't resolve roo
 
 # 27. An unmounted btrfs subvolume given as a root is read on its own, though
 # it sits inside another root whose walk stops at it (2026102814341412). Only
-# on btrfs, so HOST_TEMP picks it.
-bt="${work}/bt"
+# on btrfs, so TUKFS_IT_BTRFS or HOST_TEMP picks it (2026110211132205).
+bt="${btWork:-${work}}/bt"
 mkdir -p "${bt}/p"
 printf 'a\n' > "${bt}/p/f1"
 if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/p/sv" > /dev/null 2>&1; then
@@ -864,3 +957,9 @@ fi
 ##		- 20261102: A CHECK in place of the trigger that refuses a row, and a
 ##		  planted trigger refused.
 ##		- 20261102: Step 5 also stops and resumes over a new database.
+##		- 20261107: The work folder's marks are removed last, so a removal
+##		  that fails partway leaves it for the next run's sweep.
+##		- 20261108: TUKFS_IT_BTRFS gives step 27 a work folder on btrfs, and a
+##		  subvolume a stop left behind is removed with its folder.
+##		- 20261108: A bind mount of a folder inside another root, and a
+##		  database reached through one.
