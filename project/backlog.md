@@ -334,7 +334,7 @@
 - On NTFS, APFS or HFS+, `accept` can't clear an attribute set an older build wrote, so the file is reported on every scan.
 	- ID: 2026102814341432
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 32
@@ -342,6 +342,19 @@
 	- Requirements [Feature]:
 		- Either have the scan ignore attributes on hands-off filesystems, or have `accept` say the attribute will keep the file flagged.
 	- Related IDs: 2026101409545200
+	- Decisions:
+		- The first option, so `accept` works there as it does anywhere else. A warning alone would leave the file flagged on every scan with no way to clear it from Linux.
+		- Narrower than the wording: on a hands-off device the attributes are left out only where the file's database row is at its size and time. Then the row alone decides. Without such a row, as on a first scan, a set written by an older build or by nemo-anywhere on its own system still gets compared. A row at that size and time catches any change since it was taken, so nothing is lost.
+		- rmlint's blake2b is left out the same way, since `accept` leaves it there too and the row has no blake2b to go by.
+	- Actual fix:
+		- `Refs` knows the file is on a hands-off device. There a row at the file's size and time means only `b3-db-mismatch` can be reported. The ok counts count only a set that agreed.
+		- design.md, "Attributes", and README.md's `accept` paragraph say so.
+	- Branch: round-20261108b
+	- Test case: `df1r9` (`the_row_decides_on_a_hands_off_device`), `df1ra` (`an_accepted_file_on_a_hands_off_device_is_clean`).
+	- Verified: `df1ra` fails with the new rule turned off and passes with it. `--backlog-run-quick` passed, all areas, and `--backlog-run-quick miri`.
+	- Swept: `Refs::new` has the one caller, `one_file`, so the link and cache paths go through it too. `write_attrs` and `accept`'s `hands_off_at` call already keep off these devices. `snapdiff` compares snapshots, which are never hands-off.
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
+	- Closed: 20261108-133557
 
 - The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
 	- ID: 2026102814341442

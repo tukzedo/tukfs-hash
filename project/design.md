@@ -195,6 +195,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - Nothing is written to NTFS, APFS or HFS+, not attributes and not the database. Linux's drivers for them aren't reliable enough to trust with writes, and this tool only runs on Linux. They're still read and recorded.
 	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway. A `fuseblk` given a subtype shows as `fuseblk.<name>`, and counts the same.
 	- The walk stays on its root's device, so a root's filesystem decides for every file under it.
+	- A set already there, such as one an older build wrote, can't be updated by `accept` either. So where the file's database row is at its size and time, the scan goes by the row alone and doesn't compare the attributes. Without such a row it still does.
 
 - With `--rmlint`, rmlint's `user.rmlint.blake2b.*` are written too, where they're missing or their time is stale. The format is what rmlint 2.10 writes: hex ending in a NUL, and the time as C's `%.17g` of seconds plus nanoseconds. A current one that disagrees is a mismatch and stays, the same as ours.
 	- The same places get none: git work trees, `--no-xattr`, `--verify` and the filesystems above.

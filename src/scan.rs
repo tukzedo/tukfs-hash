@@ -1546,24 +1546,34 @@ struct Refs<'a> {
 	xattr_date: Option<i64>,
 	b2b: Option<[u8; 64]>,
 	db: Option<&'a Prior>,
+	// On a hands-off device nothing can update a set, so where the row has a
+	// say, it's the only one. design.md, "Attributes".
+	row_decides: bool,
 }
 
 type Miss = (Kind, String);
 
 impl<'a> Refs<'a> {
-	fn new(onfile: &OnFile, prior: Option<&'a Prior>, md: &fs::Metadata) -> Refs<'a> {
+	fn new(
+		onfile: &OnFile,
+		prior: Option<&'a Prior>,
+		md: &fs::Metadata,
+		hands_off: bool,
+	) -> Refs<'a> {
 		let (bytes, mt) = (md.len() as i64, mtime_us(md));
+		let db = prior.filter(|p| p.bytes == bytes && p.mtime_us == mt);
 		Refs {
 			xattr: onfile.b3_current(bytes, mt),
 			xattr_date: onfile.b3_date_us,
 			b2b: onfile.b2b_current(mtime_s(md)),
-			db: prior.filter(|p| p.bytes == bytes && p.mtime_us == mt),
+			db,
+			row_decides: hands_off && db.is_some(),
 		}
 	}
 
 	fn misses(&self, s: &Sums) -> Vec<Miss> {
 		let mut out = Vec::new();
-		if let Some(stored) = self.xattr.filter(|d| *d != s.b3) {
+		if let Some(stored) = self.xattr.filter(|d| *d != s.b3 && !self.row_decides) {
 			let when = self.xattr_date.map_or_else(|| "unknown".into(), fmt_local);
 			out.push((
 				Kind::XattrMismatch,
@@ -1576,6 +1586,7 @@ impl<'a> Refs<'a> {
 		}
 		if let (Some(stored), Some(now)) = (self.b2b, s.b2b)
 			&& stored != now
+			&& !self.row_decides
 		{
 			out.push((
 				Kind::RmlintMismatch,
@@ -1596,12 +1607,13 @@ impl<'a> Refs<'a> {
 		out
 	}
 
-	// Only for a read that agreed with all of them.
+	// Only for a read that agreed with all of them, or with the row where it
+	// decides.
 	fn tally(&self, s: &Sums, st: &Stats) {
-		if self.xattr.is_some() {
+		if self.xattr == Some(s.b3) {
 			st.b3_ok.fetch_add(1, Relaxed);
 		}
-		if self.b2b.is_some() && s.b2b.is_some() {
+		if self.b2b.is_some() && self.b2b == s.b2b {
 			st.b2b_ok.fetch_add(1, Relaxed);
 		}
 		if self.db.is_some() {
@@ -1713,7 +1725,8 @@ impl<'a> Worker<'a> {
 		});
 		let fd = file.as_raw_fd();
 		let onfile = OnFile::read(fd);
-		let refs = Refs::new(&onfile, prior, &before);
+		let hands_off = self.sh.no_write_devs.contains(&before.dev());
+		let refs = Refs::new(&onfile, prior, &before, hands_off);
 		if self.skip_unread(job, prior, &refs, &onfile, &before) {
 			return;
 		}
@@ -2024,6 +2037,7 @@ mod tests {
 			xattr_date: None,
 			b2b: None,
 			db,
+			row_decides: false,
 		}
 	}
 
@@ -3029,6 +3043,88 @@ mod tests {
 		if control == 0 {
 			eprintln!("no user xattrs here; the control proves nothing");
 		}
+		drop(sh);
+		drain.join().unwrap();
+	}
+
+	// accept can't update a set on a hands-off device, so the row it took has
+	// the say there (2026102814341432). Without a row the set still counts.
+	#[test]
+	fn the_row_decides_on_a_hands_off_device() {
+		let _id = test_id("df1r9");
+		let read = Sums {
+			b3: [1; 32],
+			b2b: Some([8; 64]),
+		};
+		let names =
+			|r: &Refs| -> Vec<&str> { r.misses(&read).iter().map(|m| m.0.name()).collect() };
+		let (good, bad) = (prior(1), prior(3));
+		let stale = |db, row_decides| Refs {
+			b2b: Some([7; 64]),
+			row_decides,
+			..refs(Some(2), db)
+		};
+		assert_eq!(
+			names(&stale(Some(&good), false)),
+			["b3-xattr-mismatch", "b2b-rmlint-mismatch"]
+		);
+		assert!(names(&stale(Some(&good), true)).is_empty());
+		assert_eq!(names(&stale(Some(&bad), true)), ["b3-db-mismatch"]);
+		let st = Stats::default();
+		stale(Some(&good), true).tally(&read, &st);
+		assert_eq!(st.b3_ok.load(Relaxed), 0);
+		assert_eq!(st.b2b_ok.load(Relaxed), 0);
+		assert_eq!(st.db_ok.load(Relaxed), 1);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
+	fn an_accepted_file_on_a_hands_off_device_is_clean() {
+		let _id = test_id("df1ra");
+		let d = scratch("scan_handsoff_accepted");
+		fs::write(d.join("f"), "fixed").unwrap();
+		let fd = File::open(d.join("f")).unwrap();
+		let md = fd.metadata().unwrap();
+		let (bytes, mt) = (md.len() as i64, mtime_us(&md));
+		let old = blake3::hash(b"broke");
+		let id = (md.dev(), md.ino());
+		let raw = fd.as_raw_fd();
+		if xattr::write_b3(raw, old.as_bytes(), bytes, mt, 1, id, xattr::B3Write::All).is_err() {
+			eprintln!("no user xattrs here; skipped");
+			return;
+		}
+		let taken = Prior {
+			id: 1,
+			bytes,
+			mtime_us: mt,
+			ino: md.ino() as i64,
+			hashed_us: 1,
+			seen_run: 0,
+			b3: blake3::hash(b"fixed").as_bytes().to_vec(),
+		};
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		// Both taken before the skip date, so neither skips the read.
+		sh.cutoff_us = now_us();
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let r = Arc::new(Root::open(&d).unwrap());
+		let control = test_group(&d);
+		read_one(
+			&control,
+			&sh,
+			&job(&r, "f"),
+			Some(&taken),
+			&Links::default(),
+		);
+		assert_eq!(control.stats.mismatch.load(Relaxed), 1);
+		sh.no_write_devs.insert(md.dev());
+		let g = test_group(&d);
+		read_one(&g, &sh, &job(&r, "f"), Some(&taken), &Links::default());
+		assert_eq!(g.stats.mismatch.load(Relaxed), 0);
+		assert_eq!(g.stats.hashed.load(Relaxed), 1);
+		assert_eq!(OnFile::read(raw).b3, Some(*old.as_bytes()));
+		let unrecorded = test_group(&d);
+		read_one(&unrecorded, &sh, &job(&r, "f"), None, &Links::default());
+		assert_eq!(unrecorded.stats.mismatch.load(Relaxed), 1);
 		drop(sh);
 		drain.join().unwrap();
 	}
