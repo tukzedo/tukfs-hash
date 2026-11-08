@@ -32,7 +32,8 @@
 - 2 private cicd checks fail on dev: build-mark-check.bash and gate-record-check.bash's strict image case.
 	- ID: 2026110718460111
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-184601
 	- Opened by:
@@ -40,6 +41,14 @@
 		- Found 2026-11-08 by 2026110218175401's worker, failing the same way on a clone of dev without that change.
 		- build-mark-check.bash runs git tag v1.0.0-beta.1 in a clone that already has that tag since the beta.1 release.
 		- gate-record-check.bash, case 'image checks, strict=1', gets [1 0 codeql] where it wants [0 0 sanitize-rust-miri codeql]. Check whether that's a stale check or a strict-mode gap in cicd.bash.
+	- Actual cause [Bug]:
+		- build-mark-check.bash: a stale check. Its clone took REPO's tags, so its own `v1.0.0-beta.1` tag failed.
+		- gate-record-check.bash: a real gap, from the test sandbox of 2026-11-02. `sanitize-rust.bash` went into the sandbox before its nightly check, so its skip went to a list the sandbox can't write, and it exited 1. In a run on the frozen copy the list is the starter's, outside the sandbox's temp dir, so a check-only run on a box with no docker and no nightly failed instead of passing without recording.
+	- Actual fix [Bug]: The check clones with `--no-tags`. `sanitize-rust.bash` checks for the nightly before it enters the sandbox.
+	- Branch: round-20261108
+	- Test case: none with an ID. The private `gate-record-check.bash REPO` and `build-mark-check.bash REPO`, since private checks stay out of the pipeline (2026102508462883). Verified: the strict image case failed before, with "Read-only file system" on the skip list, and both checks pass after, 21 of 21 each. `--backlog-run-quick` passed.
+	- Swept: the other `fLeakHostSkip` caller, `codeql-scan.bash`, isn't sandboxed. `soak.bash` and `fuzz.bash` go into the sandbox but write no skips. `demo-gif.bash` sandboxes only the drawing, and fails by exit code. cicd.bash writes its own skips outside any sandbox.
+	- Closed: 20261107-185400
 
 - No one-line install script.
 	- ID: 2026110218175402
