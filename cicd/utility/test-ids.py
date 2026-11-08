@@ -111,7 +111,7 @@ class Found(NamedTuple):
 ##	The script's lines with only its code left, each the same length as
 ##	before: quoted text and heredoc bodies become "_", comments become spaces.
 ##	A $( ) inside double quotes stays code. Close enough for bash as this
-##	project writes it, not a full parser.
+##	project writes it. It isn't a full parser.
 def fShellCode(text: str) -> list[str]:
     out = list(text)
     stack = [Lex.CODE]

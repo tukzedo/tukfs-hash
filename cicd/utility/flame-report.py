@@ -4,7 +4,7 @@
 ##		spends its CPU by subsystem, the self-time hot spots, the call buckets,
 ##		and the caller chain of the top leaves - by parsing the pprof/inferno
 ##		SVG (its fg:w attribute = raw sample counts).
-##		Runs two ways: plain (print the report, meant to run every cicd run) and
+##		Runs 2 ways: plain (print the report, meant to run every cicd run) and
 ##		--check (print only when the newest flamegraph is newer than the one last
 ##		recorded in a local marker, then record it - meant for session startup so
 ##		a look is a no-op until there is something new to read).
@@ -72,7 +72,7 @@ class Frame(NamedTuple):
 
 def fSkip(msg: str) -> NoReturn:
     ##	2 = environmental skip (no dir / unparseable) - non-fatal, matches the
-    ##	cicd profiler stage, which treats such things as a warning, not a failure.
+    ##	cicd profiler stage, which treats such things as a warning rather than a failure.
     sys.stderr.write(f"flame-report: {msg}\n")
     sys.exit(2)
 
@@ -92,7 +92,7 @@ def fAge(path: Path) -> str:
 
 
 def fNewest(pdir: Path) -> tuple[str, str] | None:
-    ##	Sort on the timestamp, NOT the role suffix: GFS rotation retags the role
+    ##	Sort on the timestamp, never the role suffix: GFS rotation retags the role
     ##	(frequent -> latest -> hour/day/...) as time passes, but the timestamp in
     ##	the name is stable.
     best = None
@@ -188,7 +188,7 @@ def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
     if abs(sum(selfOf.values()) - total) > 1 or min(selfOf.values()) < -1e-6:
         fSkip(
             f"self time sums to {sum(selfOf.values()):.0f} of {total} samples; "
-            "frames are missing or misplaced, not a whole flamegraph"
+            "frames are missing or misplaced; not a whole flamegraph"
         )
 
     selfBy: dict[str, float] = {}
@@ -198,7 +198,7 @@ def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
     for fr in frames:
         name = fr.name
         byName.setdefault(name, []).append(fr)
-        ##	Once per stack: a recursive call, or one name inlined at two depths,
+        ##	Once per stack: a recursive call, or one name inlined at 2 depths,
         ##	sits inside itself and would be counted again.
         up = parent(fr)
         while up and up.name != name:
@@ -235,7 +235,7 @@ def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
         print(f"  {b} {'.' * (width + 3 - len(b))}: {pct(bucketBy.get(b, 0.0))}")
     print()
 
-    print("top self-time (where CPU actually burns):")
+    print("top self-time (where CPU burns):")
     for name, v in sorted(selfBy.items(), key=lambda kv: -kv[1])[:top]:
         if v < 1:
             break

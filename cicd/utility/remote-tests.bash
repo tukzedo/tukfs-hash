@@ -11,7 +11,7 @@
 ##	Syntax:
 ##		remote-tests.bash HOST TARGET BINARY
 ##		REMOTE_LOCK_WAIT in config.bash is how long to wait for a box someone
-##		else holds.
+##		else has locked.
 ##	Exit: 0 = passed, 1 = a test failed, 3 = skipped, with "SKIP: <why>" as
 ##	      the last line, or the why alone in the file TUKFS_SKIP_WHY names,
 ##	      2 = can't run.
@@ -33,7 +33,7 @@ sshTo=(ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o Se
 ## To TUKFS_SKIP_WHY where the caller gives one, which says it itself.
 fSkip(){ if [[ -n "${TUKFS_SKIP_WHY:-}" ]]; then printf '%s\n' "$*" > "${TUKFS_SKIP_WHY}"; else echo "SKIP: $*"; fi; exit 3; }
 
-## Under the wrap, which holds HOST and has it up. Leaves "reached" once ssh
+## Under the wrap, which locks HOST and has it up. Leaves "reached" once ssh
 ## answers, "skip" with the reason when the box can't take the tests, and
 ## "rc" with how the tests went.
 fHeld(){   ## fHeld HOST STAGE_PARENT
@@ -73,7 +73,7 @@ host="$1"; target="$2"; bin="$3"
 [[ "${host}" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "remote-tests: bad host name: ${host}" >&2; exit 2; }
 [[ -f "${bin}" ]] || { echo "remote-tests: no build at ${bin}" >&2; exit 2; }
 wrap="${REMOTE_VM_WRAP:-}"
-[[ -n "${wrap}" && -x "${wrap}" ]] || fSkip "${host}: no VM state helper on this box to hold it with"
+[[ -n "${wrap}" && -x "${wrap}" ]] || fSkip "${host}: no VM state helper on this box to lock it with"
 command -v ssh > /dev/null 2>&1 || fSkip "${host}: no ssh on this box"
 
 trap 'fStopDescendants; fScratchGone || true' EXIT
@@ -101,7 +101,7 @@ fBg "${wrap}" wrap "${host}" --wait "${REMOTE_LOCK_WAIT:-900}" --why "${APP_NAME
 if ((rc > 128)); then exit "${rc}"; fi
 if [[ -s "${scratch}/skip" ]]; then fSkip "$(< "${scratch}/skip")"; fi
 if [[ ! -e "${scratch}/reached" ]]; then
-	fSkip "${host} wasn't reached (exit ${rc}): held elsewhere past ${REMOTE_LOCK_WAIT:-900} s, not a guest that starts here, or no ssh"
+	fSkip "${host} wasn't reached (exit ${rc}): held elsewhere past ${REMOTE_LOCK_WAIT:-900} s, a guest that doesn't start here, or no ssh"
 fi
 got=1; { read -r got < "${scratch}/rc"; } 2> /dev/null || true
 ## The wrap's own 1 on a pass means the box wasn't put back, which isn't the

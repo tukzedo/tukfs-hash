@@ -200,6 +200,12 @@ fn one(
 	}
 
 	out!("accepted\t{}\t{}", show_path(&path), b64u_encode(&sums.b3));
+	// The scan's row stays as it was, and goes on being reported.
+	if prior.is_none() {
+		out!(
+			"\tno scan has a record under this name; one may have it under another, such as through a bind mount"
+		);
+	}
 	if before.nlink() > 1 {
 		out!(
 			"\t{} other name(s) for this file keep their own records; accept those too",

@@ -40,15 +40,15 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - `runs` has one row per scan, with its skip date and a summary. `events` has every mismatch, read error, unstable file and failed attribute write, by run.
 
-- Names go in as text when they're UTF-8 and as blobs when they aren't, so the sqlite3 shell can match most of them with a plain string.
+- Names go in as text when they're UTF-8 and as blobs when they aren't, so the sqlite3 shell can match most of them with a plain string. A name stored as anything else, such as a number from an edit made with the sqlite3 shell, stops the command that reads it with the column's name, as a wrong type in any other column does.
 
-- Unlike nemo-anywhere's cache, this one is never thrown away and rebuilt. A damaged file, or one with another table version, is refused and left alone, since it's the only record of what files used to read as.
+- Unlike nemo-anywhere's cache, this one is never thrown away and rebuilt. A damaged file, or one with another table version, is refused and left alone, since it's the only record of what files used to read as. An empty one is taken as new, such as the 0-byte file a first scan leaves when the disk fills, and the tables and their version go in as one transaction, so a failed first scan can't leave them half made.
 
 - One writer thread commits at most a second apart. Events go in first, in their own transaction, so a row the database refuses can't take a mismatch with it.
 
 - The folder walk looks up each file's row before it queues the file, 256 at a time in one read transaction. A transaction per lookup cost most of the lookup, about a sixth of the CPU on small files. Each batch ends before it waits on the queue, so it doesn't keep the writer from checkpointing for long.
 
-- Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The handover goes by an fd opened without following links, and only for regular files.
+- Under sudo the database and its lock, `-wal` and `-shm` files are handed back to the user who ran it. A symlink at any of the 4 names is refused rather than followed, since that user could point one at a system file before a root run. The refusal names the link. A command that only reads checks the database's own name, since it makes neither WAL file. The handover goes by an fd opened without following links, and only for regular files.
 
 - Every open checks the schema first, and refuses anything the program doesn't make, such as a trigger, a view or a virtual table, without reading further. `trusted_schema` is off on every connection. Under sudo the file is one its user can write, so nothing in it should run code the program didn't put there (2026102814341423).
 
@@ -67,6 +67,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - Each root is walked on its own and the walk stops at every mount point, so bind mounts, snapshots and other filesystems are only read when they are listed.
 	- It also stops at any folder on another device than the root. That covers a btrfs subvolume that isn't mounted, and anything mounted after the mount table was read.
 	- A mount that's been mounted over isn't a mount point any more, and neither is anything mounted on it, since no path reaches them. The table's parent IDs show which those are. The same goes for which mount a root or the database is on.
+	- `--exclude` and `--no-xattr` know each folder by device and inode as well as by path, so a walk that reaches one under another name, such as through a bind mount, still doesn't go into it or writes no attributes there. A root inside one under another name is the same. A file given to `--no-xattr` gets none under any name, a hard link included, since attributes belong to the inode. `--threads` still matches by path, since it only sets how many workers read.
 	- A root that's the same folder as another, or a folder another root's walk gets to, is dropped, so nothing is read twice. A bind mount of a folder inside another root is one, wherever it's mounted. The table gives the folder each mount shows, and the walk from the other root has to reach it on its own mount and stop at no mount the bind mount doesn't have. A btrfs subvolume inside another root is kept, since that root's walk stops at it. A root that can't be resolved, such as a typo, stops the scan before it starts, with exit 1, so the rest isn't read under a run that looks fine. One that's gone by the time its walk starts is a `dir-error`, so the run exits 8.
 
 - Every file and folder is opened from the root's own folder, and no symlink is followed and no mount crossed anywhere on the way. A folder swapped for a symlink after it was listed counts as gone, rather than sending the scan, which runs as root, somewhere else. Kernels before 5.6 have no `openat2`, so there it goes one folder at a time.
@@ -95,7 +96,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - Otherwise the attribute and the database row are left as they were and nothing new is written. The next run reads the file again and reports it again. Writing the new checksum would make the next run call the damaged file clean, and a crash before the event was saved would leave no trace at all.
 
-- `accept` is the one way to replace a stored checksum with a different one. It reads the file twice and wants both reads to agree, so a fault during that read isn't what gets kept. It logs an `accepted` event under its own run, with status `accept`, which `scan --resume` never picks up.
+- `accept` is the one way to replace a stored checksum with a different one. It reads the file twice and wants both reads to agree, so a fault during that read isn't what gets kept. It logs an `accepted` event under its own run, with status `accept`, which `scan --resume` never picks up. A name the database has no row for gets one, and a note that no scan knows it by that name. A scan may know the file by another, such as through a bind mount, and its row there is left as it was.
 
 - A database lookup that fails for any reason but a missing row is a `db-error` event, and the file isn't recorded. Taking it for "no record" would overwrite the row unseen.
 
@@ -151,6 +152,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A resumed run doesn't read again what an earlier part already judged at the same size and time, mismatches included, so it doesn't report them twice.
 
+- A group's progress lines and its summary line end with a percent done, against the used space of the filesystems its roots are on, from `statvfs`. Counting the bytes first would take a second walk, and on hard drives that's a lot of seeks. Done is the bytes read plus the sizes of files skipped unread, so a resumed run starts near where the stopped one ended. A skipped name counts its share of a hard link's size. The percent is approximate: compression and reflinks can make the bytes read outrun the space used, so it stops at 100, and snapshots keep it low. A group with a root that's a folder inside its filesystem gets no percent, since the rest of the filesystem would keep it near 0.
+
 - The exit code comes from the run's events in the database, not from the counters of the process that ends it. A file reported by 2 parts counts once, so a resume doesn't double it.
 
 - Each event kind sets one exit code bit, and the bits add up with 2 for a stop. This table is the rule:
@@ -192,6 +195,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 - Nothing is written to NTFS, APFS or HFS+, not attributes and not the database. Linux's drivers for them aren't reliable enough to trust with writes, and this tool only runs on Linux. They're still read and recorded.
 	- A FUSE mount of a disk or image with no type of its own, `fuseblk` or a user's plain `fuse`, counts too. That's ntfs-3g or exfat-fuse in practice, and exfat has no attributes anyway. A `fuseblk` given a subtype shows as `fuseblk.<name>`, and counts the same.
 	- The walk stays on its root's device, so a root's filesystem decides for every file under it.
+	- A set already there, such as one an older build wrote, can't be updated by `accept` either. So where the file's database row is at its size and time, the scan goes by the row alone and doesn't compare the attributes. Without such a row it still does.
 
 - With `--rmlint`, rmlint's `user.rmlint.blake2b.*` are written too, where they're missing or their time is stale. The format is what rmlint 2.10 writes: hex ending in a NUL, and the time as C's `%.17g` of seconds plus nanoseconds. A current one that disagrees is a mismatch and stays, the same as ours.
 	- The same places get none: git work trees, `--no-xattr`, `--verify` and the filesystems above.
@@ -207,7 +211,7 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - A path with both a `-` and a `+` line in `zfs diff` is a file replaced by a new one. rsync without `--inplace`, tar and atomic saves do that, and they keep the time, so these get compared too.
 
-- btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, or holds another inode there, as after `mv c a`, the old snapshot is walked once for the inode numbers it still needs, since snapshots of one subvolume keep them. A matching birth time rules out a number used again after a delete. A file the walk doesn't find is compared with the one under its name, which is what an atomic save needs. A walk is only paid for when a listed file is missing from the old side or has another inode there, which new files and atomic saves also cause.
+- btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, or names another inode there, as after `mv c a`, the old snapshot is walked once for the inode numbers it still needs, since snapshots of one subvolume keep them. A matching birth time rules out a number used again after a delete. A file the walk doesn't find is compared with the one under its name, which is what an atomic save needs. A walk is only paid for when a listed file is missing from the old side or has another inode there, which new files and atomic saves also cause.
 
 - The change list is read a line at a time, and each file is compared as it's read, so that way memory doesn't grow with the list. Only zfs diff's `-` and `+` names and the files waiting on the walk are held to the end. A 100,000-line list took 66 MB before, and now takes what a 1-line one does. A refused line stops the run where it's met, with exit 1, after whatever was printed before it.
 

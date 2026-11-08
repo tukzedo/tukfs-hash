@@ -108,7 +108,7 @@
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
 ##	  stops the whole run.
-##	- Publish refuses when the checkout no longer holds the tree the run
+##	- Publish refuses when the checkout's tree is no longer the one the run
 ##	  tested, other than the demo gif it drew, or when the upstream has
 ##	  commits the run didn't take.
 ##	- The job count is half the logical CPUs, or a quarter when the 1-minute
@@ -271,7 +271,7 @@ while (($#)); do case "$1" in
 		exit 0 ;;
 	*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
 esac; done
-## Two options that say opposite things are refused, rather than the last winning.
+## 2 options that say opposite things are refused, rather than the last winning.
 if ((leakcheck_flag && no_leakcheck)); then echo "--leakcheck and --no-leakcheck can't go together (try --help)" >&2; exit 2; fi
 if ((quick && slow)); then echo "--quick and --long can't go together (try --help)" >&2; exit 2; fi
 if [[ -n "${mode}" ]] && ((quick || slow)); then echo "${mode_flag} has its own steps; drop --quick and --long" >&2; exit 2; fi
@@ -319,7 +319,7 @@ if ((gate_mode)); then
 		_known=" "; _leakKept=()
 		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
 		## The step each area runs in, so an area named with the --no- option
-		## that takes that step out is refused. off_why holds only the options
+		## that takes that step out is refused. off_why has only the options
 		## given so far.
 		declare -A _areaStep=([fmt]=format [build]=build [lint]=lint [unit]=tests [it]=tests [profile]=profile [release]=release [remote]=remote)
 		for _name in "${areas[@]}"; do
@@ -536,7 +536,7 @@ fSafePath(){
 }
 
 ## rm -rf, but only on a dir that passes fSafePath, is still where it was made
-## with no links on the way, and holds the mark with TOKEN in it.
+## with no links on the way, and has the mark with TOKEN in it.
 fSafeRm(){   ## fSafeRm PATH TOKEN
 	local p="${1:-}" token="${2:-}" real="" got=""
 	fSafePath "${p}" || return 1
@@ -764,14 +764,14 @@ fBuildNumber(){   ## fBuildNumber EPOCH_SECONDS
 	printf '%s\n' "${out}"
 }
 
-## From the commit, not the clock, so a rebuild of one commit gives the same
+## From the commit rather than the clock, so a rebuild of one commit gives the same
 ## bytes. Every cargo call in the run sees the same value, so none rebuilds
 ## over it.
 ## A release is a commit tagged v<version>, so tag before building one. Any
 ## other build prints its date too.
 ## A tree that isn't the commit's, such as uncommitted work in the frozen copy,
 ## gets -dirty after the number and is never a release, since the number names
-## a commit that doesn't hold what was built. The run on the frozen copy works
+## a commit that isn't what was built. The run on the frozen copy works
 ## it out again from the copy, and a run with no copy does after its format
 ## stage, which can rewrite the tree.
 build_number=""; build_release=""; build_date=""; build_mark=""
@@ -1046,7 +1046,7 @@ fi
 ## Stages
 
 ## A stash the sync stage or the publisher left, when a run stopped between
-## its stash and its pop, or the pop conflicted. It holds uncommitted work.
+## its stash and its pop, or the pop conflicted. It has uncommitted work in it.
 ## Syncing or publishing past it leaves that work stashed, and the next stash
 ## buries it deeper. The publisher looks only for its own. Prints the entry.
 fLeftStash(){
@@ -1252,11 +1252,10 @@ fStageLint(){
 		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
 	done
 	## The content scrub lives with the private project files, so a clone
-	## without them skips it. It only reports until 2026110218175403 is done.
+	## without them skips it.
 	if [[ -x "${checkout}/../private/hooks/scrub.bash" ]]; then
 		fEcho_Clean "content scrub: ../private/hooks/scrub.bash"
-		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"
-		else fEcho "NOTE: the content scrub found lines to look at; they're above, and in the lint log"; fi
+		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"; else failed+=(scrub); fi
 	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
@@ -1904,7 +1903,7 @@ fCleanup(){
 ## Run
 
 fmt_done=0
-## Here too, and not only at the end, so a run that's stopped as well still
+## Here as well as at the end, so a run that's stopped still
 ## takes down what the last one left.
 if ((! inner_run)); then
 	fSweepKilled
@@ -2029,6 +2028,7 @@ exit 0
 ##		  --no-sandbox.
 ##		- 2026-11-02: The content scrub in the lint stage, when the private
 ##		  folder has one.
+##		- 2026-11-08: A scrub hit fails the lint stage.
 ##		- 2026-11-07: A run dir's marks are removed last, so a removal that
 ##		  fails partway leaves it for the next run's sweep.
 ##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it

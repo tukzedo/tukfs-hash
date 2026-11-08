@@ -15,7 +15,7 @@
 ##		Vendored crates count only for findings tagged security or
 ##		correctness. Their style isn't ours to fix.
 ##		The copy gets a planted finding, which has to be reported, and the
-##		database has to hold every file of ours and the root of every crate
+##		database has to have every file of ours and the root of every crate
 ##		the Linux build takes, so an extractor that dropped code fails rather
 ##		than passing as clean. The Rust extractor reads source through
 ##		rust-analyzer and watches no build, so a warm build dir can't leave it
@@ -132,7 +132,7 @@ if ! codeql database analyze "${db}" codeql/rust-queries:codeql-suites/rust-secu
 	tail -n 20 "${art}/rust-analyze.log"; echo "codeql-scan: the analysis didn't finish" >&2; exit 2
 fi
 
-## The suppression comments. query run takes a file, not a pack's query.
+## The suppression comments. query run wants a file path; a pack's query name won't do.
 cp -r -- cicd/codeql/rust-suppression "${work}/rust-suppression"
 if ! (cd "${work}/rust-suppression" && codeql pack install >"${work}/pack.log" 2>&1); then
 	cat "${work}/pack.log"; echo "codeql-scan: the Rust suppression query's pack didn't resolve" >&2; exit 2

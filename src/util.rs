@@ -71,7 +71,7 @@ pub fn b64u_decode(s: &[u8]) -> Option<Vec<u8>> {
 			acc &= (1 << bits) - 1;
 		}
 	}
-	// Leftover bits must be zero, or two texts would decode the same.
+	// Leftover bits must be zero, or 2 texts would decode the same.
 	if acc != 0 {
 		return None;
 	}

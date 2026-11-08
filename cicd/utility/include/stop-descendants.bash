@@ -26,7 +26,7 @@
 ##		                   trap by exit 130, 143 or 129. With no trap of its
 ##		                   own, bash 5.2 dies at once on a second TERM that
 ##		                   comes while it's still starting the EXIT trap, and
-##		                   timeout sends two. A trapped one waits its turn.
+##		                   timeout sends 2. A trapped one waits its turn.
 ##		                   bash runs a trap only between commands, so a long
 ##		                   step goes through fBg.
 ##		fBg CMD...         CMD in the background, waited for, so a trapped
@@ -93,12 +93,12 @@ fStopDescendants(){
 	## part way. timeout signals the script, then its group.
 	trap '' INT TERM HUP PIPE
 	[[ "${wait}" =~ ^[0-9]{1,4}$ ]] || wait=30
-	## First, so a client that won't go doesn't hold the rest up.
+	## First, so a client that won't go doesn't keep the rest waiting.
 	fStopContainers
 	for f in /proc/[0-9]*/stat; do
 		{ read -r line < "${f}"; } 2>/dev/null || continue
 		pid="${f#/proc/}"; pid="${pid%/stat}"
-		## The name in parens can hold spaces, so the fields start after its last ')'.
+		## The name in parens can have spaces, so the fields start after its last ')'.
 		line="${line##*) }"; line="${line#* }"; ppid="${line%% *}"
 		kids["${ppid}"]+=" ${pid}"
 	done

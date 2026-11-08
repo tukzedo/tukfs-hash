@@ -7,7 +7,7 @@
 ##		their tools in it. Source stop-descendants.bash and config.bash
 ##		first, with root set to the repo root.
 ##			fCtrUseRelease      the functions below work on the release image
-##			                    from then on, not the leak check one.
+##			                    from then on, in place of the leak check one.
 ##			fCtrWhyNot          nothing when the image can run here, else why
 ##			                    not: it's x86_64 only, and docker (or
 ##			                    TUKFS_DOCKER) counts once its daemon answers.

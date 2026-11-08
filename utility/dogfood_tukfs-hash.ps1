@@ -15,7 +15,7 @@
 .SYNOPSIS
 Prints the path of the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
 .DESCRIPTION
-The bash launcher, dogfood_tukfs-hash, runs what this prints with the arguments as typed, and its exit code comes back. PowerShell would expand wildcards and ~ in them, and can't carry a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
+The bash launcher, dogfood_tukfs-hash, runs what this prints with the arguments as typed, and its exit code comes back. PowerShell would expand wildcards and ~ in them, and can't pass a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
 .EXAMPLE
 dogfood_tukfs-hash.ps1 --no-update
 #>
@@ -221,7 +221,7 @@ function Get-GfsRole {
 	.SYNOPSIS
 	Each version's role, by name. A version with none is one nothing keeps.
 	.DESCRIPTION
-	The coarser role wins where two apply; oldest and newest win over all of them.
+	The coarser role wins where 2 apply; oldest and newest win over all of them.
 	#>
 	[CmdletBinding()]
 	[OutputType([hashtable])]
@@ -329,7 +329,7 @@ function Get-RunningVersion {
 	.SYNOPSIS
 	The names of the versions running now.
 	.DESCRIPTION
-	One of this user's runs is found by its image path. Another user's, such as a run through sudo, has none to read, so it's found by its comm and first argument, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name in them gives its stamp, which a later rename keeps. A run through the fixed name has only that name, so it holds the version the fixed name pointed at when it started: the newest that had come in by then.
+	One of this user's runs is found by its image path. Another user's, such as a run through sudo, has none to read, so it's found by its comm and first argument, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name in them gives its stamp, which a later rename keeps. A run through the fixed name has only that name, so it has the version the fixed name pointed at when it started: the newest that had come in by then.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]

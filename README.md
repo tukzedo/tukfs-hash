@@ -80,6 +80,8 @@ The first scan reads every file and records it. Run the same scan again on a lat
 
 - Stops cleanly on Ctrl+C and picks up where it left off with `--resume`. A file read since the start of the day, or since `--since`, isn't read again. `--resume` only takes the newest scan, and only with the same roots and the same `--verify` or not, so 2 scripts sharing one database can't finish each other's runs.
 
+- Progress lines and the summary show roughly how far each group has got, as a share of the space used on its filesystems. That's only shown when every root in the group is a whole filesystem, and it's a rough figure, since compression, reflinks and snapshots make the space used differ from what gets read.
+
 - `scan --verify` is a quicker check between full runs. It reads again only the files with a checksum stored at their current size and time, even ones read earlier that day, and leaves no attributes. New and edited files wait for the next full scan.
 
 - `gone` lists the names a finished scan didn't see, which mostly means deleted files. `prune` drops the contents no name points at any more, since every edit leaves one behind.
@@ -117,9 +119,9 @@ tukfs-hash prune --db FILE
 tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 ~~~
 
-`tukfs-hash --help` has the options. `report` and `gone` list 200 lines unless `--limit` says otherwise, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
+`tukfs-hash --help` has the options, and so does `-h` or `--help` after a command. Each command refuses an option that isn't shown for it, rather than ignore it. `report` and `gone` list 200 lines unless `--limit` says otherwise, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root to reach every file. The database is handed back to the user who ran sudo when the run ends.
 
-`accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. On NTFS, APFS or HFS+ only the database record changes. Each name of a hard-linked file has its own record, so name each one.
+`accept` reads each file twice and takes what it reads as now as good. It's for a file changed on purpose with its time put back, or one restored from a backup and checked by hand. It replaces the database record and any blake3 already on the file, and removes rmlint's blake2b if that no longer matches. On NTFS, APFS or HFS+ only the database record changes, and from then on a scan goes by that record there, not by attributes still on the file. Each name of a hard-linked file has its own record, so name each one.
 
 `gone` takes the newest finished scan, or run N, and lists the names under its roots that it didn't see. A name with an error in that run, or under a folder it couldn't list, isn't counted, and neither is one last seen from a deeper root by another run, since that may be a mount the walk stops at. A folder left out with `--exclude` does count as not seen.
 

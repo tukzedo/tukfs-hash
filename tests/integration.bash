@@ -38,7 +38,7 @@ if [[ -n "${TUKFS_IT_BTRFS:-}" ]]; then
 		echo "TUKFS_IT_BTRFS isn't a folder on btrfs, so step 27 uses the work folder: ${TUKFS_IT_BTRFS}" >&2
 	fi
 fi
-# The exit trap removes it only while the marker holds this run's token, so
+# The exit trap removes it only while the marker has this run's token, so
 # a folder this run didn't make is never touched.
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 # A TERM to this shell alone leaves its children writing into the folder.
@@ -261,7 +261,7 @@ rc="$(scan)"
 check ddx0v "second scan exit" "${rc}" 0
 check ddx0w "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed 0"
 
-# 3. Change bytes, put the time back. All three references must notice.
+# 3. Change bytes, put the time back. All 3 references must notice.
 digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${1}'"; }
 x_before="$(xget "${tree}/big.bin" user.blake3.b64u)"
 db_before="$(digest_of "${tree}/big.bin")"
@@ -598,7 +598,7 @@ fqSchema "UPDATE sqlite_schema SET sql = replace(sql, ', CONSTRAINT refused_by_t
 check ddy8v "a failed run resumed" "$(fscan --resume) $(fq 'SELECT status FROM runs ORDER BY id DESC LIMIT 1') $(fq 'SELECT count(*) FROM runs')" "4 done 2"
 check ddy8w "and the refused row taken" "$(fq "SELECT count(*) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${wf}/b' AND f.bytes = 12")" 1
 fq "CREATE TRIGGER planted AFTER INSERT ON runs BEGIN SELECT 1; END;"
-check des6w "a planted trigger refused" "$(fscan) $(grep -c 'holds trigger "planted"' "${work}/wf.txt")" "1 1"
+check des6w "a planted trigger refused" "$(fscan) $(grep -c 'has trigger "planted"' "${work}/wf.txt")" "1 1"
 fq "DROP TRIGGER planted"
 
 # 17. --verify reads every file with a stored checksum again, even the same
@@ -618,6 +618,7 @@ k1c="$(stat -c %z "${vt}/k1")"
 check ddy9j "verify: exit and reads" "$(vscan --verify) $(grep -o 'hashed [0-9]*' "${work}/vt.txt" | head -1)" "4 hashed 2"
 check ddy9k "verify: only the damaged file flagged" "$(vq "SELECT group_concat(kind || ' ' || path, ', ') FROM (SELECT kind, path FROM events WHERE run_id = (SELECT max(id) FROM runs) ORDER BY kind)")" "b3-db-mismatch ${vt}/k2, b3-xattr-mismatch ${vt}/k2"
 check ddy9m "verify: new file not recorded" "$(vq "SELECT count(*) FROM paths WHERE path = '${vt}/n1'")" 0
+check df1rm "verify: no attributes on a new file" "$(getfattr -d -m '^user\.(blake3|rmlint)\.' --absolute-names "${vt}/n1" 2> /dev/null || true)" ""
 check ddy9n "verify: no attribute written" "$(stat -c %z "${vt}/k1")" "${k1c}"
 check ddy9p "verify: edited file's row left for the next scan" "$(vq "SELECT bytes FROM paths WHERE path = '${vt}/k3'")" 8
 check ddy9q "verify: every known name seen" "$(vq 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
@@ -656,7 +657,7 @@ last="$(gq 'SELECT max(id) FROM runs')"
 gq "UPDATE runs SET status = 'stopped' WHERE id = ${last}"
 check ddya4 "gone: a stopped run refused" "$(gone --run "${last}")" 1
 check ddya5 "gone: the newest finished run by default" "$(gone) $(head -1 "${work}/gone.txt") $(grep -c '^gone' "${work}/gone.txt")" "0 run $((last - 1)) 0"
-# A typo or a run that isn't there is an error, not an empty list.
+# A typo or a run that isn't there is an error rather than an empty list.
 rep() { local rc=0; "${bin}" report --db "${gdb}" "${@}" > "${work}/rep.txt" 2>&1 || rc=$?; echo "${rc}"; }
 check dehzs "report: an unknown kind refused" "$(rep --kind read-eror) $(grep -c 'unknown kind read-eror; kinds are b3-xattr-mismatch' "${work}/rep.txt") $(rep --kind dir-error)" "1 1 0"
 check dehzt "report and gone: an unknown run refused" "$(rep --run 999) $(grep -c '^tukfs-hash: no run 999$' "${work}/rep.txt") $(gone --run 999)" "1 1 1"
@@ -735,6 +736,15 @@ done
 check dee8e "help ends with a blank line" "${helpBad}" ""
 check des4v "help exit codes" "${helpRcs}" " [-h] 0 [--help] 0 [help] 0 [] 1"
 
+# After a command too. And a command refuses another's option by name, rather
+# than leave out the filter it asked for (2026102814341425).
+helpWant="$("${bin}" --help && echo x0)"
+check df1q4 "help after a command" "$("${bin}" scan --root "${tree}" --help && echo x0 || echo "x$?")|$("${bin}" accept --db "${db}" -h && echo x0 || echo "x$?")" "${helpWant}|${helpWant}"
+refused() { local rc=0 msg=''; msg="$("${bin}" "${@}" 2>&1 > /dev/null)" || rc=$?; echo "${rc} ${msg}"; }
+check df1q5 "gone refuses --root" "$(refused gone --db "${db}" --root "${tree}")" "1 tukfs-hash: gone doesn't take --root; see --help"
+check df1q6 "report refuses --since" "$(refused report --db "${db}" --since "${tomorrow}")" "1 tukfs-hash: report doesn't take --since; see --help"
+check df1q7 "accept refuses --rmlint" "$(refused accept --db "${db}" --rmlint "${tree}/small.txt")" "1 tukfs-hash: accept doesn't take --rmlint; see --help"
+
 # 23. A mount point whose name isn't UTF-8 doesn't stop a scan of some other
 # root (2026102519331112). The mounts are in a user namespace, so no root is
 # needed, and they go when it ends. A box that won't make one skips, and so
@@ -781,6 +791,13 @@ check dejdq "sudo prune, database name a link" "$(ln_case "" db)" "1 none"
 check dejdr "sudo prune, lock a link" "$(ln_case .lock link)" "1 none"
 check dejds "sudo prune, -wal a link" "$(ln_case -wal link)" "1 none"
 check dejdt "sudo prune, -shm a link" "$(ln_case -shm link)" "1 none"
+# Each refusal names the link, where SQLite said only "unable to open database file"
+# (2026102822062342).
+lnSaid=''
+for sfx in '' .lock -wal -shm; do
+	lnSaid+="$(grep -cF "${work}/ln${sfx:-db}/t.sqlite${sfx}: is a symbolic link; refused" "${work}/ln${sfx:-db}/out.txt" || true)"
+done
+check df1qe "sudo prune, each link named" "${lnSaid}" 1111
 
 # 25. A mount that's been mounted over is gone from the walk's view, and so is
 # what's mounted on it (2026102814341407). In a user namespace, as step 23.
@@ -814,7 +831,9 @@ fi
 # A bind mount of a folder inside another root is that root's folder, wherever
 # it's mounted, so it isn't read twice (2026102814341414). One of a folder
 # outside the roots is read. A database reached through such a mount still
-# leaves out only its own names in the root's walk (2026110719570617).
+# leaves out only its own names in the root's walk (2026110719570617), adn
+# --no-xattr and --exclude given by the mount's name still apply, also to a
+# root under it (2026110720070507).
 cat > "${ns}/bind.bash" << 'EOF2'
 cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
 for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
@@ -826,6 +845,12 @@ echo "${rc} $(grep -o 'files [0-9]* hashed [0-9]*' c.out | head -1)" > c.got
 grep -c '^skipping root .*: inside .*/c/tree, as .*/c/tree/s' c.out > c.skips
 rc=0; "${2}" scan --db c/bind/d.sqlite --root c/tree --progress 3600 > d.out 2>&1 || rc=$?
 echo "${rc}" > d.got
+mkdir -p e/tree/sub/deep e/bind || exit 1
+printf 't\n' > e/tree/top; printf 'f\n' > e/tree/sub/f; printf 'g\n' > e/tree/sub/deep/g
+mount --bind e/tree/sub e/bind || exit 1
+escan() { local rc=0; "${2}" scan --db "${1}.sqlite" --progress 3600 "${@:3}" > "${1}.out" 2>&1 || rc=$?; echo "${rc} $(grep -oE 'files [0-9]+' "${1}.out" | head -1)"; }
+escan e1 "${2}" --root e/tree --no-xattr e/bind > e1.got
+echo "$(escan e2 "${2}" --root e/tree --exclude e/bind --no-xattrs) $(escan e3 "${2}" --root e/bind/deep --exclude e/tree/sub --no-xattrs)" > e2.got
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -834,15 +859,22 @@ if [[ "${nsfs}" == zfs ]]; then
 	skip df0qc "bind mount of a folder inside another root read once (ZFS pools aren't seen from a user namespace)"
 	skip df0qd "bind mounts inside another root named as skipped (ZFS pools aren't seen from a user namespace)"
 	skip df0qh "database through a bind mount: own names left out, no attributes (ZFS pools aren't seen from a user namespace)"
+	skip df1nj "--no-xattr by a bind mount's name (ZFS pools aren't seen from a user namespace)"
+	skip df1nk "--exclude by a bind mount's name (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
 	dd="${ns}/c/tree/sub/d.sqlite"
 	check df0qh "database through a bind mount: own names left out, no attributes" "$(cat "${ns}/d.got") $(sqlite3 "${dd}" 'SELECT count(*) FROM paths') $(sqlite3 "${dd}" "SELECT count(*) FROM paths WHERE path LIKE '%/d.sqlite%'") $(xget "${dd}" user.blake3.b64u)" "0 6 0 "
+	et="${ns}/e/tree"
+	check df1nj "--no-xattr by a bind mount's name" "$(cat "${ns}/e1.got") $(xget "${et}/top" user.blake3.b64u | wc -c) $(xget "${et}/sub/f" user.blake3.b64u)$(xget "${et}/sub/deep/g" user.blake3.b64u)" "0 files 3 43 "
+	check df1nk "--exclude by a bind mount's name" "$(cat "${ns}/e2.got")" "0 files 1 0 files 0"
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
 	skip df0qh "database through a bind mount: own names left out, no attributes (no user namespace here)"
+	skip df1nj "--no-xattr by a bind mount's name (no user namespace here)"
+	skip df1nk "--exclude by a bind mount's name (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
@@ -884,7 +916,7 @@ check des66 "the database's own names left out" "$(sqlite3 "${dn}/tree/tuk" "SEL
 rc=0; "${bin}" scan --db "${dn}/g.sqlite" --root "${dn}/repo/src" --progress 3600 > "${dn}/g.txt" 2>&1 || rc=$?
 check des67 "root below a git folder: no attributes" "${rc} $(sqlite3 "${dn}/g.sqlite" 'SELECT count(*) FROM paths') $(xget "${dn}/repo/src/a.c" user.blake3.b64u)" "0 1 "
 
-# 29. The pipeline runs this in its sandbox, where only the folder that holds
+# 29. The pipeline runs this in its sandbox, where only the folder that has
 # the work folders can be written, and docker's socket isn't there. Run by the
 # pipeline outside it, without --no-sandbox, is a failure. Home is an empty
 # tmpfs in there, which is fine to write, and a scan refuses tmpfs, so a test
@@ -897,6 +929,69 @@ if [[ -n "${TUKFS_SANDBOX:-}" || ( -n "${TUKFS_RUN_NAME:-}" && -z "${TUKFS_NO_SA
 	expect desk2 "sandbox: nothing outside the test folder written" "sandbox: not in it, could write ${probe%/*}, or docker's socket is there" "${st}"
 else
 	skip desk2 "sandbox: nothing outside the test folder written (not in the sandbox)"
+fi
+
+# 30. A first scan that fills the disk leaves a database the next run can
+# still use (2026102814341430). The tmpfs that fills is in a user namespace,
+# as step 23. 8k fails before a page is written, 96k partway through making
+# the tables.
+cat > "${ns}/full.bash" << 'EOF2'
+cd "${1}" && mkdir -p full fr && printf 'x\n' > fr/f || exit 1
+for sz in 8k 96k; do
+	mount -t tmpfs -o "size=${sz}" none full || exit 1
+	rc=0; "${2}" scan --db full/t.sqlite --root fr --progress 3600 > /dev/null 2>&1 || rc=$?
+	echo "${rc}" > "full-${sz}.rc"
+	cp full/t.sqlite "full-${sz}.sqlite" && umount full || exit 1
+done
+: > full.mounted
+EOF2
+if [[ "${nsfs}" != zfs ]]; then
+	unshare --user --map-root-user --mount bash "${ns}/full.bash" "${ns}" "${bin}" 2> /dev/null || true
+fi
+if [[ "${nsfs}" == zfs ]]; then
+	skip df1qb "database left by a full disk taken as new (ZFS pools aren't seen from a user namespace)"
+elif [[ -e "${ns}/full.mounted" ]]; then
+	fullGot=''
+	for sz in 8k 96k; do
+		rc=0; "${bin}" scan --db "${ns}/full-${sz}.sqlite" --root "${ns}/fr" --progress 3600 > /dev/null 2>&1 || rc=$?
+		fullGot+="$(cat "${ns}/full-${sz}.rc") ${rc} "
+	done
+	check df1qb "database left by a full disk taken as new" "${fullGot}" "1 0 1 0 "
+else
+	skip df1qb "database left by a full disk taken as new (no user namespace here)"
+fi
+
+# 31. accept of a name no scan has a row for says so, since a scan may know
+# the file by another name and go on reporting it (2026102814341431).
+an="${work}/an"; mkdir -p "${an}"
+cp "${db}" "${an}/t.sqlite"; printf 'n\n' > "${an}/new.txt"
+rc=0; "${bin}" accept --db "${an}/t.sqlite" "${an}/new.txt" "${tree}/small.txt" > "${an}/out.txt" 2>&1 || rc=$?
+check df1qc "accept of a name no scan knows says so" "${rc} $(grep -c 'no scan has a record under this name' "${an}/out.txt")" "0 1"
+
+# 32. A file that changes while it's read, and an attribute that can't be
+# written, are reported and set no exit bit (design.md, Runs and exit codes).
+us="${work}/us"; mkdir -p "${us}"
+head -c 1000000 /dev/urandom > "${us}/live"
+# Appends a byte at a time, so the size moves under every read.
+python3 -I -c '
+import os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND)
+while True:
+	os.write(fd, b"x")
+' "${us}/live" &
+appender=$!
+for ((i = 0; i < 200; i++)); do [[ "$(stat -c %s "${us}/live")" -gt 1000000 ]] && break; sleep 0.05; done
+rc=0; "${bin}" scan --db "${work}/db/us.sqlite" --root "${us}" --no-xattrs --progress 3600 > "${work}/us.txt" 2>&1 || rc=$?
+kill "${appender}"; wait "${appender}" 2> /dev/null || true
+check df1rj "a file changing while read: reported, exit 0" "${rc} $(sqlite3 "${work}/db/us.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 unstable ${us}/live"
+ro="${work}/ro"; mkdir -p "${ro}"
+printf 'read only\n' > "${ro}/f"; chmod 444 "${ro}/f"
+# Root, or a sandbox that kept its capabilities, can write it anyway.
+if setfattr -n user.tukfs-probe -v 1 "${ro}/f" 2> /dev/null; then
+	skip df1rk "an attribute that can't be written: reported, exit 0 (a 0444 file takes attributes here)"
+else
+	rc=0; "${bin}" scan --db "${work}/db/ro.sqlite" --root "${ro}" --progress 3600 > "${work}/ro.txt" 2>&1 || rc=$?
+	check df1rk "an attribute that can't be written: reported, exit 0" "${rc} $(sqlite3 "${work}/db/ro.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 xattr-error ${ro}/f"
 fi
 
 if [[ "${fails}" -eq 0 ]]; then
@@ -915,7 +1010,7 @@ fi
 ##		- 20261019: --rmlint and rmlint's blake2b xattrs, b2b names.
 ##		- 20261023: Header and history. Old commented-out checks dropped, every
 ##		  expansion braced, and the work folder is removed only when its marker
-##		  holds the run's token.
+##		  has the run's token.
 ##		- 20261023: expect takes a status for [[ ]] checks, one fFlipByte, and
 ##		  step 5's 400 files from one python3.
 ##		- 20261023: fSafeRm guards the work folder's rm -rf, and the folder moved
@@ -941,10 +1036,10 @@ fi
 ##		  namespace.
 ##		- 20261028: ddx1e and de5gd fail on their own line when they find
 ##		  nothing, rather than ending the script. Step 20's scan helper is
-##		  rdscan, not a second rscan. SPDX line.
+##		  rdscan, where it was a second rscan. SPDX line.
 ##		- 20261028: The stale folder sweep also needs the folder to be ours.
 ##		- 20261029: A build number marked -dirty.
-##		- 20261102: A Ctrl+C stops the test, not only the running scan. A
+##		- 20261102: A Ctrl+C stops the test as well as the running scan. A
 ##		  locked folder left by a stop or kill no longer blocks its removal.
 ##		- 20261102: Step 29, the pipeline's sandbox.
 ##		  ddx0t reads the journal mode, ddx0s runs only through sudo, and
@@ -963,3 +1058,10 @@ fi
 ##		  subvolume a stop left behind is removed with its folder.
 ##		- 20261108: A bind mount of a folder inside another root, and a
 ##		  database reached through one.
+##		- 20261108: Help after a command, and an option another command takes
+##		  refused.
+##		- 20261108: A database left by a first scan that filled the disk.
+##		- 20261108: accept of a name no scan knows.
+##		- 20261108: A link at the database's names is named in the refusal.
+##		- 20261108: A file that changes while read, an attribute that can't be
+##		  written, and no attributes on a new file after --verify.

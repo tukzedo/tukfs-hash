@@ -64,7 +64,7 @@ fGen(){
 	mkdir -p -- "${tree}" "${dir}/db"
 	cd -- "${tree}"
 	fBlock
-	## Photos and music hold most of the bytes, as on a real disk: about 55%
+	## Photos and music are most of the bytes, as on a real disk: about 55%
 	## in 2 to 24 MB, 40% in 1 to 8 MB.
 	for ((i = 0; i < mb * 55 / 1300; i++)); do
 		fRand; printf -v mm '%02d' $((seed % 12 + 1)); d="photos/$((2014 + seed % 11))/${mm}"

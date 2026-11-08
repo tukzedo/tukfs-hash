@@ -219,6 +219,9 @@ struct Stats {
 	skip_unknown: AtomicU64,
 	links: AtomicU64,
 	bytes: AtomicU64,
+	// Sizes of files skipped unread, so a resumed run's percent picks up
+	// where the stopped part left off.
+	skipped_bytes: AtomicU64,
 	b3_ok: AtomicU64,
 	b2b_ok: AtomicU64,
 	db_ok: AtomicU64,
@@ -252,6 +255,12 @@ impl Stats {
 			g(&self.xattr_fail),
 			g(&self.rmlint_set),
 		)
+	}
+
+	// A hard link's names share its size, so a skip counts each name's part.
+	fn skipped(&self, md: &fs::Metadata) {
+		self.skipped_bytes
+			.fetch_add(md.len() / md.nlink().max(1), Relaxed);
 	}
 }
 
@@ -292,11 +301,14 @@ struct Shared {
 	db_dir: (u64, u64),
 	excludes: Vec<PathBuf>,
 	no_xattr: Vec<PathBuf>,
+	// --exclude and --no-xattr by device and inode too, for the same reason.
+	exclude_ids: HashSet<(u64, u64)>,
+	no_xattr_ids: HashSet<(u64, u64)>,
 	mount_points: BTreeMap<PathBuf, String>,
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
-	// blake2b for every file read, not only ones with a current rmlint set.
+	// blake2b for every file read, also ones without a current rmlint set.
 	rmlint: bool,
 	mode: Mode,
 	// Never skipped until read clean or accepted.
@@ -313,11 +325,27 @@ struct Group {
 	threads: usize,
 	stats: Stats,
 	done: AtomicBool,
+	// Approximate bytes under the roots, from the filesystems' used space.
+	size: Option<u64>,
+}
+
+impl Group {
+	fn line(&self) -> String {
+		let line = self.stats.line();
+		let Some(size) = self.size.filter(|&n| n > 0) else {
+			return line;
+		};
+		let done = self.stats.bytes.load(Relaxed) + self.stats.skipped_bytes.load(Relaxed);
+		// Compression and reflinks can put the bytes read past the space used.
+		let pct = (done.saturating_mul(100) / size).min(100);
+		format!("{line} | ~{pct}% of {}", human_bytes(size))
+	}
 }
 
 struct Job {
 	path: PathBuf,
 	in_git: bool,
+	no_xattr: bool,
 	root: Arc<Root>,
 	prior: Option<Prior>,
 }
@@ -412,10 +440,10 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			continue;
 		}
 		let disks = mounts::disks_for(m, &mounts)?;
-		kept.push((c, disks));
+		kept.push(mounts::RootDisks { root: c, disks });
 	}
 	let mut groups = Vec::new();
-	for (disks, rs) in mounts::group_roots(kept) {
+	for mounts::DiskGroup { disks, roots: rs } in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);
 		for (p, t) in threads {
 			if let Ok(c) = fs::canonicalize(p)
@@ -604,8 +632,10 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			.iter()
 			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
 			.collect(),
+		exclude_ids: ids_of(&o.excludes),
+		no_xattr_ids: ids_of(&o.no_xattr),
 		mount_points: mounts::mount_points(mounts),
-		no_write_devs: hands_off.values().map(|(d, _)| *d).collect(),
+		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
@@ -711,28 +741,34 @@ fn begin(
 	Ok(r)
 }
 
-// Roots on NTFS, APFS or HFS+, with their device and filesystem type.
+// A root on NTFS, APFS or HFS+.
+struct HandsOff {
+	dev: u64,
+	fstype: String,
+}
+
 fn hands_off(
 	mounts: &[mounts::Mount],
 	groups: &[Planned],
-) -> Result<BTreeMap<PathBuf, (u64, String)>, String> {
+) -> Result<BTreeMap<PathBuf, HandsOff>, String> {
 	let mut out = BTreeMap::new();
 	for r in groups.iter().flat_map(|g| &g.roots) {
-		if let Some(t) = mounts::hands_off_at(mounts, r) {
+		if let Some(fstype) = mounts::hands_off_at(mounts, r) {
 			let dev = fs::metadata(r)
 				.map_err(|e| format!("{}: {e}", r.display()))?
 				.dev();
-			out.insert(r.clone(), (dev, t));
+			out.insert(r.clone(), HandsOff { dev, fstype });
 		}
 	}
 	Ok(out)
 }
 
-fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -> Vec<Arc<Group>> {
+fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>) -> Vec<Arc<Group>> {
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|p| {
 			Arc::new(Group {
+				size: used_under(&p.roots),
 				name: p.name,
 				roots: p.roots,
 				threads: p.threads,
@@ -744,14 +780,47 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, (u64, String)>) -
 	for g in &groups {
 		out!("group {} with {} worker(s):", g.name, g.threads);
 		for r in &g.roots {
-			if let Some((_, t)) = hands_off.get(r) {
-				out!("\t{} ({t}, no attributes written)", r.display());
+			if let Some(h) = hands_off.get(r) {
+				out!("\t{} ({}, no attributes written)", r.display(), h.fstype);
 			} else {
 				out!("\t{}", r.display());
 			}
 		}
 	}
 	groups
+}
+
+// Used space on the roots' filesystems, which stands in for the bytes under
+// them, since counting them first would mean a second walk. None when a root
+// is a folder inside its filesystem, where the rest would keep the percent
+// low. See design.md, Runs and exit codes.
+fn used_under(roots: &[PathBuf]) -> Option<u64> {
+	let mut devs = BTreeSet::new();
+	let mut total = 0u64;
+	for r in roots {
+		let md = fs::metadata(r).ok()?;
+		let up = fs::metadata(r.join("..")).ok()?;
+		if up.dev() == md.dev() && up.ino() != md.ino() {
+			return None;
+		}
+		if devs.insert(md.dev()) {
+			total += fs_used(r)?;
+		}
+	}
+	Some(total)
+}
+
+fn fs_used(p: &Path) -> Option<u64> {
+	let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
+	let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+	// SAFETY: c is NUL-terminated and outlives the call, and st is only read
+	// after the call says it filled it.
+	if unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) } != 0 {
+		return None;
+	}
+	// SAFETY: statvfs returned 0, so st is filled.
+	let st = unsafe { st.assume_init() };
+	Some(st.f_blocks.saturating_sub(st.f_bfree) * st.f_frsize)
 }
 
 fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
@@ -768,7 +837,7 @@ fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 					fmt_local(now_us()),
 					g.name,
 					human_bytes(rate as u64),
-					g.stats.line()
+					g.line()
 				);
 			}
 		}
@@ -796,7 +865,7 @@ fn finish(
 	// part's. The events line is the whole run's either way.
 	let mut part = String::new();
 	for g in p.groups {
-		let _ = writeln!(part, "{}: {}", g.name, g.stats.line());
+		let _ = writeln!(part, "{}: {}", g.name, g.line());
 	}
 	let counts = run_events(&conn, run_id)
 		.map_err(|x| why.push(format!("database: {x}")))
@@ -859,7 +928,7 @@ impl Drop for DoneOnDrop<'_> {
 	}
 }
 
-// A panic is a fault, not a hang: it stops the run and marks it failed.
+// A panic is a fault rather than a hang: it stops the run and marks it failed.
 fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
 	if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
 		sh.faults.add(&sh.stop, format!("{who} panicked"));
@@ -869,7 +938,7 @@ fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
 fn run_group(g: &Group, sh: &Shared) {
 	let _done = DoneOnDrop(&g.done);
 	let (jtx, jrx) = sync_channel::<Job>(1024);
-	// Only the workers hold the receiver, so once the last one is gone the
+	// Only the workers have the receiver, so once the last one is gone the
 	// walk's send fails, rather than waiting on a full queue forever.
 	let jrx = Arc::new(Mutex::new(jrx));
 	let links = Links::default();
@@ -912,6 +981,25 @@ fn db_dir(db: &Path) -> Result<(u64, u64), String> {
 	fs::metadata(dir)
 		.map(|m| (m.dev(), m.ino()))
 		.map_err(|e| format!("database folder {}: {e}", dir.display()))
+}
+
+// A path that isn't there yet matches by path only.
+fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
+	paths
+		.iter()
+		.filter_map(|p| fs::metadata(p).ok())
+		.map(|m| (m.dev(), m.ino()))
+		.collect()
+}
+
+// A root inside one of the folders under another name. The root's own folder
+// is the walk's to check.
+fn inside_any(root: &Path, ids: &HashSet<(u64, u64)>) -> bool {
+	!ids.is_empty()
+		&& root
+			.ancestors()
+			.skip(1)
+			.any(|a| fs::metadata(a).is_ok_and(|m| ids.contains(&(m.dev(), m.ino()))))
 }
 
 // The database, its journal files and its lock, in its folder under any name.
@@ -960,10 +1048,17 @@ pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
 // so its list doesn't grow without end.
 const FILES_BATCH: usize = 1 << 20;
 
+// What a folder hands down to everything under it.
+#[derive(Clone, Copy)]
+struct Marks {
+	in_git: bool,
+	no_xattr: bool,
+}
+
 // Subfolders still to walk, last name first, so each pop frees one.
 struct Frame {
 	dir: PathBuf,
-	in_git: bool,
+	marks: Marks,
 	subdirs: Vec<Box<OsStr>>,
 }
 
@@ -979,6 +1074,9 @@ fn walk(
 	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) {
+	if inside_any(root, &sh.exclude_ids) {
+		return;
+	}
 	let root = match Root::open(root) {
 		Ok(r) => Arc::new(r),
 		// A root gone since the plan wasn't read either.
@@ -989,10 +1087,21 @@ fn walk(
 		}
 	};
 	let mut stack: Vec<Frame> = Vec::new();
-	let mut next = Some((root.path.clone(), git_tree_above(&root.path, root.dev)));
+	let above = Marks {
+		in_git: git_tree_above(&root.path, root.dev),
+		no_xattr: inside_any(&root.path, &sh.no_xattr_ids),
+	};
+	let mut next = Some((root.path.clone(), above));
+	let w = Walker {
+		root,
+		sh,
+		stats,
+		look,
+		jobs,
+	};
 	while !sh.stop.load(Relaxed) {
-		if let Some((dir, git_above)) = next.take() {
-			match list_dir(&root, dir, git_above, sh, stats, look, jobs) {
+		if let Some((dir, above)) = next.take() {
+			match w.list_dir(dir, above) {
 				Ok(Some(f)) => stack.push(f),
 				Ok(None) => {}
 				Err(Closed) => return,
@@ -1002,140 +1111,145 @@ fn walk(
 			return;
 		};
 		match top.subdirs.pop() {
-			Some(name) => next = Some((top.dir.join(&*name), top.in_git)),
+			Some(name) => next = Some((top.dir.join(&*name), top.marks)),
 			None => _ = stack.pop(),
 		}
 	}
-}
-
-fn list_dir(
-	root: &Arc<Root>,
-	dir: PathBuf,
-	git_above: bool,
-	sh: &Shared,
-	stats: &Stats,
-	look: &rusqlite::Connection,
-	jobs: &SyncSender<Job>,
-) -> Result<Option<Frame>, Closed> {
-	let opened = root
-		.open_at(root.rel(&dir), libc::O_RDONLY | libc::O_DIRECTORY)
-		.and_then(|f| {
-			let m = f.metadata()?;
-			Ok(((m.dev(), m.ino()), f))
-		});
-	let (id, list) = match opened.and_then(|(id, f)| Ok((id, beneath::List::new(f)?))) {
-		// A btrfs subvolume, or something mounted since the scan began. The
-		// mount table only knows what was there at the start.
-		Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
-		Ok(got) => got,
-		Err(e) if beneath::moved(&e) => return Ok(None),
-		Err(e) => {
-			stats.other_err.fetch_add(1, Relaxed);
-			event(sh, Kind::DirError, &dir, e.to_string());
-			return Ok(None);
-		}
-	};
-	// Asked first, since a big folder's files are queued before the listing
-	// ends.
-	let mut in_git = git_above || list.has(".git");
-	let mut files: Vec<(u64, PathBuf)> = Vec::new();
-	let mut subdirs = Vec::new();
-	for (seen, ent) in list.enumerate() {
-		// The rest of the folder goes unread after an error. An EIO in a
-		// damaged folder block is the case.
-		let ent = match ent {
-			Ok(ent) => ent,
-			Err(e) => {
-				stats.other_err.fetch_add(1, Relaxed);
-				event(
-					sh,
-					Kind::DirError,
-					&dir,
-					format!("{e}, after {seen} entries; the rest weren't read"),
-				);
-				break;
-			}
-		};
-		if &*ent.name == ".git" {
-			in_git = true;
-		}
-		let kind = match ent.kind {
-			Ok(k) => k,
-			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-			Err(e) => {
-				stats.other_err.fetch_add(1, Relaxed);
-				event(sh, Kind::StatError, &dir.join(&*ent.name), e.to_string());
-				continue;
-			}
-		};
-		let is_dir = match kind {
-			beneath::Kind::Dir => true,
-			beneath::Kind::File => false,
-			beneath::Kind::Other => continue,
-		};
-		if is_dir && &*ent.name == ".zfs" && sh.mount_points.get(&dir).is_some_and(|t| t == "zfs") {
-			continue;
-		}
-		let p = dir.join(&*ent.name);
-		if sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
-			continue;
-		}
-		if is_dir {
-			subdirs.push(ent.name);
-			continue;
-		}
-		files.push((ent.ino, p));
-		if files.len() >= FILES_BATCH {
-			queue(root, &mut files, in_git, sh, stats, look, jobs)?;
-		}
-	}
-	queue(root, &mut files, in_git, sh, stats, look, jobs)?;
-	subdirs.sort_unstable_by(|a, b| b.cmp(a));
-	Ok(Some(Frame {
-		dir,
-		in_git,
-		subdirs,
-	}))
 }
 
 // Looked up a batch at a time, each in its own read transaction, which ends
 // before the batch waits on the queue so the writer can checkpoint.
 const LOOKUP_BATCH: usize = 256;
 
-fn queue(
-	root: &Arc<Root>,
-	files: &mut Vec<(u64, PathBuf)>,
-	in_git: bool,
-	sh: &Shared,
-	stats: &Stats,
-	look: &rusqlite::Connection,
-	jobs: &SyncSender<Job>,
-) -> Result<(), Closed> {
-	files.sort_unstable();
-	let mut rest = files.drain(..).map(|(_, p)| p);
-	loop {
-		let batch: Vec<PathBuf> = rest.by_ref().take(LOOKUP_BATCH).collect();
-		if batch.is_empty() {
-			return Ok(());
-		}
-		let keys: Vec<&[u8]> = batch.iter().map(|p| p.as_os_str().as_bytes()).collect();
-		let priors = db::lookup_each(look, &keys);
-		for (path, prior) in batch.into_iter().zip(priors) {
-			let prior = match prior {
-				Ok(p) => p,
+// One root's walk, the way Worker is one hashing thread.
+struct Walker<'a> {
+	root: Arc<Root>,
+	sh: &'a Shared,
+	stats: &'a Stats,
+	look: &'a rusqlite::Connection,
+	jobs: &'a SyncSender<Job>,
+}
+
+impl Walker<'_> {
+	fn list_dir(&self, dir: PathBuf, above: Marks) -> Result<Option<Frame>, Closed> {
+		let (root, sh, stats) = (&self.root, self.sh, self.stats);
+		let opened = root
+			.open_at(root.rel(&dir), libc::O_RDONLY | libc::O_DIRECTORY)
+			.and_then(|f| {
+				let m = f.metadata()?;
+				Ok(((m.dev(), m.ino()), f))
+			});
+		let (id, list) = match opened.and_then(|(id, f)| Ok((id, beneath::List::new(f)?))) {
+			// A btrfs subvolume, or something mounted since the scan began. The
+			// mount table only knows what was there at the start.
+			Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
+			// --exclude under another name, as through a bind mount.
+			Ok((id, _)) if sh.exclude_ids.contains(&id) => return Ok(None),
+			Ok(got) => got,
+			Err(e) if beneath::moved(&e) => return Ok(None),
+			Err(e) => {
+				stats.other_err.fetch_add(1, Relaxed);
+				event(sh, Kind::DirError, &dir, e.to_string());
+				return Ok(None);
+			}
+		};
+		// Asked first, since a big folder's files are queued before the listing
+		// ends.
+		let mut marks = Marks {
+			in_git: above.in_git || list.has(".git"),
+			no_xattr: above.no_xattr || sh.no_xattr_ids.contains(&id),
+		};
+		let mut files: Vec<(u64, PathBuf)> = Vec::new();
+		let mut subdirs = Vec::new();
+		for (seen, ent) in list.enumerate() {
+			// The rest of the folder goes unread after an error. An EIO in a
+			// damaged folder block is the case.
+			let ent = match ent {
+				Ok(ent) => ent,
 				Err(e) => {
 					stats.other_err.fetch_add(1, Relaxed);
-					event(sh, Kind::DbError, &path, e);
+					event(
+						sh,
+						Kind::DirError,
+						&dir,
+						format!("{e}, after {seen} entries; the rest weren't read"),
+					);
+					break;
+				}
+			};
+			if &*ent.name == ".git" {
+				marks.in_git = true;
+			}
+			let kind = match ent.kind {
+				Ok(k) => k,
+				Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+				Err(e) => {
+					stats.other_err.fetch_add(1, Relaxed);
+					event(sh, Kind::StatError, &dir.join(&*ent.name), e.to_string());
 					continue;
 				}
 			};
-			let job = Job {
-				path,
-				in_git,
-				root: root.clone(),
-				prior,
+			let is_dir = match kind {
+				beneath::Kind::Dir => true,
+				beneath::Kind::File => false,
+				beneath::Kind::Other => continue,
 			};
-			jobs.send(job).map_err(|_| Closed)?;
+			if is_dir
+				&& &*ent.name == ".zfs"
+				&& sh.mount_points.get(&dir).is_some_and(|t| t == "zfs")
+			{
+				continue;
+			}
+			let p = dir.join(&*ent.name);
+			if sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
+				continue;
+			}
+			if is_dir {
+				subdirs.push(ent.name);
+				continue;
+			}
+			files.push((ent.ino, p));
+			if files.len() >= FILES_BATCH {
+				self.queue(&mut files, marks)?;
+			}
+		}
+		self.queue(&mut files, marks)?;
+		subdirs.sort_unstable_by(|a, b| b.cmp(a));
+		Ok(Some(Frame {
+			dir,
+			marks,
+			subdirs,
+		}))
+	}
+
+	fn queue(&self, files: &mut Vec<(u64, PathBuf)>, marks: Marks) -> Result<(), Closed> {
+		files.sort_unstable();
+		let mut rest = files.drain(..).map(|(_, p)| p);
+		loop {
+			let batch: Vec<PathBuf> = rest.by_ref().take(LOOKUP_BATCH).collect();
+			if batch.is_empty() {
+				return Ok(());
+			}
+			let keys: Vec<&[u8]> = batch.iter().map(|p| p.as_os_str().as_bytes()).collect();
+			let priors = db::lookup_each(self.look, &keys);
+			for (path, prior) in batch.into_iter().zip(priors) {
+				let prior = match prior {
+					Ok(p) => p,
+					Err(e) => {
+						self.stats.other_err.fetch_add(1, Relaxed);
+						event(self.sh, Kind::DbError, &path, e);
+						continue;
+					}
+				};
+				let job = Job {
+					path,
+					in_git: marks.in_git,
+					no_xattr: marks.no_xattr,
+					root: self.root.clone(),
+					prior,
+				};
+				self.jobs.send(job).map_err(|_| Closed)?;
+			}
 		}
 	}
 }
@@ -1269,13 +1383,24 @@ fn hasher(g: &Group, sh: &Shared, jobs: &Mutex<Receiver<Job>>, links: &Links) {
 		if sh.stop.load(Relaxed) {
 			continue;
 		}
-		w.one_file(&job, job.prior.as_ref());
+		w.one_file(&job);
 	}
 }
 
 /// The mtime in microseconds, as stored.
 pub fn mtime_us(md: &fs::Metadata) -> i64 {
-	md.mtime() * 1_000_000 + md.mtime_nsec() / 1000
+	micros(md.mtime(), md.mtime_nsec())
+}
+
+fn micros(secs: i64, nsec: i64) -> i64 {
+	secs * 1_000_000 + nsec / 1000
+}
+
+// The row's last-seen run, written once per run.
+fn mark_seen(sh: &Shared, prior: Option<&Prior>) {
+	if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
+		send(sh, Msg::Seen(p.id));
+	}
 }
 
 /// rmlint's time, as it works it out.
@@ -1443,24 +1568,34 @@ struct Refs<'a> {
 	xattr_date: Option<i64>,
 	b2b: Option<[u8; 64]>,
 	db: Option<&'a Prior>,
+	// On a hands-off device nothing can update a set, so where the row has a
+	// say, it's the only one. design.md, "Attributes".
+	row_decides: bool,
 }
 
 type Miss = (Kind, String);
 
 impl<'a> Refs<'a> {
-	fn new(onfile: &OnFile, prior: Option<&'a Prior>, md: &fs::Metadata) -> Refs<'a> {
+	fn new(
+		onfile: &OnFile,
+		prior: Option<&'a Prior>,
+		md: &fs::Metadata,
+		hands_off: bool,
+	) -> Refs<'a> {
 		let (bytes, mt) = (md.len() as i64, mtime_us(md));
+		let db = prior.filter(|p| p.bytes == bytes && p.mtime_us == mt);
 		Refs {
 			xattr: onfile.b3_current(bytes, mt),
 			xattr_date: onfile.b3_date_us,
 			b2b: onfile.b2b_current(mtime_s(md)),
-			db: prior.filter(|p| p.bytes == bytes && p.mtime_us == mt),
+			db,
+			row_decides: hands_off && db.is_some(),
 		}
 	}
 
 	fn misses(&self, s: &Sums) -> Vec<Miss> {
 		let mut out = Vec::new();
-		if let Some(stored) = self.xattr.filter(|d| *d != s.b3) {
+		if let Some(stored) = self.xattr.filter(|d| *d != s.b3 && !self.row_decides) {
 			let when = self.xattr_date.map_or_else(|| "unknown".into(), fmt_local);
 			out.push((
 				Kind::XattrMismatch,
@@ -1473,6 +1608,7 @@ impl<'a> Refs<'a> {
 		}
 		if let (Some(stored), Some(now)) = (self.b2b, s.b2b)
 			&& stored != now
+			&& !self.row_decides
 		{
 			out.push((
 				Kind::RmlintMismatch,
@@ -1493,12 +1629,13 @@ impl<'a> Refs<'a> {
 		out
 	}
 
-	// Only for a read that agreed with all of them.
+	// Only for a read that agreed with all of them, or with the row where it
+	// decides.
 	fn tally(&self, s: &Sums, st: &Stats) {
-		if self.xattr.is_some() {
+		if self.xattr == Some(s.b3) {
 			st.b3_ok.fetch_add(1, Relaxed);
 		}
-		if self.b2b.is_some() && s.b2b.is_some() {
+		if self.b2b.is_some() && self.b2b == s.b2b {
 			st.b2b_ok.fetch_add(1, Relaxed);
 		}
 		if self.db.is_some() {
@@ -1563,9 +1700,7 @@ fn keep(
 		st.mismatch.fetch_add(1, Relaxed);
 		event(sh, kind, path, format!("{detail}{note}"));
 	}
-	if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-		send(sh, Msg::Seen(p.id));
-	}
+	mark_seen(sh, prior);
 }
 
 fn hashed_msg(path: &[u8], s: &Sums, md: &fs::Metadata, hashed_us: i64) -> Msg {
@@ -1590,12 +1725,13 @@ struct Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
-	fn one_file(&mut self, job: &Job, prior: Option<&Prior>) {
+	fn one_file(&mut self, job: &Job) {
+		let prior = job.prior.as_ref();
 		let rel = job.root.rel(&job.path);
 		let Some(md) = self.stat(job, rel) else {
 			return;
 		};
-		if self.judged_already(job, prior, &md) {
+		if self.judged_already(job, &md) {
 			return;
 		}
 		let Some((file, before)) = self.open(job, rel) else {
@@ -1610,7 +1746,8 @@ impl<'a> Worker<'a> {
 		});
 		let fd = file.as_raw_fd();
 		let onfile = OnFile::read(fd);
-		let refs = Refs::new(&onfile, prior, &before);
+		let hands_off = self.sh.no_write_devs.contains(&before.dev());
+		let refs = Refs::new(&onfile, prior, &before, hands_off);
 		if self.skip_unread(job, prior, &refs, &onfile, &before) {
 			return;
 		}
@@ -1657,43 +1794,34 @@ impl<'a> Worker<'a> {
 
 	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch` and
 	// `resume-seen`.
-	fn judged_already(&self, job: &Job, prior: Option<&Prior>, md: &fs::Metadata) -> bool {
+	fn judged_already(&self, job: &Job, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
+		let path = job.path.as_os_str().as_bytes();
 		// Row `resume-seen` for a mismatch with no row at this size and time. A
 		// ctime from before the run means nothing touched the file since.
-		if !sh.reported.is_empty()
-			&& md.ctime() * 1_000_000 + md.ctime_nsec() / 1000 < sh.run_started_us
-			&& sh.reported.contains(job.path.as_os_str().as_bytes())
-		{
-			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-				send(sh, Msg::Seen(p.id));
-			}
-			st.skip_db.fetch_add(1, Relaxed);
-			self.links.passed(md);
-			return true;
-		}
-		let Some(p) = prior else {
-			return false;
-		};
-		let fresh = || {
-			(sh.cutoff_us..=now_us()).contains(&p.hashed_us)
-				&& !sh.open_misses.contains(job.path.as_os_str().as_bytes())
-		};
+		let reported = !sh.reported.is_empty()
+			&& micros(md.ctime(), md.ctime_nsec()) < sh.run_started_us
+			&& sh.reported.contains(path);
 		// An earlier part of this run already judged it, mismatch or not, so
 		// a resumed run doesn't read and report it twice.
-		if (p.seen_run == sh.run_id || fresh())
-			&& p.bytes == md.len() as i64
-			&& p.mtime_us == mtime_us(md)
-			&& p.ino == md.ino() as i64
-		{
-			if p.seen_run != sh.run_id {
-				send(sh, Msg::Seen(p.id));
-			}
-			st.skip_db.fetch_add(1, Relaxed);
-			self.links.passed(md);
-			return true;
+		let vouched = || {
+			job.prior.as_ref().is_some_and(|p| {
+				(p.seen_run == sh.run_id
+					|| ((sh.cutoff_us..=now_us()).contains(&p.hashed_us)
+						&& !sh.open_misses.contains(path)))
+					&& p.bytes == md.len() as i64
+					&& p.mtime_us == mtime_us(md)
+					&& p.ino == md.ino() as i64
+			})
+		};
+		if !reported && !vouched() {
+			return false;
 		}
-		false
+		mark_seen(sh, job.prior.as_ref());
+		st.skip_db.fetch_add(1, Relaxed);
+		st.skipped(md);
+		self.links.passed(md);
+		true
 	}
 
 	fn open(&self, job: &Job, rel: &Path) -> Option<(File, fs::Metadata)> {
@@ -1731,10 +1859,9 @@ impl<'a> Worker<'a> {
 		// The next full scan reads it.
 		if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
 			st.skip_unknown.fetch_add(1, Relaxed);
+			st.skipped(before);
 			self.links.passed(before);
-			if let Some(p) = prior.filter(|p| p.seen_run != sh.run_id) {
-				send(sh, Msg::Seen(p.id));
-			}
+			mark_seen(sh, prior);
 			return true;
 		}
 
@@ -1759,6 +1886,7 @@ impl<'a> Worker<'a> {
 			return false;
 		}
 		st.skip_xattr.fetch_add(1, Relaxed);
+		st.skipped(before);
 		self.links.passed(before);
 		send(
 			sh,
@@ -1859,8 +1987,10 @@ impl<'a> Worker<'a> {
 		// No xattrs in git work trees. See design.md, Attributes.
 		if !sh.write_xattrs
 			|| job.in_git
+			|| job.no_xattr
 			|| sh.no_write_devs.contains(&before.dev())
 			|| sh.no_xattr.iter().any(|x| path.starts_with(x))
+			|| sh.no_xattr_ids.contains(&(before.dev(), before.ino()))
 		{
 			return;
 		}
@@ -1915,6 +2045,7 @@ mod tests {
 			xattr_date: None,
 			b2b: None,
 			db,
+			row_decides: false,
 		}
 	}
 
@@ -2026,6 +2157,8 @@ mod tests {
 			db,
 			excludes: Vec::new(),
 			no_xattr: Vec::new(),
+			exclude_ids: HashSet::new(),
+			no_xattr_ids: HashSet::new(),
 			mount_points: BTreeMap::new(),
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
@@ -2039,7 +2172,7 @@ mod tests {
 		(sh, rx)
 	}
 
-	// More files than the job queue holds, and no worker to take them. Workers
+	// More files than the job queue has room for, and no worker to take them. Workers
 	// stopped opening the database in 2026102810135573, so a missing one now
 	// stops the walk alone, and no workers is asked for outright.
 	#[test]
@@ -2061,6 +2194,7 @@ mod tests {
 				threads,
 				stats: Stats::default(),
 				done: AtomicBool::new(false),
+				size: None,
 			};
 			let (dtx, drx) = std::sync::mpsc::channel();
 			std::thread::spawn(move || {
@@ -2190,11 +2324,12 @@ mod tests {
 			threads: 1,
 			stats: Stats::default(),
 			done: AtomicBool::new(false),
+			size: None,
 		}
 	}
 
 	// A small buffer, so a read takes several passes.
-	fn read_one(g: &Group, sh: &Shared, j: &Job, prior: Option<&Prior>, links: &Links) {
+	fn read_one(g: &Group, sh: &Shared, j: &Job, links: &Links) {
 		let mut w = Worker {
 			g,
 			sh,
@@ -2202,15 +2337,23 @@ mod tests {
 			buf: vec![0u8; 4096],
 			xattr_fail_logged: 0,
 		};
-		w.one_file(j, prior);
+		w.one_file(j);
 	}
 
 	fn job(root: &Arc<Root>, rel: &str) -> Job {
 		Job {
 			path: root.path.join(rel),
 			in_git: false,
+			no_xattr: false,
 			root: root.clone(),
 			prior: None,
+		}
+	}
+
+	fn known(root: &Arc<Root>, rel: &str, prior: &Prior) -> Job {
+		Job {
+			prior: Some(prior.clone()),
+			..job(root, rel)
 		}
 	}
 
@@ -2367,6 +2510,82 @@ mod tests {
 		assert_eq!(jobs, want);
 	}
 
+	// --exclude and --no-xattr know their folders by device and inode too, so
+	// a walk that reaches one under another name, as through a bind mount,
+	// still leaves it out or marks it, and so does a root inside one.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn excluded_and_no_xattr_folders_under_another_name() {
+		let _id = test_id("df1ng");
+		let d = scratch("scan_exclids");
+		let tree = fs::canonicalize(&*d).unwrap().join("tree");
+		for sub in ["ex", "ex/deep", "nx", "nx/deep", "plain"] {
+			fs::create_dir_all(tree.join(sub)).unwrap();
+			fs::write(tree.join(sub).join("f"), "x").unwrap();
+		}
+		fs::write(tree.join("top"), "x").unwrap();
+		let look = db::open_rw(&d.join("look.sqlite")).unwrap();
+		let walked = |root: &Path| {
+			let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+			sh.excludes = vec![d.join("elsewhere/ex")];
+			sh.no_xattr = vec![d.join("elsewhere/nx")];
+			sh.exclude_ids = ids_of(&[tree.join("ex")]);
+			sh.no_xattr_ids = ids_of(&[tree.join("nx")]);
+			let drain = std::thread::spawn(move || rx.iter().count());
+			let (jtx, jrx) = sync_channel(64);
+			walk(root, &sh, &Stats::default(), &look, &jtx);
+			drop((jtx, sh));
+			drain.join().unwrap();
+			jrx.iter()
+				.map(|j| (j.path, j.no_xattr))
+				.collect::<BTreeMap<_, _>>()
+		};
+		let want = |l: &[(&str, bool)]| -> BTreeMap<PathBuf, bool> {
+			l.iter().map(|(p, n)| (tree.join(p), *n)).collect()
+		};
+		assert_eq!(
+			walked(&tree),
+			want(&[
+				("nx/deep/f", true),
+				("nx/f", true),
+				("plain/f", false),
+				("top", false),
+			])
+		);
+		assert_eq!(walked(&tree.join("ex/deep")), want(&[]));
+		assert_eq!(walked(&tree.join("nx/deep")), want(&[("nx/deep/f", true)]));
+		assert_eq!(walked(&tree.join("plain")), want(&[("plain/f", false)]));
+	}
+
+	// A file given to --no-xattr gets none under another name either, a hard
+	// link included, since the attributes are the inode's.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
+	fn no_xattr_file_under_another_name() {
+		let _id = test_id("df1nh");
+		let d = scratch("scan_nxfile");
+		fs::write(d.join("given"), "x").unwrap();
+		fs::hard_link(d.join("given"), d.join("other")).unwrap();
+		fs::write(d.join("plain"), "x").unwrap();
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.write_xattrs = true;
+		sh.no_xattr_ids = ids_of(&[d.join("given")]);
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		read_one(&g, &sh, &job(&r, "plain"), &Links::default());
+		read_one(&g, &sh, &job(&r, "other"), &Links::default());
+		drop(sh);
+		drain.join().unwrap();
+		let b3 = |name: &str| OnFile::read(File::open(d.join(name)).unwrap().as_raw_fd()).b3;
+		if b3("plain").is_none() {
+			eprintln!("no user xattrs here; skipped");
+			return;
+		}
+		assert_eq!(g.stats.files.load(Relaxed), 2);
+		assert_eq!(b3("given"), None);
+	}
+
 	// design.md, Attributes: none in a git work tree, however deep the root.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
@@ -2415,7 +2634,7 @@ mod tests {
 		let (sh, rx) = test_shared(d.join("t.sqlite"));
 		let g = test_group(&root);
 		let r = Arc::new(Root::open(&root).unwrap());
-		read_one(&g, &sh, &job(&r, "dir/f"), None, &Links::default());
+		read_one(&g, &sh, &job(&r, "dir/f"), &Links::default());
 		assert_eq!(g.stats.files.load(Relaxed), 0);
 		assert!(rx.try_recv().is_err());
 	}
@@ -2446,12 +2665,12 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		read_one(&g, &sh, &job(&r, "a"), &links);
 		let left = |l: &Links| locked(&l.map).entries.len();
 		assert_eq!(left(&links), 1);
-		read_one(&g, &sh, &job(&r, "b"), Some(&fresh), &links);
+		read_one(&g, &sh, &known(&r, "b", &fresh), &links);
 		assert_eq!(g.stats.skip_db.load(Relaxed), 1);
-		read_one(&g, &sh, &job(&r, "c"), None, &links);
+		read_one(&g, &sh, &job(&r, "c"), &links);
 		if g.stats.xattr_set.load(Relaxed) == 1 {
 			assert_eq!(g.stats.skip_xattr.load(Relaxed), 1);
 		} else {
@@ -2460,6 +2679,70 @@ mod tests {
 		assert_eq!(left(&links), 0);
 		drop(sh);
 		drain.join().unwrap();
+	}
+
+	// A skipped name counts its share of the size, so a resumed run's percent
+	// goes on from the stopped one's (2026110407135700).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn skips_count_toward_the_percent() {
+		let _id = test_id("df1ph");
+		let d = scratch("scan_percent");
+		fs::write(d.join("a"), "linked").unwrap();
+		fs::hard_link(d.join("a"), d.join("b")).unwrap();
+		fs::hard_link(d.join("a"), d.join("c")).unwrap();
+		let md = fs::metadata(d.join("a")).unwrap();
+		let fresh = Prior {
+			id: 1,
+			bytes: md.len() as i64,
+			mtime_us: mtime_us(&md),
+			ino: md.ino() as i64,
+			hashed_us: now_us(),
+			seen_run: 0,
+			b3: blake3::hash(b"linked").as_bytes().to_vec(),
+		};
+		let (sh, rx) = test_shared(d.join("t.sqlite"));
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let mut g = test_group(&d);
+		g.size = Some(24);
+		let r = Arc::new(Root::open(&d).unwrap());
+		let links = Links::default();
+		read_one(&g, &sh, &known(&r, "b", &fresh), &links);
+		assert_eq!(g.stats.skipped_bytes.load(Relaxed), 2);
+		read_one(&g, &sh, &job(&r, "a"), &links);
+		assert_eq!(g.stats.bytes.load(Relaxed), 6);
+		assert!(g.line().ends_with(" | ~33% of 24 B"), "{}", g.line());
+		drop(sh);
+		drain.join().unwrap();
+	}
+
+	#[test]
+	fn the_percent_needs_a_size() {
+		let _id = test_id("df1pj");
+		let mut g = test_group(Path::new("/"));
+		g.stats.bytes.store(300, Relaxed);
+		assert!(!g.line().contains('%'));
+		g.size = Some(0);
+		assert!(!g.line().contains('%'));
+		g.size = Some(1200);
+		assert!(g.line().ends_with(" | ~25% of 1.2 KiB"), "{}", g.line());
+		// Compressed files can read as more than the space they use.
+		g.stats.skipped_bytes.store(5000, Relaxed);
+		assert!(g.line().ends_with(" | ~100% of 1.2 KiB"), "{}", g.line());
+	}
+
+	// A folder inside a filesystem would show the whole filesystem's share.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
+	fn only_a_whole_filesystem_has_a_size() {
+		let _id = test_id("df1pk");
+		let d = scratch("scan_fs_used");
+		assert_eq!(used_under(&[d.to_path_buf()]), None);
+		assert!(used_under(&[PathBuf::from("/")]).is_some_and(|n| n > 0));
+		// One filesystem counts once, however many roots are on it.
+		let once = used_under(&[PathBuf::from("/")]).unwrap();
+		let twice = used_under(&[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
+		assert!(twice < once + once / 2, "{once} then {twice}");
 	}
 
 	// Row `resume-seen`, with no row at the file's size and time to say so.
@@ -2487,16 +2770,16 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let links = Links::default();
-		read_one(&g, &sh, &a, None, &links);
-		read_one(&g, &sh, &a, Some(&older), &links);
+		read_one(&g, &sh, &a, &links);
+		read_one(&g, &sh, &known(&r, "a", &older), &links);
 		assert_eq!(g.stats.skip_db.load(Relaxed), 2);
 		assert_eq!(g.stats.hashed.load(Relaxed), 0);
 		// Changed since the run began, or never reported.
 		sh.run_started_us = 0;
-		read_one(&g, &sh, &a, None, &links);
+		read_one(&g, &sh, &a, &links);
 		sh.run_started_us = now_us() + 1;
 		fs::write(d.join("b"), "fine").unwrap();
-		read_one(&g, &sh, &job(&r, "b"), None, &links);
+		read_one(&g, &sh, &job(&r, "b"), &links);
 		assert_eq!(g.stats.hashed.load(Relaxed), 2);
 		drop(sh);
 		drain.join().unwrap();
@@ -2504,7 +2787,7 @@ mod tests {
 
 	// Row `link-writing`. The claimant is part way through its set after an
 	// edit: the old checksum and inode value, the new size and time. A read
-	// across those writes sees just that.
+	// across those writes sees that.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn a_half_written_set_is_not_read() {
@@ -2541,7 +2824,7 @@ mod tests {
 			let Claim::Mine(mine) = links.claim(id, 2, bytes, mt) else {
 				panic!("not claimed");
 			};
-			let other = s.spawn(|| read_one(&g, &sh, &job(&r, "b"), None, &links));
+			let other = s.spawn(|| read_one(&g, &sh, &job(&r, "b"), &links));
 			for _ in 0..30 {
 				if other.is_finished() {
 					break;
@@ -2764,10 +3047,10 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
-		read_one(&g, &sh, &job(&r, "a"), None, &links);
+		read_one(&g, &sh, &job(&r, "a"), &links);
 		let control = g.stats.xattr_set.load(Relaxed);
 		sh.no_write_devs.insert(fs::metadata(&d).unwrap().dev());
-		read_one(&g, &sh, &job(&r, "b"), None, &links);
+		read_one(&g, &sh, &job(&r, "b"), &links);
 		assert_eq!(g.stats.xattr_set.load(Relaxed), control);
 		assert_eq!(g.stats.xattr_fail.load(Relaxed), 0);
 		let fd = File::open(d.join("b")).unwrap();
@@ -2775,6 +3058,82 @@ mod tests {
 		if control == 0 {
 			eprintln!("no user xattrs here; the control proves nothing");
 		}
+		drop(sh);
+		drain.join().unwrap();
+	}
+
+	// accept can't update a set on a hands-off device, so the row it took has
+	// the say there (2026102814341432). Without a row the set still counts.
+	#[test]
+	fn the_row_decides_on_a_hands_off_device() {
+		let _id = test_id("df1r9");
+		let read = Sums {
+			b3: [1; 32],
+			b2b: Some([8; 64]),
+		};
+		let names =
+			|r: &Refs| -> Vec<&str> { r.misses(&read).iter().map(|m| m.0.name()).collect() };
+		let (good, bad) = (prior(1), prior(3));
+		let stale = |db, row_decides| Refs {
+			b2b: Some([7; 64]),
+			row_decides,
+			..refs(Some(2), db)
+		};
+		assert_eq!(
+			names(&stale(Some(&good), false)),
+			["b3-xattr-mismatch", "b2b-rmlint-mismatch"]
+		);
+		assert!(names(&stale(Some(&good), true)).is_empty());
+		assert_eq!(names(&stale(Some(&bad), true)), ["b3-db-mismatch"]);
+		let st = Stats::default();
+		stale(Some(&good), true).tally(&read, &st);
+		assert_eq!(st.b3_ok.load(Relaxed), 0);
+		assert_eq!(st.b2b_ok.load(Relaxed), 0);
+		assert_eq!(st.db_ok.load(Relaxed), 1);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
+	fn an_accepted_file_on_a_hands_off_device_is_clean() {
+		let _id = test_id("df1ra");
+		let d = scratch("scan_handsoff_accepted");
+		fs::write(d.join("f"), "fixed").unwrap();
+		let fd = File::open(d.join("f")).unwrap();
+		let md = fd.metadata().unwrap();
+		let (bytes, mt) = (md.len() as i64, mtime_us(&md));
+		let old = blake3::hash(b"broke");
+		let id = (md.dev(), md.ino());
+		let raw = fd.as_raw_fd();
+		if xattr::write_b3(raw, old.as_bytes(), bytes, mt, 1, id, xattr::B3Write::All).is_err() {
+			eprintln!("no user xattrs here; skipped");
+			return;
+		}
+		let taken = Prior {
+			id: 1,
+			bytes,
+			mtime_us: mt,
+			ino: md.ino() as i64,
+			hashed_us: 1,
+			seen_run: 0,
+			b3: blake3::hash(b"fixed").as_bytes().to_vec(),
+		};
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		// Both taken before the skip date, so neither skips the read.
+		sh.cutoff_us = now_us();
+		let drain = std::thread::spawn(move || rx.iter().count());
+		let r = Arc::new(Root::open(&d).unwrap());
+		let control = test_group(&d);
+		read_one(&control, &sh, &known(&r, "f", &taken), &Links::default());
+		assert_eq!(control.stats.mismatch.load(Relaxed), 1);
+		sh.no_write_devs.insert(md.dev());
+		let g = test_group(&d);
+		read_one(&g, &sh, &known(&r, "f", &taken), &Links::default());
+		assert_eq!(g.stats.mismatch.load(Relaxed), 0);
+		assert_eq!(g.stats.hashed.load(Relaxed), 1);
+		assert_eq!(OnFile::read(raw).b3, Some(*old.as_bytes()));
+		let unrecorded = test_group(&d);
+		read_one(&unrecorded, &sh, &job(&r, "f"), &Links::default());
+		assert_eq!(unrecorded.stats.mismatch.load(Relaxed), 1);
 		drop(sh);
 		drain.join().unwrap();
 	}
@@ -2798,7 +3157,7 @@ mod tests {
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
-		read_one(&g, &sh, &job(&r, "a"), None, &Links::default());
+		read_one(&g, &sh, &job(&r, "a"), &Links::default());
 		assert_eq!(g.stats.xattr_set.load(Relaxed), 1);
 		let on = OnFile::read(fd.as_raw_fd());
 		assert_eq!(on.b3, Some(*blake3::hash(b"synced").as_bytes()));
@@ -2831,7 +3190,7 @@ mod tests {
 		let g = test_group(&d);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let go = |sh: &Shared, j: Job| {
-			read_one(&g, sh, &j, None, &Links::default());
+			read_one(&g, sh, &j, &Links::default());
 			match rx.try_recv() {
 				Ok(Msg::Hashed(h)) => h.b2b,
 				_ => panic!("nothing recorded"),
@@ -2858,7 +3217,7 @@ mod tests {
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
 	}
 
-	// rmlint takes plain unkeyed blake2b-512. The first two are RFC 7693's,
+	// rmlint takes plain unkeyed blake2b-512. The first 2 are RFC 7693's,
 	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
 	#[test]
 	fn b2b_matches_known_digests() {

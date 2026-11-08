@@ -8,7 +8,7 @@
 ##			                    with this shell's token in its mark, into scratch
 ##			fScratchGone        remove it, but only when the path can only be
 ##			                    one, it has no links on the way, and the mark
-##			                    holds the token
+##			                    has the token
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
