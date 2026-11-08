@@ -211,6 +211,8 @@ Started in October 2026 after bad RAM was found on a workstation. The question w
 
 - The change list is read a line at a time, and each file is compared as it's read, so that way memory doesn't grow with the list. Only zfs diff's `-` and `+` names and the files waiting on the walk are held to the end. A 100,000-line list took 66 MB before, and now takes what a 1-line one does. A refused line stops the run where it's met, with exit 1, after whatever was printed before it.
 
+- Files are opened beneath `--old` and `--new` as scan opens them beneath a root, with no symlink followed and no mount crossed on the way. A name that goes through a symlinked folder isn't in that snapshot, and counts as missing there. `--old` and `--new` themselves may be symlinks, since a person names them. Snapshots can't change, but a folder in one can still be a link to the live system, or a list can name one.
+
 - Output is in the list's order. zfs diff's replaced files come last, sorted by name. find-new's files come in its own order, which is by inode, and the ones that waited on the walk come last. They used to be sorted by name, which took the whole list in memory.
 
 ## Build and release

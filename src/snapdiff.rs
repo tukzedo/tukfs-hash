@@ -16,6 +16,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirEntryExt, MetadataExt};
 use std::path::{Component, Path, PathBuf};
 
+use crate::beneath::{self, Root};
 use crate::util::{escape_name, show_path};
 
 /// Where the list of changed files comes from.
@@ -402,7 +403,7 @@ fn describe(d: &Diff) -> String {
 // the one under its own name to fall back on.
 struct Held {
 	name: String,
-	new_path: PathBuf,
+	new_rel: PathBuf,
 	new_md: Metadata,
 	by_name: Option<(PathBuf, Metadata)>,
 	by_inode: Option<(PathBuf, Metadata)>,
@@ -429,19 +430,28 @@ impl Tally {
 	}
 }
 
+// What a name beneath a root is, with no symlink followed and no mount
+// crossed on the way. None when nothing is there by that path.
+fn stat_beneath(root: &Root, rel: &Path) -> io::Result<Option<Metadata>> {
+	// A symlink at the name itself comes back as the link, which isn't a file.
+	match root.open_at(rel, libc::O_PATH).and_then(|f| f.metadata()) {
+		Ok(m) => Ok(Some(m)),
+		Err(e) if beneath::moved(&e) => Ok(None),
+		Err(e) => Err(e),
+	}
+}
+
 // Old copies of renamed files, found by inode. Snapshots of one btrfs
 // subvolume keep inode numbers, and the birth time rules out a number used
 // again after a delete. One walk serves every file the pair needs.
 fn find_by_inode(
-	old: &Path,
+	old: &Root,
 	wanted: &mut HashMap<u64, usize>,
 	held: &mut [Held],
 	tally: &mut Tally,
 ) {
-	let Ok(dev) = fs::symlink_metadata(old).map(|m| m.dev()) else {
-		return;
-	};
-	let mut dirs = vec![old.to_path_buf()];
+	let dev = old.dev;
+	let mut dirs = vec![old.path.clone()];
 	while let Some(dir) = dirs.pop() {
 		let entries = match fs::read_dir(&dir) {
 			Ok(rd) => rd,
@@ -480,7 +490,7 @@ fn find_by_inode(
 				_ => true,
 			};
 			if md.is_file() && same_birth {
-				held[at].by_inode = Some((p, md));
+				held[at].by_inode = Some((old.rel(&p).to_path_buf(), md));
 				wanted.remove(&ent.ino());
 				if wanted.is_empty() {
 					return;
@@ -493,8 +503,8 @@ fn find_by_inode(
 // Compares each file as it's read off the list, holding back only the ones
 // whose old copy has to be found by inode.
 struct Checker<'a> {
-	old: &'a Path,
-	new: &'a Path,
+	old: &'a Root,
+	new: &'a Root,
 	need_old: bool,
 	need_new: bool,
 	show_all: bool,
@@ -507,10 +517,9 @@ struct Checker<'a> {
 impl Checker<'_> {
 	fn pair(&mut self, pair: &Pair) {
 		let name = show_path(&pair.new);
-		let new_path = self.new.join(&pair.new);
-		let new_md = match fs::symlink_metadata(&new_path) {
-			Ok(m) => m,
-			Err(e) if e.kind() == io::ErrorKind::NotFound => {
+		let new_md = match stat_beneath(self.new, &pair.new) {
+			Ok(Some(m)) => m,
+			Ok(None) => {
 				self.tally.missing_new += 1;
 				self.tally.missing(self.need_new, &name, "--new");
 				return;
@@ -524,10 +533,8 @@ impl Checker<'_> {
 		if !new_md.is_file() {
 			return;
 		}
-		let old_path = self.old.join(&pair.old);
-		let by_name = match fs::symlink_metadata(&old_path) {
-			Ok(m) => Some((old_path, m)),
-			Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+		let by_name = match stat_beneath(self.old, &pair.old) {
+			Ok(found) => found.map(|m| (pair.old.clone(), m)),
 			Err(e) => {
 				self.tally.unchecked += 1;
 				out!("stat-error\t{name}\t{e}");
@@ -541,7 +548,7 @@ impl Checker<'_> {
 			self.wanted.insert(ino, self.held.len());
 			self.held.push(Held {
 				name,
-				new_path,
+				new_rel: pair.new.clone(),
 				new_md,
 				by_name,
 				by_inode: None,
@@ -549,7 +556,7 @@ impl Checker<'_> {
 			return;
 		}
 		match by_name {
-			Some((old_path, mo)) => self.check(&name, (&old_path, &mo), (&new_path, &new_md)),
+			Some((old_rel, mo)) => self.check(&name, (&old_rel, &mo), (&pair.new, &new_md)),
 			None => self.tally.missing(self.need_old, &name, "--old"),
 		}
 	}
@@ -560,8 +567,8 @@ impl Checker<'_> {
 		}
 		for h in mem::take(&mut self.held) {
 			match h.by_inode.or(h.by_name) {
-				Some((old_path, mo)) => {
-					self.check(&h.name, (&old_path, &mo), (&h.new_path, &h.new_md));
+				Some((old_rel, mo)) => {
+					self.check(&h.name, (&old_rel, &mo), (&h.new_rel, &h.new_md));
 				}
 				None => self.tally.missing(self.need_old, &h.name, "--old"),
 			}
@@ -571,8 +578,8 @@ impl Checker<'_> {
 	fn check(
 		&mut self,
 		name: &str,
-		(old_path, mo): (&Path, &Metadata),
-		(new_path, mn): (&Path, &Metadata),
+		(old_rel, mo): (&Path, &Metadata),
+		(new_rel, mn): (&Path, &Metadata),
 	) {
 		if !mo.is_file() {
 			return;
@@ -594,8 +601,9 @@ impl Checker<'_> {
 			);
 			return;
 		}
-		let open_both =
-			|| -> io::Result<(File, File)> { Ok((File::open(old_path)?, File::open(new_path)?)) };
+		let open_both = || -> io::Result<(File, File)> {
+			Ok((self.old.open_read(old_rel)?, self.new.open_read(new_rel)?))
+		};
 		let (fa, fb) = match open_both() {
 			Ok(f) => f,
 			Err(e) => {
@@ -624,12 +632,18 @@ impl Checker<'_> {
 
 /// The `snapdiff` command.
 pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, String> {
-	for dir in [old, new] {
-		let md = fs::metadata(dir).map_err(|e| format!("{}: {e}", show_path(dir)))?;
-		if !md.is_dir() {
+	// The folders themselves were named by a person and may be symlinks. Only
+	// what's beneath them is held to no symlinks and no mounts, as scan does.
+	let open_root = |dir: &Path| -> Result<Root, String> {
+		let fail = |e: io::Error| format!("{}: {e}", show_path(dir));
+		if !fs::metadata(dir).map_err(fail)?.is_dir() {
 			return Err(format!("{}: not a folder", show_path(dir)));
 		}
-	}
+		fs::canonicalize(dir)
+			.and_then(|real| Root::open(&real))
+			.map_err(fail)
+	};
+	let (old, new) = (&open_root(old)?, &open_root(new)?);
 	// Which side each listed file has to be on. zfs diff names files in both
 	// snapshots, find-new files in the new one, and a list can name anything.
 	let resolved;
@@ -993,6 +1007,53 @@ transid marker was 12\n";
 		};
 		assert_eq!(run_on("a"), 0);
 		assert_eq!(run_on("b"), 4);
+	}
+
+	#[test]
+	fn a_symlinked_folder_is_not_followed() {
+		let _id = test_id("df0qt");
+		let dir = scratch("snapdiff_link");
+		let [old, new, elsewhere] = ["old", "new", "elsewhere"].map(|d| dir.join(d));
+		for d in [&old, &new, &elsewhere, &new.join("in"), &old.join("out")] {
+			fs::create_dir(d).unwrap();
+		}
+		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let put = |p: &Path, bytes: &[u8]| {
+			fs::write(p, bytes).unwrap();
+			File::options()
+				.write(true)
+				.open(p)
+				.unwrap()
+				.set_modified(when)
+				.unwrap();
+		};
+		// Same size and time as the listed file, other bytes, so reaching it
+		// flags the file.
+		put(&elsewhere.join("f"), b"ffff");
+		put(&new.join("in/f"), b"FFFF");
+		put(&old.join("out/f"), b"FFFF");
+		std::os::unix::fs::symlink(&elsewhere, old.join("in")).unwrap();
+		std::os::unix::fs::symlink(&elsewhere, new.join("out")).unwrap();
+		let list = dir.join("list");
+		let run_on = |line: &str| {
+			fs::write(&list, format!("{line}\n")).unwrap();
+			run(&old, &new, &Source::List(list.clone()), true).unwrap()
+		};
+		// Not in --old, which a list allows.
+		assert_eq!(run_on("in/f"), 0);
+		// Not in --new, so nothing was compared.
+		assert_eq!(run_on("out/f"), 8);
+		// --old and --new through symlinks are still taken.
+		std::os::unix::fs::symlink(&old, dir.join("old-link")).unwrap();
+		fs::write(&list, "out/f\n").unwrap();
+		let via = |o: &Path| run(o, &new, &Source::List(list.clone()), true).unwrap();
+		assert_eq!(via(&dir.join("old-link")), 8);
+		fs::remove_file(new.join("out")).unwrap();
+		fs::create_dir(new.join("out")).unwrap();
+		put(&new.join("out/f"), b"FFFF");
+		assert_eq!(via(&dir.join("old-link")), 0);
+		put(&new.join("out/f"), b"FFFf");
+		assert_eq!(via(&dir.join("old-link")), 4);
 	}
 
 	// zfs diff's own escape: all but printable ASCII, and space and backslash.

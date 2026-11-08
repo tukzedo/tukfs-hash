@@ -458,7 +458,7 @@
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 28
@@ -466,6 +466,18 @@
 	- Requirements [Feature]:
 		- Open both sides through `beneath::Root`, as scan does.
 	- Note: With `lo/dir -> /etc` and a list line `dir/hostname`, it compared the live `/etc/hostname` and said "same".
+	- Progress log:
+		- 2026-11-08: Every file in both snapshots is now looked up and opened through `beneath::Root`, with no symlink followed and no mount crossed below `--old` and `--new`. The inode walk's finds are opened the same way.
+	- Decisions:
+		- A name that goes through a symlinked folder, or onto another mount, counts as missing on that side, like a name that isn't there. On `--new` that leads to "nothing compared" and exit 8 when nothing else was compared, rather than a quiet exit 0.
+		- `--old` and `--new` themselves may be symlinks, and are resolved once, since a person names them. design.md, Snapshot diffs, says so.
+		- A symlink at the name itself is still skipped as not a regular file, as before.
+	- Branch: round-20261108
+	- Test case: `df0qt` (`snapdiff::tests::a_symlinked_folder_is_not_followed`): a symlinked folder on the old side, then on the new side, then `--old` as a symlink. It fails before the fix, exit 4 where 0 is wanted, and passes after.
+	- Swept: the stat and open of both sides in `Checker::pair` and `check`, and the inode walk, which lists by file type and checks devices, so it never followed links. The list file and `--mount` are arguments a person gives. No other snapdiff path opens a file.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, with ddy61 to ddy6e and df0pq. `snapdiff-ab.bash 5 20000` gave the same user and sys CPU before and after, 0.17 s.
+	- Acceptance signoff: Self-closed: opening beneath the root is how scan already does it, and the test fails before and passes after.
+	- Closed: 20261107-201700
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
