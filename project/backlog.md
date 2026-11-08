@@ -137,6 +137,7 @@
 		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
 	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
 	- Branch: round-20261108b
+	- Commit: `864712f`
 	- Test case: `df1q2` (unit, 8 options refused by name), `df1q3` (unit, each command's own options get past the check), `df1q4` to `df1q7` (integration step 22: help after `scan` and `accept`, and `gone --root`, `report --since` and `accept --rmlint` refused).
 	- Verified: `df1q4` to `df1q7` fail against the installed build from before and pass after. `df1q2` fails with the refusal taken out and passes after. `--backlog-run-quick` passed in 3m 05s, and its `miri` area in 1m 02s.
 
