@@ -29,34 +29,6 @@
 
 ## Issues
 
-- Every command takes every other command's flags without a word, and `scan --help` is an error.
-	- ID: 2026102814341425
-	- Type: Enhancement
-	- Status: Waiting on UAT
-		- It changes what users type. b23's scan wrapper's `--plan` now stops at `plan doesn't take --exclude`, since it hands `plan` the same list as `scan`. Its fix is to keep `--exclude` and `--no-xattr` out of the list it gives `plan`.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261028-143414
-	- Opened by: code review 20261028, item 15
-	- Origin: `f05c368` and `cede460`. Confirmed.
-	- Requirements [Feature]:
-		- Each command refuses, by name, a flag it doesn't use.
-		- `-h` and `--help` after a command print the help.
-	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
-	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
-	- Actual fix:
-		- Each option has a list of the commands that take it. Any other command refuses it with `<command> doesn't take <option>; see --help`, exit 1. An unknown command is refused before its options are read.
-		- `-h` and `--help` anywhere after a command print the help, exit 0. After `accept --`, they're file names.
-		- The help text and README say both.
-	- Decisions:
-		- `plan` refuses `scan`'s other options too, as the requirement says, since it doesn't use them. The b23 wrapper's `--plan` breaks on that. Filed as a Check in questions.md.
-		- Help after a command prints the whole help, since the help is short and each part points at the others.
-		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
-	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
-	- Branch: round-20261108b
-	- Commit: `864712f`
-	- Test case: `df1q2` (unit, 8 options refused by name), `df1q3` (unit, each command's own options get past the check), `df1q4` to `df1q7` (integration step 22: help after `scan` and `accept`, and `gone --root`, `report --since` and `accept --rmlint` refused).
-	- Verified: `df1q4` to `df1q7` fail against the installed build from before and pass after. `df1q2` fails with the refusal taken out and passes after. `--backlog-run-quick` passed in 3m 05s, and its `miri` area in 1m 02s.
-
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -1508,6 +1480,36 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 	- Closed: 20261015-130151
+
+- Every command takes every other command's flags without a word, and `scan --help` is an error.
+	- ID: 2026102814341425
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261028-143414
+	- Opened by: code review 20261028, item 15
+	- Origin: `f05c368` and `cede460`. Confirmed.
+	- Requirements [Feature]:
+		- Each command refuses, by name, a flag it doesn't use.
+		- `-h` and `--help` after a command print the help.
+	- Note: `gone --root DIR` and `report --since` are ignored, so the filter asked for isn't applied. `accept --rmlint` is ignored too.
+	- Note: Changes what users type, so it waits on UAT. The b23 wrappers' flags have to be checked against the new refusals first.
+	- Actual fix:
+		- Each option has a list of the commands that take it. Any other command refuses it with `<command> doesn't take <option>; see --help`, exit 1. An unknown command is refused before its options are read.
+		- `-h` and `--help` anywhere after a command print the help, exit 0. After `accept --`, they're file names.
+		- The help text and README say both.
+	- Decisions:
+		- `plan` refuses `scan`'s other options too, as the requirement says, since it doesn't use them. The b23 wrapper's `--plan` breaks on that. Filed as a Check in questions.md.
+		- Help after a command prints the whole help, since the help is short and each part points at the others.
+		- No changelog entry, since nothing after 1.0.0-beta.1 has one yet.
+	- Swept: every option in the parser, by `df1q3`. The other 2 wrappers: `tukfs-hash_vm-scan-b23.bash` passes `scan` only `--db`, `--no-xattrs`, `--root`, `--exclude` and its own arguments, and the scan wrapper's scan line passes `scan` options only, so both still work. `dogfood_tukfs-hash` passes its arguments through as typed. cicd and the tests call no command with another's options.
+	- Branch: round-20261108b
+	- Commit: `864712f`
+	- Test case: `df1q2` (unit, 8 options refused by name), `df1q3` (unit, each command's own options get past the check), `df1q4` to `df1q7` (integration step 22: help after `scan` and `accept`, and `gone --root`, `report --since` and `accept --rmlint` refused).
+	- Verified: `df1q4` to `df1q7` fail against the installed build from before and pass after. `df1q2` fails with the refusal taken out and passes after. `--backlog-run-quick` passed in 3m 05s, and its `miri` area in 1m 02s.
+	- Progress log:
+		- 2026-11-09: b23's scan wrapper keeps `--exclude` and `--no-xattr` out of what it gives `plan`. With this build its `--plan` stopped at `plan doesn't take --exclude` before and passes after. With the installed build it prints the same plan as before.
+	- Acceptance signoff: Self-closed per memory.md's close policy, 2026-11-09. The Check in questions.md was answered (a), as done. The wrapper is outside the repo, so it has no test with an ID.
 
 - The scan output has no percent complete.
 	- ID: 2026110407135700
