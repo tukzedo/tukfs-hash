@@ -773,14 +773,17 @@ mod tests {
 			point.push_str("/d");
 			deep.push(mount(i, i - 1, &point));
 		}
+		// The sibling scan took 20 s or so on the flat one, in a release build.
+		// The sanitizer runs are debug builds with an unoptimized std, about
+		// 10 times slower, and deep took 1.4 s under ASan on a busy box.
+		let limit = Duration::from_secs(if cfg!(debug_assertions) { 10 } else { 1 });
 		for (name, table) in [("flat", flat), ("deep", deep)] {
 			let n = table.len();
 			let start = std::time::Instant::now();
 			let kept = visible(table).len();
 			let took = start.elapsed();
 			assert_eq!(kept, n, "{name}");
-			// The sibling scan took 20 s or so on the flat one.
-			assert!(took < Duration::from_secs(1), "{name}: {took:?}");
+			assert!(took < limit, "{name}: {took:?}");
 		}
 	}
 
