@@ -994,6 +994,23 @@
 	- Acceptance signoff: Self-closed after the root run.
 	- Closed: 20261015-130151
 
+- The bundled SQLite 3.53.2 can hand back stale memory for a database whose `-wal` has another page size (RUSTSEC-2026-0459, CVE-2026-119375).
+	- ID: 2026110912585556
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261109-125855
+	- Opened by: advisories check in a run with no options
+	- Related IDs: 2026102814341423
+	- Note: A `sudo` scan hands the database back to the user, so the user could plant a `-wal` that root then reads. The default run and the merge gate both failed on it.
+	- Decisions: Take rusqlite 0.41 and `libsqlite3-sys` 0.39.1 (SQLite 3.54.1), and raise `rust-version` from 1.88 to 1.89, which rusqlite 0.41 needs. This drops 2026102814341423's note that a newer rusqlite keeps 1.88. 1.88 was only the floor for let-chains, and the toolchain is pinned at 1.96.
+	- Progress log:
+		- 2026-11-09: Bumped, with the README badge. No code changes needed.
+	- Branch: sqlite-354
+	- Test case: des6s still passes, so the build flags still reach the bundled SQLite.
+	- Verified: `--backlog-run-quick` passes, and so do `--backlog-run-quick advisories release`, both targets in the Debian 10 image, glibc 2.28. x86_64 release went from 2,258,312 to 2,318,088 bytes.
+	- Closed: 20261109-130000
+
 - The release check's integration test fails its sandbox probe when `--backlog-run-quick release` runs alone on b23.
 	- ID: 2026110709102100
 	- Type: Bug

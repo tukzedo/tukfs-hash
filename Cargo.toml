@@ -2,7 +2,7 @@
 name = "tukfs-hash"
 version = "1.0.0-beta.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "GPL-2.0-only"
 publish = false
 
@@ -10,7 +10,7 @@ publish = false
 blake2b_simd = "1.0"
 blake3 = "1.8"
 libc = "0.2"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 signal-hook = "0.3"
 # The soak test's heap counter, and nothing else. See src/soak.rs.
 dhat = { version = "0.3", optional = true }

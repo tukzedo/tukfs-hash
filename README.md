@@ -6,7 +6,7 @@
 <!-- TOC ignore:true -->
 # tukfs-hash
 
-[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)](license.md) [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange)](Cargo.toml)
+[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)](license.md) [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
 
 Checksums every file on a Linux box, remembers what each one read as, and says when a file's contents changed while its size and modified time didn't. That is what bad RAM, a bad cable or a filesystem bug leaves behind. A normal edit always moves the time.
 
