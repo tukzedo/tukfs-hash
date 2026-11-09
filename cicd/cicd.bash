@@ -119,6 +119,12 @@
 ##	  caller wins. utility/include/cpu-cap.bash works it out.
 ##	- Everything runs at nice 19 in the idle I/O class, containers too, which
 ##	  also get --cpu-shares 256.
+##	- Memory: CICD_MEM_CAP, a docker size such as 24g, or none. The default
+##	  is a third of the RAM, 4g to 32g. Each container gets it with no swap
+##	  and --oom-score-adj 1000, and the run on the host gets it in a systemd
+##	  user scope under choom 1000, where there is one. A step killed at the
+##	  cap exits 137. Any other value fails the run before it starts.
+##	  utility/include/mem-cap.bash works it out.
 ##	- A run at least as thorough as the merge gate records the tree it tested
 ##	  once the release checks pass (utility/green-tree.bash), and the pre-push
 ##	  hook lets a push of that tree through without running the gate again.
@@ -163,6 +169,14 @@ root="$(cd "${here}/.." && pwd)"
 ## rustup's cargo has to win over Debian's /bin/cargo, which ignores
 ## rust-toolchain.toml.
 export PATH="${HOME}/.cargo/bin:${PATH}"
+
+## A runaway step has to die alone, so the whole run goes in a user scope at
+## the memory cap, once, before anything starts. Each container gets the cap
+## too, in fCtrRun. A step killed at the cap exits 137. A bad CICD_MEM_CAP
+## stops the run here.
+source "${here}/utility/include/mem-cap.bash"
+fMemCap || exit 2
+fMemScope "${here}/${BASH_SOURCE[0]##*/}" "$@" || exit 2
 
 ## The box usually has something else running. Before config.bash, which
 ## reads CPU_CAP.
@@ -894,6 +908,10 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_mark}${build_date}}"
 	fEcho_Clean "Jobs ...........: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}; checked again at each step"
 	cpu_shown="${CPU_CAP}"
+	if [[ -z "${mem_cap}" ]]; then _mem="no cap, since CICD_MEM_CAP is none"
+	elif [[ -n "${TUKFS_MEM_SCOPE:-}" ]]; then _mem="${mem_cap} with no swap, each container and the run on the host"
+	else _mem="${mem_cap} with no swap, each container. The run on the host isn't capped, with no user scope here"; fi
+	fEcho_Clean "Memory .........: ${_mem}"
 	fEcho_Clean "Temp dir .......: ${run_tmp}"
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
@@ -2037,3 +2055,5 @@ exit 0
 ##		  in the same form as its Starting line.
 ##		- 2026-11-08: IT_BTRFS, a btrfs folder for the integration test's
 ##		  subvolume check, given to each run as TUKFS_IT_BTRFS.
+##		- 2026-11-09: A memory cap with no swap, CICD_MEM_CAP, on every
+##		  container, and the whole run in a user scope under it.
