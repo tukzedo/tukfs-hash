@@ -1695,6 +1695,7 @@
 	- Test case: `df4kp` (another user's folder refused, nothing made, root's taken), `df4kq` (a link at the folder refused), `df4kr` (the hand-back stays in the checked folder after another is moved in at its name). With the owner check off df4kp fails, and with the hand-back by path df4kr fails. The root case is `sudo-folder-standin.bash` in the private tools folder, which failed 4 of 11 checks on the installed build df46q and passes all 11, with `sudo-links-standin.bash` and `fail-handback-standin.bash` still passing.
 	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
 	- Closed: 20261110-142434
+	- Verified: 2026-11-10, a real sudo run on b23 of the dev build at a720ad6 passed all 11 folder checks: scan, accept and prune in the user's and root's folders handed back, a link to another user's folder refused with nothing made, and a run as another user with no hand-back or warning.
 
 - A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
 	- ID: 2026111011092303
@@ -2557,6 +2558,7 @@
 	- Branch: round-20261110
 	- Test case: `df4he`, `scan::tests::a_refused_resume_ends_in_rollback_mode`, a refused `--resume` on a database it found and on one it made. It failed with the close taken out of the guard, and passes with it. The hand-back as root is `fail-handback-standin.bash` in the private tools folder, which failed 6 of 7 checks on the old build and passes all 7 after, with `sudo-links-standin.bash` still passing.
 	- Closed: 20261110-131002
+	- Verified: 2026-11-10, a real sudo run on b23 of the dev build at a720ad6 passed all 7 failure checks: a refused --resume on a finished and on a new database left rollback mode with both files handed back, the user's own accept and scan then ran, and prune and accept on a newer schema still handed back.
 
 - A root that's a bind mount of a subfolder isn't checked against `--exclude`, `--no-xattr` or a git work tree above its source.
 	- ID: 2026111011092307
