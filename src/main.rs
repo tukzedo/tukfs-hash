@@ -481,16 +481,9 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", util::show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path, &mounts::read_mounts()?)?;
-	let conn = db::open_rw(&db_path)?;
-	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			util::show_path(&db_path)
-		);
-	}
-	scan::give_back(&db_path);
+	let mut held = scan::Held::take(&db_path, &mounts::read_mounts()?)?;
+	let n = db::prune(held.open()?).map_err(|e| format!("database: {e}"))?;
+	drop(held);
 	out!("removed {n} content(s) no name points at");
 	Ok(0)
 }

@@ -29,8 +29,8 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	}
 	// Read before the run row goes in, so a failure leaves none.
 	let mounts = crate::mounts::read_mounts()?;
-	let _lock = scan::lock(&db_path, &mounts)?;
-	let mut conn = db::open_rw(&db_path)?;
+	let mut held = scan::Held::take(&db_path, &mounts)?;
+	let conn = held.open()?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Its own status, so `scan --resume` never takes it for a stopped scan.
 	conn.execute(
@@ -42,7 +42,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	let mut buf = vec![0u8; 1 << 20];
 	let mut taken = 0;
 	for p in paths {
-		match one(&mut conn, run_id, p, &mounts, &mut buf) {
+		match one(conn, run_id, p, &mounts, &mut buf) {
 			Ok(()) => taken += 1,
 			Err(msg) => err!("{}: {msg}", show_path(p)),
 		}
@@ -56,13 +56,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 		],
 	)
 	.map_err(e)?;
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			show_path(&db_path)
-		);
-	}
-	scan::give_back(&db_path);
+	drop(held);
 	out!("run {run_id}: accepted {taken} of {}", paths.len());
 	Ok(i32::from(taken != paths.len()))
 }

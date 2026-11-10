@@ -467,7 +467,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 }
 
 /// Takes the database's lock file, so 2 scans can't share it.
-pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
+fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	if let Some(t) = mounts::hands_off_at(mounts, db) {
 		return Err(format!(
 			"{} is on {t}, which isn't written to from Linux; put the database elsewhere",
@@ -504,6 +504,57 @@ pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	Ok(f)
 }
 
+/// The database's lock, for a command that writes. However the command ends,
+/// once this goes the file is back in rollback mode and, under sudo, its
+/// user's again. See design.md, Database.
+#[derive(Debug)]
+pub struct Held {
+	db: PathBuf,
+	conn: Option<rusqlite::Connection>,
+	// Let go only after drop() has handed the files back.
+	_lock: File,
+}
+
+impl Held {
+	pub fn take(db: &Path, mounts: &[mounts::Mount]) -> Result<Self, String> {
+		Ok(Self {
+			_lock: lock(db, mounts)?,
+			db: db.to_path_buf(),
+			conn: None,
+		})
+	}
+
+	pub fn open(&mut self) -> Result<&mut rusqlite::Connection, String> {
+		Ok(self.conn.insert(db::open_rw(&self.db)?))
+	}
+
+	/// For the writer thread. `put_back` returns it, to be closed here.
+	pub fn lend(&mut self) -> Result<rusqlite::Connection, String> {
+		self.conn
+			.take()
+			.ok_or_else(|| "database: not open".to_string())
+	}
+
+	pub fn put_back(&mut self, conn: rusqlite::Connection) {
+		self.conn = Some(conn);
+	}
+}
+
+impl Drop for Held {
+	fn drop(&mut self) {
+		// Only a warning, so it can't change the command's result.
+		if let Some(conn) = self.conn.take()
+			&& let Err(x) = db::close_rw(conn)
+		{
+			err!(
+				"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
+				crate::util::show_path(&self.db)
+			);
+		}
+		give_back(&self.db);
+	}
+}
+
 /// This box's hostname, or empty.
 pub fn host() -> String {
 	fs::read_to_string("/proc/sys/kernel/hostname")
@@ -514,7 +565,7 @@ pub fn host() -> String {
 /// Hand the files back to whoever ran this through sudo, so reports and
 /// queries need no root. The WAL files are only there when leaving WAL mode
 /// failed.
-pub fn give_back(db: &Path) {
+fn give_back(db: &Path) {
 	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
 	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
 		return;
@@ -592,10 +643,10 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	// running (backlog ...852).
 	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
-	let _lock = lock(&db_path, &mounts)?;
+	let mut held = Held::take(&db_path, &mounts)?;
 	let db_dir = db_dir(&db_path)?;
-	let conn = db::open_rw(&db_path)?;
-	let open_misses = db::open_misses(&conn)?;
+	let conn = held.open()?;
+	let open_misses = db::open_misses(conn)?;
 
 	let started = now_us();
 	let Resumed {
@@ -604,8 +655,9 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		started_us: run_started,
 		summary: earlier,
 		reported,
-	} = begin(&conn, o, &roots_key(&planned), started)?;
+	} = begin(conn, o, &roots_key(&planned), started)?;
 
+	let conn = held.lend()?;
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
 	let writer = {
@@ -675,7 +727,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		groups: &groups,
 		t0,
 	};
-	finish(conn, &part, why, stop.load(Relaxed), &db_path)
+	finish(conn, &part, why, stop.load(Relaxed), held)
 }
 
 // Picks up the run to resume, or starts a new one, and marks it running. A new
@@ -858,7 +910,7 @@ fn finish(
 	p: &Part,
 	mut why: Vec<String>,
 	stopped: bool,
-	db_path: &Path,
+	mut held: Held,
 ) -> Result<i32, String> {
 	let run_id = p.run_id;
 	// The stored summary keeps every part's lines; the output shows this
@@ -894,14 +946,8 @@ fn finish(
 		why.push(format!("database: {x}"));
 		status = RunStatus::Failed;
 	}
-	// Everything is committed by now, so this can't change the result.
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			db_path.display()
-		);
-	}
-	give_back(db_path);
+	held.put_back(conn);
+	drop(held);
 
 	out!(
 		"run {run_id} {} after {}s\n{part}",
@@ -2943,6 +2989,47 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(status, RunStatus::Failed.text());
+	}
+
+	// A scan that fails after taking the lock still ends in rollback mode,
+	// on a database it found and on one it made (backlog 2026111011092306).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_refused_resume_ends_in_rollback_mode() {
+		let _id = test_id("df4he");
+		let d = scratch("scan_refusedresume");
+		let root = d.join("r");
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("a"), "x").unwrap();
+		let opts = |db: &str, resume| Opts {
+			db: d.join(db),
+			roots: vec![root.clone()],
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			threads: Vec::new(),
+			since: None,
+			resume,
+			mode: Mode::Full,
+			write_xattrs: false,
+			rmlint: false,
+			progress_secs: 3600,
+			args: "test".into(),
+		};
+		// The file format's read and write versions, 2 for WAL.
+		let versions = |db: &str| fs::read(d.join(db)).unwrap()[18..20].to_vec();
+		let go = |o: &Opts| run(o, &Arc::new(AtomicBool::new(false)));
+		if let Err(e) = go(&opts("old.sqlite", false)) {
+			eprintln!("a plain scan fails here ({e}); skipped");
+			return;
+		}
+		for db in ["old.sqlite", "new.sqlite"] {
+			let r = go(&opts(db, true));
+			assert!(
+				r.as_ref().is_err_and(|e| e.starts_with("--resume: ")),
+				"{db}: {r:?}"
+			);
+			assert_eq!(versions(db), [1, 1], "{db}");
+		}
 	}
 
 	// Progress counts a file as it's read, not all at the end (backlog ...779).

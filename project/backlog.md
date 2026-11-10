@@ -222,7 +222,8 @@
 - A scan, `accept` or `prune` that fails after taking the lock leaves the database in WAL mode, and under sudo leaves it and its lock owned by root.
 	- ID: 2026111011092306
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No, the quick gate's unit test covers the mode, and the hand-back ran in a root stand-in.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 7
@@ -235,6 +236,15 @@
 	- Probable fix [Bug]: One guard, taken right after `lock()`, that runs `close_rw` and `give_back` on any return.
 	- Sweep: `scan::run`, `accept::run` and `prune` in `main.rs`.
 	- Related IDs: 2026102808215852
+	- Reproduced [Bug]: Yes, all 3, as root in a user namespace with subuids mapped. A refused `--resume` left WAL mode, a first scan with `--resume` left both files owned by 0 and the user's `accept` and `scan` then failed, and `prune` and `accept` at version 5 left the lock owned by 0.
+	- Actual cause [Bug]: `close_rw` and `give_back` ran only at the end of each command, so any `?` after the lock skipped both.
+	- Actual fix [Bug]: `scan::Held` takes the lock, opens the database, and on drop puts it back in rollback mode and hands the files back, so every return after the lock does both. The 3 commands go through it, and `lock` and `give_back` are private to `scan.rs` now.
+	- Decisions:
+		- The guard owns the connection, and the scan lends it to the writer thread and puts it back. The writer already hands it back after a panic, so only a failed join loses it, and the hand-back still runs then.
+	- Swept: every caller of `lock`, `open_rw`, `close_rw` and `give_back` outside the tests. Only `scan::run`, `accept::run` and `prune` write the database. `runs`, `report` and `gone` open it read only.
+	- Branch: round-20261110
+	- Test case: `df4he`, `scan::tests::a_refused_resume_ends_in_rollback_mode`, a refused `--resume` on a database it found and on one it made. It failed with the close taken out of the guard, and passes with it. The hand-back as root is `fail-handback-standin.bash` in the private tools folder, which failed 6 of 7 checks on the old build and passes all 7 after, with `sudo-links-standin.bash` still passing.
+	- Closed: 20261110-131002
 
 - A root that's a bind mount of a subfolder isn't checked against `--exclude`, `--no-xattr` or a git work tree above its source.
 	- ID: 2026111011092307
