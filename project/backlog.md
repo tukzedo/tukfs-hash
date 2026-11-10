@@ -372,13 +372,26 @@
 - snapdiff reads zfs diff's `<xattrdir>` lines as files missing from `--new`, and adds exit 8.
 	- ID: 2026111011092312
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 13
 	- Origin: `f05c368`, before the last review, in its current form from `f6f4e7a`. Confirmed with made-up lines: `missing a/<xattrdir>/user.blake3.date not in --new`, and exit 12 where 4 was right. Plausible that zfs prints such lines, on `xattr=dir` or when a set spills out of `sa`. b23 uses `sa`.
 	- Expected behavior [Bug]: design.md, "snapdiff": a missing file means the snapshots aren't the ones diffed.
 	- Probable fix [Bug]: Skip a name with a `<xattrdir>` part under a regular file, or count those lines apart as attribute changes.
+	- Reproduced [Bug]: Yes. The new test got exit 8 for attribute lines of a file, a folder and the dataset, where 0 was right.
+	- Actual cause [Bug]: zfs names an attribute folder's files as `<xattrdir>` beneath their owner. No path reaches them, so each one was stat'd, not found, and counted missing.
+	- Actual fix [Bug]: For zfs diff only, a name not found in `--new` that has a `<xattrdir>` part whose owner is there is skipped, as folders and links are. design.md, Snapshot diffs, says so.
+	- Decisions:
+		- Skipped, not counted apart. Attributes aren't the file's bytes, and folders and links already go by with no count. A count would change the summary line for every run.
+		- The owner may be a file, a folder or the dataset itself, since all 3 can have attributes. A name is looked up by its path first, so a real folder named `<xattrdir>` is still compared. A name whose owner isn't in `--new` is still missing.
+		- The 3 bools for which side a file must be on were folded into a reference to the source, since a fourth tripped clippy's bool limit.
+	- Note: The `<xattrdir>` form comes from OpenZFS's object-to-path code. `zfs diff` needs root here, so no real output was parsed.
+	- Branch: round-20261110
+	- Test case: `df4jw` (`snapdiff::tests::xattr_lines_are_not_missing_files`). It fails before the fix, exit 8 where 0 is wanted, and passes after. Making every owner count as there turns its missing-owner case red.
+	- Swept: The other "missing" sites are the old side. A name found in `--new` is a real path, so its old copy is too, and `<xattrdir>` can't reach them. find-new and lists name real paths only, so the rule is held to zfs diff.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri`.
+	- Closed: 20261110-135646
 
 - Percent done shows the whole filesystem for a root that's a bind mount of a subfolder from another filesystem.
 	- ID: 2026111011092313

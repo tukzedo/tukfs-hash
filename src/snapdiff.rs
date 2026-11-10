@@ -505,8 +505,7 @@ fn find_by_inode(
 struct Checker<'a> {
 	old: &'a Root,
 	new: &'a Root,
-	need_old: bool,
-	need_new: bool,
+	src: &'a Source,
 	show_all: bool,
 	tally: Tally,
 	bufs: CompareBufs,
@@ -515,13 +514,26 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
+	// Which side each listed file has to be on. zfs diff names files in both
+	// snapshots, find-new files in the new one, and a list can name anything.
+	fn need_old(&self) -> bool {
+		matches!(self.src, Source::ZfsDiff(..))
+	}
+
+	fn need_new(&self) -> bool {
+		!matches!(self.src, Source::List(_))
+	}
+
 	fn pair(&mut self, pair: &Pair) {
 		let name = show_path(&pair.new);
 		let new_md = match stat_beneath(self.new, &pair.new) {
 			Ok(Some(m)) => m,
+			Ok(None) if matches!(self.src, Source::ZfsDiff(..)) && self.is_attribute(&pair.new) => {
+				return;
+			}
 			Ok(None) => {
 				self.tally.missing_new += 1;
-				self.tally.missing(self.need_new, &name, "--new");
+				self.tally.missing(self.need_new(), &name, "--new");
 				return;
 			}
 			Err(e) => {
@@ -557,8 +569,23 @@ impl Checker<'_> {
 		}
 		match by_name {
 			Some((old_rel, mo)) => self.check(&name, (&old_rel, &mo), (&pair.new, &new_md)),
-			None => self.tally.missing(self.need_old, &name, "--old"),
+			None => self.tally.missing(self.need_old(), &name, "--old"),
 		}
+	}
+
+	// zfs diff names attributes kept as a folder, by xattr=dir or a set too
+	// big for sa, as "<xattrdir>" beneath their file. No path reaches them, and
+	// they aren't the file's bytes. A real folder by that name is found by stat
+	// before this is asked, and an owner that isn't there is still missing.
+	fn is_attribute(&self, rel: &Path) -> bool {
+		let Some(owner) = rel
+			.ancestors()
+			.find(|a| a.file_name() == Some(OsStr::new("<xattrdir>")))
+			.and_then(Path::parent)
+		else {
+			return false;
+		};
+		owner.as_os_str().is_empty() || matches!(stat_beneath(self.new, owner), Ok(Some(_)))
 	}
 
 	fn finish(&mut self) {
@@ -570,7 +597,7 @@ impl Checker<'_> {
 				Some((old_rel, mo)) => {
 					self.check(&h.name, (&old_rel, &mo), (&h.new_rel, &h.new_md));
 				}
-				None => self.tally.missing(self.need_old, &h.name, "--old"),
+				None => self.tally.missing(self.need_old(), &h.name, "--old"),
 			}
 		}
 	}
@@ -644,20 +671,18 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 			.map_err(fail)
 	};
 	let (old, new) = (&open_root(old)?, &open_root(new)?);
-	// Which side each listed file has to be on. zfs diff names files in both
-	// snapshots, find-new files in the new one, and a list can name anything.
 	let resolved;
 	let mut mounts = Vec::new();
-	let (list, format, need_old, need_new) = match src {
+	let (list, format) = match src {
 		Source::ZfsDiff(f, mount) => {
 			// zfs prints the real mount point, and --mount may go through a symlink.
 			resolved = fs::canonicalize(mount).ok().filter(|r| r != mount);
 			mounts.push(mount.as_path());
 			mounts.extend(resolved.as_deref());
-			(f, Format::ZfsDiff(&mounts), true, true)
+			(f, Format::ZfsDiff(&mounts))
 		}
-		Source::FindNew(f) => (f, Format::FindNew, false, true),
-		Source::List(f) => (f, Format::List, false, false),
+		Source::FindNew(f) => (f, Format::FindNew),
+		Source::List(f) => (f, Format::List),
 	};
 	let read_error = |e: io::Error| format!("{}: {e}", show_path(list));
 	let input = BufReader::new(File::open(list).map_err(read_error)?);
@@ -665,8 +690,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 	let mut checker = Checker {
 		old,
 		new,
-		need_old,
-		need_new,
+		src,
 		show_all,
 		tally: Tally::default(),
 		bufs: CompareBufs::default(),
@@ -1056,6 +1080,60 @@ transid marker was 12\n";
 		assert_eq!(via(&dir.join("old-link")), 0);
 		put(&new.join("out/f"), b"FFFf");
 		assert_eq!(via(&dir.join("old-link")), 4);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn xattr_lines_are_not_missing_files() {
+		let _id = test_id("df4jw");
+		let dir = scratch("snapdiff_xattr");
+		let [old, new] = ["old", "new"].map(|d| dir.join(d));
+		for d in [&old, &new, &old.join("d"), &new.join("d")] {
+			fs::create_dir(d).unwrap();
+		}
+		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let put = |p: &Path, bytes: &[u8]| {
+			fs::write(p, bytes).unwrap();
+			File::options()
+				.write(true)
+				.open(p)
+				.unwrap()
+				.set_modified(when)
+				.unwrap();
+		};
+		put(&old.join("a"), b"aaaa");
+		put(&new.join("a"), b"aaaa");
+		let list = dir.join("zfs-diff");
+		let mount = new.to_str().unwrap();
+		let run_on = |lines: &[&str]| {
+			let text = lines.join("\n").replace('@', mount);
+			fs::write(&list, text + "\n").unwrap();
+			run(
+				&old,
+				&new,
+				&Source::ZfsDiff(list.clone(), new.clone()),
+				false,
+			)
+			.unwrap()
+		};
+		// The attribute folders of a file, a folder and the dataset itself.
+		let attrs = [
+			"M\t@/a",
+			"M\t@/a/<xattrdir>",
+			"M\t@/a/<xattrdir>/user.blake3.date",
+			"-\t@/d/<xattrdir>/user.x",
+			"+\t@/d/<xattrdir>/user.x",
+			"M\tF\t@/<xattrdir>/user.y",
+		];
+		assert_eq!(run_on(&attrs), 0);
+		// An owner that isn't there is still a missing file.
+		assert_eq!(run_on(&["M\t@/a", "M\t@/gone/<xattrdir>/user.x"]), 8);
+		// A real folder by that name is compared like any other.
+		fs::create_dir(old.join("d/<xattrdir>")).unwrap();
+		fs::create_dir(new.join("d/<xattrdir>")).unwrap();
+		put(&old.join("d/<xattrdir>/f"), b"ffff");
+		put(&new.join("d/<xattrdir>/f"), b"FFFF");
+		assert_eq!(run_on(&["M\t@/d/<xattrdir>/f"]), 4);
 	}
 
 	// zfs diff's own escape: all but printable ASCII, and space and backslash.
