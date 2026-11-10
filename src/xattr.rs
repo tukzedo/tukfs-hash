@@ -362,7 +362,7 @@ mod tests {
 	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
 	fn fuzz_inode_values() {
 		let _id = test_id("deebb");
-		fuzz("inode", |r| {
+		fuzz("inode", 7, |r| {
 			let mut covered = 0;
 			let dev = r.next_u64() >> r.below(64);
 			let ino = r.next_u64() >> r.below(64);
@@ -385,6 +385,6 @@ mod tests {
 			}
 			covered
 		})
-		.covers(7);
+		.covers();
 	}
 }
