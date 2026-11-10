@@ -533,7 +533,7 @@
 - The lint stage only reports content scrub hits, rather than failing on them.
 	- ID: 2026110811422141
 	- Type: Task
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261108-114221
 	- Opened by: split from 2026110218175403
@@ -545,8 +545,10 @@
 	- Branch: round-20261108b
 	- Progress log:
 		- 2026-11-10: Reopened by code review 20261110. It closed with no lasting check and no reason why there can't be one. A private check that plants a hit, or that reason, closes it.
-	- Test case: none with an ID. Checked by planting a banned word in `project/design.md`.
-	- Verified: with the plant, `cicd/cicd.bash --backlog-run-quick lint` printed the hit and failed the stage (exit 1). With the plant removed, `cicd/cicd.bash --backlog-run-quick` passes, "content scrub: clean".
+		- 2026-11-10: `private/claude_simple/tools/scrub-fail-check.bash REPO` clones the repo to a scratch folder with a copy of the private hooks beside it, and runs `--backlog-run-quick lint` unplanted, with a banned word planted in the clone's `project/design.md`, and with it removed. Private, by the 2026-10-25 answer, so it has no test ID and runs by hand.
+	- Test case: none with an ID. `private/claude_simple/tools/scrub-fail-check.bash`, by hand.
+	- Verified: the check passes on the repo (lint passes unplanted, fails with the hit printed, passes with it removed). Against a copy with `failed+=(scrub)` taken out, the planted case goes red ("rc=0").
+	- Closed: 20261110-204900
 	- Swept: the only caller of the scrub is the lint stage in `cicd/cicd.bash`. No doc says it only reports, except the memory.md note.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
