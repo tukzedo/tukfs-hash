@@ -3430,6 +3430,7 @@ mod tests {
 		let said = open_dir(&d.join("link/t.sqlite"), None).unwrap_err();
 		assert!(
 			said.ends_with("link: is a symbolic link; refused"),
+			// codeql[rust/cleartext-logging] a folder's uid isn't a secret, and this is a test's failure text
 			"{said}"
 		);
 	}
