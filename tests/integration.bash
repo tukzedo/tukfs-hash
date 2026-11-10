@@ -877,6 +877,7 @@ for t in ex nx repo plain; do mkdir -p "g/${t}/src" "g/mnt/${t}" && printf '%s\n
 escan g1 "${2}" --root g/mnt/ex --exclude g/ex --no-xattrs > g1.got
 escan g2 "${2}" --root g/mnt/nx --no-xattr g/nx > g2.got
 escan g3 "${2}" --root g/mnt/repo --root g/mnt/plain > g3.got
+cat e3.out g1.out | grep -c '^skipping root .*: inside --exclude ' > eg.skips
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -890,6 +891,7 @@ if [[ "${nsfs}" == zfs ]]; then
 	skip df4j8 "root that's a bind of a folder in an --exclude folder (ZFS pools aren't seen from a user namespace)"
 	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (ZFS pools aren't seen from a user namespace)"
 	skip df4ja "root that's a bind of a folder in a git work tree (ZFS pools aren't seen from a user namespace)"
+	skip df4m4 "root under an --exclude folder by another name named as skipped (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
@@ -897,11 +899,12 @@ elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qh "database through a bind mount: own names left out, no attributes" "$(cat "${ns}/d.got") $(sqlite3 "${dd}" 'SELECT count(*) FROM paths') $(sqlite3 "${dd}" "SELECT count(*) FROM paths WHERE path LIKE '%/d.sqlite%'") $(xget "${dd}" user.blake3.b64u)" "0 6 0 "
 	et="${ns}/e/tree"
 	check df1nj "--no-xattr by a bind mount's name" "$(cat "${ns}/e1.got") $(xget "${et}/top" user.blake3.b64u | wc -c) $(xget "${et}/sub/f" user.blake3.b64u)$(xget "${et}/sub/deep/g" user.blake3.b64u)" "0 files 3 43 "
-	check df1nk "--exclude by a bind mount's name" "$(cat "${ns}/e2.got")" "0 files 1 0 files 0"
+	check df1nk "--exclude by a bind mount's name" "$(cat "${ns}/e2.got")" "0 files 1 1 "
 	gt="${ns}/g"
-	check df4j8 "root that's a bind of a folder in an --exclude folder" "$(cat "${ns}/g1.got")" "0 files 0"
+	check df4j8 "root that's a bind of a folder in an --exclude folder" "$(cat "${ns}/g1.got")" "1 "
 	check df4j9 "root that's a bind of a folder in a --no-xattr folder" "$(cat "${ns}/g2.got") $(xget "${gt}/nx/src/f" user.blake3.b64u | wc -c)" "0 files 1 0"
 	check df4ja "root that's a bind of a folder in a git work tree" "$(cat "${ns}/g3.got") $(xget "${gt}/repo/src/f" user.blake3.b64u | wc -c) $(xget "${gt}/plain/src/f" user.blake3.b64u | wc -c)" "0 files 2 0 43"
+	check df4m4 "root under an --exclude folder by another name named as skipped" "$(cat "${ns}/eg.skips")" 2
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
@@ -911,6 +914,7 @@ else
 	skip df4j8 "root that's a bind of a folder in an --exclude folder (no user namespace here)"
 	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (no user namespace here)"
 	skip df4ja "root that's a bind of a folder in a git work tree (no user namespace here)"
+	skip df4m4 "root under an --exclude folder by another name named as skipped (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
@@ -922,6 +926,22 @@ rc=0; "${bin}" scan --db "${mr}/t.sqlite" --root "${mr}/t" --root "${mr}/t/nonex
 check des5v "scan with a missing root" "${rc}" 1
 mrDb=none; [[ -e "${mr}/t.sqlite" ]] && mrDb=made
 check des5w "missing root named, nothing scanned" "$(grep -cF "can't resolve root ${mr}/t/nonexist: No such file or directory (os error 2)" "${mr}/out.txt" || true) ${mrDb}" "1 none"
+# So does a mistyped --exclude or --no-xattr, which would read or write where
+# it was told not to (2026111011092303). A root in or at an --exclude folder
+# is named and dropped, and with no root left it's nothing to scan
+# (2026111011092318).
+mkdir -p "${mr}/t/vm-images" "${mr}/t/ex/src" "${mr}/u"
+printf 'x\n' > "${mr}/t/vm-images/disk.img"; printf 'x\n' > "${mr}/t/ex/src/f"; printf 'u\n' > "${mr}/u/f"
+mscan() { local rc=0; "${bin}" scan --db "${mr}/${1}.sqlite" --progress 3600 "${@:2}" > "${mr}/${1}.txt" 2>&1 || rc=$?; local made=none; [[ -e "${mr}/${1}.sqlite" ]] && made=made; echo "${rc} ${made}"; }
+got="$(mscan mx --root "${mr}/t" --exclude "${mr}/t/vm-imgaes" --no-xattrs)"
+check df4m5 "missing --exclude named, nothing scanned" "${got} $(grep -cF "can't resolve --exclude ${mr}/t/vm-imgaes: No such file or directory (os error 2)" "${mr}/mx.txt" || true)" "1 none 1"
+got="$(mscan mn --root "${mr}/t" --no-xattr "${mr}/t/vm-imgaes")"
+check df4m6 "missing --no-xattr named, nothing written" "${got} $(grep -cF "can't resolve --no-xattr ${mr}/t/vm-imgaes: No such file or directory (os error 2)" "${mr}/mn.txt" || true) $(xget "${mr}/t/vm-images/disk.img" user.blake3.b64u | wc -c)" "1 none 1 0"
+mrc="$(realpath "${mr}")"
+got="$(mscan me --root "${mr}/t/ex/src" --root "${mr}/u" --exclude "${mr}/t/ex" --no-xattrs)"
+check df4m7 "root in an --exclude folder named and dropped" "${got} $(grep -oE 'files [0-9]+' "${mr}/me.txt" | head -1) $(grep -cxF "skipping root ${mrc}/t/ex/src: inside --exclude ${mrc}/t/ex" "${mr}/me.txt" || true)" "0 made files 1 1"
+got="$(mscan mo --root "${mr}/t/ex" --exclude "${mr}/t/ex" --no-xattrs)"
+check df4m8 "only root is an --exclude folder, nothing to scan" "${got} $(grep -cxF "skipping root ${mrc}/t/ex: same folder as --exclude ${mrc}/t/ex" "${mr}/mo.txt" || true) $(grep -c 'nothing to scan' "${mr}/mo.txt" || true)" "1 none 1 1"
 
 # 27. An unmounted btrfs subvolume given as a root is read on its own, though
 # it sits inside another root whose walk stops at it (2026102814341412). Only

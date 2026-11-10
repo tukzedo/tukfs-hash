@@ -95,8 +95,9 @@ snapdiff options:
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at
 once. Ctrl+C stops after the files in hand; --resume picks up from there.
-A second Ctrl+C ends it at once, with exit 130. A root that can't be
-resolved stops the scan before it starts.
+A second Ctrl+C ends it at once, with exit 130. A root, or a path given to
+--exclude or --no-xattr, that can't be resolved stops the scan before it
+starts. A root in an --exclude folder is skipped, and named.
 
 A file that reads differently from what was stored, at the same size and
 time, is read again with its cache dropped. If the second read matches, it's

@@ -135,7 +135,7 @@ The exit codes are:
 | 4    | Mismatches or read errors found
 | 8    | Some files or folders couldn't be checked, or snapdiff didn't understand some of its input
 
-The codes 2, 4, and 8 add up, so 6 is a stop after a mismatch, and 12 means both kinds were found. A resumed scan counts what its earlier parts found too. `accept` exits 1 if any file wasn't taken. A second Ctrl+C ends a scan at once, with 130. A root that can't be resolved is an error, and the scan doesn't read anything.
+The codes 2, 4, and 8 add up, so 6 is a stop after a mismatch, and 12 means both kinds were found. A resumed scan counts what its earlier parts found too. `accept` exits 1 if any file wasn't taken. A second Ctrl+C ends a scan at once, with 130. A root that can't be resolved is an error, and the scan doesn't read anything. So is a path given to `--exclude` or `--no-xattr` that can't be resolved. A root inside an `--exclude` folder is skipped, and the scan says so.
 
 Names that aren't plain text are printed with `\xHH` escapes, and a backslash is printed as `\\`, so 2 different names can't ever print the same.
 

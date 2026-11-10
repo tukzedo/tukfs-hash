@@ -683,13 +683,21 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		err!("skipping root {d}");
 	}
 	// A mistyped root would leave a whole tree unread under a run that looks
-	// fine, so nothing starts (2026102814341406).
-	if !unresolved.is_empty() {
-		for (r, e) in &unresolved {
-			err!("can't resolve root {}: {e}", crate::util::show_path(r));
+	// fine, and a mistyped --exclude or --no-xattr reads or writes where it was
+	// told not to, so nothing starts (2026102814341406, 2026111011092303).
+	let mut bad: Vec<String> = unresolved
+		.iter()
+		.map(|(r, e)| format!("root {}: {e}", crate::util::show_path(r)))
+		.collect();
+	let excludes = resolve_each("--exclude", &o.excludes, &mut bad);
+	let no_xattr = resolve_each("--no-xattr", &o.no_xattr, &mut bad);
+	if !bad.is_empty() {
+		for b in &bad {
+			err!("can't resolve {b}");
 		}
 		return Err("nothing scanned".into());
 	}
+	let planned = drop_excluded(planned, &excludes, &mounts);
 	if planned.is_empty() {
 		return Err("nothing to scan".into());
 	}
@@ -728,18 +736,10 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		cutoff_us: cutoff_us.min(run_started),
 		db: db_path.clone(),
 		db_dir,
-		excludes: o
-			.excludes
-			.iter()
-			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-			.collect(),
-		no_xattr: o
-			.no_xattr
-			.iter()
-			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-			.collect(),
-		exclude_ids: ids_of(&o.excludes),
-		no_xattr_ids: ids_of(&o.no_xattr),
+		exclude_ids: ids_of(&excludes),
+		no_xattr_ids: ids_of(&no_xattr),
+		excludes,
+		no_xattr,
 		mount_points: mounts::mount_points(&mounts),
 		mounts,
 		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
@@ -1087,12 +1087,72 @@ fn db_dir(db: &Path) -> Result<(u64, u64), String> {
 		.map_err(|e| format!("database folder {}: {e}", dir.display()))
 }
 
-// A path that isn't there yet matches by path only.
+// Each path resolved. One that can't be goes in `bad`, made absolute, with why.
+fn resolve_each(flag: &str, paths: &[PathBuf], bad: &mut Vec<String>) -> Vec<PathBuf> {
+	let mut resolved = Vec::with_capacity(paths.len());
+	for p in paths {
+		match fs::canonicalize(p) {
+			Ok(c) => resolved.push(c),
+			Err(e) => {
+				let abs = std::path::absolute(p).unwrap_or_else(|_| p.clone());
+				bad.push(format!("{flag} {}: {e}", crate::util::show_path(&abs)));
+			}
+		}
+	}
+	resolved
+}
+
+// One gone since the scan resolved it matches by path only.
 fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
 	paths
 		.iter()
 		.filter_map(|p| fs::metadata(p).ok())
 		.map(|m| (m.dev(), m.ino()))
+		.collect()
+}
+
+// A root in an --exclude folder would read nothing and leave every name under
+// it to show in gone, so it's dropped and named before the run, as plan's
+// drops are (2026111011092318).
+fn drop_excluded(
+	planned: Vec<Planned>,
+	excludes: &[PathBuf],
+	mounts: &[mounts::Mount],
+) -> Vec<Planned> {
+	let ids: HashMap<(u64, u64), &Path> = excludes
+		.iter()
+		.filter_map(|x| {
+			fs::metadata(x)
+				.ok()
+				.map(|m| ((m.dev(), m.ino()), x.as_path()))
+		})
+		.collect();
+	if ids.is_empty() {
+		return planned;
+	}
+	let why = |root: &Path| {
+		let md = fs::metadata(root).ok()?;
+		if let Some(x) = ids.get(&(md.dev(), md.ino())) {
+			return Some(format!(
+				"same folder as --exclude {}",
+				crate::util::show_path(x)
+			));
+		}
+		found_above(&names_above(mounts, root), |id| ids.get(&id).copied())
+			.map(|x| format!("inside --exclude {}", crate::util::show_path(x)))
+	};
+	planned
+		.into_iter()
+		.filter_map(|mut g| {
+			g.roots.retain(|r| {
+				let Some(why) = why(r) else {
+					return true;
+				};
+				err!("skipping root {}: {why}", crate::util::show_path(r));
+				false
+			});
+			(!g.roots.is_empty()).then_some(g)
+		})
 		.collect()
 }
 
@@ -1107,27 +1167,33 @@ fn above_to<'a>(root: &'a Path, top: &'a Path) -> impl Iterator<Item = &'a Path>
 // The root's own name, and its name in each mount that shows more of its
 // filesystem, as for a bind mount of a subfolder (2026111011092307). Each
 // comes with the mount point the folders above it stop at.
-fn names_above(sh: &Shared, root: &Path) -> Vec<(PathBuf, PathBuf)> {
+fn names_above(mounts: &[mounts::Mount], root: &Path) -> Vec<(PathBuf, PathBuf)> {
 	let mut names = vec![(root.to_path_buf(), PathBuf::from("/"))];
 	let Ok(md) = fs::metadata(root) else {
 		return names;
 	};
 	let id = (md.dev(), md.ino());
 	names.extend(
-		mounts::wider_views(&sh.mounts, root)
+		mounts::wider_views(mounts, root)
 			.into_iter()
 			.filter(|(at, _)| fs::metadata(at).is_ok_and(|m| (m.dev(), m.ino()) == id)),
 	);
 	names
 }
 
+// The first hit among the folders above any of a root's names.
+fn found_above<T>(
+	names: &[(PathBuf, PathBuf)],
+	hit: impl Fn((u64, u64)) -> Option<T>,
+) -> Option<T> {
+	names.iter().find_map(|(p, top)| {
+		above_to(p, top).find_map(|a| fs::metadata(a).ok().and_then(|m| hit((m.dev(), m.ino()))))
+	})
+}
+
 // A root inside one of the folders under another name.
 fn inside_any(names: &[(PathBuf, PathBuf)], ids: &HashSet<(u64, u64)>) -> bool {
-	!ids.is_empty()
-		&& names.iter().any(|(p, top)| {
-			above_to(p, top)
-				.any(|a| fs::metadata(a).is_ok_and(|m| ids.contains(&(m.dev(), m.ino()))))
-		})
+	!ids.is_empty() && found_above(names, |id| ids.contains(&id).then_some(())).is_some()
 }
 
 // The database, its journal files and its lock, in its folder under any name.
@@ -1203,7 +1269,7 @@ fn walk(
 	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) {
-	let names = names_above(sh, root);
+	let names = names_above(&sh.mounts, root);
 	if inside_any(&names, &sh.exclude_ids) {
 		return;
 	}
@@ -2715,6 +2781,47 @@ mod tests {
 		}
 		assert_eq!(g.stats.files.load(Relaxed), 2);
 		assert_eq!(b3("given"), None);
+	}
+
+	// A root in or at an --exclude folder is dropped before the run, and a
+	// group left with no roots goes with it (2026111011092318).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't stat real folders")]
+	fn roots_in_an_excluded_folder_are_dropped() {
+		let _id = test_id("df4m3");
+		let d = scratch("scan_dropex");
+		let d = fs::canonicalize(&*d).unwrap();
+		for sub in ["ex/deep", "plain", "other"] {
+			fs::create_dir_all(d.join(sub)).unwrap();
+		}
+		let group = |name: &str, rs: &[&str]| Planned {
+			name: name.into(),
+			roots: rs.iter().map(|r| d.join(r)).collect(),
+			threads: 1,
+		};
+		let roots = |gs: &[Planned]| -> Vec<(String, Vec<PathBuf>)> {
+			gs.iter()
+				.map(|g| (g.name.clone(), g.roots.clone()))
+				.collect()
+		};
+		let planned = || {
+			vec![
+				group("a", &["ex", "ex/deep", "plain"]),
+				group("b", &["ex/deep"]),
+			]
+		};
+		assert_eq!(
+			roots(&drop_excluded(planned(), &[d.join("ex")], &[])),
+			[("a".into(), vec![d.join("plain")])]
+		);
+		assert_eq!(
+			roots(&drop_excluded(planned(), &[], &[])),
+			roots(&planned())
+		);
+		assert_eq!(
+			roots(&drop_excluded(planned(), &[d.join("other")], &[])),
+			roots(&planned())
+		);
 	}
 
 	// design.md, Attributes: none in a git work tree, however deep the root.
