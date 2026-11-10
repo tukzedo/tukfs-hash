@@ -468,7 +468,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 }
 
 /// Takes the database's lock file, so 2 scans can't share it.
-fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
+fn lock(dir: &File, db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	if let Some(t) = mounts::hands_off_at(mounts, db) {
 		return Err(format!(
 			"{} is on {t}, which isn't written to from Linux; put the database elsewhere",
@@ -478,16 +478,15 @@ fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	let p = lock_path(db);
 	// Under sudo a link here would make and later chown a file of the user's
 	// choosing.
-	let f = OpenOptions::new()
-		.create(true)
-		.truncate(false)
-		.write(true)
-		.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-		.open(&p)
-		.map_err(|e| match e.raw_os_error() {
-			Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
-			_ => format!("{}: {e}", p.display()),
-		})?;
+	let f = beneath::openat(
+		dir.as_raw_fd(),
+		p.file_name().unwrap_or_default(),
+		libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK,
+	)
+	.map_err(|e| match e.raw_os_error() {
+		Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
+		_ => format!("{}: {e}", p.display()),
+	})?;
 	if !f.metadata().is_ok_and(|m| m.file_type().is_file()) {
 		return Err(format!("{}: not a regular file; refused", p.display()));
 	}
@@ -505,12 +504,55 @@ fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	Ok(f)
 }
 
+/// The user who ran this through sudo, when it runs as root. Anyone else can't
+/// give files away, nor make them where that user couldn't.
+fn sudo_ids() -> Option<(u32, u32)> {
+	// SAFETY: geteuid only reads.
+	if unsafe { libc::geteuid() } != 0 {
+		return None;
+	}
+	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
+	Some((id("SUDO_UID")?, id("SUDO_GID")?))
+}
+
+/// The database's folder. Under sudo it has to be that user's or root's, or a
+/// link planted at it would have root make the files wherever it points and
+/// hand them over (2026111011092301).
+fn open_dir(db: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
+	let dir = db.parent().unwrap_or(Path::new("/"));
+	let failed = |e: io::Error| format!("database folder {}: {e}", dir.display());
+	// With O_PATH a link is opened rather than refused, so its type says so.
+	let f = beneath::openat(libc::AT_FDCWD, dir.as_os_str(), libc::O_PATH).map_err(failed)?;
+	let m = f.metadata().map_err(failed)?;
+	if m.file_type().is_symlink() {
+		return Err(format!("{}: is a symbolic link; refused", dir.display()));
+	}
+	if !m.is_dir() {
+		return Err(failed(io::Error::from_raw_os_error(libc::ENOTDIR)));
+	}
+	if let Some((uid, _)) = sudo
+		&& m.uid() != uid
+		&& m.uid() != 0
+	{
+		return Err(format!(
+			"database folder {} is owned by uid {}, not by uid {uid} or root; refused",
+			dir.display(),
+			m.uid()
+		));
+	}
+	Ok(f)
+}
+
 /// The database's lock, for a command that writes. However the command ends,
 /// once this goes the file is back in rollback mode and, under sudo, its
 /// user's again. See design.md, Database.
 #[derive(Debug)]
 pub struct Held {
 	db: PathBuf,
+	// The folder that was checked. The lock is made and the files are handed
+	// back through it.
+	dir: File,
+	sudo: Option<(u32, u32)>,
 	conn: Option<rusqlite::Connection>,
 	// Let go only after drop() has handed the files back.
 	_lock: File,
@@ -518,9 +560,21 @@ pub struct Held {
 
 impl Held {
 	pub fn take(db: &Path, mounts: &[mounts::Mount]) -> Result<Self, String> {
+		Self::take_as(db, mounts, sudo_ids())
+	}
+
+	// A test can't be root, so it names the sudo ids itself.
+	fn take_as(
+		db: &Path,
+		mounts: &[mounts::Mount],
+		sudo: Option<(u32, u32)>,
+	) -> Result<Self, String> {
+		let dir = open_dir(db, sudo)?;
 		Ok(Self {
-			_lock: lock(db, mounts)?,
+			_lock: lock(&dir, db, mounts)?,
+			dir,
 			db: db.to_path_buf(),
+			sudo,
 			conn: None,
 		})
 	}
@@ -539,6 +593,21 @@ impl Held {
 	pub fn put_back(&mut self, conn: rusqlite::Connection) {
 		self.conn = Some(conn);
 	}
+
+	// Hand the files back to whoever ran this through sudo, so reports and
+	// queries need no root. The WAL files are only there when leaving WAL
+	// mode failed.
+	fn give_back(&self) {
+		let Some((uid, gid)) = self.sudo else {
+			return;
+		};
+		for (p, e) in hand_over(&self.dir, &self.db, uid, gid) {
+			err!(
+				"warning: can't give {} back to uid {uid}: {e}",
+				crate::util::show_path(&p)
+			);
+		}
+	}
 }
 
 impl Drop for Held {
@@ -552,7 +621,7 @@ impl Drop for Held {
 				crate::util::show_path(&self.db)
 			);
 		}
-		give_back(&self.db);
+		self.give_back();
 	}
 }
 
@@ -563,25 +632,9 @@ pub fn host() -> String {
 		.unwrap_or_default()
 }
 
-/// Hand the files back to whoever ran this through sudo, so reports and
-/// queries need no root. The WAL files are only there when leaving WAL mode
-/// failed.
-fn give_back(db: &Path) {
-	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
-	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
-		return;
-	};
-	for (p, e) in hand_over(db, uid, gid) {
-		err!(
-			"warning: can't give {} back to uid {uid}: {e}",
-			crate::util::show_path(&p)
-		);
-	}
-}
-
-// The files that couldn't be handed over. The WAL files are usually gone, so a
-// missing one doesn't count.
-fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
+// The files in `dir` that couldn't be handed over. The WAL files are usually
+// gone, so a missing one doesn't count.
+fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let with = |sfx: &str| {
 		let mut s = db.as_os_str().to_owned();
 		s.push(sfx);
@@ -590,11 +643,11 @@ fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let mut failed = Vec::new();
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
 		// By fd, so a link swapped in at the name isn't followed.
-		let f = match OpenOptions::new()
-			.read(true)
-			.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
-			.open(&p)
-		{
+		let f = match beneath::openat(
+			dir.as_raw_fd(),
+			p.file_name().unwrap_or_default(),
+			libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY,
+		) {
 			Ok(f) => f,
 			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
 			Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
@@ -3182,11 +3235,12 @@ mod tests {
 		let d = scratch("scan_heldlock");
 		let db = d.join("t.sqlite");
 		let mounts = mounts::read_mounts().unwrap();
-		let held = lock(&db, &mounts).unwrap();
-		let again = lock(&db, &mounts).unwrap_err();
+		let dir = open_dir(&db, None).unwrap();
+		let held = lock(&dir, &db, &mounts).unwrap();
+		let again = lock(&dir, &db, &mounts).unwrap_err();
 		assert!(again.ends_with("is locked; another scan is using this database"));
 		drop(held);
-		lock(&db, &mounts).unwrap();
+		lock(&dir, &db, &mounts).unwrap();
 	}
 
 	// A database left owned by root is named; a missing WAL file isn't
@@ -3205,8 +3259,12 @@ mod tests {
 		fs::write(&db, "").unwrap();
 		fs::write(lock_path(&db), "").unwrap();
 		let me = fs::metadata(&db).unwrap();
-		assert!(hand_over(&db, me.uid(), me.gid()).is_empty());
-		let failed: Vec<PathBuf> = hand_over(&db, 0, 0).into_iter().map(|f| f.0).collect();
+		let dir = open_dir(&db, None).unwrap();
+		assert!(hand_over(&dir, &db, me.uid(), me.gid()).is_empty());
+		let failed: Vec<PathBuf> = hand_over(&dir, &db, 0, 0)
+			.into_iter()
+			.map(|f| f.0)
+			.collect();
 		assert_eq!(failed, [db.clone(), lock_path(&db)]);
 	}
 
@@ -3222,12 +3280,78 @@ mod tests {
 		wal.push("-wal");
 		std::os::unix::fs::symlink(d.join("target"), &wal).unwrap();
 		let me = fs::metadata(&db).unwrap();
-		let failed: Vec<PathBuf> = hand_over(&db, me.uid(), me.gid())
+		let dir = open_dir(&db, None).unwrap();
+		let failed: Vec<PathBuf> = hand_over(&dir, &db, me.uid(), me.gid())
 			.into_iter()
 			.map(|f| f.0)
 			.collect();
 		assert_eq!(failed, [PathBuf::from(wal)]);
 		assert!(!d.join("target").exists());
+	}
+
+	// Under sudo a folder that's neither the user's nor root's is refused
+	// before anything is made (2026111011092301).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
+	fn a_folder_not_the_users_is_refused() {
+		let _id = test_id("df4kp");
+		let d = scratch("scan_sudo_folder");
+		let db = d.join("t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let me = fs::metadata(&d).unwrap();
+		let other = Some((me.uid() + 1, me.gid()));
+		let said = Held::take_as(&db, &mounts, other).unwrap_err();
+		assert!(
+			said.contains("not by uid") && said.ends_with("; refused"),
+			"{said}"
+		);
+		assert!(!lock_path(&db).exists() && !db.exists());
+		assert!(open_dir(Path::new("/t.sqlite"), other).is_ok());
+		drop(Held::take_as(&db, &mounts, Some((me.uid(), me.gid()))).unwrap());
+		assert!(lock_path(&db).exists());
+	}
+
+	// A link at the folder itself, as one swapped in after it was resolved,
+	// is refused.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
+	fn a_linked_folder_is_refused() {
+		let _id = test_id("df4kq");
+		let d = scratch("scan_sudo_folder_link");
+		fs::create_dir(d.join("real")).unwrap();
+		std::os::unix::fs::symlink(d.join("real"), d.join("link")).unwrap();
+		let said = open_dir(&d.join("link/t.sqlite"), None).unwrap_err();
+		assert!(
+			said.ends_with("link: is a symbolic link; refused"),
+			"{said}"
+		);
+	}
+
+	// The hand-back goes to the folder that was checked, even after another
+	// folder is moved in at its name.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no chown")]
+	fn the_hand_back_stays_in_the_checked_folder() {
+		let _id = test_id("df4kr");
+		// SAFETY: geteuid only reads.
+		if unsafe { libc::geteuid() } == 0 {
+			eprintln!("root can give anything away; skipped");
+			return;
+		}
+		let d = scratch("scan_sudo_folder_moved");
+		fs::create_dir(d.join("a")).unwrap();
+		let db = d.join("a/t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let held = Held::take_as(&db, &mounts, None).unwrap();
+		fs::rename(d.join("a"), d.join("b")).unwrap();
+		fs::create_dir(d.join("a")).unwrap();
+		fs::write(&db, "").unwrap();
+		// Uid 0 fails for each file there, which names them.
+		let failed: Vec<PathBuf> = hand_over(&held.dir, &db, 0, 0)
+			.into_iter()
+			.map(|f| f.0)
+			.collect();
+		assert_eq!(failed, [lock_path(&db)]);
 	}
 
 	#[test]

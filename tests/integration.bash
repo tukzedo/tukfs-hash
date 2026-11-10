@@ -791,7 +791,8 @@ fi
 
 # 24. Run through sudo, a link at the database or one of its 3 other names
 # would be followed as root and the target made or chowned (2026102814341403).
-# The own ids stand in for sudo's, so no root is needed.
+# A link is refused whoever runs it, so no root is needed. The folder's owner
+# is checked only as root, so df4kp to df4kr pass the ids in as unit tests.
 ln_case() {
 	local d="${work}/ln${1:-db}" rc=0
 	mkdir -p "${d}"

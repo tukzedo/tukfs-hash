@@ -152,7 +152,7 @@
 - Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
 	- ID: 2026111011092301
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 2
@@ -166,7 +166,17 @@
 		- The hand-back goes through the folder fd that was checked.
 	- Against: 2026102814341403's note that a link in a parent folder is still followed, "since the folder is the user's own choice". That item guards against a process running as the user, and such a process can plant a link at the folder as easily as at the file names.
 	- Decisions: Under sudo, a database folder that isn't owned by `SUDO_UID` or root is refused before anything is made, and the hand-back goes through that folder's fd. This replaces 2026102814341403's note on parent links (answered 2026-11-10).
+		- As answered, a folder owned by root is still taken, so the steps above, with `sys` owned by root, still run and hand both files over. A folder of any other user is refused, through a link or not.
+		- The check and the hand-back run only as root. Another user with sudo's ids, as `sudo -u` leaves them, can't give files away, so it no longer warns twice (an observation under 2026111011092329).
+		- SQLite still opens the database by path. `SQLITE_OPEN_NOFOLLOW` refuses a link anywhere in it, so a folder swapped for a link after the check is refused there too.
+		- The folder is opened with `O_PATH`, so one the user can't list still works.
 	- Note: The file names are the user's own, so making root out of this needs a root folder that trusts any file name.
+	- Actual effort: Low
+	- Swept: every caller of `Held::take`, `lock`, `hand_over` and `beneath::openat`. Only `scan::run`, `accept::run` and `prune` make or hand back files. `runs`, `report` and `gone` open read only and make nothing.
+	- Branch: round-20261110
+	- Test case: `df4kp` (another user's folder refused, nothing made, root's taken), `df4kq` (a link at the folder refused), `df4kr` (the hand-back stays in the checked folder after another is moved in at its name). With the owner check off df4kp fails, and with the hand-back by path df4kr fails. The root case is `sudo-folder-standin.bash` in the private tools folder, which failed 4 of 11 checks on the installed build df46q and passes all 11, with `sudo-links-standin.bash` and `fail-handback-standin.bash` still passing.
+	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261110-142434
 
 - A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
 	- ID: 2026111011092303
