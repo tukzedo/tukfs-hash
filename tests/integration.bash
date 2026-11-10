@@ -1000,6 +1000,67 @@ else
 	check df1rk "an attribute that can't be written: reported, exit 0" "${rc} $(sqlite3 "${work}/db/ro.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 xattr-error ${ro}/f"
 fi
 
+# 33. A read error is news like a mismatch, so no skip passes the file until
+# it reads clean (design.md, Skipping, row db-read-error). A preloaded shim
+# fails the reads, since a real EIO needs a failing disk.
+er="${work}/er"; mkdir -p "${er}/tree"
+head -c 40000 /dev/urandom > "${er}/tree/bad"; printf 'fine\n' > "${er}/tree/good"
+cat > "${er}/eio.c" << 'EOF'
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+// Whether fd is open on a path that ends in EIO_NAME.
+static int bad(int fd) {
+	const char *want = getenv("EIO_NAME");
+	char link[64], got[4096];
+	if (!want) return 0;
+	snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
+	ssize_t n = readlink(link, got, sizeof got - 1);
+	if (n <= 0) return 0;
+	got[n] = 0;
+	size_t w = strlen(want);
+	return (size_t)n >= w && strcmp(got + n - w, want) == 0;
+}
+
+ssize_t read(int fd, void *buf, size_t count) {
+	static ssize_t (*real)(int, void *, size_t);
+	if (!real) real = dlsym(RTLD_NEXT, "read");
+	if (bad(fd)) { errno = EIO; return -1; }
+	return real(fd, buf, count);
+}
+
+ssize_t pread64(int fd, void *buf, size_t count, off_t at) {
+	static ssize_t (*real)(int, void *, size_t, off_t);
+	if (!real) real = dlsym(RTLD_NEXT, "pread64");
+	if (bad(fd)) { errno = EIO; return -1; }
+	return real(fd, buf, count, at);
+}
+EOF
+erdb="${work}/db/er.sqlite"
+# erscan shim|plain [ARGS...]: the exit code, the run's read errors and how
+# many files it read.
+erscan() {
+	local rc=0 pre=()
+	if [[ "${1}" == shim ]]; then pre=(env "LD_PRELOAD=${er}/eio.so" "EIO_NAME=/er/tree/bad"); fi
+	"${pre[@]}" "${bin}" scan --db "${erdb}" --root "${er}/tree" --progress 3600 "${@:2}" > "${work}/er.txt" 2>&1 || rc=$?
+	echo "${rc} $(sqlite3 "${erdb}" "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND kind = 'read-error'") $(grep -o 'hashed [0-9]*' "${work}/er.txt" | head -1)"
+}
+if ! command -v cc > /dev/null || ! cc -shared -fPIC -o "${er}/eio.so" "${er}/eio.c" -ldl > "${work}/er-cc.txt" 2>&1; then
+	skip df4ep "read error: --verify reports it (no C compiler for the shim)"
+	skip df4eq "read error: reported again on a plain run the same day (no C compiler for the shim)"
+	skip df4er "read error: a clean read closes it (no C compiler for the shim)"
+else
+	erscan plain > /dev/null
+	check df4ep "read error: --verify reports it" "$(erscan shim --verify)" "4 1 hashed 1"
+	check df4eq "read error: reported again on a plain run the same day" "$(erscan shim)" "4 1 hashed 0"
+	check df4er "read error: a clean read closes it" "$(erscan plain) $(erscan plain)" "0 0 hashed 1 0 0 hashed 0"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -1071,3 +1132,5 @@ fi
 ##		- 20261108: A link at the database's names is named in the refusal.
 ##		- 20261108: A file that changes while read, an attribute that can't be
 ##		  written, and no attributes on a new file after --verify.
+##		- 20261110: A read error, through a preloaded shim, is read and
+##		  reported again until it reads clean.

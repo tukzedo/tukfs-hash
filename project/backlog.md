@@ -88,7 +88,7 @@
 - A read error found by `--verify` is skipped by a plain scan later the same day, which exits 0.
 	- ID: 2026111011092300
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 1
@@ -103,6 +103,19 @@
 	- Sweep: every kind in `Kind` against the table, `unsupported` included.
 	- Related IDs: 2026102814341402, 2026102814341401
 	- Note: The same class as 2026102814341401 and ...402, both High. The shim makes an integration check for `read-error` possible, which was thought to need a failing disk.
+	- Reproduced [Bug]: Yes, on ext4, with the shim in step 33 of `tests/integration.bash`: the plain run got "0 0 hashed 0" where "4 1 hashed 0" was wanted.
+	- Actual cause [Bug]: `miss_paths` listed the 3 mismatch kinds by hand. A read error writes no row either, so the earlier good read's date skipped the file.
+	- Decisions:
+		- Which kinds keep a path open is `Kind::keeps_open`, an exhaustive match, and both queries take their kinds from it, so a new kind has to choose.
+		- `read-unsupported`, `open-error`, `stat-error` and `unstable` don't keep a path open, row `db-unchecked`. Nothing was read to the end, so the last good read is still the newest check of the bytes, and none of them sets 4. A later day's scan reads them again.
+		- `run_misses` takes read errors too, so a resumed run doesn't read and report one again, row `resume-seen`.
+	- Actual fix [Bug]: A read error keeps the path open until a clean read or `accept`, like a mismatch. design.md, "Skipping", has rows `db-read-error` and `db-unchecked`, and `x-mismatch` covers read errors.
+	- Branch: round-20261110
+	- Test case: df4ep, df4eq and df4er in step 33 of `tests/integration.bash`, which fails the reads through a preloaded shim and skips without a C compiler. Unit tests dejdf `open_misses_are_the_unread_ones` and des7p `run_misses_are_this_runs`.
+	- Verified: df4eq and df4er failed on the unfixed build on ext4, and pass after on ext4 and ZFS and in the quick gate's sandbox. dejdf and des7p fail with read errors taken out of the set. The quick gate passes.
+	- Swept: every kind in `Kind` against the table, through `keeps_open`. `judged_already` and `skip_unread` are still the only skips, and both check the set.
+	- Closed: 20261110-114229
+	- 2026-11-10: dejdf's read error moved from `/d` to its own path, and is now in the open set, where it was left out. `/d` keeps its `cache-mismatch`. des7p's `/e` read error is now in the set too.
 
 - Integration check df0pq can't see snapdiff memory growth under about 13 MB.
 	- ID: 2026111011092302

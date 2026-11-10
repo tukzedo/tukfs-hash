@@ -1792,8 +1792,8 @@ impl<'a> Worker<'a> {
 		Some(md)
 	}
 
-	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch` and
-	// `resume-seen`.
+	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch`,
+	// `db-read-error` and `resume-seen`.
 	fn judged_already(&self, job: &Job, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
 		let path = job.path.as_os_str().as_bytes();

@@ -378,44 +378,46 @@ pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prio
 	}
 }
 
-/// Paths whose last mismatch came after their last good read, so nothing has
-/// read them clean or accepted them since. A mismatch keeps the old row, so
-/// its read date alone would skip the file again. See design.md, "Skipping",
-/// row `db-mismatch`.
+/// Paths whose last mismatch or read error came after their last good read,
+/// so nothing has read them clean or accepted them since. Neither writes a
+/// row, so the old row's read date alone would skip the file again. See
+/// design.md, "Skipping", rows `db-mismatch` and `db-read-error`.
 pub fn open_misses(conn: &Connection) -> Result<HashSet<Vec<u8>>, String> {
 	miss_paths(
 		conn,
 		"SELECT DISTINCT e.path FROM events e LEFT JOIN paths p ON p.path = e.path
-		WHERE e.kind IN (?1, ?2, ?3) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
+		WHERE e.kind IN (KINDS) AND (p.hashed_us IS NULL OR e.at_us > p.hashed_us)",
 		None,
 	)
 }
 
-/// Paths an earlier part of this run reported a mismatch for. A path with no
-/// row at its size and time has nothing else to say it was reached. See
-/// design.md, "Skipping", row `resume-seen`.
+/// Paths an earlier part of this run reported a mismatch or read error for.
+/// A path with no row at its size and time has nothing else to say it was
+/// reached. See design.md, "Skipping", row `resume-seen`.
 pub fn run_misses(conn: &Connection, run_id: i64) -> Result<HashSet<Vec<u8>>, String> {
 	miss_paths(
 		conn,
-		"SELECT DISTINCT path FROM events WHERE kind IN (?1, ?2, ?3) AND run_id = ?4",
+		"SELECT DISTINCT path FROM events WHERE kind IN (KINDS) AND run_id = ?",
 		Some(run_id),
 	)
 }
 
+// KINDS in the query becomes one placeholder per kind that keeps a path open.
 fn miss_paths(
 	conn: &Connection,
 	sql: &str,
 	run_id: Option<i64>,
 ) -> Result<HashSet<Vec<u8>>, String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
-	let mut st = conn.prepare(sql).map_err(e)?;
-	let kinds = [Kind::XattrMismatch, Kind::RmlintMismatch, Kind::DbMismatch];
-	let row = |r: &rusqlite::Row<'_>| path_at(r, 0).map(<[u8]>::to_vec);
-	let rows = match run_id {
-		Some(id) => st.query_map(params![kinds[0], kinds[1], kinds[2], id], row),
-		None => st.query_map(kinds, row),
+	let kinds: Vec<Kind> = Kind::ALL.into_iter().filter(|k| k.keeps_open()).collect();
+	let marks = vec!["?"; kinds.len()].join(", ");
+	let mut st = conn.prepare(&sql.replace("KINDS", &marks)).map_err(e)?;
+	let mut args: Vec<&dyn ToSql> = kinds.iter().map(|k| k as &dyn ToSql).collect();
+	if let Some(id) = &run_id {
+		args.push(id);
 	}
-	.map_err(e)?;
+	let row = |r: &rusqlite::Row<'_>| path_at(r, 0).map(<[u8]>::to_vec);
+	let rows = st.query_map(args.as_slice(), row).map_err(e)?;
 	rows.collect::<rusqlite::Result<_>>().map_err(e)
 }
 
@@ -509,6 +511,27 @@ impl Kind {
 			| Kind::OpenError
 			| Kind::DbError => 8,
 			Kind::Unstable | Kind::XattrError | Kind::Accepted => 0,
+		}
+	}
+
+	/// Whether no skip passes the path after this event until a later good
+	/// read or `accept`. See design.md, "Skipping", rows `db-mismatch`,
+	/// `db-read-error` and `db-unchecked`.
+	pub fn keeps_open(self) -> bool {
+		match self {
+			Kind::XattrMismatch | Kind::RmlintMismatch | Kind::DbMismatch | Kind::ReadError => true,
+			// Ends in a clean read, which writes the row.
+			Kind::CacheMismatch
+			// Nothing was read to the end, so the last good read still stands.
+			| Kind::Unsupported
+			| Kind::Unstable
+			| Kind::StatError
+			| Kind::OpenError
+			| Kind::DbError
+			// Not about a file's bytes.
+			| Kind::DirError
+			| Kind::XattrError
+			| Kind::Accepted => false,
 		}
 	}
 }
@@ -1045,7 +1068,8 @@ mod tests {
 		close_rw(conn).unwrap();
 	}
 
-	// design.md, "Skipping", row `db-mismatch`: open until a later good read.
+	// design.md, "Skipping", rows `db-mismatch`, `db-read-error` and
+	// `db-unchecked`: open until a later good read.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn open_misses_are_the_unread_ones() {
@@ -1055,17 +1079,20 @@ mod tests {
 		conn.execute_batch(
 			"INSERT INTO files (id, b3, bytes) VALUES (1, x'01', 3);
 			INSERT INTO paths (path, file_id, bytes, mtime_us, ino, hashed_us, seen_run) VALUES
-				('/a', 1, 3, 9, 1, 100, 1), ('/b', 1, 3, 9, 1, 300, 1), ('/d', 1, 3, 9, 1, 100, 1);
+				('/a', 1, 3, 9, 1, 100, 1), ('/b', 1, 3, 9, 1, 300, 1), ('/d', 1, 3, 9, 1, 100, 1),
+				('/f', 1, 3, 9, 1, 100, 1), ('/g', 1, 3, 9, 1, 300, 1), ('/h', 1, 3, 9, 1, 100, 1);
 			INSERT INTO events (run_id, at_us, kind, path) VALUES
 				(1, 200, 'b3-db-mismatch', '/a'), (1, 200, 'b3-xattr-mismatch', '/a'),
 				(1, 200, 'b3-db-mismatch', '/b'), (1, 50, 'b3-xattr-mismatch', '/c'),
-				(1, 200, 'cache-mismatch', '/d'), (1, 200, 'read-error', '/d'),
+				(1, 200, 'cache-mismatch', '/d'), (1, 200, 'read-error', '/f'),
+				(1, 200, 'read-error', '/g'), (1, 200, 'read-unsupported', '/h'),
+				(1, 200, 'open-error', '/h'), (1, 200, 'unstable', '/h'),
 				(1, 50, 'b2b-rmlint-mismatch', x'2f65ff');",
 		)
 		.unwrap();
 		let mut got: Vec<_> = open_misses(&conn).unwrap().into_iter().collect();
 		got.sort();
-		assert_eq!(got, [&b"/a"[..], b"/c", b"/e\xff"]);
+		assert_eq!(got, [&b"/a"[..], b"/c", b"/e\xff", b"/f"]);
 		close_rw(conn).unwrap();
 	}
 
@@ -1080,12 +1107,12 @@ mod tests {
 				(2, 200, 'b3-xattr-mismatch', '/a'), (2, 300, 'b3-xattr-mismatch', '/a'),
 				(2, 200, 'b2b-rmlint-mismatch', x'2f62ff'), (2, 200, 'b3-db-mismatch', '/c'),
 				(2, 200, 'cache-mismatch', '/d'), (2, 200, 'read-error', '/e'),
-				(1, 100, 'b3-xattr-mismatch', '/f');",
+				(1, 100, 'b3-xattr-mismatch', '/f'), (2, 200, 'read-unsupported', '/g');",
 		)
 		.unwrap();
 		let mut got: Vec<_> = run_misses(&conn, 2).unwrap().into_iter().collect();
 		got.sort();
-		assert_eq!(got, [&b"/a"[..], b"/b\xff", b"/c"]);
+		assert_eq!(got, [&b"/a"[..], b"/b\xff", b"/c", b"/e"]);
 		close_rw(conn).unwrap();
 	}
 
