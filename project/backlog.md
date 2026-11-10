@@ -181,15 +181,29 @@
 - A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
 	- ID: 2026111011092303
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 4
+	- Related IDs: 2026111011092318
 	- Origin: `562a451` and `f05c368`, before the last review. Confirmed: `scan --root r --no-xattr r/vm-imgaes` printed "xattr set 1" and exited 0, and `r/vm-images/disk.img` then had `user.blake3.*`.
 	- Requirements [Feature]: A path given to `--exclude` or `--no-xattr` that doesn't exist stops the scan before the run begins, with exit 1, as a root that can't be resolved does.
 	- Against: 2026102814341406's Swept line, which keeps these quiet "since none of them leaves files unread". A typo in `--no-xattr` doesn't leave anything unread, but it changes ctimes and attributes that were meant to be left alone.
 	- Decisions: A path given to `--exclude` or `--no-xattr` that doesn't exist stops the scan before the run begins, with exit 1. This replaces 2026102814341406's Swept line for these 2 options (answered 2026-11-10). The b23 wrappers' lists get checked with the fix.
+		- Any error resolving the path refuses, as for a root. A broken link or EACCES leaves the folder unmatched too.
+		- Every bad root and option path is named before the scan stops, so one try shows them all.
+		- b23's scan wrapper passes `--exclude /var/lib/containerd` and `--no-xattr /boot/efi`. Both are there on b23, so neither is refused. The VM wrapper excludes image files it found in the snapshot.
 	- Note: The b23 scan wrappers pass a fixed list, which may name a folder that isn't on every box. Check them before choosing.
+	- Actual fix:
+		- A scan resolves each `--exclude` and `--no-xattr` path with the roots, before the run begins. One that can't be resolved is printed as "can't resolve --exclude P: error", and the scan stops with exit 1 and no database.
+		- design.md "Reading files", README and `--help` say so.
+	- Branch: round-20261110
+	- Commit: `2698b36`
+	- Test case: `df4m5` (missing `--exclude`) and `df4m6` (missing `--no-xattr`, no attribute written), integration step 26.
+	- Verified: `df4m5` and `df4m6` fail against the installed build df46q ("0 made 0", and an attribute on the file) and pass after, on ext4 and ZFS. `--backlog-run-quick` passed in 2m 20s, and its `miri` area in 1m 05s.
+	- Swept: `--threads` paths stay quiet, since a typo there only leaves the default worker count, per 2026110720070507. `plan` already refuses `--exclude` and `--no-xattr`. `Shared.excludes` and `Shared.no_xattr` now take the resolved paths, so no fallback to the unresolved path is left.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the answered Check's option (a), and the tests fail before and pass after.
+	- Closed: 20261110-143646
 
 - A release run that skipped a check commits and pushes `main`, and only then refuses the upload.
 	- ID: 2026111011092304
@@ -513,13 +527,28 @@
 - A root inside an `--exclude` folder scans nothing and exits 0 without saying why.
 	- ID: 2026111011092318
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 19
 	- Origin: `91439f1`, round-20261108b, after the last review. Confirmed: `scan --exclude x2/ex --root x2/ex/src` printed "files 0 hashed 0" and exited 0. Every path under it then shows in `gone`.
 	- Requirements [Feature]: A root inside an excluded folder is named before the run begins, such as "skipping root R: inside --exclude X", as `plan` does for other dropped roots.
-	- Related IDs: 2026102814341406, 2026110720070507
+	- Related IDs: 2026102814341406, 2026110720070507, 2026111011092303
+	- Decisions:
+		- The root is dropped as well as named, as `plan`'s other drops are, so the run's roots leave it out and `gone` doesn't list its names. With no root left it's "nothing to scan", exit 1, before a run begins, the rule for other drops. It was exit 0 with "files 0". In questions.md as a Check.
+		- A root that is the excluded folder counts too, as "same folder as --exclude X".
+		- The walk keeps its own check, for a root that moves under one after the plan.
+		- 2026-11-10: `df1nk`'s second scan went from "0 files 0" to "1 ", and `df4j8` from "0 files 0" to "1 ", since each one's only root is now dropped. `df4m4` checks both are named.
+	- Actual fix:
+		- `scan::drop_excluded` drops a root at or inside an `--exclude` folder before the run begins, by device and inode under each of its names, as the walk checks, and prints "skipping root R: inside --exclude X".
+		- design.md "Reading files", README and `--help` say so.
+	- Branch: round-20261110
+	- Commit: `2698b36`
+	- Test case: `df4m3` (unit), `df4m7` and `df4m8` (integration step 26), `df4m4` (step 25, in a user namespace, skipped on ZFS).
+	- Verified: `df4m4`, `df4m7` and `df4m8` fail against the installed build df46q (no skip line, exit 0) and pass after, on ext4, and `df4m7` and `df4m8` on ZFS too. `--backlog-run-quick` passed in 2m 20s, and its `miri` area in 1m 05s.
+	- Swept: `walk`'s `inside_any` and `list_dir`'s id check are the other places a root or folder is left out by `--exclude`. `plan` doesn't take `--exclude`. `--no-xattr` roots are still scanned, with no attributes.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the requirement, and the tests fail before and pass after. The exit code for a scan whose every root is excluded changes, so it's in questions.md as a Check.
+	- Closed: 20261110-143646
 
 - An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
 	- ID: 2026111011092319
