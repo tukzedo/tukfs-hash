@@ -147,6 +147,7 @@
 		- `cicd/cicd.bash --backlog-run-quick` passed, df0pq on ext4 and ZFS.
 	- Swept: df0pq is the only RSS reading in the tests and the private tools. The soak reads dhat's heap count, and `profiling.rs` reads only CPU times.
 	- Closed: 20261110-125629
+	- 2026-11-10: GNU time installed on vmDebARM64 (Debian package time), so df0pq checks there too. b23 already had it.
 
 - Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
 	- ID: 2026111011092301
