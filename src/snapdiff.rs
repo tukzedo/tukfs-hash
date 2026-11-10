@@ -1136,7 +1136,7 @@ transid marker was 12\n";
 	fn fuzz_zfs_diff() {
 		let _id = test_id("deeb7");
 		let real: &[u8] = b"M\t/home/u/a\\0040b.txt\nR\t/home/u/old\t/home/u/new\n+\t/home/u/added\nM\t/other/x\n1700000000.5\tM\t/home/u/t\nM\tF\t/home/u/h\t(+1)\nR\t/home/u/old\\0040x -> /home/u/new\n-\t/home/u/saved\n+\t/home/u/saved\nX\t/home/u/a\n";
-		crate::testutil::fuzz("zfs diff", |r| {
+		crate::testutil::fuzz("zfs diff", 0x1ff, |r| {
 			let mut covered = 0;
 			let mount: &[u8] = r.pick(&[b"/home/u".as_slice(), b"/mnt/my disk", b"/"]);
 			let both = [mount, b"/real/u"];
@@ -1251,7 +1251,7 @@ transid marker was 12\n";
 			}
 			covered
 		})
-		.covers(0x1ff);
+		.covers();
 	}
 
 	fn same_bytes(b: &[u8]) -> Pair {
@@ -1266,7 +1266,7 @@ transid marker was 12\n";
 inode 300 file offset 0 len 4096 disk start 12 offset 0 gen 9 flags COMPRESS|PREALLOC b\n\
 inode x file offset 0 len 4096 disk start 12 offset 0 gen 9 flags NONE c\n\
 transid marker was 12\n";
-		crate::testutil::fuzz("find-new", |r| {
+		crate::testutil::fuzz("find-new", 0xf, |r| {
 			let mut covered = 0;
 			let (mut text, mut pairs, mut unusable, mut names) =
 				(Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -1358,6 +1358,6 @@ transid marker was 12\n";
 			}
 			covered
 		})
-		.covers(0xf);
+		.covers();
 	}
 }

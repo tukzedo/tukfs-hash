@@ -238,21 +238,27 @@ impl Rng {
 pub struct Fuzzed {
 	pub cases: u64,
 	covered: u32,
+	want: u32,
 	replay: bool,
 }
 
 impl Fuzzed {
 	/// The guard that the generator still makes what it's meant to: each bit
-	/// is something some case must have hit. A replayed seed can't hit them all.
-	pub fn covers(&self, want: u32) {
+	/// of `want` is something some case must have hit. A replayed seed can't
+	/// hit them all.
+	pub fn covers(&self) {
 		assert!(
-			self.replay || self.covered & want == want,
+			self.replay || self.covered & self.want == self.want,
 			"{} cases never hit {:#b}",
 			self.cases,
-			want & !self.covered
+			self.want & !self.covered
 		);
 	}
 }
+
+/// How long a run may go past its time to hit the last of `want`. A slow box,
+/// like an arm64 one under emulation, got too few cases in 1 s for a rare bit.
+const FUZZ_EXTRA: Duration = Duration::from_secs(30);
 
 fn fuzz_env(name: &str) -> Option<String> {
 	std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -261,8 +267,25 @@ fn fuzz_env(name: &str) -> Option<String> {
 /// Runs `case` over one seed after another until `TUKFS_FUZZ_SECS` of wall
 /// time is gone, 1 s when unset. Each run starts from a new seed, and a
 /// failure names its own, which `TUKFS_FUZZ_SEED` runs again alone. A case
-/// returns the coverage bits it hit.
-pub fn fuzz(name: &str, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
+/// returns the coverage bits it hit, and the run goes on past its time until
+/// it has all of `want`, for up to `FUZZ_EXTRA` more.
+pub fn fuzz(name: &str, want: u32, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
+	let secs: f64 = fuzz_env("TUKFS_FUZZ_SECS").map_or(1.0, |s| {
+		s.parse()
+			.ok()
+			.filter(|s: &f64| s.is_finite() && *s >= 0.0)
+			.expect("TUKFS_FUZZ_SECS is seconds")
+	});
+	fuzz_for(name, want, Duration::from_secs_f64(secs), FUZZ_EXTRA, case)
+}
+
+fn fuzz_for(
+	name: &str,
+	want: u32,
+	time: Duration,
+	extra: Duration,
+	case: impl Fn(&mut Rng) -> u32,
+) -> Fuzzed {
 	let one = |seed: u64| {
 		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| case(&mut Rng(seed))))
 			.unwrap_or_else(|_| {
@@ -274,26 +297,28 @@ pub fn fuzz(name: &str, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
 		return Fuzzed {
 			cases: 1,
 			covered: one(seed),
+			want,
 			replay: true,
 		};
 	}
-	let secs: f64 = fuzz_env("TUKFS_FUZZ_SECS").map_or(1.0, |s| {
-		s.parse()
-			.ok()
-			.filter(|s: &f64| s.is_finite() && *s >= 0.0)
-			.expect("TUKFS_FUZZ_SECS is seconds")
-	});
-	let until = std::time::Instant::now() + Duration::from_secs_f64(secs);
+	let until = std::time::Instant::now() + time;
+	let cap = until + extra;
 	let start = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map_or(0, |d| d.as_nanos() as u64);
 	let mut done = Fuzzed {
 		cases: 0,
 		covered: 0,
+		want,
 		replay: false,
 	};
 	// At least a few hundred, so a busy box still gets some coverage.
-	while done.cases < 300 || std::time::Instant::now() < until {
+	loop {
+		let now = std::time::Instant::now();
+		let short = done.covered & want != want;
+		if done.cases >= 300 && now >= until && !(short && now < cap) {
+			break;
+		}
 		done.covered |= one(start.wrapping_add(done.cases));
 		done.cases += 1;
 	}
@@ -390,13 +415,37 @@ mod tests {
 		// Pinned, so a change to the generator shows here first.
 		assert_eq!(r.next_u64(), 0xe220_a839_7b1d_cdaf);
 		let hit = std::cell::Cell::new(0u64);
-		let f = fuzz("self", |r| {
+		let f = fuzz("self", 0b111, |r| {
 			hit.set(hit.get() + 1);
 			1 << r.below(3)
 		});
 		assert_eq!(f.cases, hit.get());
 		assert!(f.cases >= 300);
-		f.covers(0b111);
+		f.covers();
+	}
+
+	// Out of time with a bit still missing: keep going until it's hit, and
+	// no further. One that never comes still fails, once the extra is gone.
+	#[test]
+	fn a_rare_bit_is_waited_for() {
+		let _id = test_id("df3h9");
+		let n = std::cell::Cell::new(0u64);
+		let late = |_: &mut Rng| {
+			n.set(n.get() + 1);
+			if n.get() == 5000 { 0b11 } else { 0b01 }
+		};
+		let f = fuzz_for("late", 0b11, Duration::ZERO, Duration::from_secs(600), late);
+		assert_eq!(f.cases, 5000);
+		f.covers();
+		let f = fuzz_for(
+			"never",
+			0b11,
+			Duration::ZERO,
+			Duration::from_millis(50),
+			|_| 1,
+		);
+		assert!(f.cases >= 300);
+		assert!(std::panic::catch_unwind(|| f.covers()).is_err());
 	}
 
 	// Of these only the old one of a pid that's gone may go.

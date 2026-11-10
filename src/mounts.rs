@@ -725,7 +725,7 @@ mod tests {
 	fn fuzz_visible() {
 		let _id = test_id("df1ny");
 		let points = ["/", "/a", "/a/b", "/a/b/c", "/a/c", "/ab", "/b", "/b/a"];
-		crate::testutil::fuzz("visible", |r| {
+		crate::testutil::fuzz("visible", 0b111, |r| {
 			let n = 1 + r.below(14);
 			let mut all = Vec::with_capacity(n);
 			let mut covered = 0;
@@ -757,7 +757,7 @@ mod tests {
 			assert_eq!(ids(&got), ids(&want), "{:?}", ids(&all));
 			covered | if want.len() < all.len() { 1 } else { 2 }
 		})
-		.covers(0b111);
+		.covers();
 	}
 
 	#[test]
@@ -894,7 +894,7 @@ mod tests {
 	fn fuzz_mountinfo() {
 		let _id = test_id("deeb6");
 		let real = fs::read("/proc/self/mountinfo").unwrap_or_default();
-		crate::testutil::fuzz("mountinfo", |r| {
+		crate::testutil::fuzz("mountinfo", 0b1_1111, |r| {
 			let mut covered = 0;
 			let mut text = Vec::new();
 			let mut want = Vec::new();
@@ -981,6 +981,6 @@ mod tests {
 			}
 			covered
 		})
-		.covers(0b1_1111);
+		.covers();
 	}
 }
