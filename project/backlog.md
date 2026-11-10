@@ -356,7 +356,8 @@
 - The dogfood launcher now always prints a pool path, and design.md and the private dogfood check still expect the fixed name.
 	- ID: 2026111011092315
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
+	- Needs local test suite run?: No, design.md is a doc, and the private check below runs the launcher.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 16
@@ -364,6 +365,15 @@
 	- Expected behavior [Bug]: design.md, "Build and release", says what the launcher prints, and its check passes.
 	- Probable fix [Bug]: Update the 3 cases and the sentence in design.md.
 	- Sweep: whatever finds a run by the name `tukfs-hash`, since a pool run's name is now its pool name.
+	- Reproduced [Bug]: Yes, the 3 cases failed on `HEAD`.
+	- Actual cause [Bug]: The launcher was changed to print the pool path, and the doc and the check weren't.
+	- Actual fix [Bug]: design.md, "Build and release", says the launcher prints the newest version's own path and why. The 3 cases in the private `dogfood-check.bash` want that path.
+	- Decisions:
+		- The code stays as published, since the edit was on purpose and the docs follow it.
+	- Branch: round-20261110
+	- Test case: none with an ID, since private checks have none. The private `dogfood-check.bash REPO`. Verified: its 3 updated cases fail on the launcher from before `a332fbd`, and all 38 pass on `HEAD`. The quick gate passed.
+	- Swept: `fInUse` in `cicd/cicd.bash` matches only the synced copy's name, and a pool run's comm is now `tukfs-hash_<date>`, so it can't be taken for that copy. `Get-RunningVersion` already reads a version's name from the comm and first argument. Nothing else in the repo or the private tools finds a run by the name.
+	- Closed: 20261110-122410
 
 - README's Installation says no release is published, but 1.0.0-beta.1 is.
 	- ID: 2026111011092316
