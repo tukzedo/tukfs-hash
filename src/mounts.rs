@@ -259,6 +259,27 @@ fn kname_of(dev: &str) -> Option<String> {
 	Some(real.file_name()?.to_string_lossy().into_owned())
 }
 
+// A source can name a node that isn't there, such as `/dev/root` on a box
+// booted with no initramfs. The major and minor still find it then.
+fn kname_for(m: &Mount) -> Option<String> {
+	if m.source.starts_with("/dev/")
+		&& let Some(k) = kname_of(&m.source)
+	{
+		return Some(k);
+	}
+	let (major, minor) = m.dev.split_once(':')?;
+	let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+	if !digits(major) || !digits(minor) {
+		return None;
+	}
+	kname_of(&format!("/sys/dev/block/{major}:{minor}"))
+}
+
+// A snapshot's source is `pool@snap` or `pool/dataset@snap`.
+fn zfs_pool(source: &str) -> &str {
+	source.split(['/', '@']).next().unwrap_or(source)
+}
+
 // Down through LUKS, LVM and partitions to whole disks.
 fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 	let sys = Path::new("/sys/class/block").join(kname);
@@ -348,26 +369,22 @@ pub fn disks_for(m: &Mount, mounts: &[Mount]) -> Result<BTreeSet<String>, String
 fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<String>, String> {
 	let mut out = BTreeSet::new();
 	match m.fstype.as_str() {
-		"zfs" => {
-			let pool = m.source.split('/').next().unwrap_or(&m.source);
-			zpool_disks(pool, &mut out)?;
-		}
-		_ if m.source.starts_with("/dev/") => {
-			let k = kname_of(&m.source).ok_or_else(|| format!("cannot resolve {}", m.source))?;
-			if m.fstype == "btrfs" {
-				btrfs_disks(&k, &mut out);
-			} else {
-				base_disks(&k, &mut out);
+		"zfs" => zpool_disks(zfs_pool(&m.source), &mut out)?,
+		_ => match kname_for(m) {
+			Some(k) if m.fstype == "btrfs" => btrfs_disks(&k, &mut out),
+			Some(k) => base_disks(&k, &mut out),
+			None if m.source.starts_with("/dev/") => {
+				return Err(format!("cannot resolve {}", m.source));
 			}
-		}
-		_ => {
-			return Err(format!(
-				"{} is {} from {}, not a local disk",
-				m.point.display(),
-				m.fstype,
-				m.source
-			));
-		}
+			None => {
+				return Err(format!(
+					"{} is {} from {}, not a local disk",
+					m.point.display(),
+					m.fstype,
+					m.source
+				));
+			}
+		},
 	}
 	if out.is_empty() {
 		return Err(format!("no disks found under {}", m.point.display()));
@@ -626,6 +643,75 @@ mod tests {
 			Some("fuseblk.exfat")
 		);
 		assert_eq!(hands_off_at(&all, Path::new("/home")), None);
+	}
+
+	// A snapshot of a pool's top dataset comes from `pool@snap`
+	// (2026111011092311).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't run zpool")]
+	fn a_snapshot_finds_its_pool() {
+		let _id = test_id("df4jg");
+		assert_eq!(zfs_pool("zf10@snap"), "zf10");
+		assert_eq!(zfs_pool("zf10/a/b@snap"), "zf10");
+		assert_eq!(zfs_pool("zf10/a"), "zf10");
+		assert_eq!(zfs_pool("zf10"), "zf10");
+		let all = read_mounts().unwrap();
+		// Where zpool can't see the pool, as in a user namespace, there's
+		// nothing to compare with.
+		let Some(top) = all
+			.iter()
+			.find(|m| m.fstype == "zfs" && !m.source.contains('@'))
+		else {
+			return;
+		};
+		let Ok(whole) = disks_for(top, &all) else {
+			return;
+		};
+		let pool = top.source.split('/').next().unwrap_or_default();
+		let m = |source: String| Mount {
+			source,
+			..top.clone()
+		};
+		assert_eq!(
+			disks_for(&m(format!("{pool}@snap")), &all),
+			Ok(whole.clone())
+		);
+		assert_eq!(disks_for(&m(format!("{pool}/a/b@snap")), &all), Ok(whole));
+	}
+
+	// No initramfs, so `/` comes from `/dev/root`, which isn't there
+	// (2026111011092321).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no sysfs")]
+	fn a_missing_source_falls_back_to_the_device_number() {
+		let _id = test_id("df4jh");
+		let all = read_mounts().unwrap();
+		let Some(real) = all.iter().find(|m| {
+			m.fstype != "btrfs"
+				&& m.source.starts_with("/dev/")
+				&& kname_of(&m.source).is_some()
+				&& Path::new("/sys/dev/block").join(&m.dev).exists()
+		}) else {
+			return;
+		};
+		let want = disks_for(real, &all).unwrap();
+		let moved = |source: &str, dev: &str| Mount {
+			source: source.into(),
+			dev: dev.into(),
+			..real.clone()
+		};
+		let gone = "/dev/tukfs-hash-test-no-such-node";
+		assert_eq!(disks_for(&moved(gone, &real.dev), &all), Ok(want.clone()));
+		assert_eq!(disks_for(&moved("rootfs", &real.dev), &all), Ok(want));
+		assert_eq!(
+			disks_for(&moved(gone, "0:0"), &all),
+			Err(format!("cannot resolve {gone}"))
+		);
+		assert!(disks_for(&moved(gone, "../8:1"), &all).is_err());
+		assert!(
+			disks_for(&moved("rootfs", "0:0"), &all)
+				.is_err_and(|e| e.ends_with("not a local disk"))
+		);
 	}
 
 	// base on mnt, hid on mnt/sub, then vis over mnt.
