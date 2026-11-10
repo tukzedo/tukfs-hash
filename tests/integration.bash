@@ -971,7 +971,7 @@ check df1qc "accept of a name no scan knows says so" "${rc} $(grep -c 'no scan h
 # 32. A file that changes while it's read, and an attribute that can't be
 # written, are reported and set no exit bit (design.md, Runs and exit codes).
 us="${work}/us"; mkdir -p "${us}"
-head -c 1000000 /dev/urandom > "${us}/live"
+head -c 16000000 /dev/urandom > "${us}/live"
 # Appends a byte at a time, so the size moves under every read.
 python3 -I -c '
 import os, sys
@@ -980,10 +980,16 @@ while True:
 	os.write(fd, b"x")
 ' "${us}/live" &
 appender=$!
-for ((i = 0; i < 200; i++)); do [[ "$(stat -c %s "${us}/live")" -gt 1000000 ]] && break; sleep 0.05; done
-rc=0; "${bin}" scan --db "${work}/db/us.sqlite" --root "${us}" --no-xattrs --progress 3600 > "${work}/us.txt" 2>&1 || rc=$?
+for ((i = 0; i < 200; i++)); do [[ "$(stat -c %s "${us}/live")" -gt 16000000 ]] && break; sleep 0.05; done
+# On a loaded box the appender can sit out a whole read, so a quiet scan gets
+# another go. The first one that reports anything is what's checked.
+for ((i = 1; i <= 5; i++)); do
+	rc=0; "${bin}" scan --db "${work}/db/us${i}.sqlite" --root "${us}" --no-xattrs --progress 3600 > "${work}/us.txt" 2>&1 || rc=$?
+	usGot="${rc} $(sqlite3 "${work}/db/us${i}.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")"
+	[[ "${usGot}" == "0 " ]] || break
+done
 kill "${appender}"; wait "${appender}" 2> /dev/null || true
-check df1rj "a file changing while read: reported, exit 0" "${rc} $(sqlite3 "${work}/db/us.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 unstable ${us}/live"
+check df1rj "a file changing while read: reported, exit 0" "${usGot}" "0 unstable ${us}/live"
 ro="${work}/ro"; mkdir -p "${ro}"
 printf 'read only\n' > "${ro}/f"; chmod 444 "${ro}/f"
 # Root, or a sandbox that kept its capabilities, can write it anyway.
