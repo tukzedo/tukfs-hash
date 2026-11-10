@@ -660,12 +660,14 @@ _fSingleExitPoint(){
 	local -r errMsg="${4:-}"
 	local -r errCommand="$BASH_COMMAND"
 	_ErrVal=$exitCode
-	if [[ "${signal}" == "INT" ]]; then
+	## A stop exits here, with 128 plus the signal's number. Returning from the
+	## trap would go on to commit and push. HUP's trap names it SIGHUP.
+	if [[ "${signal#SIG}" =~ ^(INT|TERM|HUP)$ ]]; then
 		fEcho_Force
-		echo "User interrupted." >&2
+		if [[ "${signal#SIG}" == "INT" ]]; then echo "User interrupted." >&2; else echo "Stopped by SIG${signal#SIG}." >&2; fi
 		fEcho_ResetBlankCounter
 		fCleanup  ## User cleanup
-		exit 1
+		case "${signal#SIG}" in INT) exit 130 ;; TERM) exit 143 ;; *) exit 129 ;; esac
 	elif [[ "${exitCode}" != "0" ]] && [[ "${exitCode}" != "1" ]]; then  ## Clunky string compare is less likely to fail than integer
 		fEcho_Clean
 		echo -e "Signal .....: '${signal}'"      >&2
@@ -822,3 +824,5 @@ fMain  "${@}"
 ##		- 20261107: A failed stash pop names the untracked files it couldn't put
 ##		  back and says to keep the stash, rather than advising a drop that
 ##		  deletes their only copy.
+##		- 20261110: A TERM or HUP stops the run before it commits, as INT does.
+##		  INT, TERM and HUP exit 130, 143 and 129. INT exited 1.

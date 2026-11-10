@@ -274,7 +274,7 @@
 - The publisher goes on after a TERM or HUP to its own PID, then commits, pushes and exits 0.
 	- ID: 2026111011092310
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 11
@@ -283,6 +283,19 @@
 	- Expected behavior [Bug]: A TERM or HUP stops the publisher before it commits.
 	- Probable fix [Bug]: Exit 143 for TERM and 129 for HUP, as it already exits 130 for INT.
 	- Note: cicd stops a step with a TERM to its group, which kills the child and trips errexit, so a cicd stop isn't affected.
+	- Reproduced [Bug]: Yes, 2026-11-10. A TERM or HUP to the publisher's PID during the backup gave exit 0, with the edit committed and pushed. INT gave exit 1, not 130.
+	- Actual cause [Bug]: The INT and TERM traps are both `_fTrap_Exit`, and HUP's is `_fTrap_Error` with the name `SIGHUP`. `_fSingleExitPoint` exits only for `INT`, so TERM and HUP run the cleanup and return to the script.
+	- Decisions:
+		- INT, TERM and HUP exit 130, 143 and 129, as cicd.bash and `box-side.bash` do. INT exited 1, not 130 as the item says. cicd treats any failure the same.
+		- A stop between the stash and its pop leaves the work in `auto-stash`, as INT already did. The next run and cicd's sync stage refuse while it's there.
+	- Actual fix [Bug]: `_fSingleExitPoint` exits for INT, TERM and HUP, after the cleanup, printing "Stopped by SIGTERM." or "Stopped by SIGHUP." for a TERM or HUP.
+	- Branch: round-20261110
+	- Test case: none with an ID. The private `publish-check.bash REPO`, cases "TERM, HUP and INT during the backup", since private checks stay out of the pipeline (2026102508462883).
+	- Verified: those cases fail on the code before (TERM and HUP exit 0 and push, INT exits 1) and pass after. A TERM during the pull exits 143 with the work in `auto-stash`, and the next run refuses. shellcheck and the quick gate pass.
+	- Swept: no other script in the repo or the private tools has this trap template. `git-auto-msg.bash` and `gfs-rotate.bash`, also from shcl, have no signal traps.
+	- Note: shcl's canonical copy needs the same change.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code before.
+	- Closed: 20261110-121709
 
 - A scan root on a snapshot of a pool's top dataset fails planning.
 	- ID: 2026111011092311
