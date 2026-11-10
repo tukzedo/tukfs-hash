@@ -714,6 +714,9 @@ fRunTmpGone(){
 	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
+	## After the trap above, so a TERM in its git calls can't skip the rest
+	## (2026111011092309), and after the stop, so no git of ours has the ref locked.
+	fTagUndo || true
 	fCtrsGone || true
 	if [[ "${ctrs_said}" == kept* ]]; then printf '[ %s ]\n' "${ctrs_said}" >&2
 	elif [[ -n "${ctrs_said}" ]]; then printf '[ cleanup: removed %s, about %s ]\n' "${ctrs_said}" "$(fSize "${ctrs_kb}")" >&2; fi
@@ -748,7 +751,7 @@ fTagUndo(){
 	fi
 	return 0
 }
-trap 'fTagUndo; fRunTmpGone || true' EXIT
+trap 'fRunTmpGone || true' EXIT
 fStopOnSignals
 
 
@@ -818,20 +821,31 @@ fBuildStamp
 ## A release is a commit tagged v<version>, so a run that uploads one tags HEAD
 ## before it builds. A tag of that name anywhere else, here or on the git host,
 ## means the version wasn't bumped. A stop before the upload takes the tag off
-## again, so it never names a commit that didn't pass.
+## again, so it never names a commit that didn't pass. After the format stage,
+## since that can change the tree.
 fReleaseTag(){
-	local tag at="" head out="" remote
+	local tag at="" head obj="" out="" remote tree="" headTree="" more=""
+	local -a changed=()
 	[[ -n "${step_no[upload]:-}" ]] || return 0
 	tag="v$(fVersion)"; head="$(git -C "${root}" rev-parse HEAD)" || fDie "no HEAD"
 	at="$(git -C "${root}" rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
-	if [[ "${at}" == "${head}" ]]; then return 0; fi
-	if [[ -n "${at}" ]]; then fDie "${tag} is already on ${at:0:12}, not HEAD. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	if [[ -n "${at}" && "${at}" != "${head}" ]]; then fDie "${tag} is already on ${at:0:12}, not HEAD. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	## Even with the tag on HEAD here, since the upload only pushes this one,
+	## and refuses another of that name there.
 	remote="$(git -C "${root}" config --get "branch.${RELEASE_BRANCH}.remote" || echo origin)"
 	out="$(fGitRemote -C "${root}" ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "could not list the tags on ${remote}, to see if ${tag} is taken. Run with --no-upload to build without it."
-	if [[ -n "${out}" ]]; then fDie "${remote} already has ${tag}. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
-	if [[ "$("${here}/utility/green-tree.bash" tree "${root}")" != "$(git -C "${root}" rev-parse 'HEAD^{tree}')" ]]; then
-		fDie "the checkout has changes that aren't committed, so its build can't be a release. Commit them, or run with --no-upload."
+	out="$(awk -v r="refs/tags/${tag}" '$2 == r { print $1; exit }' <<< "${out}")"
+	if [[ -n "${at}" ]]; then obj="$(git -C "${root}" rev-parse "refs/tags/${tag}")" || fDie "could not read tag ${tag}"; fi
+	if [[ -n "${out}" && -z "${obj}" ]]; then fDie "${remote} already has ${tag}. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	if [[ -n "${out}" && "${out}" != "${obj}" ]]; then fDie "${remote} has another ${tag} than the one on HEAD here. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "could not read the checkout's tree"
+	headTree="$(git -C "${root}" rev-parse 'HEAD^{tree}')" || fDie "no tree for HEAD"
+	if [[ "${tree}" != "${headTree}" ]]; then
+		mapfile -t changed < <(git -C "${root}" diff --name-only --no-renames "${headTree}" "${tree}")
+		((${#changed[@]} <= 10)) || more=" and $((${#changed[@]} - 10)) more"
+		fDie "the checkout has changes that aren't committed after the format stage, so its build can't be a release: ${changed[*]:0:10}${more}. Commit them, or run with --no-upload."
 	fi
+	[[ -z "${at}" ]] || return 0
 	git -C "${root}" tag -a -m "${tag}" "${tag}" HEAD || fDie "could not tag HEAD ${tag}"
 	tag_made="${tag}=$(git -C "${root}" rev-parse "refs/tags/${tag}")"
 	fEcho "tagged HEAD ${tag}; taken off again if the run stops before the upload"
@@ -1927,11 +1941,11 @@ if ((! inner_run)); then
 	fSweepKilled
 	if ((${#swept[@]})); then fEcho_Clean "cleanup: removed $(printf '%s, ' "${swept[@]}" | sed 's/, $//'), about $(fSize "${swept_kb}")"; fi
 	fStageSync
-	fReleaseTag
 fi
 if ((freeze)); then
 	## Rewrites the checkout, before the copy is taken. A check runs in the copy.
 	if ((${#FMT_CMD[@]})); then fStageFormat; fmt_done=1; fi
+	fReleaseTag
 	fFreeze
 fi
 if [[ -n "${frozen_root}" ]]; then
@@ -1939,6 +1953,7 @@ if [[ -n "${frozen_root}" ]]; then
 else
 	## The run on the frozen copy only checks, and only in the check-only modes.
 	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fBuildStamp; fi
+	if ((! inner_run && ! freeze)); then fReleaseTag; fi
 	if ((! inner_run)) && { ((record_green)) || ((${#GIT_PUBLISH[@]})); }; then tested_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
 	if ((record_green && ! inner_run)); then green_tree="${tested_tree}"; fi
 	fStageBuild

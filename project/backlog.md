@@ -232,7 +232,7 @@
 - A release run with a local `v<version>` tag already on HEAD doesn't check the git host for that tag on another commit.
 	- ID: 2026111011092308
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 9
@@ -241,11 +241,20 @@
 	- Expected behavior [Bug]: design.md, "Build and release": a tag of that name on another commit, here or on the git host, stops the run before the build.
 	- Probable fix [Bug]: Run the `ls-remote` check before the early return, and accept only a remote tag on the same object.
 	- Related IDs: 2026110218175401
+	- Reproduced [Bug]: Yes, 2026-11-10. With the tag on HEAD here and the host's on the commit before, the run went on to the build. A dirty checkout with the tag already on HEAD did too.
+	- Actual fix [Bug]: The host's tag is checked whether or not the tag is on HEAD here, and has to be the same tag object. So is the tree, so a dirty checkout stops the run before the build either way.
+	- Decisions: The same object is the tag object rather than its commit, since `release-upload.bash` refuses any other tag object of that name on the host.
+	- Branch: round-20261110
+	- Test case: none with an ID. The private `release-upload-check.bash REPO`, cases "tag on HEAD, host's on another commit" and "tag on HEAD, dirty checkout", since private checks stay out of the pipeline (2026102508462883).
+	- Verified: `release-upload-check.bash REPO` passes 39 of 39, and both cases fail on the code before. `publish-check.bash`, `cicd-noflags-check.bash`, `cicd-steps-check.bash`, `cicd-flags-check.bash` and `cicd/cicd.bash --backlog-run-quick` pass.
+	- Swept: every return in `fReleaseTag` before the tree check, and the host check in `release-upload.bash`, which already compares the tag object.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code before. The first real release is the last check.
+	- Closed: 20261110-120348
 
 - A TERM while the EXIT trap takes the release tag off skips the run's cleanup.
 	- ID: 2026111011092309
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 10
@@ -253,6 +262,14 @@
 	- Incorrect behavior [Bug]: `fTagUndo` runs 2 git commands before `fRunTmpGone` ignores signals, so a TERM then leaves descendants, containers and the run folder behind.
 	- Expected behavior [Bug]: A stop's cleanup ignores further signals, as `fRunTmpGone` does.
 	- Probable fix [Bug]: Ignore INT, TERM, HUP and PIPE at the top of `fTagUndo`, or call it from `fRunTmpGone` after that line.
+	- Reproduced [Bug]: Yes, 2026-11-10. A TERM while a slow stand-in `git` took the tag off gave exit 143, and no cleanup line.
+	- Actual fix [Bug]: `fRunTmpGone` takes the tag off itself, once it ignores signals and has stopped what the run started. The EXIT trap is `fRunTmpGone` alone again.
+	- Branch: round-20261110
+	- Test case: none with an ID. The private `release-upload-check.bash REPO`, case "TERM while the tag comes off", since private checks stay out of the pipeline (2026102508462883).
+	- Verified: that case passes, exit 1 with the cleanup line, and fails on the code before with exit 143. `cicd-stop-check.bash REPO 20 twice` and `ctrlc` pass.
+	- Swept: the other EXIT traps in `cicd/`. Each starts with `fStopDescendants`, which ignores signals first. `fStopSignal` does too.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code before.
+	- Closed: 20261110-120348
 
 - The publisher goes on after a TERM or HUP to its own PID, then commits, pushes and exits 0.
 	- ID: 2026111011092310
@@ -305,7 +322,7 @@
 - A release run tags HEAD and checks the tree before the format stage, which can then make the build `-dirty`.
 	- ID: 2026111011092314
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 15
@@ -313,6 +330,15 @@
 	- Incorrect behavior [Bug]: When `cargo fmt` rewrites a file, the build is marked dirty, so stage 11 refuses it after about 20 minutes and a publish. The message doesn't name the format stage.
 	- Expected behavior [Bug]: design.md, "Build and release": a checkout that can't be released stops the run before the build.
 	- Probable fix [Bug]: Tag and check the tree after `fStageFormat`.
+	- Reproduced [Bug]: Yes, 2026-11-10. A format command that left a new file went past the build and publish, and the run failed only at the upload.
+	- Actual fix [Bug]: The tag and the tree check come right after the format stage, with the frozen copy and without. The refusal says it's after the format stage, and names up to 10 changed files. design.md, "Build and release", says when the tree is checked.
+	- Decisions: A release run still stops on a format change rather than committing it, since the release has to be a commit that was pushed as it is.
+	- Branch: round-20261110
+	- Test case: none with an ID. The private `release-upload-check.bash REPO`, case "format makes it dirty", since private checks stay out of the pipeline (2026102508462883).
+	- Verified: that case passes, and fails on the code before. The same runs as 2026111011092308 pass.
+	- Swept: both places the format stage runs in the outer run, with and without the frozen copy.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code before.
+	- Closed: 20261110-120348
 
 - The dogfood launcher now always prints a pool path, and design.md and the private dogfood check still expect the fixed name.
 	- ID: 2026111011092315
