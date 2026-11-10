@@ -348,13 +348,26 @@
 - A scan root on a snapshot of a pool's top dataset fails planning.
 	- ID: 2026111011092311
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 12
+	- Related IDs: 2026111011092321
 	- Origin: `f05c368`, before the last review. Not seen before. Plausible: `disks_under` cuts the pool name at the first `/` only, so a source of `zf10@snap` goes to `zpool list` as is, and `zpool list zf10@x` fails with "invalid character '@' in pool name". No snapshot was mounted.
 	- Expected behavior [Bug]: design.md: a snapshot is read when it's listed.
 	- Probable fix [Bug]: Cut at the first `/` or `@`.
+	- Reproduced [Bug]: Yes. `disks_for` on a zfs mount from `zf12@snap` failed with "zpool list zf12@snap: cannot open 'zf12@snap': invalid character '@' in pool name".
+	- Actual cause [Bug]: As above.
+	- Actual fix [Bug]: The pool name is cut at the first `/` or `@`, in `mounts::zfs_pool`.
+	- Branch: round-20261110
+	- Commit: `3bc4fdc`
+	- Test case: `df4jg`. It skips where zpool can't see a mounted pool.
+	- Verified:
+		- `df4jg` fails with the old cut and passes with the new one, on b23.
+		- clippy with all targets and features, `cicd/cicd.bash --backlog-run-quick`, and its `miri` area passed.
+	- Swept: `disks_under` is the only place in `src/` that reads a zfs source. `cicd/utility/sandbox.bash` cuts its writable folders' sources at `/` only, which is enough, since a snapshot is never writable.
+	- Acceptance signoff: Self-closed: the probable fix, and its test fails before and passes after.
+	- Closed: 20261110-134535
 
 - snapdiff reads zfs diff's `<xattrdir>` lines as files missing from `--new`, and adds exit 8.
 	- ID: 2026111011092312
@@ -495,13 +508,29 @@
 - A mount whose source names no device node, such as `/dev/root`, stops planning.
 	- ID: 2026111011092321
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 22
+	- Related IDs: 2026111011092311
 	- Origin: `f05c368`, before the last review. Plausible. A box booted without an initramfs, such as Raspberry Pi OS, lists `/` as `/dev/root`, which doesn't exist, so `scan --root /` stops with "cannot resolve /dev/root".
 	- Requirements [Feature]: When the source doesn't resolve, find the disk from `Mount.dev` through `/sys/dev/block/<major>:<minor>`.
 	- Note: 2026102814341443 decided against unescaping a mount's source, since it fails loudly. `Mount.dev` came later, which makes this fallback cheap.
+	- Progress log:
+		- 2026-11-10: `mounts::kname_for` tries the source first, then `/sys/dev/block/<major>:<minor>`. A source that's in neither still stops planning with the same message as before.
+	- Decisions:
+		- The fallback also covers a source that isn't under `/dev/` at all, such as `rootfs`. The device number is the kernel's own answer, and a filesystem with no block device, such as tmpfs, NFS or sshfs, has major 0, which `/sys/dev/block` doesn't list, so those still say "not a local disk".
+		- btrfs isn't helped. Its device number is an anonymous one with no entry in `/sys/dev/block`, so a btrfs `/` from `/dev/root` still stops with "cannot resolve /dev/root". Raspberry Pi OS's `/` is ext4.
+		- A device number that isn't 2 runs of digits around a colon isn't looked up.
+	- Branch: round-20261110
+	- Commit: `3bc4fdc`
+	- Test case: `df4jh`. It takes a mount from a block device in the box's own table, and gives it a source that isn't there. It skips on a box with none.
+	- Verified:
+		- `df4jh` fails with the old lookup, at "cannot resolve", and passes with the new one, on b23.
+		- clippy with all targets and features, `cicd/cicd.bash --backlog-run-quick`, and its `miri` area passed.
+	- Swept: `disks_under` is the only caller of `kname_of` for a mount's source. `zpool_disks` reads device paths from zpool, which are real nodes.
+	- Acceptance signoff: Self-closed: per the requirement, and its test fails before and passes after.
+	- Closed: 20261110-134535
 
 - snapdiff keeps every run of differing bytes, so its memory grows with the file.
 	- ID: 2026111011092322
