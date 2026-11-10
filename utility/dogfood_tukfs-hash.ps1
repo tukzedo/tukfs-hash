@@ -472,17 +472,17 @@ function Update-FixedName {
 function Get-RunTarget {
 	<#
 	.SYNOPSIS
-	The fixed name when it names the newest version, else that version itself.
+	The newest version by its own path, never the fixed name.
+	.DESCRIPTION
+	A run that repoints the name while this one starts can't swap the build,
+	and the process shows which version it is. The fixed name is there for PATH.
 	#>
 	[CmdletBinding()]
 	[OutputType([string])]
 	param()
 	$versions = Get-HeldVersion
 	if ($versions.Count -eq 0) { return $null }
-	$newest = $versions[-1].File.FullName
-	$cur = Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue
-	if ($cur -and "$($cur.Target)" -ceq $newest) { return $LinkPath }
-	return $newest
+	return $versions[-1].File.FullName
 }
 
 Set-StrictMode -Version Latest
@@ -519,3 +519,4 @@ Write-Output -InputObject $exe
 ##		  frequent, so a burst of builds can't push out the week and day ones.
 ##		  Another user's run, such as one through sudo, is found by its comm
 ##		  and first argument.
+##		- 2026-11-09: Prints the newest version's own path, never the fixed name.
