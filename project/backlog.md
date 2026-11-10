@@ -29,6 +29,38 @@
 
 ## Issues
 
+- Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
+	- ID: 2026111011092301
+	- Type: Enhancement
+	- Status: Waiting for answers
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 2
+	- Origin: `canonical_db` from `f05c368` and `eb111ff`, the hand-back from `422efff`, `65e5872` and `8a0921d`. All before the last review. Not seen before. Confirmed, as root in a user namespace with `SUDO_UID` set.
+	- Steps to reproduce [Bug]:
+		- A folder `sys` owned by root, mode 755. As the user, `ln -s ../sys home/data`.
+		- As root, `SUDO_UID=1000 SUDO_GID=1000 tukfs-hash scan --db home/data/tukfs.sqlite --root r` exits 0.
+		- `sys/tukfs.sqlite` and `sys/tukfs.sqlite.lock` are then the user's, and the user can write them.
+	- Requirements [Feature]:
+		- Under sudo, a database folder that isn't owned by `SUDO_UID` or root stops the run before anything is made.
+		- The hand-back goes through the folder fd that was checked.
+	- Against: 2026102814341403's note that a link in a parent folder is still followed, "since the folder is the user's own choice". That item guards against a process running as the user, and such a process can plant a link at the folder as easily as at the file names.
+	- Note: The file names are the user's own, so making root out of this needs a root folder that trusts any file name.
+	- Note: Check entry in questions.md.
+
+- A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
+	- ID: 2026111011092303
+	- Type: Enhancement
+	- Status: Waiting for answers
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 4
+	- Origin: `562a451` and `f05c368`, before the last review. Confirmed: `scan --root r --no-xattr r/vm-imgaes` printed "xattr set 1" and exited 0, and `r/vm-images/disk.img` then had `user.blake3.*`.
+	- Requirements [Feature]: A path given to `--exclude` or `--no-xattr` that doesn't exist stops the scan before the run begins, with exit 1, as a root that can't be resolved does.
+	- Against: 2026102814341406's Swept line, which keeps these quiet "since none of them leaves files unread". A typo in `--no-xattr` doesn't leave anything unread, but it changes ctimes and attributes that were meant to be left alone.
+	- Note: The b23 scan wrappers pass a fixed list, which may name a folder that isn't on every box. Check them before choosing.
+	- Note: Check entry in questions.md.
+
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -84,6 +116,365 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- A read error found by `--verify` is skipped by a plain scan later the same day, which exits 0.
+	- ID: 2026111011092300
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 1
+	- Origin: `73ad713`, 2026102814341402's fix, which reopens only the 3 mismatch kinds. Before the last review. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Scan a tree.
+		- Run `scan --verify` with reads of one file failing with EIO, through an `LD_PRELOAD` shim. It prints "read-err 1" and exits 4.
+		- A plain scan right after prints "skipped 2" and no events, and exits 0.
+	- Incorrect behavior [Bug]: `db::miss_paths` brings back xattr, rmlint and database mismatches only. A read error leaves the row at the earlier good read's date, so the same day's scan skips the file.
+	- Expected behavior [Bug]: design.md, "Reading files": an EIO is reported the same as a mismatch. So the next run reads it again, as row `db-mismatch` of "Skipping" says.
+	- Probable fix [Bug]: Add a row for it to "Skipping" first, then add `Kind::ReadError` to the kinds in `miss_paths`. dejdf asserts the opposite, and no reason for that was recorded.
+	- Sweep: every kind in `Kind` against the table, `unsupported` included.
+	- Related IDs: 2026102814341402, 2026102814341401
+	- Note: The same class as 2026102814341401 and ...402, both High. The shim makes an integration check for `read-error` possible, which was thought to need a failing disk.
+
+- Integration check df0pq can't see snapdiff memory growth under about 13 MB.
+	- ID: 2026111011092302
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 3
+	- Origin: `f6f4e7a`, round-20261108, the test for 2026110715441806. After the last review. Confirmed.
+	- Incorrect behavior [Bug]:
+		- `peak()` reads `ru_maxrss` of a child that python3 forked. Linux keeps the high-water mark from before the exec, so every reading starts near 11.7 MB, while snapdiff uses about 2.5 MB.
+		- The long list repeats one name, so growth per distinct name can't show either.
+		- A build that keeps every listed line went from 2.7 MB to 7.6 MB, and df0pq still passed.
+	- Expected behavior [Bug]: Growth per line fails df0pq. design.md, "snapdiff": a 100,000-line list takes what a 1-line one does.
+	- Probable fix [Bug]: Distinct names, and a measure that doesn't fork from python, such as `/usr/bin/time -f %M`, compared with a 1-line run. Watch it fail on a build that keeps every line.
+	- Related IDs: 2026110715441806
+	- Note: The numbers in 2026110715441806's Verified row are that floor rather than snapdiff's own.
+
+- A release run that skipped a check commits and pushes `main`, and only then refuses the upload.
+	- ID: 2026111011092304
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 5
+	- Origin: `b5d023b`, round-20261108, 2026110218175401. After the last review. Confirmed for the plan: `cicd.bash --list --no-container` on `main` plans the upload and the tag, though the host release build always adds a skip. The order of publish and the refusal is from reading.
+	- Requirements [Feature]:
+		- The upload's skip and release line checks run before publish, and a failed one stops the run there.
+		- A reason known at the start, such as `--no-container`, leaves the upload and the tag out of the plan, and the plan says why.
+	- Note: A skip also leaves the tree unrecorded, so the publisher's push to `main` runs the pre-push merge gate first, which takes most of an hour. A vmDebARM64 skip is the usual cause.
+	- Note: The decision that a run that skipped anything doesn't upload stays. Only the order changes.
+	- Related IDs: 2026110218175401
+
+- snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
+	- ID: 2026111011092305
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 6
+	- Origin: `cede460`, before the last review. Its current form is from `f6f4e7a` and `729d491`, round-20261108. Confirmed on ext4: 2.4 MB for 1 line, 75 MB for 100,000 new files, and the summary said "100000 missing" with exit 0.
+	- Requirements [Feature]:
+		- Memory doesn't grow with the number of new files.
+		- The summary counts files only in `--new` apart from real misses.
+	- Note: A file born after the old snapshot was taken can skip the inode walk. The snapshot's time is in the subvolume's info, which needs no root. Otherwise keep only the path, inode and birth time.
+	- Note: design.md, "snapdiff", says files waiting on the walk are kept to the end, so this isn't a defect. 2026110715441806 covered zfs diff and `--list`.
+	- Related IDs: 2026110715441806
+
+- A scan, `accept` or `prune` that fails after taking the lock leaves the database in WAL mode, and under sudo leaves it and its lock owned by root.
+	- ID: 2026111011092306
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 7
+	- Origin: `f05c368`, `562a451`, `73ad713` and `65e5872`, before the last review. A sibling of 2026102808215852, whose sweep only covered the span between `begin()` and `finish()`. Confirmed.
+	- Steps to reproduce [Bug]:
+		- After a finished scan, `scan --resume` exits 1, and bytes 18 and 19 of the database's header read 2 and 2, which is WAL.
+		- As root in a user namespace with `SUDO_UID` set, a first scan with `--resume` leaves the database and lock owned by 0. The user's next `accept` and `scan` then fail with "Permission denied".
+		- `prune` on a database at version 5 does the same.
+	- Expected behavior [Bug]: design.md, "Database": rollback mode after a run, and both files handed back under sudo.
+	- Probable fix [Bug]: One guard, taken right after `lock()`, that runs `close_rw` and `give_back` on any return.
+	- Sweep: `scan::run`, `accept::run` and `prune` in `main.rs`.
+	- Related IDs: 2026102808215852
+
+- A root that's a bind mount of a subfolder isn't checked against `--exclude`, `--no-xattr` or a git work tree above its source.
+	- ID: 2026111011092307
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 8
+	- Origin: `91439f1`, round-20261108b, 2026110720070507, after the last review, and `57e3c52`, 2026102814341413, before it. The same class 2026110720070507 fixed for folders the walk reaches. Confirmed in `unshare -rm`.
+	- Steps to reproduce [Bug]:
+		- `--exclude ex --root mnt/exsrc`, where `mnt/exsrc` is a bind of `ex/src`, reads the files.
+		- The same with `--no-xattr nx` writes attributes.
+		- `--root mnt/src`, a bind of `repo/src` where `repo/.git` exists, writes `user.blake3.*` in the work tree.
+	- Expected behavior [Bug]: design.md, "Reading files": "A root inside one under another name is the same". "Attributes": none are written in a git work tree.
+	- Probable fix [Bug]: When the root's mount shows a subfolder, find that folder in another visible mount of the device, as `mounts::seen_from` does, and run both checks there too.
+	- Related IDs: 2026110720070507, 2026102814341413
+
+- A release run with a local `v<version>` tag already on HEAD doesn't check the git host for that tag on another commit.
+	- ID: 2026111011092308
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 9
+	- Origin: `b5d023b`, round-20261108, after the last review. Confirmed with `fReleaseTag` in a harness and a bare origin with the tag on another commit: it returned 0 and made no tag.
+	- Incorrect behavior [Bug]: `fReleaseTag` returns early when the local tag is on HEAD, before its `ls-remote` check. The build is then stamped as the release, and `release-upload.bash` refuses only at the end.
+	- Expected behavior [Bug]: design.md, "Build and release": a tag of that name on another commit, here or on the git host, stops the run before the build.
+	- Probable fix [Bug]: Run the `ls-remote` check before the early return, and accept only a remote tag on the same object.
+	- Related IDs: 2026110218175401
+
+- A TERM while the EXIT trap takes the release tag off skips the run's cleanup.
+	- ID: 2026111011092309
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 10
+	- Origin: `b5d023b`, round-20261108, after the last review. A regression: before it, the EXIT trap was `fRunTmpGone`, which ignores further signals first. Confirmed in a harness with a slow `git` stand-in: a TERM 0.3 s into the trap gave exit 143, and the cleanup never ran.
+	- Incorrect behavior [Bug]: `fTagUndo` runs 2 git commands before `fRunTmpGone` ignores signals, so a TERM then leaves descendants, containers and the run folder behind.
+	- Expected behavior [Bug]: A stop's cleanup ignores further signals, as `fRunTmpGone` does.
+	- Probable fix [Bug]: Ignore INT, TERM, HUP and PIPE at the top of `fTagUndo`, or call it from `fRunTmpGone` after that line.
+
+- The publisher goes on after a TERM or HUP to its own PID, then commits, pushes and exits 0.
+	- ID: 2026111011092310
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 11
+	- Origin: `1282504`, copied from shcl on 2026-10-23, before the last review. shcl's copy has the same trap text, so the fix goes there and is copied back. Confirmed with the script's traps and helpers in a harness.
+	- Incorrect behavior [Bug]: `_fSingleExitPoint` in `n8git_backup-and-publish` only exits for INT.
+	- Expected behavior [Bug]: A TERM or HUP stops the publisher before it commits.
+	- Probable fix [Bug]: Exit 143 for TERM and 129 for HUP, as it already exits 130 for INT.
+	- Note: cicd stops a step with a TERM to its group, which kills the child and trips errexit, so a cicd stop isn't affected.
+
+- A scan root on a snapshot of a pool's top dataset fails planning.
+	- ID: 2026111011092311
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 12
+	- Origin: `f05c368`, before the last review. Not seen before. Plausible: `disks_under` cuts the pool name at the first `/` only, so a source of `zf10@snap` goes to `zpool list` as is, and `zpool list zf10@x` fails with "invalid character '@' in pool name". No snapshot was mounted.
+	- Expected behavior [Bug]: design.md: a snapshot is read when it's listed.
+	- Probable fix [Bug]: Cut at the first `/` or `@`.
+
+- snapdiff reads zfs diff's `<xattrdir>` lines as files missing from `--new`, and adds exit 8.
+	- ID: 2026111011092312
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 13
+	- Origin: `f05c368`, before the last review, in its current form from `f6f4e7a`. Confirmed with made-up lines: `missing a/<xattrdir>/user.blake3.date not in --new`, and exit 12 where 4 was right. Plausible that zfs prints such lines, on `xattr=dir` or when a set spills out of `sa`. b23 uses `sa`.
+	- Expected behavior [Bug]: design.md, "snapdiff": a missing file means the snapshots aren't the ones diffed.
+	- Probable fix [Bug]: Skip a name with a `<xattrdir>` part under a regular file, or count those lines apart as attribute changes.
+
+- Percent done shows the whole filesystem for a root that's a bind mount of a subfolder from another filesystem.
+	- ID: 2026111011092313
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 14
+	- Origin: `dc2f0cd`, 2026110407135700, after the last review. Confirmed in `unshare -rm`: a 1 MiB folder showed "~0% of 78.3 GiB". A bind on the same filesystem shows no percent, as it should.
+	- Incorrect behavior [Bug]: `used_under` decides it's a whole filesystem from the device of `..`, which is the mount point's parent here.
+	- Expected behavior [Bug]: design.md, "Runs and exit codes": a folder inside its filesystem gets no percent.
+	- Probable fix [Bug]: Decide from the mount table: a percent only when the root is its mount's point and the mount shows its filesystem's top.
+	- Related IDs: 2026110407135700
+
+- A release run tags HEAD and checks the tree before the format stage, which can then make the build `-dirty`.
+	- ID: 2026111011092314
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 15
+	- Origin: the call from `b5d023b`, round-20261108, after the last review. The format stage's place is from `1282504`. Plausible, from reading the order and `fBuildStamp`.
+	- Incorrect behavior [Bug]: When `cargo fmt` rewrites a file, the build is marked dirty, so stage 11 refuses it after about 20 minutes and a publish. The message doesn't name the format stage.
+	- Expected behavior [Bug]: design.md, "Build and release": a checkout that can't be released stops the run before the build.
+	- Probable fix [Bug]: Tag and check the tree after `fStageFormat`.
+
+- The dogfood launcher now always prints a pool path, and design.md and the private dogfood check still expect the fixed name.
+	- ID: 2026111011092315
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 16
+	- Origin: `a332fbd`, after the last review, from the 2026-11-09 `Get-RunTarget` edit, which was published with no item. Confirmed: `dogfood-check.bash REPO` fails 3 of 38 cases, each wanting `.local/bin/tukfs-hash`.
+	- Expected behavior [Bug]: design.md, "Build and release", says what the launcher prints, and its check passes.
+	- Probable fix [Bug]: Update the 3 cases and the sentence in design.md.
+	- Sweep: whatever finds a run by the name `tukfs-hash`, since a pool run's name is now its pool name.
+
+- README's Installation says no release is published, but 1.0.0-beta.1 is.
+	- ID: 2026111011092316
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 17
+	- Origin: `b2b9f09`, before the last review. Out of date since the pre-release of 2026-11-07. Confirmed with `gh release list`.
+	- Probable fix [Bug]: Point Installation at the pre-release's files, with a build from source as the second way.
+
+- design.md says `xattr=on` keeps a file's attributes in a hidden folder.
+	- ID: 2026111011092317
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 18
+	- Origin: `f05c368`. 2026101406340928 fixed the same text in a script's comment only. Confirmed against b23's `man zfsprops`: `sa` is the default and equal to `on`, and `dir` is the folder kind.
+	- Probable fix [Bug]: Say that `xattr=dir` makes the folder, and that `on` means `sa` on current OpenZFS.
+
+- A root inside an `--exclude` folder scans nothing and exits 0 without saying why.
+	- ID: 2026111011092318
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 19
+	- Origin: `91439f1`, round-20261108b, after the last review. Confirmed: `scan --exclude x2/ex --root x2/ex/src` printed "files 0 hashed 0" and exited 0. Every path under it then shows in `gone`.
+	- Requirements [Feature]: A root inside an excluded folder is named before the run begins, such as "skipping root R: inside --exclude X", as `plan` does for other dropped roots.
+	- Related IDs: 2026102814341406, 2026110720070507
+
+- An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
+	- ID: 2026111011092319
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 20
+	- Origin: `f05c368`, before the last review. Plausible, since no attribute EIO could be made here.
+	- Requirements [Feature]: The error is an event, and that file gets no attributes written.
+	- Note: The comment on `OnFile::read` chooses this. design.md's `db-error` rule refuses the same trade for a database lookup, since it would overwrite the row unseen.
+
+- `CICD_MEM_CAP` takes sizes too small to run anything.
+	- ID: 2026111011092320
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 21
+	- Origin: `2cda616`, after the last review. Confirmed: `1`, `500` and `1k` pass `fMemCap`. `systemd-run --user --scope -p MemoryMax=1 true` exits 137, which `fMemScope` reads as no user scope, and docker refuses any cap under 6 MB later.
+	- Requirements [Feature]: A floor, such as 512m, refused at the start like any other bad value. `CICD_MEM_CAP=32`, meant as 32g, is the likely slip.
+
+- A mount whose source names no device node, such as `/dev/root`, stops planning.
+	- ID: 2026111011092321
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 22
+	- Origin: `f05c368`, before the last review. Plausible. A box booted without an initramfs, such as Raspberry Pi OS, lists `/` as `/dev/root`, which doesn't exist, so `scan --root /` stops with "cannot resolve /dev/root".
+	- Requirements [Feature]: When the source doesn't resolve, find the disk from `Mount.dev` through `/sys/dev/block/<major>:<minor>`.
+	- Note: 2026102814341443 decided against unescaping a mount's source, since it fails loudly. `Mount.dev` came later, which makes this fallback cheap.
+
+- snapdiff keeps every run of differing bytes, so its memory grows with the file.
+	- ID: 2026111011092322
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 23
+	- Origin: `f05c368`, before the last review. Confirmed: 2 files of 64 MiB that differ at every 8th byte took 135 MB.
+	- Requirements [Feature]: Keep the first 8 runs that `describe` shows, the last run for merging, and counts for the rest.
+
+- Exit 130 on a second Ctrl+C is in README and `--help`, and nothing checks it.
+	- ID: 2026111011092323
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 24
+	- Origin: before the last review. Confirmed that it works: INT twice, 50 ms apart, gave 130 and left the run marked running.
+	- Requirements [Feature]: An integration check that sends INT twice and wants 130, and then `killed` on the next run.
+
+- Integration check df1qb skips as "no user namespace here" when the first full disk scan leaves no database file.
+	- ID: 2026111011092324
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 25
+	- Origin: `57e4c96`, 2026102814341430, after the last review. Confirmed with a stand-in binary that fails for that database.
+	- Requirements [Feature]: The marker is written right after the first mount, as steps 23 and 25 do, and a missing file is its own result.
+	- Related IDs: 2026102814341430
+
+- The integration test's sweep reads `run.pid` before it checks that the folder is its own, so a FIFO there hangs it.
+	- ID: 2026111011092325
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 26
+	- Origin: before the last review, last touched in `4c2a394`. Confirmed: a FIFO at `run.pid` in a run folder's name made `timeout 8 tests/integration.bash` end at 124 with no output.
+	- Requirements [Feature]: Check that the folder is owned, isn't a link, and that `run.pid` is a regular file before reading it.
+	- Sweep: `fSweepStale` and `fCacheInUse` in `cicd/cicd.bash`, which read the same way.
+
+- `testutil::Fuzzed` isn't `#[must_use]`, so a fuzz test that never calls `covers()` passes without proving its generator works.
+	- ID: 2026111011092326
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 27
+	- Origin: `d130ec6`, before the last review. Read only. Every current caller calls it.
+	- Requirements [Feature]: `#[must_use]` on `Fuzzed`, with a message naming `covers()`.
+
+- Comments in `tests/integration.bash` are out of date.
+	- ID: 2026111011092327
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 28
+	- Origin: `ef00124`, `0a45bc8` and `91439f1`. Confirmed by reading.
+	- Requirements [Feature]:
+		- The header says only step 23 mounts, but steps 25 and 30 do too.
+		- A wait loop's comment says 10 s, and it waits 60.
+		- "adn" near step 27.
+
+- README.md and design.md break the Grammar rules added to the directives on 2026-11-08.
+	- ID: 2026111011092328
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 29, directives 2026-11-08
+	- Origin: agent text from `f05c368`, `9aeb954`, `25144d2`, `b2b9f09` and `c3196c2`. A new rule, so not a defect.
+	- Requirements [Feature]: A sweep of agent prose in both files. Examples:
+		- The negative on the noun, as in "follows no symlink and crosses no mount" and "get none".
+		- Sentences that start with a number, such as "2 readers on one hard drive make it seek".
+		- Sentences without a verb, such as "WAL while running, rollback mode after".
+		- A thing that decides, such as "a root's filesystem decides for every file under it".
+		- A colon as a joiner, and "keeps" for "stores".
+	- Note: Text the user wrote stays as it is.
+
+- The lint stage only reports content scrub hits, rather than failing on them.
+	- ID: 2026110811422141
+	- Type: Task
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261108-114221
+	- Opened by: split from 2026110218175403
+	- Parent ID: 2026110218175403
+	- Prereq IDs: 2026110811422129
+	- Requirements [Feature]: Once the scrub reports 0 hits, the lint stage fails on a hit, as with the other linters.
+	- Estimated effort: Low
+	- Decisions: A hit adds `scrub` to the stage's failed list, so the stage ends like any other linter's failure and every linter still runs first. A clone without the private folder still skips the scrub.
+	- Branch: round-20261108b
+	- Progress log:
+		- 2026-11-10: Reopened by code review 20261110. It closed with no lasting check and no reason why there can't be one. A private check that plants a hit, or that reason, closes it.
+	- Test case: none with an ID. Checked by planting a banned word in `project/design.md`.
+	- Verified: with the plant, `cicd/cicd.bash --backlog-run-quick lint` printed the hit and failed the stage (exit 1). With the plant removed, `cicd/cicd.bash --backlog-run-quick` passes, "content scrub: clean".
+	- Swept: the only caller of the scrub is the lint stage in `cicd/cicd.bash`. No doc says it only reports, except the memory.md note.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1023,6 +1414,8 @@
 	- Note: Same failure on `dev` at `dccfc63`, so not from a recent change. Found cutting 1.0.0-beta.1; the package checks and everything else passed.
 	- Done: The release check gives the sandbox `<release work>/tukfs-hash` as its writable folder, as the test roots do, so the probe's folder is no longer writable. Fails before, passes after, in the `release` area alone and in a full run.
 	- Estimated effort: Low
+	- Test case: desk2, in the `release` area alone and in a full run.
+	- Closed: 20261107-091021
 
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
@@ -1527,6 +1920,7 @@
 	- Progress log:
 		- 2026-11-09: b23's scan wrapper keeps `--exclude` and `--no-xattr` out of what it gives `plan`. With this build its `--plan` stopped at `plan doesn't take --exclude` before and passes after. With the installed build it prints the same plan as before.
 	- Acceptance signoff: Self-closed per memory.md's close policy, 2026-11-09. The Check in questions.md was answered (a), as done. The wrapper is outside the repo, so it has no test with an ID.
+	- Closed: 20261109-120532
 
 - The scan output has no percent complete.
 	- ID: 2026110407135700
@@ -2506,6 +2900,7 @@
 	- Verified: clippy with all targets, the xattr unit tests, and `--backlog-run-quick` passed.
 	- Swept: all 3 `write_b3` callers pass a `B3Write`, and no other `B3Write` is turned into a bool.
 	- Acceptance signoff: Self-closed: mechanical.
+	- Closed: 20261107-204748
 
 - `test-ids.py` uses strings for its lexer states and reads a 5-field tuple by position.
 	- ID: 2026110715441804
@@ -3494,24 +3889,6 @@
 		- The allow entry for the template's placeholder rows used `\t`, which grep's extended regex doesn't read as a tab, so it never matched. It uses `[[:space:]]` now.
 	- Verified: `private/hooks/scrub.bash` reports clean.
 	- Closed: 20261108-115016
-
-- The lint stage only reports content scrub hits, rather than failing on them.
-	- ID: 2026110811422141
-	- Type: Task
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261108-114221
-	- Opened by: split from 2026110218175403
-	- Parent ID: 2026110218175403
-	- Prereq IDs: 2026110811422129
-	- Requirements [Feature]: Once the scrub reports 0 hits, the lint stage fails on a hit, as with the other linters.
-	- Estimated effort: Low
-	- Decisions: A hit adds `scrub` to the stage's failed list, so the stage ends like any other linter's failure and every linter still runs first. A clone without the private folder still skips the scrub.
-	- Branch: round-20261108b
-	- Test case: none with an ID. Checked by planting a banned word in `project/design.md`.
-	- Verified: with the plant, `cicd/cicd.bash --backlog-run-quick lint` printed the hit and failed the stage (exit 1). With the plant removed, `cicd/cicd.bash --backlog-run-quick` passes, "content scrub: clean".
-	- Swept: the only caller of the scrub is the lint stage in `cicd/cicd.bash`. No doc says it only reports, except the memory.md note.
-	- Closed: 20261108-115523
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
@@ -5022,6 +5399,7 @@
 	- Decided against: `O_NONBLOCK` on the open could give `EAGAIN` from a FUSE filesystem. Never seen.
 	- Decided against: attributes on an overlayfs root copy every lower file up. Nobody gives an overlay as a root.
 	- Decided against: foreign keys are off, and `LOOKUP`'s inner join reads a path row with no `files` row as no record. Only an edit made outside the program can cause that.
+	- Note: Foreign keys are on in the bundled SQLite, which is built with `SQLITE_DEFAULT_FOREIGN_KEYS=1`, and that makes such a row harder to make. The decision stays (code review 20261110).
 	- Decided against: a small file another process has mapped keeps its cached pages, so both reads come from cache. It still exits 4.
 	- Decided against: a mount's source isn't unescaped, so a device name with a space fails to resolve. It exits 1, loudly.
 	- Decided against: `openat2` refused with EPERM by seccomp fails every open as an error, exit 8. Loud, and scans run on the host.
@@ -5107,6 +5485,62 @@
 	- Decided against: stop-descendants' queue copies its array on each pop. Tens of processes at most.
 	- Decided against: `fShellCode` loops per character. `test-ids.py check` takes 74 ms.
 	- Decided against: the demo gif draws the window frame again for each frame. The whole gif takes 5.7 s.
+
+- Code review 20261110: observations not filed.
+	- ID: 2026111011092329
+	- Type: Task
+	- Status: Canceled
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110
+	- Decided against: a path from the root over `PATH_MAX` is a `dir-error` with exit 8. Loud, and rare.
+	- Decided against: every file opened by its full path from the root. About 4 us a file at depth 25.
+	- Decided against: the `O_NOATIME` retry on files the scanner doesn't own. About 1.4 us a file, and root never needs it.
+	- Decided against: a name skipped by its row while another name has the claim isn't counted off, so the claim stays until the cap. Memory only.
+	- Decided against: a hard link at `-wal`, `-shm` or `.lock` to a system file. It needs `fs.protected_hardlinks` off, and it's on by default.
+	- Decided against: another tool's attribute write moving the ctime between a mismatching read and the second read. It's logged as `unstable`, nothing is stored, and the next run reads it again.
+	- Decided against: an open of a file under a write lease fails with EWOULDBLOCK and is an `open-error`. The same class as the FUSE EAGAIN decision.
+	- Decided against: `give_back` warns twice when `SUDO_UID` is set but the run isn't root. Part of 2026111011092301's fix.
+	- Decided against: microsecond times past the year 294,000 wrap. They wrap the same way every run.
+	- Decided against: a device node swapped in between the stat and the open. A user can't make one.
+	- Decided against: a folder above a root swapped after it was resolved. The root is the user's choice, as with `accept`'s open.
+	- Decided against: the `.git` check inside the folder loop after `list.has(".git")`. Harmless.
+	- Decided against: `main.rs`'s `_ => unknown command` arm, unreachable since `864712f`. Harmless.
+	- Decided against: a stray word after a command is called an unknown option. It exits 1 either way.
+	- Decided against: a repeated `--db`, `--since`, `--run` or `--kind` takes the last one. Common practice.
+	- Decided against: `runs`, `report` and `gone` print the path twice for a missing database, and `runs` prints 2 spaces for an empty host. Cosmetic.
+	- Decided against: `open_ro`'s comment says a read-only open makes no WAL files, but one left in WAL mode is opened. SQLite opens them with `O_NOFOLLOW`.
+	- Decided against: a filesystem on a zvol is grouped as its own disk. b23 has no zvols.
+	- Decided against: `gone` sorts names that aren't UTF-8 after the rest. Cosmetic.
+	- Decided against: a cut-short `R` line whose new name is the mount's root is skipped. Only a truncated file makes one.
+	- Decided against: a line given twice in a change list is compared and printed twice. Real tools don't write them.
+	- Decided against: a link count line naming the old name after a rename and a new link fails with "not in --new". That's how zfs names it, and it fails loudly.
+	- Decided against: an empty change list exits 0. The caller checks `zfs diff`'s own exit.
+	- Decided against: snapdiff run by a user gets exit 8 from unreadable folders during the inode walk. Root doesn't.
+	- Decided against: snapdiff has no signal handler, so Ctrl+C gives 130. It has nothing to clean up.
+	- Decided against: `out!` drops write errors. The exit code still has 4.
+	- Decided against: `pub` on snapdiff types nothing else uses. A binary crate.
+	- Decided against: `deny.toml` has no license check. Every crate in the release build has a compatible license today.
+	- Decided against: `asm_name` in `profiling.rs` doesn't name `blake3_xof_many_avx512`. It isn't used for a 32-byte sum.
+	- Decided against: the soak test doesn't run snapdiff. df0pq covers its memory, once 2026111011092302 is fixed.
+	- Decided against: edits made during the publisher's rar backup go into its commit. A few seconds, the same class as 2026102814341426.
+	- Decided against: `git-auto-msg.bash` is never reached, since cicd always passes a message. A shcl habit.
+	- Decided against: a release run killed with `kill -9` leaves its local tag. The next run on that HEAD reuses it or says to bump the version.
+	- Decided against: `release-upload.bash` reads `FETCH_HEAD`, which a fetch at the same instant could change. Rare.
+	- Decided against: GitHub renames an asset name with `+`. No version has build metadata.
+	- Decided against: `box-side.bash`'s `fSafeRm` doesn't unlock before a retry. The integration test unlocks its own folders, and the sweep retries.
+	- Decided against: image builds have no memory cap. BuildKit has no `--memory`, and they compile little.
+	- Decided against: `push.followTags` would push the release tag before the upload checks. It's unset on b23.
+	- Decided against: `gfs-rotate.bash` leaves a file in place when 2 files have the same second and role. Needs 2 builds in a second.
+	- Decided against: publish stays in the foreground, per 2026102814341436. It's long only when the push runs the merge gate, which 2026111011092304's fix avoids on a release run.
+	- Decided against: df1nh and df1ra pass with a note when the filesystem has no user attributes. The pipeline's temp folder has them.
+	- Decided against: `tomorrow` is worked out once, so a run over midnight could fail ddx0w. A window of about 27 s a day.
+	- Decided against: df1nz's 1,000 nested mounts can't see a walk that's quadratic per parent. Real tables are shallow.
+	- Decided against: the bash launcher drops `--no-update` anywhere in the arguments. It's never a real file name.
+	- Decided against: a launcher that takes a new build can rename the path another launcher printed a moment before. A window of milliseconds.
+	- Decided against: design.md doesn't name `FUZZ_EXTRA`. Its comment does.
+	- Decided against: changelog.md has no entry for the option refusals of 2026102814341425 yet. Write it in the next release's changelog pass, since the release notes come from it.
+	- Decided against: `posix_fadvise` at 10.6% of the session-start flame graph. Dropping the cached pages makes the scan read the disk (2026102809554675).
+	- Note: Coverage is in the private notes, "Code review 20261110 coverage".
 
 - vmFreeBSD is shut down for the snapshot, though its agent can freeze.
 	- ID: 2026101416080000
