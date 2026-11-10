@@ -249,7 +249,7 @@
 - A root that's a bind mount of a subfolder isn't checked against `--exclude`, `--no-xattr` or a git work tree above its source.
 	- ID: 2026111011092307
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 8
@@ -260,7 +260,22 @@
 		- `--root mnt/src`, a bind of `repo/src` where `repo/.git` exists, writes `user.blake3.*` in the work tree.
 	- Expected behavior [Bug]: design.md, "Reading files": "A root inside one under another name is the same". "Attributes": none are written in a git work tree.
 	- Probable fix [Bug]: When the root's mount shows a subfolder, find that folder in another visible mount of the device, as `mounts::seen_from` does, and run both checks there too.
-	- Related IDs: 2026110720070507, 2026102814341413
+	- Related IDs: 2026110720070507, 2026102814341413, 2026111011092313
+	- Reproduced [Bug]: Yes, with the installed build df46q in a user namespace: all 3 cases read the file or wrote the attribute.
+	- Actual cause [Bug]: The checks for `--exclude`, `--no-xattr` and `.git` looked only at the folders above the root's own path. A bind mount's source folders above it aren't on that path.
+	- Actual fix [Bug]:
+		- `mounts::wider_views` gives the root's folder in each other mount of its filesystem that shows more of it. The walk checks the folders above it there too, up to that mount's point, after the device and inode match.
+		- design.md, "Reading files" and "Attributes", say so.
+	- Decisions:
+		- Only a mount that shows a folder above the root's source counts. Another bind of the same folder elsewhere doesn't put the root inside whatever that one sits in.
+		- A bind of a folder in a work tree counts as in git, though git run from the mount wouldn't find the `.git`. The files are the work tree's, which is what design.md's rule is about.
+	- Branch: round-20261110
+	- Commit: `831dbfd`
+	- Test case: `df4j5` (unit, the table), `df4j7` (unit, a walk), `df4j8`, `df4j9` and `df4ja` (integration step 25, in a user namespace, skipped on ZFS).
+	- Verified: `df4j8` to `df4ja` fail against the installed build from before and pass after on ext4. `df4j7` fails with the other names taken out and passes after. `--backlog-run-quick` passed in 2m 30s, and its `miri` area in 1m 06s.
+	- Swept: `inside_any` and `git_tree_above` are the only checks above a root. `plan` already finds a bind inside another root through `seen_from`. `excluded` and `write_attrs` work on what the walk reaches, which 2026110720070507 covers.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261110-133254
 
 - A release run with a local `v<version>` tag already on HEAD doesn't check the git host for that tag on another commit.
 	- ID: 2026111011092308
@@ -355,7 +370,7 @@
 - Percent done shows the whole filesystem for a root that's a bind mount of a subfolder from another filesystem.
 	- ID: 2026111011092313
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 14
@@ -363,7 +378,21 @@
 	- Incorrect behavior [Bug]: `used_under` decides it's a whole filesystem from the device of `..`, which is the mount point's parent here.
 	- Expected behavior [Bug]: design.md, "Runs and exit codes": a folder inside its filesystem gets no percent.
 	- Probable fix [Bug]: Decide from the mount table: a percent only when the root is its mount's point and the mount shows its filesystem's top.
-	- Related IDs: 2026110407135700
+	- Related IDs: 2026110407135700, 2026111011092307
+	- Reproduced [Bug]: Yes, with the installed build df46q in a user namespace: a bind of a btrfs folder on ext4 showed "~0% of 519.9 GiB".
+	- Actual cause [Bug]: `used_under` took a root as a whole filesystem when `..` was on another device, which is also true of a bind mount's point.
+	- Actual fix [Bug]:
+		- `mounts::shows_whole` decides from the mount table, as the probable fix says, and also takes the top of a btrfs subvolume.
+		- design.md, "Runs and exit codes", says so.
+	- Decisions:
+		- The top of a btrfs subvolume still gets a percent, as before, since its used space is the whole filesystem's. It's known by inode 256, so `/home` mounted from `/@home` keeps its percent. That departs from the probable fix's wording.
+	- Branch: round-20261110
+	- Commit: `831dbfd`
+	- Test case: `df4j6` (unit, the table), `df4jb` (unit, `used_under` with a bind's table). `df1pk` keeps its cases. No integration check: the bind needs a folder from another real filesystem, which a user namespace can't make, and a tmpfs root is refused.
+	- Verified: In a user namespace, a bind of a btrfs folder showed a percent with the build from before and none after. `df4jb` and `df4j6` pass. `--backlog-run-quick` passed in 2m 30s, and its `miri` area in 1m 06s.
+	- Swept: `used_under` is the only place the percent's total is decided.
+	- Acceptance signoff: Self-closed: the probable fix, tested before and after.
+	- Closed: 20261110-133254
 
 - A release run tags HEAD and checks the tree before the format stage, which can then make the build `-dirty`.
 	- ID: 2026111011092314
