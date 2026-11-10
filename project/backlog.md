@@ -29,38 +29,6 @@
 
 ## Issues
 
-- Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
-	- ID: 2026111011092301
-	- Type: Enhancement
-	- Status: Waiting for answers
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 2
-	- Origin: `canonical_db` from `f05c368` and `eb111ff`, the hand-back from `422efff`, `65e5872` and `8a0921d`. All before the last review. Not seen before. Confirmed, as root in a user namespace with `SUDO_UID` set.
-	- Steps to reproduce [Bug]:
-		- A folder `sys` owned by root, mode 755. As the user, `ln -s ../sys home/data`.
-		- As root, `SUDO_UID=1000 SUDO_GID=1000 tukfs-hash scan --db home/data/tukfs.sqlite --root r` exits 0.
-		- `sys/tukfs.sqlite` and `sys/tukfs.sqlite.lock` are then the user's, and the user can write them.
-	- Requirements [Feature]:
-		- Under sudo, a database folder that isn't owned by `SUDO_UID` or root stops the run before anything is made.
-		- The hand-back goes through the folder fd that was checked.
-	- Against: 2026102814341403's note that a link in a parent folder is still followed, "since the folder is the user's own choice". That item guards against a process running as the user, and such a process can plant a link at the folder as easily as at the file names.
-	- Note: The file names are the user's own, so making root out of this needs a root folder that trusts any file name.
-	- Note: Check entry in questions.md.
-
-- A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
-	- ID: 2026111011092303
-	- Type: Enhancement
-	- Status: Waiting for answers
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 4
-	- Origin: `562a451` and `f05c368`, before the last review. Confirmed: `scan --root r --no-xattr r/vm-imgaes` printed "xattr set 1" and exited 0, and `r/vm-images/disk.img` then had `user.blake3.*`.
-	- Requirements [Feature]: A path given to `--exclude` or `--no-xattr` that doesn't exist stops the scan before the run begins, with exit 1, as a root that can't be resolved does.
-	- Against: 2026102814341406's Swept line, which keeps these quiet "since none of them leaves files unread". A typo in `--no-xattr` doesn't leave anything unread, but it changes ctimes and attributes that were meant to be left alone.
-	- Note: The b23 scan wrappers pass a fixed list, which may name a folder that isn't on every box. Check them before choosing.
-	- Note: Check entry in questions.md.
-
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -152,6 +120,38 @@
 	- Probable fix [Bug]: Distinct names, and a measure that doesn't fork from python, such as `/usr/bin/time -f %M`, compared with a 1-line run. Watch it fail on a build that keeps every line.
 	- Related IDs: 2026110715441806
 	- Note: The numbers in 2026110715441806's Verified row are that floor rather than snapdiff's own.
+
+- Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
+	- ID: 2026111011092301
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 2
+	- Origin: `canonical_db` from `f05c368` and `eb111ff`, the hand-back from `422efff`, `65e5872` and `8a0921d`. All before the last review. Not seen before. Confirmed, as root in a user namespace with `SUDO_UID` set.
+	- Steps to reproduce [Bug]:
+		- A folder `sys` owned by root, mode 755. As the user, `ln -s ../sys home/data`.
+		- As root, `SUDO_UID=1000 SUDO_GID=1000 tukfs-hash scan --db home/data/tukfs.sqlite --root r` exits 0.
+		- `sys/tukfs.sqlite` and `sys/tukfs.sqlite.lock` are then the user's, and the user can write them.
+	- Requirements [Feature]:
+		- Under sudo, a database folder that isn't owned by `SUDO_UID` or root stops the run before anything is made.
+		- The hand-back goes through the folder fd that was checked.
+	- Against: 2026102814341403's note that a link in a parent folder is still followed, "since the folder is the user's own choice". That item guards against a process running as the user, and such a process can plant a link at the folder as easily as at the file names.
+	- Decisions: Under sudo, a database folder that isn't owned by `SUDO_UID` or root is refused before anything is made, and the hand-back goes through that folder's fd. This replaces 2026102814341403's note on parent links (answered 2026-11-10).
+	- Note: The file names are the user's own, so making root out of this needs a root folder that trusts any file name.
+
+- A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
+	- ID: 2026111011092303
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 4
+	- Origin: `562a451` and `f05c368`, before the last review. Confirmed: `scan --root r --no-xattr r/vm-imgaes` printed "xattr set 1" and exited 0, and `r/vm-images/disk.img` then had `user.blake3.*`.
+	- Requirements [Feature]: A path given to `--exclude` or `--no-xattr` that doesn't exist stops the scan before the run begins, with exit 1, as a root that can't be resolved does.
+	- Against: 2026102814341406's Swept line, which keeps these quiet "since none of them leaves files unread". A typo in `--no-xattr` doesn't leave anything unread, but it changes ctimes and attributes that were meant to be left alone.
+	- Decisions: A path given to `--exclude` or `--no-xattr` that doesn't exist stops the scan before the run begins, with exit 1. This replaces 2026102814341406's Swept line for these 2 options (answered 2026-11-10). The b23 wrappers' lists get checked with the fix.
+	- Note: The b23 scan wrappers pass a fixed list, which may name a folder that isn't on every box. Check them before choosing.
 
 - A release run that skipped a check commits and pushes `main`, and only then refuses the upload.
 	- ID: 2026111011092304
