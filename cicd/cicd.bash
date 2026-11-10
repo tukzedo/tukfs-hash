@@ -121,7 +121,7 @@
 ##	  caller wins. utility/include/cpu-cap.bash works it out.
 ##	- Everything runs at nice 19 in the idle I/O class, containers too, which
 ##	  also get --cpu-shares 256.
-##	- Memory: CICD_MEM_CAP, a docker size such as 24g, or none. The default
+##	- Memory: CICD_MEM_CAP, a docker size such as 24g, at least 512m, or none. The default
 ##	  is a third of the RAM, 4g to 32g. Each container gets it with no swap
 ##	  and --oom-score-adj 1000, and the run on the host gets it in a systemd
 ##	  user scope under choom 1000, where there is one. A step killed at the

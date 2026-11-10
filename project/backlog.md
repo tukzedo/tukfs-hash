@@ -428,12 +428,15 @@
 - `CICD_MEM_CAP` takes sizes too small to run anything.
 	- ID: 2026111011092320
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 21
 	- Origin: `2cda616`, after the last review. Confirmed: `1`, `500` and `1k` pass `fMemCap`. `systemd-run --user --scope -p MemoryMax=1 true` exits 137, which `fMemScope` reads as no user scope, and docker refuses any cap under 6 MB later.
 	- Requirements [Feature]: A floor, such as 512m, refused at the start like any other bad value. `CICD_MEM_CAP=32`, meant as 32g, is the likely slip.
+	- Decisions: Floor is 512m (also 524288k or 536870912 bytes), checked per unit so a 15-digit value can't overflow; the message hints 32 may mean 32g.
+	- Test case: mem-cap-check.bash, the fCap cases for 512m, 524288k, 1g and the bad list 1 32 500 1k 511m 524287k 536870911
+	- Closed: 20261110-124409
 
 - A mount whose source names no device node, such as `/dev/root`, stops planning.
 	- ID: 2026111011092321
