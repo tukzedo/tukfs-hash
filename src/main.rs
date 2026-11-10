@@ -95,8 +95,9 @@ snapdiff options:
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at
 once. Ctrl+C stops after the files in hand; --resume picks up from there.
-A second Ctrl+C ends it at once, with exit 130. A root that can't be
-resolved stops the scan before it starts.
+A second Ctrl+C ends it at once, with exit 130. A root, or a path given to
+--exclude or --no-xattr, that can't be resolved stops the scan before it
+starts. A root in an --exclude folder is skipped, and named.
 
 A file that reads differently from what was stored, at the same size and
 time, is read again with its cache dropped. If the second read matches, it's
@@ -481,16 +482,9 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", util::show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path, &mounts::read_mounts()?)?;
-	let conn = db::open_rw(&db_path)?;
-	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			util::show_path(&db_path)
-		);
-	}
-	scan::give_back(&db_path);
+	let mut held = scan::Held::take(&db_path, &mounts::read_mounts()?)?;
+	let n = db::prune(held.open()?).map_err(|e| format!("database: {e}"))?;
+	drop(held);
 	out!("removed {n} content(s) no name points at");
 	Ok(0)
 }

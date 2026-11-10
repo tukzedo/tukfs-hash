@@ -438,17 +438,36 @@ ln "${sd}/old/d" "${sd}/new/after"
 printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "${sd}/new/after")" > "${sd}/renamed"
 check ddy6c "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
 # A long list takes no more memory than a short one, since each file is
-# compared as it's read. Peak RSS, from 1 line to 100,000.
-head -c 3000 /dev/urandom > "${sd}/old/kept"; cp -p "${sd}/old/kept" "${sd}/new/kept"
-printf 'kept\n' > "${sd}/short"; printf 'kept\n%.0s' {1..100000} > "${sd}/long"
-peak() { python3 -I -c 'import resource, subprocess, sys
-r = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-print(r.returncode, resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' "${bin}" snapdiff --old "${sd}/old" --new "${sd}/new" --list "${1}"; }
-rcShort='' kbShort='' rcLong='' kbLong=''
-read -r rcShort kbShort < <(peak "${sd}/short") || true
-read -r rcLong kbLong < <(peak "${sd}/long") || true
-st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 4096 )) && st=0
-expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 4 MB more" "${st}"
+# compared as it's read. Peak RSS from GNU time, since a child forked from
+# python3 keeps python's high-water mark of about 12 MB through the exec, and
+# snapdiff takes about 2.5. 100,000 names, all different, every 10th a file
+# on both sides, against 1 line. 10 bytes kept per line fails it.
+mem="${sd}/mem"; mkdir -p "${mem}/old" "${mem}/new"
+head -c 3000 /dev/urandom > "${mem}/old/kept"; cp -p "${mem}/old/kept" "${mem}/new/kept"
+printf 'kept\n' > "${mem}/short"
+python3 -I -c '
+import os, sys
+d = sys.argv[1]
+os.mkdir(d + "/old/many"); os.mkdir(d + "/new/many")
+with open(d + "/long", "w") as f:
+	for i in range(100000):
+		name = "many/%d" % i
+		if i % 10 == 0:
+			open(d + "/old/" + name, "w").close()
+			os.link(d + "/old/" + name, d + "/new/" + name)
+		f.write(name + "\n")
+' "${mem}"
+# Exit status and peak KB. GNU time puts a line before them on a non-zero exit.
+peak() { /usr/bin/time -o "${mem}/peak" -f '%x %M' "${bin}" snapdiff --old "${mem}/old" --new "${mem}/new" --list "${1}" > /dev/null 2>&1 || true; tail -n 1 "${mem}/peak" 2> /dev/null; }
+if [[ -x /usr/bin/time ]] && /usr/bin/time -o "${mem}/peak" -f '%M' true 2> /dev/null && [[ "$(cat "${mem}/peak")" =~ ^[0-9]+$ ]]; then
+	rcShort='' kbShort='' rcLong='' kbLong=''
+	read -r rcShort kbShort < <(peak "${mem}/short") || true
+	read -r rcLong kbLong < <(peak "${mem}/long") || true
+	st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 1024 )) && st=0
+	expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 1 MB more" "${st}"
+else
+	skip df0pq "a long list costs no more memory (no GNU time at /usr/bin/time)"
+fi
 
 # 10. Names that aren't plain text: arguments are taken, and output escapes
 # them so 2 names never print the same.
@@ -772,7 +791,8 @@ fi
 
 # 24. Run through sudo, a link at the database or one of its 3 other names
 # would be followed as root and the target made or chowned (2026102814341403).
-# The own ids stand in for sudo's, so no root is needed.
+# A link is refused whoever runs it, so no root is needed. The folder's owner
+# is checked only as root, so df4kp to df4kr pass the ids in as unit tests.
 ln_case() {
 	local d="${work}/ln${1:-db}" rc=0
 	mkdir -p "${d}"
@@ -833,7 +853,8 @@ fi
 # outside the roots is read. A database reached through such a mount still
 # leaves out only its own names in the root's walk (2026110719570617), adn
 # --no-xattr and --exclude given by the mount's name still apply, also to a
-# root under it (2026110720070507).
+# root under it (2026110720070507). A root that's the bind mount is still
+# under the folders above its source, a git work tree too (2026111011092307).
 cat > "${ns}/bind.bash" << 'EOF2'
 cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
 for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
@@ -851,6 +872,12 @@ mount --bind e/tree/sub e/bind || exit 1
 escan() { local rc=0; "${2}" scan --db "${1}.sqlite" --progress 3600 "${@:3}" > "${1}.out" 2>&1 || rc=$?; echo "${rc} $(grep -oE 'files [0-9]+' "${1}.out" | head -1)"; }
 escan e1 "${2}" --root e/tree --no-xattr e/bind > e1.got
 echo "$(escan e2 "${2}" --root e/tree --exclude e/bind --no-xattrs) $(escan e3 "${2}" --root e/bind/deep --exclude e/tree/sub --no-xattrs)" > e2.got
+mkdir -p g/repo/.git g/mnt || exit 1
+for t in ex nx repo plain; do mkdir -p "g/${t}/src" "g/mnt/${t}" && printf '%s\n' "${t}" > "g/${t}/src/f" && mount --bind "g/${t}/src" "g/mnt/${t}" || exit 1; done
+escan g1 "${2}" --root g/mnt/ex --exclude g/ex --no-xattrs > g1.got
+escan g2 "${2}" --root g/mnt/nx --no-xattr g/nx > g2.got
+escan g3 "${2}" --root g/mnt/repo --root g/mnt/plain > g3.got
+cat e3.out g1.out | grep -c '^skipping root .*: inside --exclude ' > eg.skips
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -861,6 +888,10 @@ if [[ "${nsfs}" == zfs ]]; then
 	skip df0qh "database through a bind mount: own names left out, no attributes (ZFS pools aren't seen from a user namespace)"
 	skip df1nj "--no-xattr by a bind mount's name (ZFS pools aren't seen from a user namespace)"
 	skip df1nk "--exclude by a bind mount's name (ZFS pools aren't seen from a user namespace)"
+	skip df4j8 "root that's a bind of a folder in an --exclude folder (ZFS pools aren't seen from a user namespace)"
+	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (ZFS pools aren't seen from a user namespace)"
+	skip df4ja "root that's a bind of a folder in a git work tree (ZFS pools aren't seen from a user namespace)"
+	skip df4m4 "root under an --exclude folder by another name named as skipped (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
@@ -868,13 +899,22 @@ elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qh "database through a bind mount: own names left out, no attributes" "$(cat "${ns}/d.got") $(sqlite3 "${dd}" 'SELECT count(*) FROM paths') $(sqlite3 "${dd}" "SELECT count(*) FROM paths WHERE path LIKE '%/d.sqlite%'") $(xget "${dd}" user.blake3.b64u)" "0 6 0 "
 	et="${ns}/e/tree"
 	check df1nj "--no-xattr by a bind mount's name" "$(cat "${ns}/e1.got") $(xget "${et}/top" user.blake3.b64u | wc -c) $(xget "${et}/sub/f" user.blake3.b64u)$(xget "${et}/sub/deep/g" user.blake3.b64u)" "0 files 3 43 "
-	check df1nk "--exclude by a bind mount's name" "$(cat "${ns}/e2.got")" "0 files 1 0 files 0"
+	check df1nk "--exclude by a bind mount's name" "$(cat "${ns}/e2.got")" "0 files 1 1 "
+	gt="${ns}/g"
+	check df4j8 "root that's a bind of a folder in an --exclude folder" "$(cat "${ns}/g1.got")" "1 "
+	check df4j9 "root that's a bind of a folder in a --no-xattr folder" "$(cat "${ns}/g2.got") $(xget "${gt}/nx/src/f" user.blake3.b64u | wc -c)" "0 files 1 0"
+	check df4ja "root that's a bind of a folder in a git work tree" "$(cat "${ns}/g3.got") $(xget "${gt}/repo/src/f" user.blake3.b64u | wc -c) $(xget "${gt}/plain/src/f" user.blake3.b64u | wc -c)" "0 files 2 0 43"
+	check df4m4 "root under an --exclude folder by another name named as skipped" "$(cat "${ns}/eg.skips")" 2
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
 	skip df0qh "database through a bind mount: own names left out, no attributes (no user namespace here)"
 	skip df1nj "--no-xattr by a bind mount's name (no user namespace here)"
 	skip df1nk "--exclude by a bind mount's name (no user namespace here)"
+	skip df4j8 "root that's a bind of a folder in an --exclude folder (no user namespace here)"
+	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (no user namespace here)"
+	skip df4ja "root that's a bind of a folder in a git work tree (no user namespace here)"
+	skip df4m4 "root under an --exclude folder by another name named as skipped (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
@@ -886,6 +926,22 @@ rc=0; "${bin}" scan --db "${mr}/t.sqlite" --root "${mr}/t" --root "${mr}/t/nonex
 check des5v "scan with a missing root" "${rc}" 1
 mrDb=none; [[ -e "${mr}/t.sqlite" ]] && mrDb=made
 check des5w "missing root named, nothing scanned" "$(grep -cF "can't resolve root ${mr}/t/nonexist: No such file or directory (os error 2)" "${mr}/out.txt" || true) ${mrDb}" "1 none"
+# So does a mistyped --exclude or --no-xattr, which would read or write where
+# it was told not to (2026111011092303). A root in or at an --exclude folder
+# is named and dropped, and with no root left it's nothing to scan
+# (2026111011092318).
+mkdir -p "${mr}/t/vm-images" "${mr}/t/ex/src" "${mr}/u"
+printf 'x\n' > "${mr}/t/vm-images/disk.img"; printf 'x\n' > "${mr}/t/ex/src/f"; printf 'u\n' > "${mr}/u/f"
+mscan() { local rc=0; "${bin}" scan --db "${mr}/${1}.sqlite" --progress 3600 "${@:2}" > "${mr}/${1}.txt" 2>&1 || rc=$?; local made=none; [[ -e "${mr}/${1}.sqlite" ]] && made=made; echo "${rc} ${made}"; }
+got="$(mscan mx --root "${mr}/t" --exclude "${mr}/t/vm-imgaes" --no-xattrs)"
+check df4m5 "missing --exclude named, nothing scanned" "${got} $(grep -cF "can't resolve --exclude ${mr}/t/vm-imgaes: No such file or directory (os error 2)" "${mr}/mx.txt" || true)" "1 none 1"
+got="$(mscan mn --root "${mr}/t" --no-xattr "${mr}/t/vm-imgaes")"
+check df4m6 "missing --no-xattr named, nothing written" "${got} $(grep -cF "can't resolve --no-xattr ${mr}/t/vm-imgaes: No such file or directory (os error 2)" "${mr}/mn.txt" || true) $(xget "${mr}/t/vm-images/disk.img" user.blake3.b64u | wc -c)" "1 none 1 0"
+mrc="$(realpath "${mr}")"
+got="$(mscan me --root "${mr}/t/ex/src" --root "${mr}/u" --exclude "${mr}/t/ex" --no-xattrs)"
+check df4m7 "root in an --exclude folder named and dropped" "${got} $(grep -oE 'files [0-9]+' "${mr}/me.txt" | head -1) $(grep -cxF "skipping root ${mrc}/t/ex/src: inside --exclude ${mrc}/t/ex" "${mr}/me.txt" || true)" "0 made files 1 1"
+got="$(mscan mo --root "${mr}/t/ex" --exclude "${mr}/t/ex" --no-xattrs)"
+check df4m8 "only root is an --exclude folder, nothing to scan" "${got} $(grep -cxF "skipping root ${mrc}/t/ex: same folder as --exclude ${mrc}/t/ex" "${mr}/mo.txt" || true) $(grep -c 'nothing to scan' "${mr}/mo.txt" || true)" "1 none 1 1"
 
 # 27. An unmounted btrfs subvolume given as a root is read on its own, though
 # it sits inside another root whose walk stops at it (2026102814341412). Only
@@ -1000,6 +1056,67 @@ else
 	check df1rk "an attribute that can't be written: reported, exit 0" "${rc} $(sqlite3 "${work}/db/ro.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 xattr-error ${ro}/f"
 fi
 
+# 33. A read error is news like a mismatch, so no skip passes the file until
+# it reads clean (design.md, Skipping, row db-read-error). A preloaded shim
+# fails the reads, since a real EIO needs a failing disk.
+er="${work}/er"; mkdir -p "${er}/tree"
+head -c 40000 /dev/urandom > "${er}/tree/bad"; printf 'fine\n' > "${er}/tree/good"
+cat > "${er}/eio.c" << 'EOF'
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+// Whether fd is open on a path that ends in EIO_NAME.
+static int bad(int fd) {
+	const char *want = getenv("EIO_NAME");
+	char link[64], got[4096];
+	if (!want) return 0;
+	snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
+	ssize_t n = readlink(link, got, sizeof got - 1);
+	if (n <= 0) return 0;
+	got[n] = 0;
+	size_t w = strlen(want);
+	return (size_t)n >= w && strcmp(got + n - w, want) == 0;
+}
+
+ssize_t read(int fd, void *buf, size_t count) {
+	static ssize_t (*real)(int, void *, size_t);
+	if (!real) real = dlsym(RTLD_NEXT, "read");
+	if (bad(fd)) { errno = EIO; return -1; }
+	return real(fd, buf, count);
+}
+
+ssize_t pread64(int fd, void *buf, size_t count, off_t at) {
+	static ssize_t (*real)(int, void *, size_t, off_t);
+	if (!real) real = dlsym(RTLD_NEXT, "pread64");
+	if (bad(fd)) { errno = EIO; return -1; }
+	return real(fd, buf, count, at);
+}
+EOF
+erdb="${work}/db/er.sqlite"
+# erscan shim|plain [ARGS...]: the exit code, the run's read errors and how
+# many files it read.
+erscan() {
+	local rc=0 pre=()
+	if [[ "${1}" == shim ]]; then pre=(env "LD_PRELOAD=${er}/eio.so" "EIO_NAME=/er/tree/bad"); fi
+	"${pre[@]}" "${bin}" scan --db "${erdb}" --root "${er}/tree" --progress 3600 "${@:2}" > "${work}/er.txt" 2>&1 || rc=$?
+	echo "${rc} $(sqlite3 "${erdb}" "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND kind = 'read-error'") $(grep -o 'hashed [0-9]*' "${work}/er.txt" | head -1)"
+}
+if ! command -v cc > /dev/null || ! cc -shared -fPIC -o "${er}/eio.so" "${er}/eio.c" -ldl > "${work}/er-cc.txt" 2>&1; then
+	skip df4ep "read error: --verify reports it (no C compiler for the shim)"
+	skip df4eq "read error: reported again on a plain run the same day (no C compiler for the shim)"
+	skip df4er "read error: a clean read closes it (no C compiler for the shim)"
+else
+	erscan plain > /dev/null
+	check df4ep "read error: --verify reports it" "$(erscan shim --verify)" "4 1 hashed 1"
+	check df4eq "read error: reported again on a plain run the same day" "$(erscan shim)" "4 1 hashed 0"
+	check df4er "read error: a clean read closes it" "$(erscan plain) $(erscan plain)" "0 0 hashed 1 0 0 hashed 0"
+fi
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -1071,3 +1188,5 @@ fi
 ##		- 20261108: A link at the database's names is named in the refusal.
 ##		- 20261108: A file that changes while read, an attribute that can't be
 ##		  written, and no attributes on a new file after --verify.
+##		- 20261110: A read error, through a preloaded shim, is read and
+##		  reported again until it reads clean.

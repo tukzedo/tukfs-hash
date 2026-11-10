@@ -217,9 +217,67 @@ pub fn seen_from(mounts: &[Mount], outer: &Path, inner: &Path) -> Option<PathBuf
 		.then_some(at)
 }
 
+/// `path`'s folder in each mount of the same filesystem that shows a folder
+/// above the one `path`'s mount shows, with that mount's point. A bind mount
+/// of a subfolder is the case: the folders above it in its filesystem are
+/// only seen there (2026111011092307). The caller checks the device and inode.
+pub fn wider_views(mounts: &[Mount], path: &Path) -> Vec<(PathBuf, PathBuf)> {
+	let Some(m) = mount_for(mounts, path) else {
+		return Vec::new();
+	};
+	let Ok(rel) = path.strip_prefix(&m.point) else {
+		return Vec::new();
+	};
+	let inner = m.root.join(rel);
+	mounts
+		.iter()
+		.filter(|o| o.dev == m.dev && o.root != m.root && m.root.starts_with(&o.root))
+		.filter_map(|o| {
+			let at = o.point.join(inner.strip_prefix(&o.root).ok()?);
+			// Not when a mount below its point hides the folder there.
+			(mount_for(mounts, &at)?.id == o.id).then(|| (at, o.point.clone()))
+		})
+		.collect()
+}
+
+// btrfs gives every subvolume's top folder this inode.
+const BTRFS_SUBVOL_INO: u64 = 256;
+
+/// Whether `path` is the top of its filesystem, so the filesystem's used
+/// space stands for what's under it. A btrfs subvolume's top counts, since
+/// its used space is the whole filesystem's anyway. A bind mount of a folder
+/// doesn't, wherever it's mounted (2026111011092313).
+pub fn shows_whole(mounts: &[Mount], path: &Path, ino: u64) -> bool {
+	mount_for(mounts, path).is_some_and(|m| {
+		(path == m.point && m.root == Path::new("/"))
+			|| (m.fstype == "btrfs" && ino == BTRFS_SUBVOL_INO)
+	})
+}
+
 fn kname_of(dev: &str) -> Option<String> {
 	let real = fs::canonicalize(dev).ok()?;
 	Some(real.file_name()?.to_string_lossy().into_owned())
+}
+
+// A source can name a node that isn't there, such as `/dev/root` on a box
+// booted with no initramfs. The major and minor still find it then.
+fn kname_for(m: &Mount) -> Option<String> {
+	if m.source.starts_with("/dev/")
+		&& let Some(k) = kname_of(&m.source)
+	{
+		return Some(k);
+	}
+	let (major, minor) = m.dev.split_once(':')?;
+	let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+	if !digits(major) || !digits(minor) {
+		return None;
+	}
+	kname_of(&format!("/sys/dev/block/{major}:{minor}"))
+}
+
+// A snapshot's source is `pool@snap` or `pool/dataset@snap`.
+fn zfs_pool(source: &str) -> &str {
+	source.split(['/', '@']).next().unwrap_or(source)
 }
 
 // Down through LUKS, LVM and partitions to whole disks.
@@ -311,26 +369,22 @@ pub fn disks_for(m: &Mount, mounts: &[Mount]) -> Result<BTreeSet<String>, String
 fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<String>, String> {
 	let mut out = BTreeSet::new();
 	match m.fstype.as_str() {
-		"zfs" => {
-			let pool = m.source.split('/').next().unwrap_or(&m.source);
-			zpool_disks(pool, &mut out)?;
-		}
-		_ if m.source.starts_with("/dev/") => {
-			let k = kname_of(&m.source).ok_or_else(|| format!("cannot resolve {}", m.source))?;
-			if m.fstype == "btrfs" {
-				btrfs_disks(&k, &mut out);
-			} else {
-				base_disks(&k, &mut out);
+		"zfs" => zpool_disks(zfs_pool(&m.source), &mut out)?,
+		_ => match kname_for(m) {
+			Some(k) if m.fstype == "btrfs" => btrfs_disks(&k, &mut out),
+			Some(k) => base_disks(&k, &mut out),
+			None if m.source.starts_with("/dev/") => {
+				return Err(format!("cannot resolve {}", m.source));
 			}
-		}
-		_ => {
-			return Err(format!(
-				"{} is {} from {}, not a local disk",
-				m.point.display(),
-				m.fstype,
-				m.source
-			));
-		}
+			None => {
+				return Err(format!(
+					"{} is {} from {}, not a local disk",
+					m.point.display(),
+					m.fstype,
+					m.source
+				));
+			}
+		},
 	}
 	if out.is_empty() {
 		return Err(format!("no disks found under {}", m.point.display()));
@@ -417,8 +471,11 @@ pub fn group_name(disks: &BTreeSet<String>) -> String {
 }
 
 /// Every mount point, for stopping a walk at the edge of its own filesystem.
-pub fn mount_points(mounts: Vec<Mount>) -> BTreeMap<PathBuf, String> {
-	mounts.into_iter().map(|m| (m.point, m.fstype)).collect()
+pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
+	mounts
+		.iter()
+		.map(|m| (m.point.clone(), m.fstype.clone()))
+		.collect()
 }
 
 /// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
@@ -588,6 +645,75 @@ mod tests {
 		assert_eq!(hands_off_at(&all, Path::new("/home")), None);
 	}
 
+	// A snapshot of a pool's top dataset comes from `pool@snap`
+	// (2026111011092311).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't run zpool")]
+	fn a_snapshot_finds_its_pool() {
+		let _id = test_id("df4jg");
+		assert_eq!(zfs_pool("zf10@snap"), "zf10");
+		assert_eq!(zfs_pool("zf10/a/b@snap"), "zf10");
+		assert_eq!(zfs_pool("zf10/a"), "zf10");
+		assert_eq!(zfs_pool("zf10"), "zf10");
+		let all = read_mounts().unwrap();
+		// Where zpool can't see the pool, as in a user namespace, there's
+		// nothing to compare with.
+		let Some(top) = all
+			.iter()
+			.find(|m| m.fstype == "zfs" && !m.source.contains('@'))
+		else {
+			return;
+		};
+		let Ok(whole) = disks_for(top, &all) else {
+			return;
+		};
+		let pool = top.source.split('/').next().unwrap_or_default();
+		let m = |source: String| Mount {
+			source,
+			..top.clone()
+		};
+		assert_eq!(
+			disks_for(&m(format!("{pool}@snap")), &all),
+			Ok(whole.clone())
+		);
+		assert_eq!(disks_for(&m(format!("{pool}/a/b@snap")), &all), Ok(whole));
+	}
+
+	// No initramfs, so `/` comes from `/dev/root`, which isn't there
+	// (2026111011092321).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no sysfs")]
+	fn a_missing_source_falls_back_to_the_device_number() {
+		let _id = test_id("df4jh");
+		let all = read_mounts().unwrap();
+		let Some(real) = all.iter().find(|m| {
+			m.fstype != "btrfs"
+				&& m.source.starts_with("/dev/")
+				&& kname_of(&m.source).is_some()
+				&& Path::new("/sys/dev/block").join(&m.dev).exists()
+		}) else {
+			return;
+		};
+		let want = disks_for(real, &all).unwrap();
+		let moved = |source: &str, dev: &str| Mount {
+			source: source.into(),
+			dev: dev.into(),
+			..real.clone()
+		};
+		let gone = "/dev/tukfs-hash-test-no-such-node";
+		assert_eq!(disks_for(&moved(gone, &real.dev), &all), Ok(want.clone()));
+		assert_eq!(disks_for(&moved("rootfs", &real.dev), &all), Ok(want));
+		assert_eq!(
+			disks_for(&moved(gone, "0:0"), &all),
+			Err(format!("cannot resolve {gone}"))
+		);
+		assert!(disks_for(&moved(gone, "../8:1"), &all).is_err());
+		assert!(
+			disks_for(&moved("rootfs", "0:0"), &all)
+				.is_err_and(|e| e.ends_with("not a local disk"))
+		);
+	}
+
 	// base on mnt, hid on mnt/sub, then vis over mnt.
 	const OVER: &[u8] = b"22 1 8:1 / / rw - ext4 /dev/sda1 rw
 30 22 8:1 /base /t/mnt rw - ext4 /dev/sda1 rw
@@ -603,7 +729,7 @@ mod tests {
 		assert_eq!(ids(&all), [22, 30, 31, 32]);
 		let shown = visible(all);
 		assert_eq!(ids(&shown), [22, 32]);
-		let points = mount_points(shown);
+		let points = mount_points(&shown);
 		assert!(!points.contains_key(Path::new("/t/mnt/sub")));
 		assert!(points.contains_key(Path::new("/t/mnt")));
 	}
@@ -826,6 +952,57 @@ mod tests {
 		assert_eq!(seen(&both, "/t/tree", "/t/bind"), sub);
 		let over = "7 1 8:4 / /t/tree/sub rw - ext4 /dev/sdd1 rw\n";
 		assert_eq!(seen(over, "/t/tree", "/t/bind"), None);
+	}
+
+	#[test]
+	fn a_bind_mounts_folder_where_more_is_shown() {
+		let _id = test_id("df4j5");
+		let views = |extra: &str, path: &str| {
+			let text = [BIND, extra.as_bytes()].concat();
+			wider_views(&visible(parse_mountinfo(&text)), Path::new(path))
+		};
+		let pair = |at: &str, top: &str| (PathBuf::from(at), PathBuf::from(top));
+		assert_eq!(views("", "/t/bind"), vec![pair("/t/tree/sub", "/")]);
+		assert_eq!(views("", "/t/bind/d"), vec![pair("/t/tree/sub/d", "/")]);
+		assert_eq!(views("", "/t/ux"), vec![pair("/u/x", "/")]);
+		// The whole filesystem is already seen, or no other mount shows more.
+		assert!(views("", "/t/tree/a").is_empty());
+		assert!(views("", "/t/other").is_empty());
+		assert!(views("", "/t/tree/m").is_empty());
+		// A bind of a folder inside the bind is seen through both above it.
+		let nested = "7 1 8:1 /t/tree/sub/d /t/nd rw - ext4 /dev/sda1 rw\n";
+		assert_eq!(
+			views(nested, "/t/nd"),
+			vec![
+				pair("/t/tree/sub/d", "/"),
+				pair("/t/bind/d", "/t/bind"),
+				pair("/t/tree/b/d", "/t/tree/b"),
+			]
+		);
+		// Something mounted over the folder hides it there.
+		let over = "7 1 8:4 / /t/tree/sub rw - ext4 /dev/sdd1 rw\n";
+		assert!(views(over, "/t/bind").is_empty());
+	}
+
+	#[test]
+	fn only_a_filesystems_top_shows_all_of_it() {
+		let _id = test_id("df4j6");
+		let btrfs = "7 1 0:27 /@home /home rw - btrfs /dev/sde1 rw\n\
+			8 1 0:27 /@home/u/dir /t/bd rw - btrfs /dev/sde1 rw\n";
+		let all = visible(parse_mountinfo(&[BIND, btrfs.as_bytes()].concat()));
+		let whole = |path: &str, ino| shows_whole(&all, Path::new(path), ino);
+		assert!(whole("/", 2));
+		assert!(whole("/t/tree/m", 2));
+		assert!(!whole("/t/tree/m/x", 9));
+		assert!(!whole("/t/tree", 9));
+		// Bind mounts of a folder, from this filesystem and from another.
+		assert!(!whole("/t/bind", 9));
+		assert!(!whole("/t/other", 9));
+		// A btrfs subvolume, mounted or not, and a folder in one.
+		assert!(whole("/home", 256));
+		assert!(whole("/home/u", 256));
+		assert!(!whole("/home/u", 300));
+		assert!(!whole("/t/bd", 300));
 	}
 
 	#[test]

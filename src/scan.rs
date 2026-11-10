@@ -305,6 +305,7 @@ struct Shared {
 	exclude_ids: HashSet<(u64, u64)>,
 	no_xattr_ids: HashSet<(u64, u64)>,
 	mount_points: BTreeMap<PathBuf, String>,
+	mounts: Vec<mounts::Mount>,
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
@@ -467,7 +468,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 }
 
 /// Takes the database's lock file, so 2 scans can't share it.
-pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
+fn lock(dir: &File, db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	if let Some(t) = mounts::hands_off_at(mounts, db) {
 		return Err(format!(
 			"{} is on {t}, which isn't written to from Linux; put the database elsewhere",
@@ -477,16 +478,15 @@ pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	let p = lock_path(db);
 	// Under sudo a link here would make and later chown a file of the user's
 	// choosing.
-	let f = OpenOptions::new()
-		.create(true)
-		.truncate(false)
-		.write(true)
-		.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-		.open(&p)
-		.map_err(|e| match e.raw_os_error() {
-			Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
-			_ => format!("{}: {e}", p.display()),
-		})?;
+	let f = beneath::openat(
+		dir.as_raw_fd(),
+		p.file_name().unwrap_or_default(),
+		libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK,
+	)
+	.map_err(|e| match e.raw_os_error() {
+		Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
+		_ => format!("{}: {e}", p.display()),
+	})?;
 	if !f.metadata().is_ok_and(|m| m.file_type().is_file()) {
 		return Err(format!("{}: not a regular file; refused", p.display()));
 	}
@@ -504,6 +504,127 @@ pub fn lock(db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	Ok(f)
 }
 
+/// The user who ran this through sudo, when it runs as root. Anyone else can't
+/// give files away, nor make them where that user couldn't.
+fn sudo_ids() -> Option<(u32, u32)> {
+	// SAFETY: geteuid only reads.
+	if unsafe { libc::geteuid() } != 0 {
+		return None;
+	}
+	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
+	Some((id("SUDO_UID")?, id("SUDO_GID")?))
+}
+
+/// The database's folder. Under sudo it has to be that user's or root's, or a
+/// link planted at it would have root make the files wherever it points and
+/// hand them over (2026111011092301).
+fn open_dir(db: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
+	let dir = db.parent().unwrap_or(Path::new("/"));
+	let failed = |e: io::Error| format!("database folder {}: {e}", dir.display());
+	// With O_PATH a link is opened rather than refused, so its type says so.
+	let f = beneath::openat(libc::AT_FDCWD, dir.as_os_str(), libc::O_PATH).map_err(failed)?;
+	let m = f.metadata().map_err(failed)?;
+	if m.file_type().is_symlink() {
+		return Err(format!("{}: is a symbolic link; refused", dir.display()));
+	}
+	if !m.is_dir() {
+		return Err(failed(io::Error::from_raw_os_error(libc::ENOTDIR)));
+	}
+	if let Some((uid, _)) = sudo
+		&& m.uid() != uid
+		&& m.uid() != 0
+	{
+		return Err(format!(
+			"database folder {} is owned by uid {}, not by uid {uid} or root; refused",
+			dir.display(),
+			m.uid()
+		));
+	}
+	Ok(f)
+}
+
+/// The database's lock, for a command that writes. However the command ends,
+/// once this goes the file is back in rollback mode and, under sudo, its
+/// user's again. See design.md, Database.
+#[derive(Debug)]
+pub struct Held {
+	db: PathBuf,
+	// The folder that was checked. The lock is made and the files are handed
+	// back through it.
+	dir: File,
+	sudo: Option<(u32, u32)>,
+	conn: Option<rusqlite::Connection>,
+	// Let go only after drop() has handed the files back.
+	_lock: File,
+}
+
+impl Held {
+	pub fn take(db: &Path, mounts: &[mounts::Mount]) -> Result<Self, String> {
+		Self::take_as(db, mounts, sudo_ids())
+	}
+
+	// A test can't be root, so it names the sudo ids itself.
+	fn take_as(
+		db: &Path,
+		mounts: &[mounts::Mount],
+		sudo: Option<(u32, u32)>,
+	) -> Result<Self, String> {
+		let dir = open_dir(db, sudo)?;
+		Ok(Self {
+			_lock: lock(&dir, db, mounts)?,
+			dir,
+			db: db.to_path_buf(),
+			sudo,
+			conn: None,
+		})
+	}
+
+	pub fn open(&mut self) -> Result<&mut rusqlite::Connection, String> {
+		Ok(self.conn.insert(db::open_rw(&self.db)?))
+	}
+
+	/// For the writer thread. `put_back` returns it, to be closed here.
+	pub fn lend(&mut self) -> Result<rusqlite::Connection, String> {
+		self.conn
+			.take()
+			.ok_or_else(|| "database: not open".to_string())
+	}
+
+	pub fn put_back(&mut self, conn: rusqlite::Connection) {
+		self.conn = Some(conn);
+	}
+
+	// Hand the files back to whoever ran this through sudo, so reports and
+	// queries need no root. The WAL files are only there when leaving WAL
+	// mode failed.
+	fn give_back(&self) {
+		let Some((uid, gid)) = self.sudo else {
+			return;
+		};
+		for (p, e) in hand_over(&self.dir, &self.db, uid, gid) {
+			err!(
+				"warning: can't give {} back to uid {uid}: {e}",
+				crate::util::show_path(&p)
+			);
+		}
+	}
+}
+
+impl Drop for Held {
+	fn drop(&mut self) {
+		// Only a warning, so it can't change the command's result.
+		if let Some(conn) = self.conn.take()
+			&& let Err(x) = db::close_rw(conn)
+		{
+			err!(
+				"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
+				crate::util::show_path(&self.db)
+			);
+		}
+		self.give_back();
+	}
+}
+
 /// This box's hostname, or empty.
 pub fn host() -> String {
 	fs::read_to_string("/proc/sys/kernel/hostname")
@@ -511,25 +632,9 @@ pub fn host() -> String {
 		.unwrap_or_default()
 }
 
-/// Hand the files back to whoever ran this through sudo, so reports and
-/// queries need no root. The WAL files are only there when leaving WAL mode
-/// failed.
-pub fn give_back(db: &Path) {
-	let id = |k| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
-	let (Some(uid), Some(gid)) = (id("SUDO_UID"), id("SUDO_GID")) else {
-		return;
-	};
-	for (p, e) in hand_over(db, uid, gid) {
-		err!(
-			"warning: can't give {} back to uid {uid}: {e}",
-			crate::util::show_path(&p)
-		);
-	}
-}
-
-// The files that couldn't be handed over. The WAL files are usually gone, so a
-// missing one doesn't count.
-fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
+// The files in `dir` that couldn't be handed over. The WAL files are usually
+// gone, so a missing one doesn't count.
+fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let with = |sfx: &str| {
 		let mut s = db.as_os_str().to_owned();
 		s.push(sfx);
@@ -538,11 +643,11 @@ fn hand_over(db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let mut failed = Vec::new();
 	for p in [db.to_path_buf(), lock_path(db), with("-wal"), with("-shm")] {
 		// By fd, so a link swapped in at the name isn't followed.
-		let f = match OpenOptions::new()
-			.read(true)
-			.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
-			.open(&p)
-		{
+		let f = match beneath::openat(
+			dir.as_raw_fd(),
+			p.file_name().unwrap_or_default(),
+			libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY,
+		) {
 			Ok(f) => f,
 			Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
 			Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
@@ -578,13 +683,21 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		err!("skipping root {d}");
 	}
 	// A mistyped root would leave a whole tree unread under a run that looks
-	// fine, so nothing starts (2026102814341406).
-	if !unresolved.is_empty() {
-		for (r, e) in &unresolved {
-			err!("can't resolve root {}: {e}", crate::util::show_path(r));
+	// fine, and a mistyped --exclude or --no-xattr reads or writes where it was
+	// told not to, so nothing starts (2026102814341406, 2026111011092303).
+	let mut bad: Vec<String> = unresolved
+		.iter()
+		.map(|(r, e)| format!("root {}: {e}", crate::util::show_path(r)))
+		.collect();
+	let excludes = resolve_each("--exclude", &o.excludes, &mut bad);
+	let no_xattr = resolve_each("--no-xattr", &o.no_xattr, &mut bad);
+	if !bad.is_empty() {
+		for b in &bad {
+			err!("can't resolve {b}");
 		}
 		return Err("nothing scanned".into());
 	}
+	let planned = drop_excluded(planned, &excludes, &mounts);
 	if planned.is_empty() {
 		return Err("nothing to scan".into());
 	}
@@ -592,10 +705,10 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	// running (backlog ...852).
 	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
-	let _lock = lock(&db_path, &mounts)?;
+	let mut held = Held::take(&db_path, &mounts)?;
 	let db_dir = db_dir(&db_path)?;
-	let conn = db::open_rw(&db_path)?;
-	let open_misses = db::open_misses(&conn)?;
+	let conn = held.open()?;
+	let open_misses = db::open_misses(conn)?;
 
 	let started = now_us();
 	let Resumed {
@@ -604,8 +717,9 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		started_us: run_started,
 		summary: earlier,
 		reported,
-	} = begin(&conn, o, &roots_key(&planned), started)?;
+	} = begin(conn, o, &roots_key(&planned), started)?;
 
+	let conn = held.lend()?;
 	let faults = Arc::new(Faults::default());
 	let (tx, rx) = sync_channel::<Msg>(65536);
 	let writer = {
@@ -622,19 +736,12 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		cutoff_us: cutoff_us.min(run_started),
 		db: db_path.clone(),
 		db_dir,
-		excludes: o
-			.excludes
-			.iter()
-			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-			.collect(),
-		no_xattr: o
-			.no_xattr
-			.iter()
-			.map(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-			.collect(),
-		exclude_ids: ids_of(&o.excludes),
-		no_xattr_ids: ids_of(&o.no_xattr),
-		mount_points: mounts::mount_points(mounts),
+		exclude_ids: ids_of(&excludes),
+		no_xattr_ids: ids_of(&no_xattr),
+		excludes,
+		no_xattr,
+		mount_points: mounts::mount_points(&mounts),
+		mounts,
 		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
@@ -645,7 +752,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		run_started_us: run_started,
 		tx,
 	});
-	let groups = groups(planned, &hands_off);
+	let groups = groups(planned, &hands_off, &shared.mounts);
 
 	let mut handles = Vec::new();
 	for g in &groups {
@@ -675,7 +782,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		groups: &groups,
 		t0,
 	};
-	finish(conn, &part, why, stop.load(Relaxed), &db_path)
+	finish(conn, &part, why, stop.load(Relaxed), held)
 }
 
 // Picks up the run to resume, or starts a new one, and marks it running. A new
@@ -763,12 +870,16 @@ fn hands_off(
 	Ok(out)
 }
 
-fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>) -> Vec<Arc<Group>> {
+fn groups(
+	planned: Vec<Planned>,
+	hands_off: &BTreeMap<PathBuf, HandsOff>,
+	mounts: &[mounts::Mount],
+) -> Vec<Arc<Group>> {
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|p| {
 			Arc::new(Group {
-				size: used_under(&p.roots),
+				size: used_under(mounts, &p.roots),
 				name: p.name,
 				roots: p.roots,
 				threads: p.threads,
@@ -794,13 +905,12 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>) -> Vec
 // them, since counting them first would mean a second walk. None when a root
 // is a folder inside its filesystem, where the rest would keep the percent
 // low. See design.md, Runs and exit codes.
-fn used_under(roots: &[PathBuf]) -> Option<u64> {
+fn used_under(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<u64> {
 	let mut devs = BTreeSet::new();
 	let mut total = 0u64;
 	for r in roots {
 		let md = fs::metadata(r).ok()?;
-		let up = fs::metadata(r.join("..")).ok()?;
-		if up.dev() == md.dev() && up.ino() != md.ino() {
+		if !mounts::shows_whole(mounts, r, md.ino()) {
 			return None;
 		}
 		if devs.insert(md.dev()) {
@@ -858,7 +968,7 @@ fn finish(
 	p: &Part,
 	mut why: Vec<String>,
 	stopped: bool,
-	db_path: &Path,
+	mut held: Held,
 ) -> Result<i32, String> {
 	let run_id = p.run_id;
 	// The stored summary keeps every part's lines; the output shows this
@@ -894,14 +1004,8 @@ fn finish(
 		why.push(format!("database: {x}"));
 		status = RunStatus::Failed;
 	}
-	// Everything is committed by now, so this can't change the result.
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			db_path.display()
-		);
-	}
-	give_back(db_path);
+	held.put_back(conn);
+	drop(held);
 
 	out!(
 		"run {run_id} {} after {}s\n{part}",
@@ -983,7 +1087,22 @@ fn db_dir(db: &Path) -> Result<(u64, u64), String> {
 		.map_err(|e| format!("database folder {}: {e}", dir.display()))
 }
 
-// A path that isn't there yet matches by path only.
+// Each path resolved. One that can't be goes in `bad`, made absolute, with why.
+fn resolve_each(flag: &str, paths: &[PathBuf], bad: &mut Vec<String>) -> Vec<PathBuf> {
+	let mut resolved = Vec::with_capacity(paths.len());
+	for p in paths {
+		match fs::canonicalize(p) {
+			Ok(c) => resolved.push(c),
+			Err(e) => {
+				let abs = std::path::absolute(p).unwrap_or_else(|_| p.clone());
+				bad.push(format!("{flag} {}: {e}", crate::util::show_path(&abs)));
+			}
+		}
+	}
+	resolved
+}
+
+// One gone since the scan resolved it matches by path only.
 fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
 	paths
 		.iter()
@@ -992,14 +1111,89 @@ fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
 		.collect()
 }
 
-// A root inside one of the folders under another name. The root's own folder
-// is the walk's to check.
-fn inside_any(root: &Path, ids: &HashSet<(u64, u64)>) -> bool {
-	!ids.is_empty()
-		&& root
-			.ancestors()
-			.skip(1)
-			.any(|a| fs::metadata(a).is_ok_and(|m| ids.contains(&(m.dev(), m.ino()))))
+// A root in an --exclude folder would read nothing and leave every name under
+// it to show in gone, so it's dropped and named before the run, as plan's
+// drops are (2026111011092318).
+fn drop_excluded(
+	planned: Vec<Planned>,
+	excludes: &[PathBuf],
+	mounts: &[mounts::Mount],
+) -> Vec<Planned> {
+	let ids: HashMap<(u64, u64), &Path> = excludes
+		.iter()
+		.filter_map(|x| {
+			fs::metadata(x)
+				.ok()
+				.map(|m| ((m.dev(), m.ino()), x.as_path()))
+		})
+		.collect();
+	if ids.is_empty() {
+		return planned;
+	}
+	let why = |root: &Path| {
+		let md = fs::metadata(root).ok()?;
+		if let Some(x) = ids.get(&(md.dev(), md.ino())) {
+			return Some(format!(
+				"same folder as --exclude {}",
+				crate::util::show_path(x)
+			));
+		}
+		found_above(&names_above(mounts, root), |id| ids.get(&id).copied())
+			.map(|x| format!("inside --exclude {}", crate::util::show_path(x)))
+	};
+	planned
+		.into_iter()
+		.filter_map(|mut g| {
+			g.roots.retain(|r| {
+				let Some(why) = why(r) else {
+					return true;
+				};
+				err!("skipping root {}: {why}", crate::util::show_path(r));
+				false
+			});
+			(!g.roots.is_empty()).then_some(g)
+		})
+		.collect()
+}
+
+// The folders above a root, up to `top`. The root's own folder is the walk's
+// to check.
+fn above_to<'a>(root: &'a Path, top: &'a Path) -> impl Iterator<Item = &'a Path> {
+	root.ancestors()
+		.skip(1)
+		.take_while(move |a| a.starts_with(top))
+}
+
+// The root's own name, and its name in each mount that shows more of its
+// filesystem, as for a bind mount of a subfolder (2026111011092307). Each
+// comes with the mount point the folders above it stop at.
+fn names_above(mounts: &[mounts::Mount], root: &Path) -> Vec<(PathBuf, PathBuf)> {
+	let mut names = vec![(root.to_path_buf(), PathBuf::from("/"))];
+	let Ok(md) = fs::metadata(root) else {
+		return names;
+	};
+	let id = (md.dev(), md.ino());
+	names.extend(
+		mounts::wider_views(mounts, root)
+			.into_iter()
+			.filter(|(at, _)| fs::metadata(at).is_ok_and(|m| (m.dev(), m.ino()) == id)),
+	);
+	names
+}
+
+// The first hit among the folders above any of a root's names.
+fn found_above<T>(
+	names: &[(PathBuf, PathBuf)],
+	hit: impl Fn((u64, u64)) -> Option<T>,
+) -> Option<T> {
+	names.iter().find_map(|(p, top)| {
+		above_to(p, top).find_map(|a| fs::metadata(a).ok().and_then(|m| hit((m.dev(), m.ino()))))
+	})
+}
+
+// A root inside one of the folders under another name.
+fn inside_any(names: &[(PathBuf, PathBuf)], ids: &HashSet<(u64, u64)>) -> bool {
+	!ids.is_empty() && found_above(names, |id| ids.contains(&id).then_some(())).is_some()
 }
 
 // The database, its journal files and its lock, in its folder under any name.
@@ -1015,12 +1209,13 @@ fn excluded(sh: &Shared, p: &Path, in_db_dir: bool) -> bool {
 }
 
 // git looks for `.git` up from the work folder until the filesystem changes,
-// so this does too. The root's own folder is the walk's to check.
-fn git_tree_above(root: &Path, dev: u64) -> bool {
-	root.ancestors()
-		.skip(1)
-		.take_while(|a| fs::symlink_metadata(a).is_ok_and(|m| m.dev() == dev))
-		.any(|a| fs::symlink_metadata(a.join(".git")).is_ok())
+// so this does too.
+fn git_tree_above(names: &[(PathBuf, PathBuf)], dev: u64) -> bool {
+	names.iter().any(|(p, top)| {
+		above_to(p, top)
+			.take_while(|a| fs::symlink_metadata(a).is_ok_and(|m| m.dev() == dev))
+			.any(|a| fs::symlink_metadata(a.join(".git")).is_ok())
+	})
 }
 
 // A dead writer means nothing more can be recorded, so stop rather than read
@@ -1074,7 +1269,8 @@ fn walk(
 	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) {
-	if inside_any(root, &sh.exclude_ids) {
+	let names = names_above(&sh.mounts, root);
+	if inside_any(&names, &sh.exclude_ids) {
 		return;
 	}
 	let root = match Root::open(root) {
@@ -1088,8 +1284,8 @@ fn walk(
 	};
 	let mut stack: Vec<Frame> = Vec::new();
 	let above = Marks {
-		in_git: git_tree_above(&root.path, root.dev),
-		no_xattr: inside_any(&root.path, &sh.no_xattr_ids),
+		in_git: git_tree_above(&names, root.dev),
+		no_xattr: inside_any(&names, &sh.no_xattr_ids),
 	};
 	let mut next = Some((root.path.clone(), above));
 	let w = Walker {
@@ -1792,8 +1988,8 @@ impl<'a> Worker<'a> {
 		Some(md)
 	}
 
-	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch` and
-	// `resume-seen`.
+	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch`,
+	// `db-read-error` and `resume-seen`.
 	fn judged_already(&self, job: &Job, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
 		let path = job.path.as_os_str().as_bytes();
@@ -2160,6 +2356,7 @@ mod tests {
 			exclude_ids: HashSet::new(),
 			no_xattr_ids: HashSet::new(),
 			mount_points: BTreeMap::new(),
+			mounts: Vec::new(),
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
 			rmlint: false,
@@ -2586,6 +2783,47 @@ mod tests {
 		assert_eq!(b3("given"), None);
 	}
 
+	// A root in or at an --exclude folder is dropped before the run, and a
+	// group left with no roots goes with it (2026111011092318).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't stat real folders")]
+	fn roots_in_an_excluded_folder_are_dropped() {
+		let _id = test_id("df4m3");
+		let d = scratch("scan_dropex");
+		let d = fs::canonicalize(&*d).unwrap();
+		for sub in ["ex/deep", "plain", "other"] {
+			fs::create_dir_all(d.join(sub)).unwrap();
+		}
+		let group = |name: &str, rs: &[&str]| Planned {
+			name: name.into(),
+			roots: rs.iter().map(|r| d.join(r)).collect(),
+			threads: 1,
+		};
+		let roots = |gs: &[Planned]| -> Vec<(String, Vec<PathBuf>)> {
+			gs.iter()
+				.map(|g| (g.name.clone(), g.roots.clone()))
+				.collect()
+		};
+		let planned = || {
+			vec![
+				group("a", &["ex", "ex/deep", "plain"]),
+				group("b", &["ex/deep"]),
+			]
+		};
+		assert_eq!(
+			roots(&drop_excluded(planned(), &[d.join("ex")], &[])),
+			[("a".into(), vec![d.join("plain")])]
+		);
+		assert_eq!(
+			roots(&drop_excluded(planned(), &[], &[])),
+			roots(&planned())
+		);
+		assert_eq!(
+			roots(&drop_excluded(planned(), &[d.join("other")], &[])),
+			roots(&planned())
+		);
+	}
+
 	// design.md, Attributes: none in a git work tree, however deep the root.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
@@ -2605,9 +2843,10 @@ mod tests {
 		for (top, git) in [("repo", true), ("wt", true), ("plain", false)] {
 			let root = d.join(top).join("src");
 			let dev = fs::metadata(&root).unwrap().dev();
-			assert_eq!(git_tree_above(&root, dev), git, "{top}");
+			let names = [(root.clone(), PathBuf::from("/"))];
+			assert_eq!(git_tree_above(&names, dev), git, "{top}");
 			assert!(
-				!git_tree_above(&root, dev + 1),
+				!git_tree_above(&names, dev + 1),
 				"{top}: past the filesystem"
 			);
 			let (sh, _rx) = test_shared(d.join("t.sqlite"));
@@ -2617,6 +2856,67 @@ mod tests {
 			let jobs: Vec<(PathBuf, bool)> = jrx.iter().map(|j| (j.path, j.in_git)).collect();
 			assert_eq!(jobs.len(), 2, "{top}");
 			assert!(jobs.iter().all(|(_, g)| *g == git), "{top}: {jobs:?}");
+		}
+	}
+
+	// A root that's a bind mount of a subfolder: the folders above its source
+	// count too (2026111011092307). The table says `wide` shows the whole
+	// filesystem, and links there stand in for the binds' sources.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn a_bind_mounts_source_folders_count() {
+		let _id = test_id("df4j7");
+		let d = scratch("scan_bindsrc");
+		let d = fs::canonicalize(&*d).unwrap();
+		let tops = ["ex", "nx", "repo", "plain"];
+		let mut lines = vec![format!(
+			"1 0 8:1 / {} rw - ext4 /dev/sda1 rw",
+			d.join("wide").display()
+		)];
+		for (i, top) in tops.iter().enumerate() {
+			let (root, src) = (d.join("mnt").join(top), d.join("wide").join(top));
+			fs::create_dir_all(&root).unwrap();
+			fs::create_dir_all(&src).unwrap();
+			fs::write(root.join("f"), "x").unwrap();
+			std::os::unix::fs::symlink(&root, src.join("src")).unwrap();
+			lines.push(format!(
+				"{} 1 8:1 /{top}/src {} rw - ext4 /dev/sda1 rw",
+				i + 2,
+				root.display()
+			));
+		}
+		fs::create_dir(d.join("wide/repo/.git")).unwrap();
+		let table = mounts::parse_mountinfo(lines.join("\n").as_bytes());
+		let look = db::open_rw(&d.join("look.sqlite")).unwrap();
+		let walked = |top: &str, table: &[mounts::Mount]| {
+			let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+			sh.mounts = table.to_vec();
+			sh.exclude_ids = ids_of(&[d.join("wide/ex")]);
+			sh.no_xattr_ids = ids_of(&[d.join("wide/nx")]);
+			let drain = std::thread::spawn(move || rx.iter().count());
+			let (jtx, jrx) = sync_channel(64);
+			walk(
+				&d.join("mnt").join(top),
+				&sh,
+				&Stats::default(),
+				&look,
+				&jtx,
+			);
+			drop((jtx, sh));
+			drain.join().unwrap();
+			jrx.iter()
+				.map(|j| (j.in_git, j.no_xattr))
+				.collect::<Vec<_>>()
+		};
+		let want = [
+			vec![],
+			vec![(false, true)],
+			vec![(true, false)],
+			vec![(false, false)],
+		];
+		for (top, want) in tops.iter().zip(want) {
+			assert_eq!(walked(top, &table), want, "{top}");
+			assert_eq!(walked(top, &[]), [(false, false)], "{top}: no bind");
 		}
 	}
 
@@ -2737,12 +3037,27 @@ mod tests {
 	fn only_a_whole_filesystem_has_a_size() {
 		let _id = test_id("df1pk");
 		let d = scratch("scan_fs_used");
-		assert_eq!(used_under(&[d.to_path_buf()]), None);
-		assert!(used_under(&[PathBuf::from("/")]).is_some_and(|n| n > 0));
+		let m = mounts::read_mounts().unwrap();
+		assert_eq!(used_under(&m, &[d.to_path_buf()]), None);
+		assert!(used_under(&m, &[PathBuf::from("/")]).is_some_and(|n| n > 0));
 		// One filesystem counts once, however many roots are on it.
-		let once = used_under(&[PathBuf::from("/")]).unwrap();
-		let twice = used_under(&[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
+		let once = used_under(&m, &[PathBuf::from("/")]).unwrap();
+		let twice = used_under(&m, &[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
 		assert!(twice < once + once / 2, "{once} then {twice}");
+	}
+
+	// A bind mount of a folder from another filesystem is a folder too, though
+	// its parent is on another device (2026111011092313).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
+	fn a_bind_mount_of_a_folder_has_no_size() {
+		let _id = test_id("df4jb");
+		let table = |root: &str| {
+			mounts::parse_mountinfo(format!("1 0 8:1 {root} / rw - ext4 /dev/sda1 rw").as_bytes())
+		};
+		let top = [PathBuf::from("/")];
+		assert_eq!(used_under(&table("/sub"), &top), None);
+		assert!(used_under(&table("/"), &top).is_some_and(|n| n > 0));
 	}
 
 	// Row `resume-seen`, with no row at the file's size and time to say so.
@@ -2945,6 +3260,47 @@ mod tests {
 		assert_eq!(status, RunStatus::Failed.text());
 	}
 
+	// A scan that fails after taking the lock still ends in rollback mode,
+	// on a database it found and on one it made (backlog 2026111011092306).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_refused_resume_ends_in_rollback_mode() {
+		let _id = test_id("df4he");
+		let d = scratch("scan_refusedresume");
+		let root = d.join("r");
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("a"), "x").unwrap();
+		let opts = |db: &str, resume| Opts {
+			db: d.join(db),
+			roots: vec![root.clone()],
+			excludes: Vec::new(),
+			no_xattr: Vec::new(),
+			threads: Vec::new(),
+			since: None,
+			resume,
+			mode: Mode::Full,
+			write_xattrs: false,
+			rmlint: false,
+			progress_secs: 3600,
+			args: "test".into(),
+		};
+		// The file format's read and write versions, 2 for WAL.
+		let versions = |db: &str| fs::read(d.join(db)).unwrap()[18..20].to_vec();
+		let go = |o: &Opts| run(o, &Arc::new(AtomicBool::new(false)));
+		if let Err(e) = go(&opts("old.sqlite", false)) {
+			eprintln!("a plain scan fails here ({e}); skipped");
+			return;
+		}
+		for db in ["old.sqlite", "new.sqlite"] {
+			let r = go(&opts(db, true));
+			assert!(
+				r.as_ref().is_err_and(|e| e.starts_with("--resume: ")),
+				"{db}: {r:?}"
+			);
+			assert_eq!(versions(db), [1, 1], "{db}");
+		}
+	}
+
 	// Progress counts a file as it's read, not all at the end (backlog ...779).
 	#[test]
 	#[cfg_attr(miri, ignore = "4096 reads")]
@@ -2986,11 +3342,12 @@ mod tests {
 		let d = scratch("scan_heldlock");
 		let db = d.join("t.sqlite");
 		let mounts = mounts::read_mounts().unwrap();
-		let held = lock(&db, &mounts).unwrap();
-		let again = lock(&db, &mounts).unwrap_err();
+		let dir = open_dir(&db, None).unwrap();
+		let held = lock(&dir, &db, &mounts).unwrap();
+		let again = lock(&dir, &db, &mounts).unwrap_err();
 		assert!(again.ends_with("is locked; another scan is using this database"));
 		drop(held);
-		lock(&db, &mounts).unwrap();
+		lock(&dir, &db, &mounts).unwrap();
 	}
 
 	// A database left owned by root is named; a missing WAL file isn't
@@ -3009,8 +3366,12 @@ mod tests {
 		fs::write(&db, "").unwrap();
 		fs::write(lock_path(&db), "").unwrap();
 		let me = fs::metadata(&db).unwrap();
-		assert!(hand_over(&db, me.uid(), me.gid()).is_empty());
-		let failed: Vec<PathBuf> = hand_over(&db, 0, 0).into_iter().map(|f| f.0).collect();
+		let dir = open_dir(&db, None).unwrap();
+		assert!(hand_over(&dir, &db, me.uid(), me.gid()).is_empty());
+		let failed: Vec<PathBuf> = hand_over(&dir, &db, 0, 0)
+			.into_iter()
+			.map(|f| f.0)
+			.collect();
 		assert_eq!(failed, [db.clone(), lock_path(&db)]);
 	}
 
@@ -3026,12 +3387,79 @@ mod tests {
 		wal.push("-wal");
 		std::os::unix::fs::symlink(d.join("target"), &wal).unwrap();
 		let me = fs::metadata(&db).unwrap();
-		let failed: Vec<PathBuf> = hand_over(&db, me.uid(), me.gid())
+		let dir = open_dir(&db, None).unwrap();
+		let failed: Vec<PathBuf> = hand_over(&dir, &db, me.uid(), me.gid())
 			.into_iter()
 			.map(|f| f.0)
 			.collect();
 		assert_eq!(failed, [PathBuf::from(wal)]);
 		assert!(!d.join("target").exists());
+	}
+
+	// Under sudo a folder that's neither the user's nor root's is refused
+	// before anything is made (2026111011092301).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
+	fn a_folder_not_the_users_is_refused() {
+		let _id = test_id("df4kp");
+		let d = scratch("scan_sudo_folder");
+		let db = d.join("t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let me = fs::metadata(&d).unwrap();
+		let other = Some((me.uid() + 1, me.gid()));
+		let said = Held::take_as(&db, &mounts, other).unwrap_err();
+		assert!(
+			said.contains("not by uid") && said.ends_with("; refused"),
+			"{said}"
+		);
+		assert!(!lock_path(&db).exists() && !db.exists());
+		assert!(open_dir(Path::new("/t.sqlite"), other).is_ok());
+		drop(Held::take_as(&db, &mounts, Some((me.uid(), me.gid()))).unwrap());
+		assert!(lock_path(&db).exists());
+	}
+
+	// A link at the folder itself, as one swapped in after it was resolved,
+	// is refused.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
+	fn a_linked_folder_is_refused() {
+		let _id = test_id("df4kq");
+		let d = scratch("scan_sudo_folder_link");
+		fs::create_dir(d.join("real")).unwrap();
+		std::os::unix::fs::symlink(d.join("real"), d.join("link")).unwrap();
+		let said = open_dir(&d.join("link/t.sqlite"), None).unwrap_err();
+		assert!(
+			said.ends_with("link: is a symbolic link; refused"),
+			// codeql[rust/cleartext-logging] a folder's uid isn't a secret, and this is a test's failure text
+			"{said}"
+		);
+	}
+
+	// The hand-back goes to the folder that was checked, even after another
+	// folder is moved in at its name.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no chown")]
+	fn the_hand_back_stays_in_the_checked_folder() {
+		let _id = test_id("df4kr");
+		// SAFETY: geteuid only reads.
+		if unsafe { libc::geteuid() } == 0 {
+			eprintln!("root can give anything away; skipped");
+			return;
+		}
+		let d = scratch("scan_sudo_folder_moved");
+		fs::create_dir(d.join("a")).unwrap();
+		let db = d.join("a/t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let held = Held::take_as(&db, &mounts, None).unwrap();
+		fs::rename(d.join("a"), d.join("b")).unwrap();
+		fs::create_dir(d.join("a")).unwrap();
+		fs::write(&db, "").unwrap();
+		// Uid 0 fails for each file there, which names them.
+		let failed: Vec<PathBuf> = hand_over(&held.dir, &db, 0, 0)
+			.into_iter()
+			.map(|f| f.0)
+			.collect();
+		assert_eq!(failed, [lock_path(&db)]);
 	}
 
 	#[test]

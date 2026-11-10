@@ -10,7 +10,8 @@
 ##			                  such as 24g, or none for no cap, which leaves
 ##			                  mem_cap empty. Unset or empty is the default,
 ##			                  a third of MemTotal, 4g to 32g. Anything else
-##			                  says so on one line and returns 1.
+##			                  says so on one line and returns 1, as does a
+##			                  size under 512m, which can't run a step.
 ##			fMemCtrArgs       mem_ctr_args for a docker run: --memory and
 ##			                  --memory-swap both at the cap, so no swap, and
 ##			                  --oom-score-adj 1000, first in line for the OOM
@@ -54,6 +55,18 @@ fMemCap(){
 		mem_cap=""; return 1
 	fi
 	mem_cap="${mem_cap,,}"
+	## Floor of 512m. 15 digits at most, so k and bytes can't overflow; m and g need no scaling.
+	local n="${mem_cap%[kmg]}" u="${mem_cap:${#mem_cap}-1}"
+	case "${u}" in
+		g) ;;
+		m) ((n >= 512)) || u=small ;;
+		k) ((n >= 524288)) || u=small ;;
+		*) ((n >= 536870912)) || u=small ;;
+	esac
+	if [[ "${u}" == small ]]; then
+		echo "CICD_MEM_CAP '${CICD_MEM_CAP:-}' is under the 512m floor (32 means 32 bytes; did you mean 32g?)" >&2
+		mem_cap=""; return 1
+	fi
 }
 
 fMemCtrArgs(){
@@ -81,5 +94,6 @@ fMemScope(){   ## fMemScope SCRIPT [ARG...]
 
 
 ##	History:
+##		- 2026-11-10: A floor of 512m.
 ##		- 2026-11-09: Created. CICD_MEM_CAP, no swap and oom-score-adj 1000
 ##		  for each container, and the run on the host in a user scope.

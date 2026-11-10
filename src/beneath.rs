@@ -58,11 +58,22 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 	}
 }
 
-fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
+/// Opens a name in a folder without following a link at it. A file made by
+/// `O_CREAT` gets 0666 less the umask, as `File::create` gives.
+pub fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 	let c = cpath(Path::new(name))?;
+	let mode: libc::c_uint = 0o666;
 	retry(|| {
 		// SAFETY: c is NUL-terminated and outlives the call.
-		unsafe { libc::openat(at, c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) }.into()
+		unsafe {
+			libc::openat(
+				at,
+				c.as_ptr(),
+				flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+				mode,
+			)
+		}
+		.into()
 	})
 }
 
