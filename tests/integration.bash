@@ -438,17 +438,36 @@ ln "${sd}/old/d" "${sd}/new/after"
 printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "${sd}/new/after")" > "${sd}/renamed"
 check ddy6c "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
 # A long list takes no more memory than a short one, since each file is
-# compared as it's read. Peak RSS, from 1 line to 100,000.
-head -c 3000 /dev/urandom > "${sd}/old/kept"; cp -p "${sd}/old/kept" "${sd}/new/kept"
-printf 'kept\n' > "${sd}/short"; printf 'kept\n%.0s' {1..100000} > "${sd}/long"
-peak() { python3 -I -c 'import resource, subprocess, sys
-r = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-print(r.returncode, resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' "${bin}" snapdiff --old "${sd}/old" --new "${sd}/new" --list "${1}"; }
-rcShort='' kbShort='' rcLong='' kbLong=''
-read -r rcShort kbShort < <(peak "${sd}/short") || true
-read -r rcLong kbLong < <(peak "${sd}/long") || true
-st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 4096 )) && st=0
-expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 4 MB more" "${st}"
+# compared as it's read. Peak RSS from GNU time, since a child forked from
+# python3 keeps python's high-water mark of about 12 MB through the exec, and
+# snapdiff takes about 2.5. 100,000 names, all different, every 10th a file
+# on both sides, against 1 line. 10 bytes kept per line fails it.
+mem="${sd}/mem"; mkdir -p "${mem}/old" "${mem}/new"
+head -c 3000 /dev/urandom > "${mem}/old/kept"; cp -p "${mem}/old/kept" "${mem}/new/kept"
+printf 'kept\n' > "${mem}/short"
+python3 -I -c '
+import os, sys
+d = sys.argv[1]
+os.mkdir(d + "/old/many"); os.mkdir(d + "/new/many")
+with open(d + "/long", "w") as f:
+	for i in range(100000):
+		name = "many/%d" % i
+		if i % 10 == 0:
+			open(d + "/old/" + name, "w").close()
+			os.link(d + "/old/" + name, d + "/new/" + name)
+		f.write(name + "\n")
+' "${mem}"
+# Exit status and peak KB. GNU time puts a line before them on a non-zero exit.
+peak() { /usr/bin/time -o "${mem}/peak" -f '%x %M' "${bin}" snapdiff --old "${mem}/old" --new "${mem}/new" --list "${1}" > /dev/null 2>&1 || true; tail -n 1 "${mem}/peak" 2> /dev/null; }
+if [[ -x /usr/bin/time ]] && /usr/bin/time -o "${mem}/peak" -f '%M' true 2> /dev/null && [[ "$(cat "${mem}/peak")" =~ ^[0-9]+$ ]]; then
+	rcShort='' kbShort='' rcLong='' kbLong=''
+	read -r rcShort kbShort < <(peak "${mem}/short") || true
+	read -r rcLong kbLong < <(peak "${mem}/long") || true
+	st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 1024 )) && st=0
+	expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 1 MB more" "${st}"
+else
+	skip df0pq "a long list costs no more memory (no GNU time at /usr/bin/time)"
+fi
 
 # 10. Names that aren't plain text: arguments are taken, and output escapes
 # them so 2 names never print the same.

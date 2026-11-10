@@ -120,7 +120,7 @@
 - Integration check df0pq can't see snapdiff memory growth under about 13 MB.
 	- ID: 2026111011092302
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 3
@@ -133,6 +133,20 @@
 	- Probable fix [Bug]: Distinct names, and a measure that doesn't fork from python, such as `/usr/bin/time -f %M`, compared with a 1-line run. Watch it fail on a build that keeps every line.
 	- Related IDs: 2026110715441806
 	- Note: The numbers in 2026110715441806's Verified row are that floor rather than snapdiff's own.
+	- Reproduced [Bug]: Yes. The old df0pq passed on a build that keeps every listed line, at 12.0 MB against 11.8 MB.
+	- Actual cause [Bug]: A child forked from python3 starts at python's own peak RSS, and the list named one file 100,000 times.
+	- Decisions:
+		- Peak RSS comes from `/usr/bin/time -f %M`, which is small, so snapdiff's own 2.5 MB shows. A box without GNU time skips df0pq rather than failing the integration test.
+		- 100,000 different names, every 10th an empty file on both sides, so held names and held stat results both show. 0.4 s to make on ext4 and ZFS.
+		- The limit is 1 MB over 1 line, down from 4 MB. Runs vary by about 300 KB, and 10 bytes kept per line fails it.
+	- Actual fix [Bug]: df0pq in `tests/integration.bash` measured as above. design.md, "Snapshot diffs", names the measure.
+	- Branch: round-20261110
+	- Test case: `df0pq` in `tests/integration.bash`.
+	- Verified:
+		- The new df0pq fails 3 of 3 on a build that keeps every listed line, at about 7.5 MB against 2.7 MB, and passes 3 of 3 on the real build, at about 2.5 MB against 2.7 MB.
+		- `cicd/cicd.bash --backlog-run-quick` passed, df0pq on ext4 and ZFS.
+	- Swept: df0pq is the only RSS reading in the tests and the private tools. The soak reads dhat's heap count, and `profiling.rs` reads only CPU times.
+	- Closed: 20261110-125629
 
 - Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
 	- ID: 2026111011092301
