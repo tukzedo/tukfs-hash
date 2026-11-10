@@ -169,7 +169,7 @@
 - A release run that skipped a check commits and pushes `main`, and only then refuses the upload.
 	- ID: 2026111011092304
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 5
@@ -180,6 +180,14 @@
 	- Note: A skip also leaves the tree unrecorded, so the publisher's push to `main` runs the pre-push merge gate first, which takes most of an hour. A vmDebARM64 skip is the usual cause.
 	- Note: The decision that a run that skipped anything doesn't upload stays. Only the order changes.
 	- Related IDs: 2026110218175401
+	- Progress log: 2026-11-10: Stage 11's refusals, a skip and a set that isn't a release build, run right before publish, and stop the run there with nothing committed or pushed, and the tag taken off. A run whose release image can't run, such as with --no-container or a docker that doesn't answer, leaves the upload and the tag out of the plan, which says why. design.md, "Build and release", says so.
+	- Decisions: Known at the start means the container check the release stage itself makes, so the plan and the stage can't disagree. It runs only when the upload is still planned, so other runs don't pay for it. A missing lint tool or test root is still found only in the run, and stops it before publish. The refusal suggests --no-upload, since a publish that still wants to go out can.
+	- Branch: round-20261110
+	- Test case: none with an ID. The private `release-upload-check.bash REPO`, cases "plan --no-container", "plan, docker doesn't answer", "run --no-container", "skip in the run" and "dated build line", since private checks stay out of the pipeline (2026102508462883).
+	- Verified: `release-upload-check.bash REPO` passes 44 of 44, and the 5 new cases fail on the code before. `publish-check.bash`, `cicd-noflags-check.bash`, `cicd-steps-check.bash`, `cicd-flags-check.bash` and `cicd/cicd.bash --backlog-run-quick` pass.
+	- Swept: every refusal in fStageUpload, now all before publish, and every place that turns the upload off at the start. fCtrWhyNot's reasons are the only ones that make the release stage fall back to the host.
+	- Acceptance signoff: Self-closed: the check passes, and fails on the code before. The first real release is the last check.
+	- Closed: 20261110-124227
 
 - snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
 	- ID: 2026111011092305

@@ -31,7 +31,9 @@
 ##	  11. release upload (on main only: the release set to the git host as
 ##	      release v<version>, through utility/release-upload.bash. The run
 ##	      tags HEAD v<version> before it builds, when it isn't yet, and takes
-##	      the tag off again if it stops before this stage)
+##	      the tag off again if it stops before this stage. A skip, or a set
+##	      that isn't a release build, stops the run before publish, and
+##	      no release image leaves this stage out of the plan)
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
 ##	   is the second of 5 in this run. The plan at the start lists the ones
 ##	   off, with the flag or reason. Each step opens with a timed "Starting"
@@ -431,6 +433,12 @@ if ((quick || gate_partial)) || [[ "${mode}" == bq ]]; then record_green=0; fi
 if ((! record_green)); then UPLOAD_ENABLE=0; fOffWhy "a --no- option that drops a check" upload; fi
 cur_branch="$(git -C "${root}" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [[ -z "${RELEASE_BRANCH}" || "${cur_branch}" != "${RELEASE_BRANCH}" ]]; then UPLOAD_ENABLE=0; fOffWhy "not on ${RELEASE_BRANCH:-a release branch}" upload; fi
+## Without the release image the set is a host build, which the upload refuses
+## (2026102509342993), so say so now rather than after the whole run.
+if ((UPLOAD_ENABLE && ! release_off && ! inner_run)); then
+	_why="$(fCtrWhyNot)"
+	if [[ -n "${_why}" ]]; then UPLOAD_ENABLE=0; fOffWhy "the release builds would be on the host, since ${_why}" upload; fi
+fi
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -1631,20 +1639,31 @@ fStageGif(){
 	fStepPass
 }
 
+## Stage 11's own refusals, before publish, so a set that can't go out stops
+## the run before it commits and pushes (2026111011092304).
+upload_ver=""; upload_line=""
+fUploadReady(){
+	local ver bin line rest
+	local -r nothing="Nothing was committed or pushed. Run with --no-upload to publish without the release."
+	[[ -n "${step_no[upload]:-}" ]] || return 0
+	if [[ -s "${gate_skips}" ]]; then fDie "release not uploaded, since this run skipped: $(sort -u "${gate_skips}" | paste -sd ' '). ${nothing}"; fi
+	ver="$(fVersion)"; bin="${release_dir}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"
+	[[ -x "${bin}" ]] || fDie "no ${bin#"${root}/"} to upload. ${nothing}"
+	line="$("${bin}" --version | sed -n 1p)" || fDie "${bin#"${root}/"} --version failed. ${nothing}"
+	rest="${line#"${EXE_NAME} v${ver} build "}"
+	[[ "${rest}" != "${line}" && "${rest}" =~ ^[0-9a-z]+$ ]] || fDie "the release set isn't a release build: ${line}. ${nothing}"
+	upload_ver="${ver}"; upload_line="${line}"
+}
+
 ## Stage 11: the release set to the git host, from the release branch only.
 ## fReleaseTag put the tag on before the build, or it was there already.
 ## The set has to be this run's and a release build, so the binary's version
 ## line has no date and no -dirty. The upload pushes the tag and makes the
 ## release, and a rerun by hand picks up where it stopped.
 fStageUpload(){
-	local ver bin line rest
+	local ver="${upload_ver}" line="${upload_line}"
 	fStep upload || return 0
-	if [[ -s "${gate_skips}" ]]; then fDie "release not uploaded, since this run skipped: $(sort -u "${gate_skips}" | paste -sd ' ')"; fi
-	ver="$(fVersion)"; bin="${release_dir}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"
-	[[ -x "${bin}" ]] || fDie "no ${bin#"${root}/"} to upload"
-	line="$("${bin}" --version | sed -n 1p)" || fDie "${bin#"${root}/"} --version failed"
-	rest="${line#"${EXE_NAME} v${ver} build "}"
-	[[ "${rest}" != "${line}" && "${rest}" =~ ^[0-9a-z]+$ ]] || fDie "the release set isn't a release build: ${line}"
+	[[ -n "${line}" ]] || fDie "the release set wasn't checked before publish"
 	## From here the tag may be on the git host, so it stays.
 	tag_made=""
 	if ! fBg "${here}/utility/release-upload.bash" "${root}" "${ver}" "${release_dir}" "${line}" "${RELEASE_BRANCH}"; then
@@ -1967,6 +1986,7 @@ if ((! inner_run)); then
 	fStageDogfood
 	fStageGif
 	fRecordGreen
+	fUploadReady
 	fStagePublish
 	fStageUpload
 fi
@@ -2072,3 +2092,5 @@ exit 0
 ##		  subvolume check, given to each run as TUKFS_IT_BTRFS.
 ##		- 2026-11-09: A memory cap with no swap, CICD_MEM_CAP, on every
 ##		  container, and the whole run in a user scope under it.
+##		- 2026-11-10: The release upload's refusals run before publish, and
+##		  no release image leaves it out of the plan.
