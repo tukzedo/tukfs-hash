@@ -466,22 +466,39 @@
 - README's Installation says no release is published, but 1.0.0-beta.1 is.
 	- ID: 2026111011092316
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 17
 	- Origin: `b2b9f09`, before the last review. Out of date since the pre-release of 2026-11-07. Confirmed with `gh release list`.
 	- Probable fix [Bug]: Point Installation at the pre-release's files, with a build from source as the second way.
+	- Actual fix [Bug]: README's Installation links the releases page, names 1.0.0-beta.1 as the only release so far, lists what each release has, and gives the glibc floor. Its commands check the sums file, then install the `.deb`, the `.rpm`, or the plain binary. "Build it yourself" follows as the second way.
+	- Decisions:
+		- The commands use globs rather than a fixed version or a download URL, so they don't go stale with the next release. A download one-liner waits for 2026110218175402.
+		- No new heading, so the TOC stays as it was.
+	- Verified: the asset names and the sums file's format match `gh release view v1.0.0-beta.1` and the downloaded sums file. mdcheck and markdownlint are clean.
+	- Branch: round-20261110
+	- Test case: not applicable, docs only.
+	- Acceptance signoff: Self-closed, per memory.md's close policy.
+	- Closed: 20261110-141014
 
 - design.md says `xattr=on` keeps a file's attributes in a hidden folder.
 	- ID: 2026111011092317
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 18
 	- Origin: `f05c368`. 2026101406340928 fixed the same text in a script's comment only. Confirmed against b23's `man zfsprops`: `sa` is the default and equal to `on`, and `dir` is the folder kind.
 	- Probable fix [Bug]: Say that `xattr=dir` makes the folder, and that `on` means `sa` on current OpenZFS.
+	- Actual fix [Bug]: design.md, "Attributes", says `xattr=dir` stores the attributes in a hidden folder, `sa` stores them in the inode, and `on` means `sa` and is the default on current OpenZFS, where older releases took it as `dir`.
+	- Decisions:
+		- No OpenZFS version is named for the change of default, since only the 2.3.9 man page on b23 was checked.
+	- Verified: matches `man zfsprops` on b23 (zfs 2.3.9). mdcheck and markdownlint are clean.
+	- Branch: round-20261110
+	- Test case: not applicable, docs only.
+	- Acceptance signoff: Self-closed, per memory.md's close policy.
+	- Closed: 20261110-141014
 
 - A root inside an `--exclude` folder scans nothing and exits 0 without saying why.
 	- ID: 2026111011092318
@@ -613,7 +630,7 @@
 - README.md and design.md break the Grammar rules added to the directives on 2026-11-08.
 	- ID: 2026111011092328
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 29, directives 2026-11-08
@@ -625,6 +642,19 @@
 		- A thing that decides, such as "a root's filesystem decides for every file under it".
 		- A colon as a joiner, and "keeps" for "stores".
 	- Note: Text the user wrote stays as it is.
+	- Progress log:
+		- No user-written text turned up in either file by `git log` and by style, so every prose block was in scope. The copyright lines weren't touched.
+		- Both files were swept for the 5 examples, plus reduced relatives, appositives between commas, delexical verbs, contrast joined with "and", and missing Oxford commas.
+	- Decisions:
+		- README's exit codes became a table, since the old line was a list joined by a colon.
+		- README said no disk is read by 2 workers at once "and more on flash", which contradicted itself. It now gives design.md's counts, 1 per hard drive group, 2 on SATA flash, and 4 on NVMe.
+		- "A run with no options" stays, since it names one of the pipeline's modes. The cells of the skip and exit tables stay terse.
+		- No heading changed, so neither TOC did, and the code comments that cite design.md sections still match.
+	- Verified: mdcheck with `--baseline HEAD` and markdownlint are clean on both files, and so are the content scrub and the quick gate.
+	- Branch: round-20261110
+	- Test case: not applicable, docs only.
+	- Acceptance signoff: Self-closed, per memory.md's close policy. The wording changed throughout both files, so a read of the diff is still welcome.
+	- Closed: 20261110-141014
 
 - The lint stage only reports content scrub hits, rather than failing on them.
 	- ID: 2026110811422141
