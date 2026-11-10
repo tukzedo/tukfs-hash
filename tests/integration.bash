@@ -852,7 +852,8 @@ fi
 # outside the roots is read. A database reached through such a mount still
 # leaves out only its own names in the root's walk (2026110719570617), adn
 # --no-xattr and --exclude given by the mount's name still apply, also to a
-# root under it (2026110720070507).
+# root under it (2026110720070507). A root that's the bind mount is still
+# under the folders above its source, a git work tree too (2026111011092307).
 cat > "${ns}/bind.bash" << 'EOF2'
 cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
 for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
@@ -870,6 +871,11 @@ mount --bind e/tree/sub e/bind || exit 1
 escan() { local rc=0; "${2}" scan --db "${1}.sqlite" --progress 3600 "${@:3}" > "${1}.out" 2>&1 || rc=$?; echo "${rc} $(grep -oE 'files [0-9]+' "${1}.out" | head -1)"; }
 escan e1 "${2}" --root e/tree --no-xattr e/bind > e1.got
 echo "$(escan e2 "${2}" --root e/tree --exclude e/bind --no-xattrs) $(escan e3 "${2}" --root e/bind/deep --exclude e/tree/sub --no-xattrs)" > e2.got
+mkdir -p g/repo/.git g/mnt || exit 1
+for t in ex nx repo plain; do mkdir -p "g/${t}/src" "g/mnt/${t}" && printf '%s\n' "${t}" > "g/${t}/src/f" && mount --bind "g/${t}/src" "g/mnt/${t}" || exit 1; done
+escan g1 "${2}" --root g/mnt/ex --exclude g/ex --no-xattrs > g1.got
+escan g2 "${2}" --root g/mnt/nx --no-xattr g/nx > g2.got
+escan g3 "${2}" --root g/mnt/repo --root g/mnt/plain > g3.got
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -880,6 +886,9 @@ if [[ "${nsfs}" == zfs ]]; then
 	skip df0qh "database through a bind mount: own names left out, no attributes (ZFS pools aren't seen from a user namespace)"
 	skip df1nj "--no-xattr by a bind mount's name (ZFS pools aren't seen from a user namespace)"
 	skip df1nk "--exclude by a bind mount's name (ZFS pools aren't seen from a user namespace)"
+	skip df4j8 "root that's a bind of a folder in an --exclude folder (ZFS pools aren't seen from a user namespace)"
+	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (ZFS pools aren't seen from a user namespace)"
+	skip df4ja "root that's a bind of a folder in a git work tree (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
@@ -888,12 +897,19 @@ elif [[ -e "${ns}/bind.mounted" ]]; then
 	et="${ns}/e/tree"
 	check df1nj "--no-xattr by a bind mount's name" "$(cat "${ns}/e1.got") $(xget "${et}/top" user.blake3.b64u | wc -c) $(xget "${et}/sub/f" user.blake3.b64u)$(xget "${et}/sub/deep/g" user.blake3.b64u)" "0 files 3 43 "
 	check df1nk "--exclude by a bind mount's name" "$(cat "${ns}/e2.got")" "0 files 1 0 files 0"
+	gt="${ns}/g"
+	check df4j8 "root that's a bind of a folder in an --exclude folder" "$(cat "${ns}/g1.got")" "0 files 0"
+	check df4j9 "root that's a bind of a folder in a --no-xattr folder" "$(cat "${ns}/g2.got") $(xget "${gt}/nx/src/f" user.blake3.b64u | wc -c)" "0 files 1 0"
+	check df4ja "root that's a bind of a folder in a git work tree" "$(cat "${ns}/g3.got") $(xget "${gt}/repo/src/f" user.blake3.b64u | wc -c) $(xget "${gt}/plain/src/f" user.blake3.b64u | wc -c)" "0 files 2 0 43"
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
 	skip df0qh "database through a bind mount: own names left out, no attributes (no user namespace here)"
 	skip df1nj "--no-xattr by a bind mount's name (no user namespace here)"
 	skip df1nk "--exclude by a bind mount's name (no user namespace here)"
+	skip df4j8 "root that's a bind of a folder in an --exclude folder (no user namespace here)"
+	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (no user namespace here)"
+	skip df4ja "root that's a bind of a folder in a git work tree (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the

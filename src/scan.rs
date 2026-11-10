@@ -305,6 +305,7 @@ struct Shared {
 	exclude_ids: HashSet<(u64, u64)>,
 	no_xattr_ids: HashSet<(u64, u64)>,
 	mount_points: BTreeMap<PathBuf, String>,
+	mounts: Vec<mounts::Mount>,
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
@@ -686,7 +687,8 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 			.collect(),
 		exclude_ids: ids_of(&o.excludes),
 		no_xattr_ids: ids_of(&o.no_xattr),
-		mount_points: mounts::mount_points(mounts),
+		mount_points: mounts::mount_points(&mounts),
+		mounts,
 		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
@@ -697,7 +699,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		run_started_us: run_started,
 		tx,
 	});
-	let groups = groups(planned, &hands_off);
+	let groups = groups(planned, &hands_off, &shared.mounts);
 
 	let mut handles = Vec::new();
 	for g in &groups {
@@ -815,12 +817,16 @@ fn hands_off(
 	Ok(out)
 }
 
-fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>) -> Vec<Arc<Group>> {
+fn groups(
+	planned: Vec<Planned>,
+	hands_off: &BTreeMap<PathBuf, HandsOff>,
+	mounts: &[mounts::Mount],
+) -> Vec<Arc<Group>> {
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|p| {
 			Arc::new(Group {
-				size: used_under(&p.roots),
+				size: used_under(mounts, &p.roots),
 				name: p.name,
 				roots: p.roots,
 				threads: p.threads,
@@ -846,13 +852,12 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>) -> Vec
 // them, since counting them first would mean a second walk. None when a root
 // is a folder inside its filesystem, where the rest would keep the percent
 // low. See design.md, Runs and exit codes.
-fn used_under(roots: &[PathBuf]) -> Option<u64> {
+fn used_under(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<u64> {
 	let mut devs = BTreeSet::new();
 	let mut total = 0u64;
 	for r in roots {
 		let md = fs::metadata(r).ok()?;
-		let up = fs::metadata(r.join("..")).ok()?;
-		if up.dev() == md.dev() && up.ino() != md.ino() {
+		if !mounts::shows_whole(mounts, r, md.ino()) {
 			return None;
 		}
 		if devs.insert(md.dev()) {
@@ -1038,14 +1043,38 @@ fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
 		.collect()
 }
 
-// A root inside one of the folders under another name. The root's own folder
-// is the walk's to check.
-fn inside_any(root: &Path, ids: &HashSet<(u64, u64)>) -> bool {
+// The folders above a root, up to `top`. The root's own folder is the walk's
+// to check.
+fn above_to<'a>(root: &'a Path, top: &'a Path) -> impl Iterator<Item = &'a Path> {
+	root.ancestors()
+		.skip(1)
+		.take_while(move |a| a.starts_with(top))
+}
+
+// The root's own name, and its name in each mount that shows more of its
+// filesystem, as for a bind mount of a subfolder (2026111011092307). Each
+// comes with the mount point the folders above it stop at.
+fn names_above(sh: &Shared, root: &Path) -> Vec<(PathBuf, PathBuf)> {
+	let mut names = vec![(root.to_path_buf(), PathBuf::from("/"))];
+	let Ok(md) = fs::metadata(root) else {
+		return names;
+	};
+	let id = (md.dev(), md.ino());
+	names.extend(
+		mounts::wider_views(&sh.mounts, root)
+			.into_iter()
+			.filter(|(at, _)| fs::metadata(at).is_ok_and(|m| (m.dev(), m.ino()) == id)),
+	);
+	names
+}
+
+// A root inside one of the folders under another name.
+fn inside_any(names: &[(PathBuf, PathBuf)], ids: &HashSet<(u64, u64)>) -> bool {
 	!ids.is_empty()
-		&& root
-			.ancestors()
-			.skip(1)
-			.any(|a| fs::metadata(a).is_ok_and(|m| ids.contains(&(m.dev(), m.ino()))))
+		&& names.iter().any(|(p, top)| {
+			above_to(p, top)
+				.any(|a| fs::metadata(a).is_ok_and(|m| ids.contains(&(m.dev(), m.ino()))))
+		})
 }
 
 // The database, its journal files and its lock, in its folder under any name.
@@ -1061,12 +1090,13 @@ fn excluded(sh: &Shared, p: &Path, in_db_dir: bool) -> bool {
 }
 
 // git looks for `.git` up from the work folder until the filesystem changes,
-// so this does too. The root's own folder is the walk's to check.
-fn git_tree_above(root: &Path, dev: u64) -> bool {
-	root.ancestors()
-		.skip(1)
-		.take_while(|a| fs::symlink_metadata(a).is_ok_and(|m| m.dev() == dev))
-		.any(|a| fs::symlink_metadata(a.join(".git")).is_ok())
+// so this does too.
+fn git_tree_above(names: &[(PathBuf, PathBuf)], dev: u64) -> bool {
+	names.iter().any(|(p, top)| {
+		above_to(p, top)
+			.take_while(|a| fs::symlink_metadata(a).is_ok_and(|m| m.dev() == dev))
+			.any(|a| fs::symlink_metadata(a.join(".git")).is_ok())
+	})
 }
 
 // A dead writer means nothing more can be recorded, so stop rather than read
@@ -1120,7 +1150,8 @@ fn walk(
 	look: &rusqlite::Connection,
 	jobs: &SyncSender<Job>,
 ) {
-	if inside_any(root, &sh.exclude_ids) {
+	let names = names_above(sh, root);
+	if inside_any(&names, &sh.exclude_ids) {
 		return;
 	}
 	let root = match Root::open(root) {
@@ -1134,8 +1165,8 @@ fn walk(
 	};
 	let mut stack: Vec<Frame> = Vec::new();
 	let above = Marks {
-		in_git: git_tree_above(&root.path, root.dev),
-		no_xattr: inside_any(&root.path, &sh.no_xattr_ids),
+		in_git: git_tree_above(&names, root.dev),
+		no_xattr: inside_any(&names, &sh.no_xattr_ids),
 	};
 	let mut next = Some((root.path.clone(), above));
 	let w = Walker {
@@ -2206,6 +2237,7 @@ mod tests {
 			exclude_ids: HashSet::new(),
 			no_xattr_ids: HashSet::new(),
 			mount_points: BTreeMap::new(),
+			mounts: Vec::new(),
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
 			rmlint: false,
@@ -2651,9 +2683,10 @@ mod tests {
 		for (top, git) in [("repo", true), ("wt", true), ("plain", false)] {
 			let root = d.join(top).join("src");
 			let dev = fs::metadata(&root).unwrap().dev();
-			assert_eq!(git_tree_above(&root, dev), git, "{top}");
+			let names = [(root.clone(), PathBuf::from("/"))];
+			assert_eq!(git_tree_above(&names, dev), git, "{top}");
 			assert!(
-				!git_tree_above(&root, dev + 1),
+				!git_tree_above(&names, dev + 1),
 				"{top}: past the filesystem"
 			);
 			let (sh, _rx) = test_shared(d.join("t.sqlite"));
@@ -2663,6 +2696,67 @@ mod tests {
 			let jobs: Vec<(PathBuf, bool)> = jrx.iter().map(|j| (j.path, j.in_git)).collect();
 			assert_eq!(jobs.len(), 2, "{top}");
 			assert!(jobs.iter().all(|(_, g)| *g == git), "{top}: {jobs:?}");
+		}
+	}
+
+	// A root that's a bind mount of a subfolder: the folders above its source
+	// count too (2026111011092307). The table says `wide` shows the whole
+	// filesystem, and links there stand in for the binds' sources.
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn a_bind_mounts_source_folders_count() {
+		let _id = test_id("df4j7");
+		let d = scratch("scan_bindsrc");
+		let d = fs::canonicalize(&*d).unwrap();
+		let tops = ["ex", "nx", "repo", "plain"];
+		let mut lines = vec![format!(
+			"1 0 8:1 / {} rw - ext4 /dev/sda1 rw",
+			d.join("wide").display()
+		)];
+		for (i, top) in tops.iter().enumerate() {
+			let (root, src) = (d.join("mnt").join(top), d.join("wide").join(top));
+			fs::create_dir_all(&root).unwrap();
+			fs::create_dir_all(&src).unwrap();
+			fs::write(root.join("f"), "x").unwrap();
+			std::os::unix::fs::symlink(&root, src.join("src")).unwrap();
+			lines.push(format!(
+				"{} 1 8:1 /{top}/src {} rw - ext4 /dev/sda1 rw",
+				i + 2,
+				root.display()
+			));
+		}
+		fs::create_dir(d.join("wide/repo/.git")).unwrap();
+		let table = mounts::parse_mountinfo(lines.join("\n").as_bytes());
+		let look = db::open_rw(&d.join("look.sqlite")).unwrap();
+		let walked = |top: &str, table: &[mounts::Mount]| {
+			let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+			sh.mounts = table.to_vec();
+			sh.exclude_ids = ids_of(&[d.join("wide/ex")]);
+			sh.no_xattr_ids = ids_of(&[d.join("wide/nx")]);
+			let drain = std::thread::spawn(move || rx.iter().count());
+			let (jtx, jrx) = sync_channel(64);
+			walk(
+				&d.join("mnt").join(top),
+				&sh,
+				&Stats::default(),
+				&look,
+				&jtx,
+			);
+			drop((jtx, sh));
+			drain.join().unwrap();
+			jrx.iter()
+				.map(|j| (j.in_git, j.no_xattr))
+				.collect::<Vec<_>>()
+		};
+		let want = [
+			vec![],
+			vec![(false, true)],
+			vec![(true, false)],
+			vec![(false, false)],
+		];
+		for (top, want) in tops.iter().zip(want) {
+			assert_eq!(walked(top, &table), want, "{top}");
+			assert_eq!(walked(top, &[]), [(false, false)], "{top}: no bind");
 		}
 	}
 
@@ -2783,12 +2877,27 @@ mod tests {
 	fn only_a_whole_filesystem_has_a_size() {
 		let _id = test_id("df1pk");
 		let d = scratch("scan_fs_used");
-		assert_eq!(used_under(&[d.to_path_buf()]), None);
-		assert!(used_under(&[PathBuf::from("/")]).is_some_and(|n| n > 0));
+		let m = mounts::read_mounts().unwrap();
+		assert_eq!(used_under(&m, &[d.to_path_buf()]), None);
+		assert!(used_under(&m, &[PathBuf::from("/")]).is_some_and(|n| n > 0));
 		// One filesystem counts once, however many roots are on it.
-		let once = used_under(&[PathBuf::from("/")]).unwrap();
-		let twice = used_under(&[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
+		let once = used_under(&m, &[PathBuf::from("/")]).unwrap();
+		let twice = used_under(&m, &[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
 		assert!(twice < once + once / 2, "{once} then {twice}");
+	}
+
+	// A bind mount of a folder from another filesystem is a folder too, though
+	// its parent is on another device (2026111011092313).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
+	fn a_bind_mount_of_a_folder_has_no_size() {
+		let _id = test_id("df4jb");
+		let table = |root: &str| {
+			mounts::parse_mountinfo(format!("1 0 8:1 {root} / rw - ext4 /dev/sda1 rw").as_bytes())
+		};
+		let top = [PathBuf::from("/")];
+		assert_eq!(used_under(&table("/sub"), &top), None);
+		assert!(used_under(&table("/"), &top).is_some_and(|n| n > 0));
 	}
 
 	// Row `resume-seen`, with no row at the file's size and time to say so.
