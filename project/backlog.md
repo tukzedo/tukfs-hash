@@ -96,6 +96,8 @@
 		- Make CLI output much nicer.
 		- Show progress %.
 		- Lines should never wrap for being too long.
+			- One line per file.
+			- Lines can be arbitrarily long in logfile, e.g. `--log[=]<filespec>`.
 	- Note: A scan shows ` | ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
