@@ -264,6 +264,9 @@ check ddx0j "no attributes inside .git" "$(xget "${tree}/repo/.git/objects/ab" u
 check ddx0k "git files still recorded" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/repo/%'")" 2
 check ddx0m "non-UTF-8 name stored as blob" "$(q "SELECT count(*) FROM paths WHERE typeof(path) = 'blob'")" "${odd}"
 check ddx0n "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "${work}/out.txt" | head -1)" "b2b 1"
+# A folder's bytes are counted beside the scan, so it ends at 100.
+pct() { grep -oE '[|] ~[0-9]+% of [^|]+$' "${work}/out.txt" | tail -1 | grep -oE '~[0-9]+%'; }
+check df4x7 "folder scan's percent done" "$(pct)" "~100%"
 check ddx0p "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
 check ddx0q "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
 check ddx0r "no events" "$(q 'SELECT count(*) FROM events')" 0
@@ -280,6 +283,7 @@ check ddx0t "database left in rollback mode" "$(q 'PRAGMA journal_mode')" delete
 rc="$(scan)"
 check ddx0v "second scan exit" "${rc}" 0
 check ddx0w "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed 0"
+check df4x8 "folder skipped whole is done too" "$(pct)" "~100%"
 
 # 3. Change bytes, put the time back. All 3 references must notice.
 digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${1}'"; }
@@ -1236,6 +1240,13 @@ else
 	check df4r4 "attribute read error: accept reports it and leaves the set" "$(xescan "${bin}" accept --db "${xedb}" "${xe}/tree/f") $(grep -c "attributes couldn't be read" "${work}/xe.txt" || true)" "1 accepted ${xe}/tree/f, xattr-error ${xe}/tree/f keep 1"
 fi
 
+# 35. --log gets every line in full, and the log isn't read, though it's under
+# the root. Not a terminal here, so stdout has them in full too.
+lg="${work}/lg"; mkdir -p "${lg}/tree"
+printf 'log\n' > "${lg}/tree/f"
+rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --progress 3600 --log="${lg}/tree/scan.log" > "${lg}/out.txt" 2>&1 || rc=$?
+check df4xn "--log: the scan's lines in full, and the log not read" "${rc} $(cmp -s "${lg}/out.txt" "${lg}/tree/scan.log" && echo same) $(grep -oE 'files [0-9]+' "${lg}/tree/scan.log" | head -1)" "0 same files 1"
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -1316,3 +1327,4 @@ fi
 ##		- 20261110: A second Ctrl+C's 130 and the killed run are checked, step
 ##		  30 tells a first scan that leaves no file from no user namespace,
 ##		  and the sweep reads only marks that are plain files.
+##		- 20261110: A folder scan's percent done, and --log.

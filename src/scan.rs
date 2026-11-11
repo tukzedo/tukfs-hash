@@ -9,6 +9,7 @@
 use crate::beneath::{self, Root};
 use crate::db::{self, Hashed, Kind, Msg, Prior, RunStatus};
 use crate::mounts;
+use crate::say::{self, Fit};
 use crate::util::{
 	b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us,
 };
@@ -57,6 +58,8 @@ pub struct Opts {
 	pub write_xattrs: bool,
 	pub rmlint: bool,
 	pub progress_secs: u64,
+	// Every line the scan prints, in full, appended.
+	pub log: Option<PathBuf>,
 	pub args: String,
 }
 
@@ -205,7 +208,10 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<
 		(Mode::Full, Mode::Full) | (Mode::Verify, Mode::Verify) => {}
 	}
 	if matches!(known, RunStatus::Running | RunStatus::Killed) {
-		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
+		say::out(
+			&format!("run {id} didn't finish and wasn't stopped; it was likely killed"),
+			Fit::Cut,
+		);
 	}
 	Ok(run)
 }
@@ -326,20 +332,36 @@ struct Group {
 	threads: usize,
 	stats: Stats,
 	done: AtomicBool,
-	// Approximate bytes under the roots, from the filesystems' used space.
-	size: Option<u64>,
+	// Approximate bytes under the roots, 0 until known.
+	size: AtomicU64,
+	// Folder roots still to count, and the used space of the others.
+	to_count: Option<ToCount>,
+}
+
+struct ToCount {
+	used: u64,
+	folders: Vec<PathBuf>,
 }
 
 impl Group {
 	fn line(&self) -> String {
 		let line = self.stats.line();
-		let Some(size) = self.size.filter(|&n| n > 0) else {
-			return line;
-		};
+		match self.percent() {
+			Some(p) => format!("{line} | {p}"),
+			None => line,
+		}
+	}
+
+	// `~N% of SIZE`, once the size is known.
+	fn percent(&self) -> Option<String> {
+		let size = self.size.load(Relaxed);
+		if size == 0 {
+			return None;
+		}
 		let done = self.stats.bytes.load(Relaxed) + self.stats.skipped_bytes.load(Relaxed);
 		// Compression and reflinks can put the bytes read past the space used.
 		let pct = (done.saturating_mul(100) / size).min(100);
-		format!("{line} | ~{pct}% of {}", human_bytes(size))
+		Some(format!("~{pct}% of {}", human_bytes(size)))
 	}
 }
 
@@ -515,12 +537,12 @@ fn sudo_ids() -> Option<(u32, u32)> {
 	Some((id("SUDO_UID")?, id("SUDO_GID")?))
 }
 
-/// The database's folder. Under sudo it has to be that user's or root's, or a
-/// link planted at it would have root make the files wherever it points and
-/// hand them over (2026111011092301).
-fn open_dir(db: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
-	let dir = db.parent().unwrap_or(Path::new("/"));
-	let failed = |e: io::Error| format!("database folder {}: {e}", dir.display());
+/// The folder of the database, or of what `what` names. Under sudo it has to
+/// be that user's or root's, or a link planted at it would have root make the
+/// files wherever it points and hand them over (2026111011092301).
+pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
+	let dir = file.parent().unwrap_or(Path::new("/"));
+	let failed = |e: io::Error| format!("{what} folder {}: {e}", dir.display());
 	// With O_PATH a link is opened rather than refused, so its type says so.
 	let f = beneath::openat(libc::AT_FDCWD, dir.as_os_str(), libc::O_PATH).map_err(failed)?;
 	let m = f.metadata().map_err(failed)?;
@@ -535,7 +557,7 @@ fn open_dir(db: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
 		&& m.uid() != 0
 	{
 		return Err(format!(
-			"database folder {} is owned by uid {}, not by uid {uid} or root; refused",
+			"{what} folder {} is owned by uid {}, not by uid {uid} or root; refused",
 			dir.display(),
 			m.uid()
 		));
@@ -569,7 +591,7 @@ impl Held {
 		mounts: &[mounts::Mount],
 		sudo: Option<(u32, u32)>,
 	) -> Result<Self, String> {
-		let dir = open_dir(db, sudo)?;
+		let dir = open_dir("database", db, sudo)?;
 		Ok(Self {
 			_lock: lock(&dir, db, mounts)?,
 			dir,
@@ -602,10 +624,10 @@ impl Held {
 			return;
 		};
 		for (p, e) in hand_over(&self.dir, &self.db, uid, gid) {
-			err!(
+			say::err(&format!(
 				"warning: can't give {} back to uid {uid}: {e}",
 				crate::util::show_path(&p)
-			);
+			));
 		}
 	}
 }
@@ -616,10 +638,10 @@ impl Drop for Held {
 		if let Some(conn) = self.conn.take()
 			&& let Err(x) = db::close_rw(conn)
 		{
-			err!(
+			say::err(&format!(
 				"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
 				crate::util::show_path(&self.db)
-			);
+			));
 		}
 		self.give_back();
 	}
@@ -673,6 +695,9 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 
 /// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
+	if let Some(l) = &o.log {
+		say::open_log(l, sudo_ids())?;
+	}
 	let Plan {
 		groups: planned,
 		dropped,
@@ -680,7 +705,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mounts,
 	} = plan(&o.roots, &o.threads)?;
 	for d in &dropped {
-		err!("skipping root {d}");
+		say::err(&format!("skipping root {d}"));
 	}
 	// A mistyped root would leave a whole tree unread under a run that looks
 	// fine, and a mistyped --exclude or --no-xattr reads or writes where it was
@@ -689,11 +714,13 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		.iter()
 		.map(|(r, e)| format!("root {}: {e}", crate::util::show_path(r)))
 		.collect();
-	let excludes = resolve_each("--exclude", &o.excludes, &mut bad);
+	let mut excludes = resolve_each("--exclude", &o.excludes, &mut bad);
+	// It changes as the scan reads it.
+	excludes.extend(o.log.as_deref().and_then(|l| fs::canonicalize(l).ok()));
 	let no_xattr = resolve_each("--no-xattr", &o.no_xattr, &mut bad);
 	if !bad.is_empty() {
 		for b in &bad {
-			err!("can't resolve {b}");
+			say::err(&format!("can't resolve {b}"));
 		}
 		return Err("nothing scanned".into());
 	}
@@ -754,12 +781,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	});
 	let groups = groups(planned, &hands_off, &shared.mounts);
 
-	let mut handles = Vec::new();
-	for g in &groups {
-		let g = g.clone();
-		let sh = shared.clone();
-		handles.push(std::thread::spawn(move || run_group(&g, &sh)));
-	}
+	let handles = start(&groups, &shared);
 	drop(shared);
 
 	let t0 = Instant::now();
@@ -783,6 +805,23 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		t0,
 	};
 	finish(conn, &part, why, stop.load(Relaxed), held)
+}
+
+// Each group's walk and workers, and the counts of folder roots, which are
+// joined with them so the summary has the count's total.
+fn start(groups: &[Arc<Group>], shared: &Arc<Shared>) -> Vec<std::thread::JoinHandle<()>> {
+	let mut handles = Vec::new();
+	for g in groups {
+		let (g, sh) = (g.clone(), shared.clone());
+		handles.push(std::thread::spawn(move || run_group(&g, &sh)));
+	}
+	for g in groups.iter().filter(|g| g.to_count.is_some()) {
+		let (g, sh) = (g.clone(), shared.clone());
+		handles.push(std::thread::spawn(move || {
+			guarded(&sh, "a size count", || count_group(&g, &sh));
+		}));
+	}
+	handles
 }
 
 // Picks up the run to resume, or starts a new one, and marks it running. A new
@@ -837,12 +876,18 @@ fn begin(
 	)
 	.map_err(e)?;
 	if o.mode == Mode::Verify {
-		out!("run {}: rereading files with a known checksum", r.id);
+		say::out(
+			&format!("run {}: rereading files with a known checksum", r.id),
+			Fit::Cut,
+		);
 	} else {
-		out!(
-			"run {}: files checksummed since {} are skipped",
-			r.id,
-			fmt_local(r.cutoff_us)
+		say::out(
+			&format!(
+				"run {}: files checksummed since {} are skipped",
+				r.id,
+				fmt_local(r.cutoff_us)
+			),
+			Fit::Cut,
 		);
 	}
 	Ok(r)
@@ -878,8 +923,14 @@ fn groups(
 	let groups: Vec<Arc<Group>> = planned
 		.into_iter()
 		.map(|p| {
+			let (size, to_count) = match size_parts(mounts, &p.roots) {
+				Some((used, folders)) if folders.is_empty() => (used, None),
+				Some((used, folders)) => (0, Some(ToCount { used, folders })),
+				None => (0, None),
+			};
 			Arc::new(Group {
-				size: used_under(mounts, &p.roots),
+				size: AtomicU64::new(size),
+				to_count,
 				name: p.name,
 				roots: p.roots,
 				threads: p.threads,
@@ -889,32 +940,99 @@ fn groups(
 		})
 		.collect();
 	for g in &groups {
-		out!("group {} with {} worker(s):", g.name, g.threads);
+		say::out(
+			&format!("group {} with {} worker(s):", g.name, g.threads),
+			Fit::Cut,
+		);
 		for r in &g.roots {
 			if let Some(h) = hands_off.get(r) {
-				out!("\t{} ({}, no attributes written)", r.display(), h.fstype);
+				say::out(
+					&format!("\t{} ({}, no attributes written)", r.display(), h.fstype),
+					Fit::Cut,
+				);
 			} else {
-				out!("\t{}", r.display());
+				say::out(&format!("\t{}", r.display()), Fit::Cut);
 			}
 		}
 	}
 	groups
 }
 
-// Used space on the roots' filesystems, which stands in for the bytes under
-// them, since counting them first would mean a second walk. None when a root
-// is a folder inside its filesystem, where the rest would keep the percent
-// low. See design.md, Runs and exit codes.
-fn used_under(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<u64> {
+// Used space on the filesystems of the roots that are whole ones, which stands
+// in for the bytes under them, since counting a whole filesystem would mean a
+// second walk of it. The other roots are folders, whose bytes are counted.
+// None when a filesystem's used space can't be read. See design.md, Runs and
+// exit codes.
+fn size_parts(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<(u64, Vec<PathBuf>)> {
 	let mut devs = BTreeSet::new();
-	let mut total = 0u64;
+	let mut used = 0u64;
+	let mut folders = Vec::new();
 	for r in roots {
-		let md = fs::metadata(r).ok()?;
-		if !mounts::shows_whole(mounts, r, md.ino()) {
-			return None;
+		match fs::metadata(r) {
+			Ok(md) if mounts::shows_whole(mounts, r, md.ino()) => {
+				if devs.insert(md.dev()) {
+					used += fs_used(r)?;
+				}
+			}
+			_ => folders.push(r.clone()),
 		}
-		if devs.insert(md.dev()) {
-			total += fs_used(r)?;
+	}
+	Some((used, folders))
+}
+
+// Runs beside the scan, so the percent shows once the count is in. A stop
+// ends it, and the summary then has a percent only if it got that far.
+fn count_group(g: &Group, sh: &Shared) {
+	let Some(c) = &g.to_count else {
+		return;
+	};
+	let mut total = c.used;
+	for r in &c.folders {
+		let Some(n) = bytes_under(r, sh) else {
+			return;
+		};
+		total += n;
+	}
+	g.size.store(total, Relaxed);
+}
+
+// The bytes a walk of root would read, by the walk's rules: its own device,
+// no mounts under it, no --exclude and not the database. Each name of a hard
+// link counts its share, as a skipped one does. None after a stop.
+fn bytes_under(root: &Path, sh: &Shared) -> Option<u64> {
+	if inside_any(&names_above(&sh.mounts, root), &sh.exclude_ids) {
+		return Some(0);
+	}
+	let Ok(top) = fs::metadata(root) else {
+		return Some(0);
+	};
+	let mut total = 0u64;
+	let mut dirs = vec![(root.to_path_buf(), (top.dev(), top.ino()))];
+	while let Some((dir, id)) = dirs.pop() {
+		let Ok(list) = fs::read_dir(&dir) else {
+			continue;
+		};
+		let on_zfs = sh.mount_points.get(&dir).is_some_and(|t| t == "zfs");
+		for ent in list.flatten() {
+			if sh.stop.load(Relaxed) {
+				return None;
+			}
+			let p = ent.path();
+			if (on_zfs && ent.file_name() == ".zfs")
+				|| sh.mount_points.contains_key(&p)
+				|| excluded(sh, &p, id == sh.db_dir)
+			{
+				continue;
+			}
+			let Ok(md) = fs::symlink_metadata(&p) else {
+				continue;
+			};
+			let sub = (md.dev(), md.ino());
+			if md.is_dir() && md.dev() == top.dev() && !sh.exclude_ids.contains(&sub) {
+				dirs.push((p, sub));
+			} else if md.is_file() {
+				total += md.len() / md.nlink().max(1);
+			}
 		}
 	}
 	Some(total)
@@ -942,12 +1060,17 @@ fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 			let secs = t0.elapsed().as_secs_f64().max(1.0);
 			for g in groups {
 				let rate = g.stats.bytes.load(Relaxed) as f64 / secs;
-				out!(
-					"[{}] {} {}/s | {}",
-					fmt_local(now_us()),
-					g.name,
-					human_bytes(rate as u64),
-					g.line()
+				// What a glance wants first, since a terminal cuts the rest.
+				let done = g.percent().map(|p| format!("{p}, ")).unwrap_or_default();
+				say::out(
+					&format!(
+						"[{}] {} {done}{}/s | {}",
+						fmt_local(now_us()),
+						g.name,
+						human_bytes(rate as u64),
+						g.stats.line()
+					),
+					Fit::Cut,
 				);
 			}
 		}
@@ -1007,18 +1130,24 @@ fn finish(
 	held.put_back(conn);
 	drop(held);
 
-	out!(
-		"run {run_id} {} after {}s\n{part}",
-		status.text(),
-		p.t0.elapsed().as_secs()
+	say::out(
+		&format!(
+			"run {run_id} {} after {}s\n{part}",
+			status.text(),
+			p.t0.elapsed().as_secs()
+		),
+		Fit::Break,
 	);
 	if !why.is_empty() {
 		why.dedup();
-		out!("Fix the cause, then continue it with the same command plus --resume.");
+		say::out(
+			"Fix the cause, then continue it with the same command plus --resume.",
+			Fit::Cut,
+		);
 		return Err(why.join("; "));
 	}
 	if stopped {
-		out!("Continue it with the same command plus --resume.");
+		say::out("Continue it with the same command plus --resume.", Fit::Cut);
 	}
 	// 2 adds to the others, so a stop says what was found before it.
 	Ok(exit_bits(counts.as_deref().unwrap_or_default()) | if stopped { 2 } else { 0 })
@@ -1148,7 +1277,10 @@ fn drop_excluded(
 				let Some(why) = why(r) else {
 					return true;
 				};
-				err!("skipping root {}: {why}", crate::util::show_path(r));
+				say::err(&format!(
+					"skipping root {}: {why}",
+					crate::util::show_path(r)
+				));
 				false
 			});
 			(!g.roots.is_empty()).then_some(g)
@@ -2404,7 +2536,8 @@ mod tests {
 				threads,
 				stats: Stats::default(),
 				done: AtomicBool::new(false),
-				size: None,
+				size: AtomicU64::new(0),
+				to_count: None,
 			};
 			let (dtx, drx) = std::sync::mpsc::channel();
 			std::thread::spawn(move || {
@@ -2534,7 +2667,8 @@ mod tests {
 			threads: 1,
 			stats: Stats::default(),
 			done: AtomicBool::new(false),
-			size: None,
+			size: AtomicU64::new(0),
+			to_count: None,
 		}
 	}
 
@@ -3020,8 +3154,8 @@ mod tests {
 		};
 		let (sh, rx) = test_shared(d.join("t.sqlite"));
 		let drain = std::thread::spawn(move || rx.iter().count());
-		let mut g = test_group(&d);
-		g.size = Some(24);
+		let g = test_group(&d);
+		g.size.store(24, Relaxed);
 		let r = Arc::new(Root::open(&d).unwrap());
 		let links = Links::default();
 		read_one(&g, &sh, &known(&r, "b", &fresh), &links);
@@ -3036,12 +3170,12 @@ mod tests {
 	#[test]
 	fn the_percent_needs_a_size() {
 		let _id = test_id("df1pj");
-		let mut g = test_group(Path::new("/"));
+		let g = test_group(Path::new("/"));
 		g.stats.bytes.store(300, Relaxed);
 		assert!(!g.line().contains('%'));
-		g.size = Some(0);
+		g.size.store(0, Relaxed);
 		assert!(!g.line().contains('%'));
-		g.size = Some(1200);
+		g.size.store(1200, Relaxed);
 		assert!(g.line().ends_with(" | ~25% of 1.2 KiB"), "{}", g.line());
 		// Compressed files can read as more than the space they use.
 		g.stats.skipped_bytes.store(5000, Relaxed);
@@ -3055,11 +3189,20 @@ mod tests {
 		let _id = test_id("df1pk");
 		let d = scratch("scan_fs_used");
 		let m = mounts::read_mounts().unwrap();
-		assert_eq!(used_under(&m, &[d.to_path_buf()]), None);
-		assert!(used_under(&m, &[PathBuf::from("/")]).is_some_and(|n| n > 0));
+		// A folder is counted instead (2026111019145393).
+		assert_eq!(
+			size_parts(&m, &[d.to_path_buf()]),
+			Some((0, vec![d.to_path_buf()]))
+		);
+		let used = |roots: &[PathBuf]| {
+			let (n, folders) = size_parts(&m, roots).unwrap();
+			assert!(folders.is_empty(), "{folders:?}");
+			n
+		};
+		assert!(used(&[PathBuf::from("/")]) > 0);
 		// One filesystem counts once, however many roots are on it.
-		let once = used_under(&m, &[PathBuf::from("/")]).unwrap();
-		let twice = used_under(&m, &[PathBuf::from("/"), PathBuf::from("/")]).unwrap();
+		let once = used(&[PathBuf::from("/")]);
+		let twice = used(&[PathBuf::from("/"), PathBuf::from("/")]);
 		assert!(twice < once + once / 2, "{once} then {twice}");
 	}
 
@@ -3073,8 +3216,57 @@ mod tests {
 			mounts::parse_mountinfo(format!("1 0 8:1 {root} / rw - ext4 /dev/sda1 rw").as_bytes())
 		};
 		let top = [PathBuf::from("/")];
-		assert_eq!(used_under(&table("/sub"), &top), None);
-		assert!(used_under(&table("/"), &top).is_some_and(|n| n > 0));
+		assert_eq!(size_parts(&table("/sub"), &top), Some((0, top.to_vec())));
+		assert!(size_parts(&table("/"), &top).is_some_and(|(n, f)| n > 0 && f.is_empty()));
+	}
+
+	// The count follows the walk's rules, so a folder scan ends near 100
+	// (2026111019145393).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't list folders")]
+	fn a_folder_is_counted_as_the_walk_reads_it() {
+		let _id = test_id("df4x4");
+		let d = scratch("scan_count");
+		fs::create_dir_all(d.join("sub/deep")).unwrap();
+		fs::create_dir(d.join("ex")).unwrap();
+		fs::write(d.join("a"), [0u8; 100]).unwrap();
+		fs::write(d.join("sub/deep/b"), [0u8; 50]).unwrap();
+		fs::write(d.join("l1"), [0u8; 30]).unwrap();
+		fs::hard_link(d.join("l1"), d.join("sub/l2")).unwrap();
+		fs::write(d.join("ex/c"), [0u8; 1000]).unwrap();
+		fs::write(d.join("t.sqlite"), [0u8; 500]).unwrap();
+		fs::write(d.join("t.sqlite-wal"), [0u8; 500]).unwrap();
+		std::os::unix::fs::symlink(d.join("a"), d.join("s")).unwrap();
+		let (mut sh, _rx) = test_shared(d.join("t.sqlite"));
+		sh.excludes.push(d.join("ex"));
+		assert_eq!(bytes_under(&d, &sh), Some(180));
+		let mut g = test_group(&d);
+		g.to_count = Some(ToCount {
+			used: 20,
+			folders: vec![d.to_path_buf()],
+		});
+		g.stats.bytes.store(100, Relaxed);
+		count_group(&g, &sh);
+		assert!(g.line().ends_with(" | ~50% of 200 B"), "{}", g.line());
+	}
+
+	// A stop ends the count, and leaves no total that's short.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't list folders")]
+	fn a_stop_ends_the_count() {
+		let _id = test_id("df4x5");
+		let d = scratch("scan_count_stop");
+		fs::write(d.join("a"), [0u8; 100]).unwrap();
+		let (sh, _rx) = test_shared(d.join("t.sqlite"));
+		sh.stop.store(true, Relaxed);
+		assert_eq!(bytes_under(&d, &sh), None);
+		let mut g = test_group(&d);
+		g.to_count = Some(ToCount {
+			used: 0,
+			folders: vec![d.to_path_buf()],
+		});
+		count_group(&g, &sh);
+		assert!(!g.line().contains('%'), "{}", g.line());
 	}
 
 	// Row `resume-seen`, with no row at the file's size and time to say so.
@@ -3204,6 +3396,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			progress_secs: 3600,
+			log: None,
 			args: "test".into(),
 		};
 		// A container may not see the disk under its folders.
@@ -3250,6 +3443,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			progress_secs: 3600,
+			log: None,
 			args: "test".into(),
 		};
 		if let Err(e) = run(&o, &Arc::new(AtomicBool::new(false))) {
@@ -3299,6 +3493,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			progress_secs: 3600,
+			log: None,
 			args: "test".into(),
 		};
 		// The file format's read and write versions, 2 for WAL.
@@ -3359,7 +3554,7 @@ mod tests {
 		let d = scratch("scan_heldlock");
 		let db = d.join("t.sqlite");
 		let mounts = mounts::read_mounts().unwrap();
-		let dir = open_dir(&db, None).unwrap();
+		let dir = open_dir("database", &db, None).unwrap();
 		let held = lock(&dir, &db, &mounts).unwrap();
 		let again = lock(&dir, &db, &mounts).unwrap_err();
 		assert!(again.ends_with("is locked; another scan is using this database"));
@@ -3383,7 +3578,7 @@ mod tests {
 		fs::write(&db, "").unwrap();
 		fs::write(lock_path(&db), "").unwrap();
 		let me = fs::metadata(&db).unwrap();
-		let dir = open_dir(&db, None).unwrap();
+		let dir = open_dir("database", &db, None).unwrap();
 		assert!(hand_over(&dir, &db, me.uid(), me.gid()).is_empty());
 		let failed: Vec<PathBuf> = hand_over(&dir, &db, 0, 0)
 			.into_iter()
@@ -3404,7 +3599,7 @@ mod tests {
 		wal.push("-wal");
 		std::os::unix::fs::symlink(d.join("target"), &wal).unwrap();
 		let me = fs::metadata(&db).unwrap();
-		let dir = open_dir(&db, None).unwrap();
+		let dir = open_dir("database", &db, None).unwrap();
 		let failed: Vec<PathBuf> = hand_over(&dir, &db, me.uid(), me.gid())
 			.into_iter()
 			.map(|f| f.0)
@@ -3430,7 +3625,7 @@ mod tests {
 			"{said}"
 		);
 		assert!(!lock_path(&db).exists() && !db.exists());
-		assert!(open_dir(Path::new("/t.sqlite"), other).is_ok());
+		assert!(open_dir("database", Path::new("/t.sqlite"), other).is_ok());
 		drop(Held::take_as(&db, &mounts, Some((me.uid(), me.gid()))).unwrap());
 		assert!(lock_path(&db).exists());
 	}
@@ -3444,7 +3639,7 @@ mod tests {
 		let d = scratch("scan_sudo_folder_link");
 		fs::create_dir(d.join("real")).unwrap();
 		std::os::unix::fs::symlink(d.join("real"), d.join("link")).unwrap();
-		let said = open_dir(&d.join("link/t.sqlite"), None).unwrap_err();
+		let said = open_dir("database", &d.join("link/t.sqlite"), None).unwrap_err();
 		assert!(
 			said.ends_with("link: is a symbolic link; refused"),
 			// codeql[rust/cleartext-logging] a folder's uid isn't a secret, and this is a test's failure text
