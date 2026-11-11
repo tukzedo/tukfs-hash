@@ -167,12 +167,25 @@
 - snapdiff keeps every run of differing bytes, so its memory grows with the file.
 	- ID: 2026111011092322
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 23
 	- Origin: `f05c368`, before the last review. Confirmed: 2 files of 64 MiB that differ at every 8th byte took 135 MB.
 	- Requirements [Feature]: Keep the first 8 runs that `describe` shows, the last run for merging, and counts for the rest.
+	- Actual effort: Low
+	- Decisions:
+		- `Diff` keeps the run count, the count on a 16-byte boundary, the first 8 runs, and the open run. A run is counted when it opens, since its start never moves, and kept when it closes.
+		- The longer file's tail stays a run of its own, not merged with the one before, as before.
+		- The output line is byte for byte the same.
+		- 2026-11-10: `ddx01` and `dej04` read the kept runs from `d.shown` in place of `d.runs`, which is now a count. Same values.
+	- Branch: round-20261110b
+	- Test case: `df4rh` (`snapdiff::tests::only_the_shown_runs_are_kept`): 1,025 runs keep 8, with the right counts and line, and a tail run. `df4rj` in `tests/integration.bash`: a 4 MiB file with 524,288 runs takes under 1 MB more peak RSS than one with a byte changed. df4rj failed 3 of 3 on a build from before the change, at about 13 MB against 5 MB, and passes 3 of 3 after, at about 2.5 MB.
+	- Verified:
+		- The issue's 2 files of 64 MiB went from 136 MB peak RSS to 4.5 MB, with the same output line and the same CPU time.
+		- `cicd/cicd.bash --backlog-run-quick` passed, df4rj on ext4 and ZFS, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Swept: `compare` is the only place runs are made and `describe` the only reader. No other per-byte or per-run list in snapdiff, scan or accept.
+	- Closed: 20261110-165919
 
 - Exit 130 on a second Ctrl+C is in README and `--help`, and nothing checks it.
 	- ID: 2026111011092323

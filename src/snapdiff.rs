@@ -307,11 +307,48 @@ fn stays_inside(p: &Path) -> bool {
 		.all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
-/// Bytes that differ, and where, as runs of start and length.
-#[derive(Debug)]
+/// How many runs `describe` names.
+const RUNS_SHOWN: usize = 8;
+
+/// Bytes that differ, and where, as runs of start and length. Only the runs
+/// `describe` names are kept, and counts for the rest, so a file that differs
+/// all through takes no more memory than one scribble.
+#[derive(Debug, Default)]
 pub struct Diff {
 	pub differing: u64,
-	pub runs: Vec<(u64, u64)>,
+	/// Every run, kept or not.
+	pub runs: u64,
+	/// Runs that start on a 16-byte boundary.
+	pub aligned: u64,
+	/// The first `RUNS_SHOWN` runs.
+	pub shown: Vec<(u64, u64)>,
+	// The last run, which the next byte that differs may still join.
+	open: Option<(u64, u64)>,
+}
+
+impl Diff {
+	fn start(&mut self, start: u64, len: u64) {
+		self.close();
+		self.runs += 1;
+		self.aligned += u64::from(start.is_multiple_of(16));
+		self.open = Some((start, len));
+	}
+
+	fn byte(&mut self, pos: u64) {
+		self.differing += 1;
+		match &mut self.open {
+			Some((s, l)) if pos <= *s + *l + 4 => *l = pos - *s + 1,
+			_ => self.start(pos, 1),
+		}
+	}
+
+	fn close(&mut self) {
+		if let Some(run) = self.open.take()
+			&& self.shown.len() < RUNS_SHOWN
+		{
+			self.shown.push(run);
+		}
+	}
 }
 
 /// Read buffers for `compare`, made once per run rather than per file.
@@ -335,10 +372,7 @@ impl Default for CompareBufs {
 pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result<Diff> {
 	let CompareBufs { a: ba, b: bb } = bufs;
 	let mut off: u64 = 0;
-	let mut d = Diff {
-		differing: 0,
-		runs: Vec::new(),
-	};
+	let mut d = Diff::default();
 	let (la, lb) = (fa.metadata()?.len(), fb.metadata()?.len());
 	while off < la.min(lb) {
 		let na = read_full(&mut fa, ba)?;
@@ -350,12 +384,7 @@ pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result
 		if ba[..n] != bb[..n] {
 			for i in 0..n {
 				if ba[i] != bb[i] {
-					d.differing += 1;
-					let pos = off + i as u64;
-					match d.runs.last_mut() {
-						Some((s, l)) if pos <= *s + *l + 4 => *l = pos - *s + 1,
-						_ => d.runs.push((pos, 1)),
-					}
+					d.byte(off + i as u64);
 				}
 			}
 		}
@@ -365,8 +394,9 @@ pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result
 	if la != lb {
 		let common = la.min(lb);
 		d.differing += la.max(lb) - common;
-		d.runs.push((common, la.max(lb) - common));
+		d.start(common, la.max(lb) - common);
 	}
+	d.close();
 	Ok(d)
 }
 
@@ -384,20 +414,18 @@ fn read_full(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 fn describe(d: &Diff) -> String {
-	let aligned = d.runs.iter().filter(|(s, _)| s % 16 == 0).count();
-	let shown: Vec<String> = d
-		.runs
-		.iter()
-		.take(8)
-		.map(|(s, l)| format!("{s}+{l}"))
-		.collect();
+	let shown: Vec<String> = d.shown.iter().map(|(s, l)| format!("{s}+{l}")).collect();
 	format!(
 		"{} bytes differ in {} run(s), {} starting on a 16-byte boundary: {}{}",
 		d.differing,
-		d.runs.len(),
-		aligned,
+		d.runs,
+		d.aligned,
 		shown.join(" "),
-		if d.runs.len() > 8 { " ..." } else { "" }
+		if d.runs > d.shown.len() as u64 {
+			" ..."
+		} else {
+			""
+		}
 	)
 }
 
@@ -1086,7 +1114,7 @@ transid marker was 12\n";
 		fs::write(dir.join("b"), &b).unwrap();
 		let d = cmp("a", "b");
 		assert_eq!(d.differing, 15);
-		assert_eq!(d.runs, vec![(2_097_168, 16)]);
+		assert_eq!(d.shown, vec![(2_097_168, 16)]);
 		assert!(describe(&d).contains("1 starting on a 16-byte boundary"));
 		fs::write(dir.join("b"), &a[..100]).unwrap();
 		let d = cmp("a", "b");
@@ -1113,8 +1141,50 @@ transid marker was 12\n";
 		assert_eq!(cmp(&big, &other).differing, 5000);
 		assert_eq!(cmp(b"same", b"same").differing, 0);
 		let d = cmp(b"0123456789", b"0123456780");
-		assert_eq!((d.differing, d.runs), (1, vec![(9, 1)]));
+		assert_eq!((d.differing, d.shown), (1, vec![(9, 1)]));
 		assert_eq!(cmp(b"", b"").differing, 0);
+	}
+
+	#[test]
+	fn only_the_shown_runs_are_kept() {
+		let _id = test_id("df4rh");
+		let dir = scratch("snapdiff_runs");
+		let mut bufs = CompareBufs::default();
+		let mut cmp = |a: &[u8], b: &[u8]| {
+			fs::write(dir.join("a"), a).unwrap();
+			fs::write(dir.join("b"), b).unwrap();
+			compare(
+				File::open(dir.join("a")).unwrap(),
+				File::open(dir.join("b")).unwrap(),
+				&mut bufs,
+			)
+			.unwrap()
+		};
+		// Every 8th byte differs, too far apart to merge, and the longer
+		// file's tail is a run of its own.
+		let a: Vec<u8> = (0..8192u32).map(|i| (i * 7) as u8).collect();
+		let mut b = a.clone();
+		for x in b.iter_mut().step_by(8) {
+			*x ^= 1;
+		}
+		b.extend_from_slice(b"0123456789");
+		let d = cmp(&a, &b);
+		assert_eq!((d.differing, d.runs, d.aligned), (1024 + 10, 1025, 513));
+		assert_eq!(d.shown, (0..8).map(|i| (i * 8, 1)).collect::<Vec<_>>());
+		assert!(d.shown.capacity() <= RUNS_SHOWN);
+		assert!(describe(&d).starts_with(
+			"1034 bytes differ in 1025 run(s), 513 starting on a 16-byte boundary: \
+			 0+1 8+1 16+1 24+1 32+1 40+1 48+1 56+1 ..."
+		));
+		let d = cmp(b"0123456789", b"0x23456789tail");
+		assert_eq!(
+			(d.runs, d.aligned, &d.shown),
+			(2, 0, &vec![(1, 1), (10, 4)])
+		);
+		assert_eq!(
+			describe(&d),
+			"5 bytes differ in 2 run(s), 0 starting on a 16-byte boundary: 1+1 10+4"
+		);
 	}
 
 	#[test]

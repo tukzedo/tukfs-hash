@@ -467,8 +467,35 @@ if [[ -x /usr/bin/time ]] && /usr/bin/time -o "${mem}/peak" -f '%M' true 2> /dev
 	read -r rcLong kbLong < <(peak "${mem}/long") || true
 	st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 1024 )) && st=0
 	expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 1 MB more" "${st}"
+	# Only the runs a line names are kept, so a file that differs all through
+	# costs no more than one with a byte changed. 4 MiB with 1 byte in 8
+	# changed is 524,288 runs, which took 8 MB more when all were kept.
+	python3 -I -c '
+import os, sys
+d = sys.argv[1]
+a = os.urandom(4 << 20)
+whole = bytearray(a)
+whole[::8] = a[::8].translate(bytes(x ^ 1 for x in range(256)))
+one = bytearray(a)
+one[100] ^= 1
+with open(d + "/old/whole", "wb") as f:
+	f.write(a)
+os.link(d + "/old/whole", d + "/old/one")
+st = os.stat(d + "/old/whole")
+for name, data in (("whole", whole), ("one", one)):
+	with open(d + "/new/" + name, "wb") as f:
+		f.write(data)
+	os.utime(d + "/new/" + name, ns=(st.st_atime_ns, st.st_mtime_ns))
+' "${mem}"
+	printf 'one\n' > "${mem}/one"; printf 'whole\n' > "${mem}/whole"
+	rcOne='' kbOne='' rcWhole='' kbWhole=''
+	read -r rcOne kbOne < <(peak "${mem}/one") || true
+	read -r rcWhole kbWhole < <(peak "${mem}/whole") || true
+	st=1; [[ "${rcOne} ${rcWhole}" == "4 4" && "${kbOne}" =~ ^[0-9]+$ && "${kbWhole}" =~ ^[0-9]+$ ]] && (( kbWhole - kbOne < 1024 )) && st=0
+	expect df4rj "a file that differs all through costs no more memory" "524,288 runs: exit ${rcWhole}, ${kbWhole} KB, against ${kbOne} KB for 1, want under 1 MB more" "${st}"
 else
 	skip df0pq "a long list costs no more memory (no GNU time at /usr/bin/time)"
+	skip df4rj "a file that differs all through costs no more memory (no GNU time at /usr/bin/time)"
 fi
 
 # 10. Names that aren't plain text: arguments are taken, and output escapes
