@@ -250,12 +250,16 @@
 - `testutil::Fuzzed` isn't `#[must_use]`, so a fuzz test that never calls `covers()` passes without proving its generator works.
 	- ID: 2026111011092326
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 27
 	- Origin: `d130ec6`, before the last review. Read only. Every current caller calls it.
 	- Requirements [Feature]: `#[must_use]` on `Fuzzed`, with a message naming `covers()`.
+	- Branch: round-20261110b
+	- Test case: none, a compile-time lint. clippy with `-D warnings` over all targets passes, so every caller uses the result.
+	- Swept: all 7 `fuzz` callers (`xattr`, `mounts` x2, `util` x2, `snapdiff` x2) and the `testutil` self-test call `covers()`.
+	- Closed: 20261111-012500
 
 - Comments in `tests/integration.bash` are out of date.
 	- ID: 2026111011092327
