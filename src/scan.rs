@@ -537,12 +537,12 @@ fn sudo_ids() -> Option<(u32, u32)> {
 	Some((id("SUDO_UID")?, id("SUDO_GID")?))
 }
 
-/// The database's folder. Under sudo it has to be that user's or root's, or a
-/// link planted at it would have root make the files wherever it points and
-/// hand them over (2026111011092301).
-fn open_dir(db: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
-	let dir = db.parent().unwrap_or(Path::new("/"));
-	let failed = |e: io::Error| format!("database folder {}: {e}", dir.display());
+/// The folder of the database, or of what `what` names. Under sudo it has to
+/// be that user's or root's, or a link planted at it would have root make the
+/// files wherever it points and hand them over (2026111011092301).
+pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
+	let dir = file.parent().unwrap_or(Path::new("/"));
+	let failed = |e: io::Error| format!("{what} folder {}: {e}", dir.display());
 	// With O_PATH a link is opened rather than refused, so its type says so.
 	let f = beneath::openat(libc::AT_FDCWD, dir.as_os_str(), libc::O_PATH).map_err(failed)?;
 	let m = f.metadata().map_err(failed)?;
@@ -557,7 +557,7 @@ fn open_dir(db: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
 		&& m.uid() != 0
 	{
 		return Err(format!(
-			"database folder {} is owned by uid {}, not by uid {uid} or root; refused",
+			"{what} folder {} is owned by uid {}, not by uid {uid} or root; refused",
 			dir.display(),
 			m.uid()
 		));
@@ -591,7 +591,7 @@ impl Held {
 		mounts: &[mounts::Mount],
 		sudo: Option<(u32, u32)>,
 	) -> Result<Self, String> {
-		let dir = open_dir(db, sudo)?;
+		let dir = open_dir("database", db, sudo)?;
 		Ok(Self {
 			_lock: lock(&dir, db, mounts)?,
 			dir,
@@ -696,7 +696,7 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 /// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	if let Some(l) = &o.log {
-		say::open_log(l)?;
+		say::open_log(l, sudo_ids())?;
 	}
 	let Plan {
 		groups: planned,
@@ -3554,7 +3554,7 @@ mod tests {
 		let d = scratch("scan_heldlock");
 		let db = d.join("t.sqlite");
 		let mounts = mounts::read_mounts().unwrap();
-		let dir = open_dir(&db, None).unwrap();
+		let dir = open_dir("database", &db, None).unwrap();
 		let held = lock(&dir, &db, &mounts).unwrap();
 		let again = lock(&dir, &db, &mounts).unwrap_err();
 		assert!(again.ends_with("is locked; another scan is using this database"));
@@ -3578,7 +3578,7 @@ mod tests {
 		fs::write(&db, "").unwrap();
 		fs::write(lock_path(&db), "").unwrap();
 		let me = fs::metadata(&db).unwrap();
-		let dir = open_dir(&db, None).unwrap();
+		let dir = open_dir("database", &db, None).unwrap();
 		assert!(hand_over(&dir, &db, me.uid(), me.gid()).is_empty());
 		let failed: Vec<PathBuf> = hand_over(&dir, &db, 0, 0)
 			.into_iter()
@@ -3599,7 +3599,7 @@ mod tests {
 		wal.push("-wal");
 		std::os::unix::fs::symlink(d.join("target"), &wal).unwrap();
 		let me = fs::metadata(&db).unwrap();
-		let dir = open_dir(&db, None).unwrap();
+		let dir = open_dir("database", &db, None).unwrap();
 		let failed: Vec<PathBuf> = hand_over(&dir, &db, me.uid(), me.gid())
 			.into_iter()
 			.map(|f| f.0)
@@ -3625,7 +3625,7 @@ mod tests {
 			"{said}"
 		);
 		assert!(!lock_path(&db).exists() && !db.exists());
-		assert!(open_dir(Path::new("/t.sqlite"), other).is_ok());
+		assert!(open_dir("database", Path::new("/t.sqlite"), other).is_ok());
 		drop(Held::take_as(&db, &mounts, Some((me.uid(), me.gid()))).unwrap());
 		assert!(lock_path(&db).exists());
 	}
@@ -3639,7 +3639,7 @@ mod tests {
 		let d = scratch("scan_sudo_folder_link");
 		fs::create_dir(d.join("real")).unwrap();
 		std::os::unix::fs::symlink(d.join("real"), d.join("link")).unwrap();
-		let said = open_dir(&d.join("link/t.sqlite"), None).unwrap_err();
+		let said = open_dir("database", &d.join("link/t.sqlite"), None).unwrap_err();
 		assert!(
 			said.ends_with("link: is a symbolic link; refused"),
 			// codeql[rust/cleartext-logging] a folder's uid isn't a secret, and this is a test's failure text

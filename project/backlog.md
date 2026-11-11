@@ -32,12 +32,27 @@
 - A --log made under sudo stays root's.
 	- ID: 2026111019430926
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-194309
 	- Opened by: 2026111019145405
-	- Related IDs: 2026111019145405
+	- Related IDs: 2026111019145405, 2026111011092301
 	- Note: The database and its lock are handed back to SUDO_UID, but the log isn't, so a later scan by the user can't append to it. A link at the log's name is refused already (df4xq).
+	- Actual effort: Low
+	- Progress log:
+		- `say::open_log` takes the sudo ids. It makes the log with `O_EXCL` through the folder's fd, and hands only a log it made to SUDO_UID, right away with `fchown`. One already there is opened for append and keeps its owner.
+		- Under sudo the log's folder goes through the same check as the database's, `scan::open_dir`, which now takes what it's for in its messages.
+		- design.md, Database, and README, Usage, say so.
+	- Decisions:
+		- Only a log the scan made is handed over, so a root log, such as one under `/var/log`, doesn't become the user's. A log an older build made under sudo stays root's until the user removes it.
+		- The log's folder has to be the user's or root's under sudo, as answered for the database. Without it, the hand-back would let a link at the folder have root make a file in another user's folder and give it to the user.
+		- A link at the log's name now reads "is a symbolic link; refused", as the lock's does.
+	- Swept: every caller of `open_log` (only `scan::run`) and of `open_dir` (`Held::take_as` and 5 tests). Only `scan` takes `--log`.
+	- Branch: round-20261111
+	- Test case: `df4y3` (`a_log_is_made_only_once`), `df4y4` (`a_log_folder_not_the_users_is_refused`), with `df4xq` and integration `df4xn` still passing. The root case is `sudo-log-standin.bash` in the private tools folder, which failed 4 of 8 checks on the build before and passes all 8.
+	- Verified: `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. As uid 0 in a user namespace with SUDO_UID set, a new log in the user's or root's folder was the user's, an old one kept its owner and was added to, a link at the folder to another user's folder and a link at the name were refused with nothing made, and a `sudo -u` style run gave no warning.
+	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261110-195616
 
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
