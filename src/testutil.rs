@@ -235,6 +235,7 @@ impl Rng {
 
 /// What a fuzz run did.
 #[derive(Debug)]
+#[must_use = "call covers(), or the test doesn't prove its generator works"]
 pub struct Fuzzed {
 	pub cases: u64,
 	covered: u32,
