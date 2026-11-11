@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 ##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
-##		root, and no mounts but step 23's in a user namespace, so mount
-##		boundaries are left to `plan` on a real box.
+##		root, and no mounts but those of steps 23, 25 and 30, in a user
+##		namespace, so the rest of the mount rules are left to `plan` on a
+##		real box.
 ##	Usage: tests/integration.bash [--keep-temp] [BINARY]
 ##		Works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or under
 ##		TMPDIR when HOST_TEMP isn't set, so HOST_TEMP picks the filesystem.
@@ -97,15 +98,17 @@ fSafeRm() {
 
 # Ours, and its run gone, such as a killed one's. A kept one waits 2 days
 # (2026102518150001). A folder with no marker of this script's, such as a
-# cicd run's, or another user's, isn't ours.
+# cicd run's, or another user's, isn't ours. The marks are plain files before
+# they're read, since a FIFO there would hang the read (2026111011092325).
 fSweep() {   ## fSweep BASE
 	local old='' pid='' got=''
 	mkdir -p -- "${1}"
 	while IFS= read -r -d '' old; do
 		pid=''; got=''
+		[[ -O "${old}" && ! -L "${old}" && -f "${old}/run.pid" && ! -L "${old}/run.pid" && -f "${old}/.test-run" && ! -L "${old}/.test-run" ]] || continue
 		read -r pid 2> /dev/null < "${old}/run.pid" || continue
 		read -r got 2> /dev/null < "${old}/.test-run" || continue
-		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" && -O "${old}" && ! -L "${old}" ]] || continue
+		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" ]] || continue
 		if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
 		fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
 	done < <(find "${1}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
@@ -183,8 +186,8 @@ q() { sqlite3 "${db}" "${1}"; }
 scan() { local rc=0; "${bin}" scan --db "${db}" --root "${tree}" --progress 3600 "${@}" > "${work}/out.txt" 2>&1 || rc=$?; echo "${rc}"; }
 xget() { getfattr --only-values -n "${2}" "${1}" 2>/dev/null || true; }
 tomorrow="$(date -d tomorrow +%Y-%m-%d)"
-# Waits up to 10 s for a scan to say it has started, rather than guessing.
-# Up to 60 s, since a loaded box has taken more than 10 to get going.
+# Waits up to 60 s for a scan to say it has started, rather than guessing,
+# since a loaded box has taken more than 10 to get going.
 wait_started() {
 	local i
 	for ((i = 0; i < 1200; i++)); do
@@ -201,6 +204,21 @@ wait_reached() {
 		[[ -e "/proc/${1}/fd/1" ]] || return 1
 		[[ -n "$(find "/proc/${1}/fd" -lname "${2}/*" -print -quit 2> /dev/null)" ]] && return 0
 		sleep 0.05
+	done
+	return 1
+}
+# wait_taken PID: up to 5 s for PID to have taken an INT sent to it, since a
+# second one sent while the first is pending merges into it. SIGINT is 0x2 in
+# the pending mask, ShdPnd.
+wait_taken() {
+	local i line='' pend=''
+	for ((i = 0; i < 500; i++)); do
+		pend=''
+		while IFS= read -r line; do if [[ "${line}" == ShdPnd:* ]]; then pend="${line#ShdPnd:}"; fi; done 2> /dev/null < "/proc/${1}/status" || return 1
+		pend="${pend//[[:space:]]/}"
+		[[ "${pend}" =~ ^[0-9a-f]+$ ]] || return 1
+		[[ "${pend: -1}" == [2367abef] ]] || return 0
+		sleep 0.01
 	done
 	return 1
 }
@@ -358,6 +376,17 @@ kill -INT "${pid}"
 rc=0; wait "${pid}" || rc=$?
 rc2=0; "${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --resume --progress 3600 > "${work}/out.txt" 2>&1 || rc2=$?
 check des7m "new database: resume didn't report it twice" "${rc} ${rc2} $(sqlite3 "${work}/db/r5.sqlite" "SELECT count(*) FROM events WHERE path = '${tree}/rm-stale.txt'")" "6 4 1"
+# A second Ctrl+C ends the scan at once, with 130, as README and --help say.
+# The run is left marked running, and the next scan marks it killed.
+"${bin}" scan --db "${work}/db/r130.sqlite" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
+pid=$!
+st=0; { wait_started "${work}/stop.txt" && wait_reached "${pid}" "${tree}/many"; } || st=1
+kill -INT "${pid}"; wait_taken "${pid}" || st=1; kill -INT "${pid}" 2> /dev/null || true
+rc=0; wait "${pid}" || rc=$?
+check df4s0 "second INT: exit 130, run left running" "${st} ${rc} $(sqlite3 "${work}/db/r130.sqlite" 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "0 130 running"
+mkdir -p "${work}/r130"; printf 'k\n' > "${work}/r130/f"
+rc=0; "${bin}" scan --db "${work}/db/r130.sqlite" --root "${work}/r130" --progress 3600 > "${work}/r130.txt" 2>&1 || rc=$?
+check df4s1 "second INT: the next scan marks it killed" "${rc} $(sqlite3 "${work}/db/r130.sqlite" 'SELECT status FROM runs ORDER BY id LIMIT 1')" "0 killed"
 
 # 6. snapdiff: same size and time, different bytes.
 mkdir -p "${work}/old" "${work}/new"
@@ -880,7 +909,7 @@ fi
 # A bind mount of a folder inside another root is that root's folder, wherever
 # it's mounted, so it isn't read twice (2026102814341414). One of a folder
 # outside the roots is read. A database reached through such a mount still
-# leaves out only its own names in the root's walk (2026110719570617), adn
+# leaves out only its own names in the root's walk (2026110719570617), and
 # --no-xattr and --exclude given by the mount's name still apply, also to a
 # root under it (2026110720070507). A root that's the bind mount is still
 # under the folders above its source, a git work tree too (2026111011092307).
@@ -1042,16 +1071,19 @@ fi
 # 30. A first scan that fills the disk leaves a database the next run can
 # still use (2026102814341430). The tmpfs that fills is in a user namespace,
 # as step 23. 8k fails before a page is written, 96k partway through making
-# the tables.
+# the tables. The marker goes once the tmpfs is mounted, before the scan, as
+# in steps 23 and 25, so a first scan that leaves no file fails here rather
+# than skipping as if there were no user namespace (2026111011092324).
 cat > "${ns}/full.bash" << 'EOF2'
 cd "${1}" && mkdir -p full fr && printf 'x\n' > fr/f || exit 1
 for sz in 8k 96k; do
 	mount -t tmpfs -o "size=${sz}" none full || exit 1
+	: > full.mounted
 	rc=0; "${2}" scan --db full/t.sqlite --root fr --progress 3600 > /dev/null 2>&1 || rc=$?
 	echo "${rc}" > "full-${sz}.rc"
-	cp full/t.sqlite "full-${sz}.sqlite" && umount full || exit 1
+	if [[ -e full/t.sqlite ]]; then cp full/t.sqlite "full-${sz}.sqlite" || exit 1; fi
+	umount full || exit 1
 done
-: > full.mounted
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/full.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -1061,8 +1093,10 @@ if [[ "${nsfs}" == zfs ]]; then
 elif [[ -e "${ns}/full.mounted" ]]; then
 	fullGot=''
 	for sz in 8k 96k; do
-		rc=0; "${bin}" scan --db "${ns}/full-${sz}.sqlite" --root "${ns}/fr" --progress 3600 > /dev/null 2>&1 || rc=$?
-		fullGot+="$(cat "${ns}/full-${sz}.rc") ${rc} "
+		firstRc=none; read -r firstRc 2> /dev/null < "${ns}/full-${sz}.rc" || true
+		rc=nodb
+		if [[ -e "${ns}/full-${sz}.sqlite" ]]; then rc=0; "${bin}" scan --db "${ns}/full-${sz}.sqlite" --root "${ns}/fr" --progress 3600 > /dev/null 2>&1 || rc=$?; fi
+		fullGot+="${firstRc:-none} ${rc} "
 	done
 	check df1qb "database left by a full disk taken as new" "${fullGot}" "1 0 1 0 "
 else
@@ -1279,3 +1313,6 @@ fi
 ##		  with no inode walk.
 ##		- 20261110: An attribute that can't be read is reported, and the set is
 ##		  left alone by scan and accept.
+##		- 20261110: A second Ctrl+C's 130 and the killed run are checked, step
+##		  30 tells a first scan that leaves no file from no user namespace,
+##		  and the sweep reads only marks that are plain files.

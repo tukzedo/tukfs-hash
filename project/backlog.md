@@ -190,34 +190,62 @@
 - Exit 130 on a second Ctrl+C is in README and `--help`, and nothing checks it.
 	- ID: 2026111011092323
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 24
 	- Origin: before the last review. Confirmed that it works: INT twice, 50 ms apart, gave 130 and left the run marked running.
 	- Requirements [Feature]: An integration check that sends INT twice and wants 130, and then `killed` on the next run.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: Step 5 of the integration test starts a scan with one worker, sends INT, waits for the scan to take it, and sends a second. df4s0 wants 130 and the run still marked running. df4s1 wants the next scan of that database to mark it killed.
+		- Verified: both pass on ext4 and ZFS in `--backlog-run-quick`. Both fail on a build without the second-signal exit ("0 6 stopped" and "0 stopped"). `second-int-check.bash` gave 130 and running in 10 of 10 rounds unloaded and 20 of 20 at load 12 with 40 spinners. Its control, 2 INTs back to back, gave a plain stop (exit 2) in 18 of those 20.
+	- Decisions: The second INT waits for the first to leave the scan's pending signals (`ShdPnd` in `/proc/PID/status`), rather than a fixed 50 ms. A second INT sent while the first is still pending merges into it, which the loaded control showed in 18 of 20 rounds.
+	- Branch: round-20261110b
+	- Test case: `df4s0` (second INT: exit 130, run left running), `df4s1` (the next scan marks it killed). `second-int-check.bash REPO BINARY [ROUNDS] [SPINNERS]`, in the private tools folder, repeats df4s0 with its controls.
+	- Acceptance signoff: Self-closed: the requirement, and the checks fail on a build without the behavior.
+	- Closed: 20261110-171831
 
 - Integration check df1qb skips as "no user namespace here" when the first full disk scan leaves no database file.
 	- ID: 2026111011092324
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 25
 	- Origin: `57e4c96`, 2026102814341430, after the last review. Confirmed with a stand-in binary that fails for that database.
 	- Requirements [Feature]: The marker is written right after the first mount, as steps 23 and 25 do, and a missing file is its own result.
 	- Related IDs: 2026102814341430
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: Step 30 writes `full.mounted` once the tmpfs is mounted, before the first scan, as steps 23 and 25 do. A first scan that leaves no file copies nothing, and the check shows `nodb` for it, where it used to skip as "no user namespace here".
+		- Verified: with a stand-in binary that fails that scan and leaves no file, df1qb fails with "1 nodb 1 nodb", and the test from before skipped it. With the real binary it passes on ext4, and skips on ZFS as before.
+	- Branch: round-20261110b
+	- Test case: `df1qb`.
+	- Swept: steps 23 and 25 already write their marker before their scans. Step 25's bind mount part does too.
+	- Acceptance signoff: Self-closed: the requirement, and a stand-in that leaves no file now fails the check where it skipped before.
+	- Closed: 20261110-171831
 
 - The integration test's sweep reads `run.pid` before it checks that the folder is its own, so a FIFO there hangs it.
 	- ID: 2026111011092325
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 26
 	- Origin: before the last review, last touched in `4c2a394`. Confirmed: a FIFO at `run.pid` in a run folder's name made `timeout 8 tests/integration.bash` end at 124 with no output.
 	- Requirements [Feature]: Check that the folder is owned, isn't a link, and that `run.pid` is a regular file before reading it.
 	- Sweep: `fSweepStale` and `fCacheInUse` in `cicd/cicd.bash`, which read the same way.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: The integration test's `fSweep` checks that the folder is ours and not a link, and that `run.pid` and `.test-run` are plain files, before it reads them. cicd.bash's `fSweepStale` and `fCacheInUse` do the same for `run.pid` and `.cicd-run`, and box-side.bash's sweep reads `run.pid` only when it's a plain file.
+		- Verified: `temp-ctr-check.bash fifo` passes 9 cases, and 5 of them fail on the code from before, where the integration test and cicd.bash hung until `timeout` and `fCacheInUse` ended at 124. `remote-check.bash box` passes 16. `--backlog-run-quick` passes in 2m 11s.
+	- Decisions: box-side.bash's sweep already checks owner and mark first, so a FIFO there could only be the user's own. It gets the plain-file check anyway, and a `run.pid` that isn't one counts as no PID, as a missing one did.
+	- Branch: round-20261110b
+	- Test case: none with an ID. `temp-ctr-check.bash REPO fifo`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every read of `run.pid` or a run mark in `cicd/` and `tests/`: `fSweep` and `fCleanupOne` in the integration test (the second reads only this run's own folder), `fSweepStale` and `fCacheInUse` in cicd.bash, and `fMake` in box-side.bash.
+	- Acceptance signoff: Self-closed: the requirement, with a test that fails before and passes after.
+	- Closed: 20261110-171814
 
 - `testutil::Fuzzed` isn't `#[must_use]`, so a fuzz test that never calls `covers()` passes without proving its generator works.
 	- ID: 2026111011092326
@@ -232,7 +260,7 @@
 - Comments in `tests/integration.bash` are out of date.
 	- ID: 2026111011092327
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 28
@@ -241,6 +269,14 @@
 		- The header says only step 23 mounts, but steps 25 and 30 do too.
 		- A wait loop's comment says 10 s, and it waits 60.
 		- "adn" near step 27.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: The header names steps 23, 25 and 30 as the ones that mount. `wait_started`'s comment says 60 s. "adn" is "and", in step 25. The comments the other 3 items added were read in the same pass.
+	- Decisions: "adn" was in step 25's bind mount comment, not near step 27.
+	- Branch: round-20261110b
+	- Test case: none, comments only. shellcheck and the quick run pass.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261110-171831
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
