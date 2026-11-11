@@ -85,203 +85,6 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
-- snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
-	- ID: 2026111011092305
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 6
-	- Origin: `cede460`, before the last review. Its current form is from `f6f4e7a` and `729d491`, round-20261108. Confirmed on ext4: 2.4 MB for 1 line, 75 MB for 100,000 new files, and the summary said "100000 missing" with exit 0.
-	- Requirements [Feature]:
-		- Memory doesn't grow with the number of new files.
-		- The summary counts files only in `--new` apart from real misses.
-	- Note: A file born after the old snapshot was taken can skip the inode walk. The snapshot's time is in the subvolume's info, which needs no root. Otherwise keep only the path, inode and birth time.
-	- Note: design.md, "snapdiff", says files waiting on the walk are kept to the end, so this isn't a defect. 2026110715441806 covered zfs diff and `--list`.
-	- Related IDs: 2026110715441806
-	- Actual effort: Avg
-	- Decisions:
-		- The old snapshot's time comes from btrfs's subvolume info ioctl, which needs no root. It's trusted only for a read-only snapshot that wasn't received. Files can be added to a writable one later, and a received one's files are all born after it.
-		- A find-new file born after that time skips the walk: a new one is counted at once, and an atomic save is compared by name at once, which is where the walk ended up for it anyway.
-		- A file that still waits keeps its name and birth time, and the walk's map its inode. Both sides are stat'd again after the walk.
-		- The summary has "N only in --new" after the files in both. find-new and lists can name new files, so there one missing from `--old` is counted there and isn't an error. Lists counted it as missing before. zfs diff names files in both, so there it's still missing.
-		- `--all` prints a `new` line for each one, as it does `edited` and `same`.
-	- Branch: round-20261110b
-	- Test case: `df4qe` (`snapdiff::tests::new_files_skip_the_walk`): new files and an atomic save aren't held when `--old`'s time is before them, and are held when it isn't known or is after. `df4qf` in `tests/integration.bash`, on a real read-only btrfs snapshot: a new file comes out in list order, before the renamed one that waits, and the summary counts it only in `--new`. df4qf failed on a build from before the change, with `0 same kept same moved 0`, and passes after.
-	- Verified:
-		- Peak RSS for 100,000 new files over a read-only btrfs snapshot went from 73.6 MB to 2.5 MB, the same as 1 line. Over plain folders, where the time isn't known, from 72.2 MB to 11.5 MB. The summary says "100000 only in --new, 0 missing".
-		- `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
-	- Swept: `find_by_inode` is the only inode lookup, and `finish` the only reader of held files. The old-side "missing" call in `pair` and in `finish` both go through `not_in_old` now. zfs diff `+` lines alone name new files too, but they're never stat'd or counted.
-	- Closed: 20261110-162935
-
-- CodeQL has no run short enough for a worker, so round code reaches it only at the gate step.
-	- ID: 2026111015123269
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-151232
-	- Opened by: round-20261110 gate step
-	- Requirements [Feature]: A CodeQL run under about 4 minutes over the crate's own code, such as a cached database for the vendored crates, or a note on why there can't be one.
-	- Estimated effort: Avg
-	- Actual effort: Avg
-	- Progress log:
-		- 2026-11-10: the gate step's codeql area found a rust/cleartext-logging false positive in test df4kq from 63957eb, which 51c258f suppressed. The area took 14m 20s at load 23.
-		- 2026-11-10: That run's logs: building the database took 7 minutes, 3m 35s of it rust-analyzer loading the vendored crates' full source, and the analysis 5m 16s over 1,880 files.
-		- 2026-11-10: `codeql-scan.bash --ours` leaves the crates in the cargo home, so only their signatures are extracted, and reports only on our code. Bait, file and crate root checks and suppressions are as before. `cicd/codeql/vendored-reviewed.tsv` isn't read. Output goes in `cicd/artifacts/codeql-ours/`. `--backlog-run-quick codeql-ours` runs it, and no other run does.
-		- 2026-11-10: An area whose text starts with `+` runs that text as its own leak check. Kept steps are now matched whole, since `codeql-ours codeql` lost the full step to the old substring check.
-		- 2026-11-10: Verified: `--ours` alone took 2m 40s wall at load 10 to 15, the database in about 1 minute. `--backlog-run-quick codeql-ours` passed in 2m 30s at load 12. Its findings in our code match the full run's SARIF: the suppressed df4kq line and the bait.
-		- 2026-11-10: Verified: the private `cicd-flags-check.bash` passes, 62 cases, and fails 6 of its new ones on the code from before. `--backlog-run-quick` passed in 2m 32s. `leak-lengths-check.bash` and `cicd-steps-check.bash` pass. A bad argument exits 2, and no image or tool is still a noted skip.
-		- 2026-11-10: Verified: the full scan, with no option, still passes, in 10m 34s at load 4 to 9, with 26 crate findings reviewed and no row stale.
-	- Decisions:
-		- Library mode rather than a cached database. CodeQL can't add our code to a saved database, and the crates' source was most of both phases. It's how CodeQL's default setup reads a Rust project.
-		- It doesn't replace the full scan. A finding in a crate, or one in our code whose flow runs through a crate's own code, shows up only there, so the gate step still runs `codeql`.
-		- An area of its own, rather than a flag, so a worker runs it the way it runs the other gates.
-	- Swept: every `codeql-scan.bash` caller in `cicd/`, `tests/`, the docs and the private tools, the leak step matching in `cicd.bash`, and the private checks that read `BACKLOG_AREAS`. `gate-record-check.bash` calls the scan with no argument, which is unchanged.
-	- Branch: round-20261110b
-	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). The private `cicd-flags-check.bash REPO`, its codeql-ours cases. The scan's own bait shows the mode reports on our code.
-	- Acceptance signoff: Self-closed per memory.md's close policy.
-	- Closed: 20261110-160844
-
-- An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
-	- ID: 2026111011092319
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 20
-	- Origin: `f05c368`, before the last review. Plausible, since no attribute EIO could be made here.
-	- Requirements [Feature]: The error is an event, and that file gets no attributes written.
-	- Note: The comment on `OnFile::read` chooses this. design.md's `db-error` rule refuses the same trade for a database lookup, since it would overwrite the row unseen.
-	- Decisions:
-		- `OnFile::read` returns the error, with the attribute's name. A scan logs it as `xattr-error`, still reads the file and checks it against its database row, and writes no attributes. design.md, "Mismatches", says so.
-		- No exit bit, as for a failed write, since the file is still read and recorded. A `Check:` entry in questions.md has the other options.
-		- Every read error is an event, with no cap of 20 as writes have, since each one is that file's own.
-		- `accept` takes the file in the database, logs `xattr-error`, and exits 1 with "its attributes couldn't be read, so they were left alone", as it does for a failed write.
-	- Branch: round-20261110b
-	- Test case: df4r3 and df4r4 in step 34 of `tests/integration.bash`, through step 33's shim, which now also fails `fgetxattr` for one file. Unit test df4r2 `an_unreadable_set_is_an_error`.
-	- Verified: df4r3 and df4r4 failed on the unfixed build, with the set written over and no event, and pass after, on ext4, and on ZFS in the quick gate. The quick gate, Miri and codeql-ours pass.
-	- Swept: every `OnFile::read` caller, `scan::Worker::one_file` and `accept::one`, and the tests. `fget` has no other caller outside tests. The Claim::Done path for other hard-link names writes no attributes.
-	- Acceptance signoff: Self-closed per memory.md's close policy.
-	- Closed: 20261110-164642
-
-- snapdiff keeps every run of differing bytes, so its memory grows with the file.
-	- ID: 2026111011092322
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 23
-	- Origin: `f05c368`, before the last review. Confirmed: 2 files of 64 MiB that differ at every 8th byte took 135 MB.
-	- Requirements [Feature]: Keep the first 8 runs that `describe` shows, the last run for merging, and counts for the rest.
-	- Actual effort: Low
-	- Decisions:
-		- `Diff` keeps the run count, the count on a 16-byte boundary, the first 8 runs, and the open run. A run is counted when it opens, since its start never moves, and kept when it closes.
-		- The longer file's tail stays a run of its own, not merged with the one before, as before.
-		- The output line is byte for byte the same.
-		- 2026-11-10: `ddx01` and `dej04` read the kept runs from `d.shown` in place of `d.runs`, which is now a count. Same values.
-	- Branch: round-20261110b
-	- Test case: `df4rh` (`snapdiff::tests::only_the_shown_runs_are_kept`): 1,025 runs keep 8, with the right counts and line, and a tail run. `df4rj` in `tests/integration.bash`: a 4 MiB file with 524,288 runs takes under 1 MB more peak RSS than one with a byte changed. df4rj failed 3 of 3 on a build from before the change, at about 13 MB against 5 MB, and passes 3 of 3 after, at about 2.5 MB.
-	- Verified:
-		- The issue's 2 files of 64 MiB went from 136 MB peak RSS to 4.5 MB, with the same output line and the same CPU time.
-		- `cicd/cicd.bash --backlog-run-quick` passed, df4rj on ext4 and ZFS, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
-	- Swept: `compare` is the only place runs are made and `describe` the only reader. No other per-byte or per-run list in snapdiff, scan or accept.
-	- Closed: 20261110-165919
-
-- Exit 130 on a second Ctrl+C is in README and `--help`, and nothing checks it.
-	- ID: 2026111011092323
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 24
-	- Origin: before the last review. Confirmed that it works: INT twice, 50 ms apart, gave 130 and left the run marked running.
-	- Requirements [Feature]: An integration check that sends INT twice and wants 130, and then `killed` on the next run.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-10: Step 5 of the integration test starts a scan with one worker, sends INT, waits for the scan to take it, and sends a second. df4s0 wants 130 and the run still marked running. df4s1 wants the next scan of that database to mark it killed.
-		- Verified: both pass on ext4 and ZFS in `--backlog-run-quick`. Both fail on a build without the second-signal exit ("0 6 stopped" and "0 stopped"). `second-int-check.bash` gave 130 and running in 10 of 10 rounds unloaded and 20 of 20 at load 12 with 40 spinners. Its control, 2 INTs back to back, gave a plain stop (exit 2) in 18 of those 20.
-	- Decisions: The second INT waits for the first to leave the scan's pending signals (`ShdPnd` in `/proc/PID/status`), rather than a fixed 50 ms. A second INT sent while the first is still pending merges into it, which the loaded control showed in 18 of 20 rounds.
-	- Branch: round-20261110b
-	- Test case: `df4s0` (second INT: exit 130, run left running), `df4s1` (the next scan marks it killed). `second-int-check.bash REPO BINARY [ROUNDS] [SPINNERS]`, in the private tools folder, repeats df4s0 with its controls.
-	- Acceptance signoff: Self-closed: the requirement, and the checks fail on a build without the behavior.
-	- Closed: 20261110-171831
-
-- Integration check df1qb skips as "no user namespace here" when the first full disk scan leaves no database file.
-	- ID: 2026111011092324
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 25
-	- Origin: `57e4c96`, 2026102814341430, after the last review. Confirmed with a stand-in binary that fails for that database.
-	- Requirements [Feature]: The marker is written right after the first mount, as steps 23 and 25 do, and a missing file is its own result.
-	- Related IDs: 2026102814341430
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-10: Step 30 writes `full.mounted` once the tmpfs is mounted, before the first scan, as steps 23 and 25 do. A first scan that leaves no file copies nothing, and the check shows `nodb` for it, where it used to skip as "no user namespace here".
-		- Verified: with a stand-in binary that fails that scan and leaves no file, df1qb fails with "1 nodb 1 nodb", and the test from before skipped it. With the real binary it passes on ext4, and skips on ZFS as before.
-	- Branch: round-20261110b
-	- Test case: `df1qb`.
-	- Swept: steps 23 and 25 already write their marker before their scans. Step 25's bind mount part does too.
-	- Acceptance signoff: Self-closed: the requirement, and a stand-in that leaves no file now fails the check where it skipped before.
-	- Closed: 20261110-171831
-
-- The integration test's sweep reads `run.pid` before it checks that the folder is its own, so a FIFO there hangs it.
-	- ID: 2026111011092325
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 26
-	- Origin: before the last review, last touched in `4c2a394`. Confirmed: a FIFO at `run.pid` in a run folder's name made `timeout 8 tests/integration.bash` end at 124 with no output.
-	- Requirements [Feature]: Check that the folder is owned, isn't a link, and that `run.pid` is a regular file before reading it.
-	- Sweep: `fSweepStale` and `fCacheInUse` in `cicd/cicd.bash`, which read the same way.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-10: The integration test's `fSweep` checks that the folder is ours and not a link, and that `run.pid` and `.test-run` are plain files, before it reads them. cicd.bash's `fSweepStale` and `fCacheInUse` do the same for `run.pid` and `.cicd-run`, and box-side.bash's sweep reads `run.pid` only when it's a plain file.
-		- Verified: `temp-ctr-check.bash fifo` passes 9 cases, and 5 of them fail on the code from before, where the integration test and cicd.bash hung until `timeout` and `fCacheInUse` ended at 124. `remote-check.bash box` passes 16. `--backlog-run-quick` passes in 2m 11s.
-	- Decisions: box-side.bash's sweep already checks owner and mark first, so a FIFO there could only be the user's own. It gets the plain-file check anyway, and a `run.pid` that isn't one counts as no PID, as a missing one did.
-	- Branch: round-20261110b
-	- Test case: none with an ID. `temp-ctr-check.bash REPO fifo`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
-	- Swept: every read of `run.pid` or a run mark in `cicd/` and `tests/`: `fSweep` and `fCleanupOne` in the integration test (the second reads only this run's own folder), `fSweepStale` and `fCacheInUse` in cicd.bash, and `fMake` in box-side.bash.
-	- Acceptance signoff: Self-closed: the requirement, with a test that fails before and passes after.
-	- Closed: 20261110-171814
-
-- `testutil::Fuzzed` isn't `#[must_use]`, so a fuzz test that never calls `covers()` passes without proving its generator works.
-	- ID: 2026111011092326
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 27
-	- Origin: `d130ec6`, before the last review. Read only. Every current caller calls it.
-	- Requirements [Feature]: `#[must_use]` on `Fuzzed`, with a message naming `covers()`.
-	- Branch: round-20261110b
-	- Test case: none, a compile-time lint. clippy with `-D warnings` over all targets passes, so every caller uses the result.
-	- Swept: all 7 `fuzz` callers (`xattr`, `mounts` x2, `util` x2, `snapdiff` x2) and the `testutil` self-test call `covers()`.
-	- Closed: 20261111-012500
-
-- Comments in `tests/integration.bash` are out of date.
-	- ID: 2026111011092327
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-110923
-	- Opened by: code review 20261110, item 28
-	- Origin: `ef00124`, `0a45bc8` and `91439f1`. Confirmed by reading.
-	- Requirements [Feature]:
-		- The header says only step 23 mounts, but steps 25 and 30 do too.
-		- A wait loop's comment says 10 s, and it waits 60.
-		- "adn" near step 27.
-	- Actual effort: Low
-	- Progress log:
-		- 2026-11-10: The header names steps 23, 25 and 30 as the ones that mount. `wait_started`'s comment says 60 s. "adn" is "and", in step 25. The comments the other 3 items added were read in the same pass.
-	- Decisions: "adn" was in step 25's bind mount comment, not near step 27.
-	- Branch: round-20261110b
-	- Test case: none, comments only. shellcheck and the quick run pass.
-	- Acceptance signoff: Self-closed: comments only.
-	- Closed: 20261110-171831
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -1760,6 +1563,35 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 	- Closed: 20261015-130151
+
+- snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
+	- ID: 2026111011092305
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 6
+	- Origin: `cede460`, before the last review. Its current form is from `f6f4e7a` and `729d491`, round-20261108. Confirmed on ext4: 2.4 MB for 1 line, 75 MB for 100,000 new files, and the summary said "100000 missing" with exit 0.
+	- Requirements [Feature]:
+		- Memory doesn't grow with the number of new files.
+		- The summary counts files only in `--new` apart from real misses.
+	- Note: A file born after the old snapshot was taken can skip the inode walk. The snapshot's time is in the subvolume's info, which needs no root. Otherwise keep only the path, inode and birth time.
+	- Note: design.md, "snapdiff", says files waiting on the walk are kept to the end, so this isn't a defect. 2026110715441806 covered zfs diff and `--list`.
+	- Related IDs: 2026110715441806
+	- Actual effort: Avg
+	- Decisions:
+		- The old snapshot's time comes from btrfs's subvolume info ioctl, which needs no root. It's trusted only for a read-only snapshot that wasn't received. Files can be added to a writable one later, and a received one's files are all born after it.
+		- A find-new file born after that time skips the walk: a new one is counted at once, and an atomic save is compared by name at once, which is where the walk ended up for it anyway.
+		- A file that still waits keeps its name and birth time, and the walk's map its inode. Both sides are stat'd again after the walk.
+		- The summary has "N only in --new" after the files in both. find-new and lists can name new files, so there one missing from `--old` is counted there and isn't an error. Lists counted it as missing before. zfs diff names files in both, so there it's still missing.
+		- `--all` prints a `new` line for each one, as it does `edited` and `same`.
+	- Branch: round-20261110b
+	- Test case: `df4qe` (`snapdiff::tests::new_files_skip_the_walk`): new files and an atomic save aren't held when `--old`'s time is before them, and are held when it isn't known or is after. `df4qf` in `tests/integration.bash`, on a real read-only btrfs snapshot: a new file comes out in list order, before the renamed one that waits, and the summary counts it only in `--new`. df4qf failed on a build from before the change, with `0 same kept same moved 0`, and passes after.
+	- Verified:
+		- Peak RSS for 100,000 new files over a read-only btrfs snapshot went from 73.6 MB to 2.5 MB, the same as 1 line. Over plain folders, where the time isn't known, from 72.2 MB to 11.5 MB. The summary says "100000 only in --new, 0 missing".
+		- `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Swept: `find_by_inode` is the only inode lookup, and `finish` the only reader of held files. The old-side "missing" call in `pair` and in `finish` both go through `not_in_old` now. zfs diff `+` lines alone name new files too, but they're never stat'd or counted.
+	- Closed: 20261110-162935
 
 - Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
 	- ID: 2026111011092301
@@ -4079,6 +3911,174 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- CodeQL has no run short enough for a worker, so round code reaches it only at the gate step.
+	- ID: 2026111015123269
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-151232
+	- Opened by: round-20261110 gate step
+	- Requirements [Feature]: A CodeQL run under about 4 minutes over the crate's own code, such as a cached database for the vendored crates, or a note on why there can't be one.
+	- Estimated effort: Avg
+	- Actual effort: Avg
+	- Progress log:
+		- 2026-11-10: the gate step's codeql area found a rust/cleartext-logging false positive in test df4kq from 63957eb, which 51c258f suppressed. The area took 14m 20s at load 23.
+		- 2026-11-10: That run's logs: building the database took 7 minutes, 3m 35s of it rust-analyzer loading the vendored crates' full source, and the analysis 5m 16s over 1,880 files.
+		- 2026-11-10: `codeql-scan.bash --ours` leaves the crates in the cargo home, so only their signatures are extracted, and reports only on our code. Bait, file and crate root checks and suppressions are as before. `cicd/codeql/vendored-reviewed.tsv` isn't read. Output goes in `cicd/artifacts/codeql-ours/`. `--backlog-run-quick codeql-ours` runs it, and no other run does.
+		- 2026-11-10: An area whose text starts with `+` runs that text as its own leak check. Kept steps are now matched whole, since `codeql-ours codeql` lost the full step to the old substring check.
+		- 2026-11-10: Verified: `--ours` alone took 2m 40s wall at load 10 to 15, the database in about 1 minute. `--backlog-run-quick codeql-ours` passed in 2m 30s at load 12. Its findings in our code match the full run's SARIF: the suppressed df4kq line and the bait.
+		- 2026-11-10: Verified: the private `cicd-flags-check.bash` passes, 62 cases, and fails 6 of its new ones on the code from before. `--backlog-run-quick` passed in 2m 32s. `leak-lengths-check.bash` and `cicd-steps-check.bash` pass. A bad argument exits 2, and no image or tool is still a noted skip.
+		- 2026-11-10: Verified: the full scan, with no option, still passes, in 10m 34s at load 4 to 9, with 26 crate findings reviewed and no row stale.
+	- Decisions:
+		- Library mode rather than a cached database. CodeQL can't add our code to a saved database, and the crates' source was most of both phases. It's how CodeQL's default setup reads a Rust project.
+		- It doesn't replace the full scan. A finding in a crate, or one in our code whose flow runs through a crate's own code, shows up only there, so the gate step still runs `codeql`.
+		- An area of its own, rather than a flag, so a worker runs it the way it runs the other gates.
+	- Swept: every `codeql-scan.bash` caller in `cicd/`, `tests/`, the docs and the private tools, the leak step matching in `cicd.bash`, and the private checks that read `BACKLOG_AREAS`. `gate-record-check.bash` calls the scan with no argument, which is unchanged.
+	- Branch: round-20261110b
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). The private `cicd-flags-check.bash REPO`, its codeql-ours cases. The scan's own bait shows the mode reports on our code.
+	- Acceptance signoff: Self-closed per memory.md's close policy.
+	- Closed: 20261110-160844
+
+- An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
+	- ID: 2026111011092319
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 20
+	- Origin: `f05c368`, before the last review. Plausible, since no attribute EIO could be made here.
+	- Requirements [Feature]: The error is an event, and that file gets no attributes written.
+	- Note: The comment on `OnFile::read` chooses this. design.md's `db-error` rule refuses the same trade for a database lookup, since it would overwrite the row unseen.
+	- Decisions:
+		- `OnFile::read` returns the error, with the attribute's name. A scan logs it as `xattr-error`, still reads the file and checks it against its database row, and writes no attributes. design.md, "Mismatches", says so.
+		- No exit bit, as for a failed write, since the file is still read and recorded. A `Check:` entry in questions.md has the other options.
+		- Every read error is an event, with no cap of 20 as writes have, since each one is that file's own.
+		- `accept` takes the file in the database, logs `xattr-error`, and exits 1 with "its attributes couldn't be read, so they were left alone", as it does for a failed write.
+	- Branch: round-20261110b
+	- Test case: df4r3 and df4r4 in step 34 of `tests/integration.bash`, through step 33's shim, which now also fails `fgetxattr` for one file. Unit test df4r2 `an_unreadable_set_is_an_error`.
+	- Verified: df4r3 and df4r4 failed on the unfixed build, with the set written over and no event, and pass after, on ext4, and on ZFS in the quick gate. The quick gate, Miri and codeql-ours pass.
+	- Swept: every `OnFile::read` caller, `scan::Worker::one_file` and `accept::one`, and the tests. `fget` has no other caller outside tests. The Claim::Done path for other hard-link names writes no attributes.
+	- Acceptance signoff: Self-closed per memory.md's close policy.
+	- Closed: 20261110-164642
+
+- snapdiff keeps every run of differing bytes, so its memory grows with the file.
+	- ID: 2026111011092322
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 23
+	- Origin: `f05c368`, before the last review. Confirmed: 2 files of 64 MiB that differ at every 8th byte took 135 MB.
+	- Requirements [Feature]: Keep the first 8 runs that `describe` shows, the last run for merging, and counts for the rest.
+	- Actual effort: Low
+	- Decisions:
+		- `Diff` keeps the run count, the count on a 16-byte boundary, the first 8 runs, and the open run. A run is counted when it opens, since its start never moves, and kept when it closes.
+		- The longer file's tail stays a run of its own, not merged with the one before, as before.
+		- The output line is byte for byte the same.
+		- 2026-11-10: `ddx01` and `dej04` read the kept runs from `d.shown` in place of `d.runs`, which is now a count. Same values.
+	- Branch: round-20261110b
+	- Test case: `df4rh` (`snapdiff::tests::only_the_shown_runs_are_kept`): 1,025 runs keep 8, with the right counts and line, and a tail run. `df4rj` in `tests/integration.bash`: a 4 MiB file with 524,288 runs takes under 1 MB more peak RSS than one with a byte changed. df4rj failed 3 of 3 on a build from before the change, at about 13 MB against 5 MB, and passes 3 of 3 after, at about 2.5 MB.
+	- Verified:
+		- The issue's 2 files of 64 MiB went from 136 MB peak RSS to 4.5 MB, with the same output line and the same CPU time.
+		- `cicd/cicd.bash --backlog-run-quick` passed, df4rj on ext4 and ZFS, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Swept: `compare` is the only place runs are made and `describe` the only reader. No other per-byte or per-run list in snapdiff, scan or accept.
+	- Closed: 20261110-165919
+
+- Exit 130 on a second Ctrl+C is in README and `--help`, and nothing checks it.
+	- ID: 2026111011092323
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 24
+	- Origin: before the last review. Confirmed that it works: INT twice, 50 ms apart, gave 130 and left the run marked running.
+	- Requirements [Feature]: An integration check that sends INT twice and wants 130, and then `killed` on the next run.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: Step 5 of the integration test starts a scan with one worker, sends INT, waits for the scan to take it, and sends a second. df4s0 wants 130 and the run still marked running. df4s1 wants the next scan of that database to mark it killed.
+		- Verified: both pass on ext4 and ZFS in `--backlog-run-quick`. Both fail on a build without the second-signal exit ("0 6 stopped" and "0 stopped"). `second-int-check.bash` gave 130 and running in 10 of 10 rounds unloaded and 20 of 20 at load 12 with 40 spinners. Its control, 2 INTs back to back, gave a plain stop (exit 2) in 18 of those 20.
+	- Decisions: The second INT waits for the first to leave the scan's pending signals (`ShdPnd` in `/proc/PID/status`), rather than a fixed 50 ms. A second INT sent while the first is still pending merges into it, which the loaded control showed in 18 of 20 rounds.
+	- Branch: round-20261110b
+	- Test case: `df4s0` (second INT: exit 130, run left running), `df4s1` (the next scan marks it killed). `second-int-check.bash REPO BINARY [ROUNDS] [SPINNERS]`, in the private tools folder, repeats df4s0 with its controls.
+	- Acceptance signoff: Self-closed: the requirement, and the checks fail on a build without the behavior.
+	- Closed: 20261110-171831
+
+- Integration check df1qb skips as "no user namespace here" when the first full disk scan leaves no database file.
+	- ID: 2026111011092324
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 25
+	- Origin: `57e4c96`, 2026102814341430, after the last review. Confirmed with a stand-in binary that fails for that database.
+	- Requirements [Feature]: The marker is written right after the first mount, as steps 23 and 25 do, and a missing file is its own result.
+	- Related IDs: 2026102814341430
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: Step 30 writes `full.mounted` once the tmpfs is mounted, before the first scan, as steps 23 and 25 do. A first scan that leaves no file copies nothing, and the check shows `nodb` for it, where it used to skip as "no user namespace here".
+		- Verified: with a stand-in binary that fails that scan and leaves no file, df1qb fails with "1 nodb 1 nodb", and the test from before skipped it. With the real binary it passes on ext4, and skips on ZFS as before.
+	- Branch: round-20261110b
+	- Test case: `df1qb`.
+	- Swept: steps 23 and 25 already write their marker before their scans. Step 25's bind mount part does too.
+	- Acceptance signoff: Self-closed: the requirement, and a stand-in that leaves no file now fails the check where it skipped before.
+	- Closed: 20261110-171831
+
+- The integration test's sweep reads `run.pid` before it checks that the folder is its own, so a FIFO there hangs it.
+	- ID: 2026111011092325
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 26
+	- Origin: before the last review, last touched in `4c2a394`. Confirmed: a FIFO at `run.pid` in a run folder's name made `timeout 8 tests/integration.bash` end at 124 with no output.
+	- Requirements [Feature]: Check that the folder is owned, isn't a link, and that `run.pid` is a regular file before reading it.
+	- Sweep: `fSweepStale` and `fCacheInUse` in `cicd/cicd.bash`, which read the same way.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: The integration test's `fSweep` checks that the folder is ours and not a link, and that `run.pid` and `.test-run` are plain files, before it reads them. cicd.bash's `fSweepStale` and `fCacheInUse` do the same for `run.pid` and `.cicd-run`, and box-side.bash's sweep reads `run.pid` only when it's a plain file.
+		- Verified: `temp-ctr-check.bash fifo` passes 9 cases, and 5 of them fail on the code from before, where the integration test and cicd.bash hung until `timeout` and `fCacheInUse` ended at 124. `remote-check.bash box` passes 16. `--backlog-run-quick` passes in 2m 11s.
+	- Decisions: box-side.bash's sweep already checks owner and mark first, so a FIFO there could only be the user's own. It gets the plain-file check anyway, and a `run.pid` that isn't one counts as no PID, as a missing one did.
+	- Branch: round-20261110b
+	- Test case: none with an ID. `temp-ctr-check.bash REPO fifo`, in the private tools folder, since private checks stay out of the pipeline (2026102508462883).
+	- Swept: every read of `run.pid` or a run mark in `cicd/` and `tests/`: `fSweep` and `fCleanupOne` in the integration test (the second reads only this run's own folder), `fSweepStale` and `fCacheInUse` in cicd.bash, and `fMake` in box-side.bash.
+	- Acceptance signoff: Self-closed: the requirement, with a test that fails before and passes after.
+	- Closed: 20261110-171814
+
+- `testutil::Fuzzed` isn't `#[must_use]`, so a fuzz test that never calls `covers()` passes without proving its generator works.
+	- ID: 2026111011092326
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 27
+	- Origin: `d130ec6`, before the last review. Read only. Every current caller calls it.
+	- Requirements [Feature]: `#[must_use]` on `Fuzzed`, with a message naming `covers()`.
+	- Branch: round-20261110b
+	- Test case: none, a compile-time lint. clippy with `-D warnings` over all targets passes, so every caller uses the result.
+	- Swept: all 7 `fuzz` callers (`xattr`, `mounts` x2, `util` x2, `snapdiff` x2) and the `testutil` self-test call `covers()`.
+	- Closed: 20261111-012500
+
+- Comments in `tests/integration.bash` are out of date.
+	- ID: 2026111011092327
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-110923
+	- Opened by: code review 20261110, item 28
+	- Origin: `ef00124`, `0a45bc8` and `91439f1`. Confirmed by reading.
+	- Requirements [Feature]:
+		- The header says only step 23 mounts, but steps 25 and 30 do too.
+		- A wait loop's comment says 10 s, and it waits 60.
+		- "adn" near step 27.
+	- Actual effort: Low
+	- Progress log:
+		- 2026-11-10: The header names steps 23, 25 and 30 as the ones that mount. `wait_started`'s comment says 60 s. "adn" is "and", in step 25. The comments the other 3 items added were read in the same pass.
+	- Decisions: "adn" was in step 25's bind mount comment, not near step 27.
+	- Branch: round-20261110b
+	- Test case: none, comments only. shellcheck and the quick run pass.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261110-171831
 
 - A root inside an `--exclude` folder scans nothing and exits 0 without saying why.
 	- ID: 2026111011092318
