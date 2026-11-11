@@ -9,6 +9,7 @@
 use crate::beneath::{self, Root};
 use crate::db::{self, Hashed, Kind, Msg, Prior, RunStatus};
 use crate::mounts;
+use crate::say::{self, Fit};
 use crate::util::{
 	b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us,
 };
@@ -57,6 +58,8 @@ pub struct Opts {
 	pub write_xattrs: bool,
 	pub rmlint: bool,
 	pub progress_secs: u64,
+	// Every line the scan prints, in full, appended.
+	pub log: Option<PathBuf>,
 	pub args: String,
 }
 
@@ -205,7 +208,10 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<
 		(Mode::Full, Mode::Full) | (Mode::Verify, Mode::Verify) => {}
 	}
 	if matches!(known, RunStatus::Running | RunStatus::Killed) {
-		out!("run {id} didn't finish and wasn't stopped; it was likely killed");
+		say::out(
+			&format!("run {id} didn't finish and wasn't stopped; it was likely killed"),
+			Fit::Cut,
+		);
 	}
 	Ok(run)
 }
@@ -340,14 +346,22 @@ struct ToCount {
 impl Group {
 	fn line(&self) -> String {
 		let line = self.stats.line();
+		match self.percent() {
+			Some(p) => format!("{line} | {p}"),
+			None => line,
+		}
+	}
+
+	// `~N% of SIZE`, once the size is known.
+	fn percent(&self) -> Option<String> {
 		let size = self.size.load(Relaxed);
 		if size == 0 {
-			return line;
+			return None;
 		}
 		let done = self.stats.bytes.load(Relaxed) + self.stats.skipped_bytes.load(Relaxed);
 		// Compression and reflinks can put the bytes read past the space used.
 		let pct = (done.saturating_mul(100) / size).min(100);
-		format!("{line} | ~{pct}% of {}", human_bytes(size))
+		Some(format!("~{pct}% of {}", human_bytes(size)))
 	}
 }
 
@@ -610,10 +624,10 @@ impl Held {
 			return;
 		};
 		for (p, e) in hand_over(&self.dir, &self.db, uid, gid) {
-			err!(
+			say::err(&format!(
 				"warning: can't give {} back to uid {uid}: {e}",
 				crate::util::show_path(&p)
-			);
+			));
 		}
 	}
 }
@@ -624,10 +638,10 @@ impl Drop for Held {
 		if let Some(conn) = self.conn.take()
 			&& let Err(x) = db::close_rw(conn)
 		{
-			err!(
+			say::err(&format!(
 				"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
 				crate::util::show_path(&self.db)
-			);
+			));
 		}
 		self.give_back();
 	}
@@ -681,6 +695,9 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 
 /// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
+	if let Some(l) = &o.log {
+		say::open_log(l)?;
+	}
 	let Plan {
 		groups: planned,
 		dropped,
@@ -688,7 +705,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mounts,
 	} = plan(&o.roots, &o.threads)?;
 	for d in &dropped {
-		err!("skipping root {d}");
+		say::err(&format!("skipping root {d}"));
 	}
 	// A mistyped root would leave a whole tree unread under a run that looks
 	// fine, and a mistyped --exclude or --no-xattr reads or writes where it was
@@ -697,11 +714,13 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		.iter()
 		.map(|(r, e)| format!("root {}: {e}", crate::util::show_path(r)))
 		.collect();
-	let excludes = resolve_each("--exclude", &o.excludes, &mut bad);
+	let mut excludes = resolve_each("--exclude", &o.excludes, &mut bad);
+	// It changes as the scan reads it.
+	excludes.extend(o.log.as_deref().and_then(|l| fs::canonicalize(l).ok()));
 	let no_xattr = resolve_each("--no-xattr", &o.no_xattr, &mut bad);
 	if !bad.is_empty() {
 		for b in &bad {
-			err!("can't resolve {b}");
+			say::err(&format!("can't resolve {b}"));
 		}
 		return Err("nothing scanned".into());
 	}
@@ -857,12 +876,18 @@ fn begin(
 	)
 	.map_err(e)?;
 	if o.mode == Mode::Verify {
-		out!("run {}: rereading files with a known checksum", r.id);
+		say::out(
+			&format!("run {}: rereading files with a known checksum", r.id),
+			Fit::Cut,
+		);
 	} else {
-		out!(
-			"run {}: files checksummed since {} are skipped",
-			r.id,
-			fmt_local(r.cutoff_us)
+		say::out(
+			&format!(
+				"run {}: files checksummed since {} are skipped",
+				r.id,
+				fmt_local(r.cutoff_us)
+			),
+			Fit::Cut,
 		);
 	}
 	Ok(r)
@@ -915,12 +940,18 @@ fn groups(
 		})
 		.collect();
 	for g in &groups {
-		out!("group {} with {} worker(s):", g.name, g.threads);
+		say::out(
+			&format!("group {} with {} worker(s):", g.name, g.threads),
+			Fit::Cut,
+		);
 		for r in &g.roots {
 			if let Some(h) = hands_off.get(r) {
-				out!("\t{} ({}, no attributes written)", r.display(), h.fstype);
+				say::out(
+					&format!("\t{} ({}, no attributes written)", r.display(), h.fstype),
+					Fit::Cut,
+				);
 			} else {
-				out!("\t{}", r.display());
+				say::out(&format!("\t{}", r.display()), Fit::Cut);
 			}
 		}
 	}
@@ -1029,12 +1060,17 @@ fn watch(groups: &[Arc<Group>], progress_secs: u64, t0: Instant) {
 			let secs = t0.elapsed().as_secs_f64().max(1.0);
 			for g in groups {
 				let rate = g.stats.bytes.load(Relaxed) as f64 / secs;
-				out!(
-					"[{}] {} {}/s | {}",
-					fmt_local(now_us()),
-					g.name,
-					human_bytes(rate as u64),
-					g.line()
+				// What a glance wants first, since a terminal cuts the rest.
+				let done = g.percent().map(|p| format!("{p}, ")).unwrap_or_default();
+				say::out(
+					&format!(
+						"[{}] {} {done}{}/s | {}",
+						fmt_local(now_us()),
+						g.name,
+						human_bytes(rate as u64),
+						g.stats.line()
+					),
+					Fit::Cut,
 				);
 			}
 		}
@@ -1094,18 +1130,24 @@ fn finish(
 	held.put_back(conn);
 	drop(held);
 
-	out!(
-		"run {run_id} {} after {}s\n{part}",
-		status.text(),
-		p.t0.elapsed().as_secs()
+	say::out(
+		&format!(
+			"run {run_id} {} after {}s\n{part}",
+			status.text(),
+			p.t0.elapsed().as_secs()
+		),
+		Fit::Break,
 	);
 	if !why.is_empty() {
 		why.dedup();
-		out!("Fix the cause, then continue it with the same command plus --resume.");
+		say::out(
+			"Fix the cause, then continue it with the same command plus --resume.",
+			Fit::Cut,
+		);
 		return Err(why.join("; "));
 	}
 	if stopped {
-		out!("Continue it with the same command plus --resume.");
+		say::out("Continue it with the same command plus --resume.", Fit::Cut);
 	}
 	// 2 adds to the others, so a stop says what was found before it.
 	Ok(exit_bits(counts.as_deref().unwrap_or_default()) | if stopped { 2 } else { 0 })
@@ -1235,7 +1277,10 @@ fn drop_excluded(
 				let Some(why) = why(r) else {
 					return true;
 				};
-				err!("skipping root {}: {why}", crate::util::show_path(r));
+				say::err(&format!(
+					"skipping root {}: {why}",
+					crate::util::show_path(r)
+				));
 				false
 			});
 			(!g.roots.is_empty()).then_some(g)
@@ -3351,6 +3396,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			progress_secs: 3600,
+			log: None,
 			args: "test".into(),
 		};
 		// A container may not see the disk under its folders.
@@ -3397,6 +3443,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			progress_secs: 3600,
+			log: None,
 			args: "test".into(),
 		};
 		if let Err(e) = run(&o, &Arc::new(AtomicBool::new(false))) {
@@ -3446,6 +3493,7 @@ mod tests {
 			write_xattrs: false,
 			rmlint: false,
 			progress_secs: 3600,
+			log: None,
 			args: "test".into(),
 		};
 		// The file format's read and write versions, 2 for WAL.

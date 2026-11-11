@@ -1240,6 +1240,13 @@ else
 	check df4r4 "attribute read error: accept reports it and leaves the set" "$(xescan "${bin}" accept --db "${xedb}" "${xe}/tree/f") $(grep -c "attributes couldn't be read" "${work}/xe.txt" || true)" "1 accepted ${xe}/tree/f, xattr-error ${xe}/tree/f keep 1"
 fi
 
+# 35. --log gets every line in full, and the log isn't read, though it's under
+# the root. Not a terminal here, so stdout has them in full too.
+lg="${work}/lg"; mkdir -p "${lg}/tree"
+printf 'log\n' > "${lg}/tree/f"
+rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --progress 3600 --log="${lg}/tree/scan.log" > "${lg}/out.txt" 2>&1 || rc=$?
+check df4xn "--log: the scan's lines in full, and the log not read" "${rc} $(cmp -s "${lg}/out.txt" "${lg}/tree/scan.log" && echo same) $(grep -oE 'files [0-9]+' "${lg}/tree/scan.log" | head -1)" "0 same files 1"
+
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
 else
@@ -1320,3 +1327,4 @@ fi
 ##		- 20261110: A second Ctrl+C's 130 and the killed run are checked, step
 ##		  30 tells a first scan that leaves no file from no user namespace,
 ##		  and the sweep reads only marks that are plain files.
+##		- 20261110: A folder scan's percent done, and --log.

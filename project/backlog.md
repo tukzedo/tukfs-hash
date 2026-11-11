@@ -29,6 +29,16 @@
 
 ## Issues
 
+- A --log made under sudo stays root's.
+	- ID: 2026111019430926
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-194309
+	- Opened by: 2026111019145405
+	- Related IDs: 2026111019145405
+	- Note: The database and its lock are handed back to SUDO_UID, but the log isn't, so a later scan by the user can't append to it. A link at the log's name is refused already (df4xq).
+
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -101,6 +111,7 @@
 	- Note: A scan shows `| ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
 	- Progress log:
 		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
+		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
 
 - A folder scan has no percent done.
 	- ID: 2026111019145393
@@ -131,7 +142,9 @@
 - Progress and summary lines wrap on a terminal, and there's no log of them in full.
 	- ID: 2026111019145405
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Waiting on UAT
+		- Run a scan in a narrow terminal, and judge the look. See the Decisions row.
+	- Needs hand testing: whether the progress, root and summary lines read well in 80 and 200 columns.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-191454
 	- Opened by: 2026111019070740
@@ -145,6 +158,21 @@
 	- Note: A progress line is about 200 characters today, and the summary line about 160.
 	- Note: tests/integration.bash greps `hashed N` and `files N` out of the summary line, and the demo's map matches `^\S+(?=: files \d+ hashed )`. Keep both working, or change them with the format.
 	- Estimated effort: Avg
+	- Actual effort: Avg
+	- Progress log:
+		- `src/say.rs` prints the scan's lines. On a terminal a progress or root line is cut to its width with `~`, and the summary is broken at its ` | ` marks, indented. A pipe or file gets them in full. stderr is never cut.
+		- A progress line now starts `[time] group ~N% of SIZE, RATE/s |`, so a cut keeps those. The summary line and what's stored in the database didn't change.
+		- `--log FILE` and `--log=FILE` append every line, stderr's included. The scan leaves the log out, and refuses a link at its name.
+		- 2026-11-10: `df1q3` (`each_command_takes_its_own_flags`) counts 31 command and option pairs, up from 30, for `--log`.
+		- Verified: `df4xn` and `df4xq` fail on the code from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. Seen on a pty at 80 and 100 columns.
+	- Decisions:
+		- `~` marks a cut, as the demo gif's renderer does, and stays ASCII.
+		- Only the scan's own lines are fitted. `report`, `gone` and `snapdiff` print one line per file for scripts, and a cut there would lose the path.
+		- stderr isn't cut, since it says what went wrong.
+		- The width is asked for each line, so a resized window is followed. A char counts as one column, and a tab to the next stop of 8.
+		- The demo pipes its output, so it isn't cut, and the gif changes only by 2026111019145393's percent.
+	- Swept: every `out!` and `err!` in `scan.rs` outside its tests, and every `Opts` built, in `main.rs`, `soak.rs` and 3 tests.
+	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902

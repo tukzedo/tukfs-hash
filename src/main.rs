@@ -21,6 +21,7 @@ mod beneath;
 mod db;
 mod gone;
 mod mounts;
+mod say;
 mod scan;
 mod snapdiff;
 #[cfg(all(test, feature = "soak"))]
@@ -77,6 +78,9 @@ scan options:
 	                    time, however recently, and compare. New and edited files
 	                    are left for the next full scan. Writes no attributes.
 	--progress SECS     Seconds between progress lines. Default 30.
+	--log FILE          Append every line the scan prints to FILE, in full. On a
+	                    terminal, a line too long for it is cut with a ~ at the
+	                    end, and a summary line is broken at its | marks.
 
 plan takes --threads as scan does, and shows the groups a scan would use.
 
@@ -182,7 +186,7 @@ fn takers(flag: &str) -> Option<&'static [&'static str]> {
 		"--db" => &["scan", "runs", "report", "gone", "accept", "prune"],
 		"--root" | "--threads" => &["scan", "plan"],
 		"--exclude" | "--no-xattr" | "--no-xattrs" | "--rmlint" | "--since" | "--resume"
-		| "--verify" | "--progress" => &["scan"],
+		| "--verify" | "--progress" | "--log" => &["scan"],
 		"--run" | "--limit" => &["report", "gone"],
 		"--kind" => &["report"],
 		"--old" | "--new" | "--zfs-diff" | "--mount" | "--find-new" | "--list" | "--all" => {
@@ -235,6 +239,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut write_xattrs = true;
 	let mut rmlint = false;
 	let mut progress = 30;
+	let mut log = None;
 	let mut run_id = None;
 	let mut kind = None;
 	let mut limit = 200;
@@ -256,6 +261,14 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				only_files = true;
 				continue;
 			}
+		}
+		// The one option that also takes --log=FILE.
+		if let Some(v) = arg.as_bytes().strip_prefix(b"--log=") {
+			if cmd != "scan" {
+				return Err(format!("{cmd} doesn't take --log; see --help"));
+			}
+			log = Some(p(OsStr::from_bytes(v)));
+			continue;
 		}
 		let a = arg.to_str().unwrap_or_default();
 		if a == "-h" || a == "--help" {
@@ -297,6 +310,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 			"--resume" => resume = true,
 			"--verify" => mode = scan::Mode::Verify,
+			"--log" => log = Some(p(take_value(&mut it, a)?)),
 			"--progress" => {
 				progress = take_text(&mut it, a)?
 					.parse()
@@ -369,6 +383,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
+					log,
 					args: arg_line(),
 				},
 				&stop,
@@ -669,6 +684,7 @@ mod tests {
 			"--resume",
 			"--verify",
 			"--progress",
+			"--log",
 			"--run",
 			"--kind",
 			"--limit",
@@ -697,7 +713,7 @@ mod tests {
 				);
 			}
 		}
-		assert_eq!(taken, 30);
+		assert_eq!(taken, 31);
 	}
 
 	#[test]
