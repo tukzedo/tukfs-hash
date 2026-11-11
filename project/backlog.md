@@ -98,7 +98,53 @@
 		- Lines should never wrap for being too long.
 			- One line per file.
 			- Lines can be arbitrarily long in logfile, e.g. `--log[=]<filespec>`.
-	- Note: A scan shows ` | ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
+	- Note: A scan shows `| ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
+	- Progress log:
+		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
+
+- A folder scan has no percent done.
+	- ID: 2026111019145393
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-191453
+	- Opened by: 2026111019070740
+	- Parent ID: 2026111019070740
+	- Requirements [Feature]:
+		- A group with a folder root shows `| ~N% of SIZE` on its progress and summary lines, as a whole filesystem does.
+	- Estimated effort: Low
+	- Actual effort: Low
+	- Progress log:
+		- A folder root's bytes are counted by a walk beside the scan, by the walk's rules. Whole filesystems keep their used space. design.md, "Runs and exit codes", says so.
+		- 2026-11-10: `df1pk` and `df4jb` call `size_parts` in place of `used_under`, and assert a folder comes back to be counted, where they asserted no size.
+		- Verified: `df4x7` and `df4x8` fail on the build from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas.
+	- Decisions:
+		- The count runs beside the scan rather than first, so the scan starts at once. Until it's done, the lines have no percent. A stop ends it.
+		- The summary waits for the count, so a short scan such as the demo always ends with its percent.
+		- Each name of a hard link counts its share, as a skipped one does, so the done part and the total match.
+		- The total keeps its `~`, since files change under a scan.
+	- Swept: every `Group` built, in `groups` and 2 tests, and every reader of its size. Nothing outside `scan.rs` reads it.
+	- Test case: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule. It reverses 2026110407135700's no percent for a folder, as this item's parent asks, so a `Check:` entry in questions.md gives the options.
+	- Closed: 20261110-192856
+
+- Progress and summary lines wrap on a terminal, and there's no log of them in full.
+	- ID: 2026111019145405
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-191454
+	- Opened by: 2026111019070740
+	- Parent ID: 2026111019070740
+	- Prereq IDs: 2026111019145393
+		- It changes the same lines, and adds the folder percent to them.
+	- Requirements [Feature]:
+		- The parent's "much nicer" output, its lines that never wrap, and its `--log[=]FILE`.
+		- On a terminal, each progress, summary and root line fits its width. Each file or root named takes one line, cut to fit.
+		- `--log FILE` gets every line in full, however long.
+	- Note: A progress line is about 200 characters today, and the summary line about 160.
+	- Note: tests/integration.bash greps `hashed N` and `files N` out of the summary line, and the demo's map matches `^\S+(?=: files \d+ hashed )`. Keep both working, or change them with the format.
+	- Estimated effort: Avg
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902

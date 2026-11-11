@@ -264,6 +264,9 @@ check ddx0j "no attributes inside .git" "$(xget "${tree}/repo/.git/objects/ab" u
 check ddx0k "git files still recorded" "$(q "SELECT count(*) FROM paths WHERE path LIKE '%/repo/%'")" 2
 check ddx0m "non-UTF-8 name stored as blob" "$(q "SELECT count(*) FROM paths WHERE typeof(path) = 'blob'")" "${odd}"
 check ddx0n "current rmlint blake2b verified" "$(grep -o 'b2b [0-9]*' "${work}/out.txt" | head -1)" "b2b 1"
+# A folder's bytes are counted beside the scan, so it ends at 100.
+pct() { grep -oE '[|] ~[0-9]+% of [^|]+$' "${work}/out.txt" | tail -1 | grep -oE '~[0-9]+%'; }
+check df4x7 "folder scan's percent done" "$(pct)" "~100%"
 check ddx0p "blake2b stored for it" "$(q "SELECT count(*) FROM files WHERE b2b IS NOT NULL")" 1
 check ddx0q "nothing outside the root" "$(q "SELECT count(*) FROM paths WHERE CAST(path AS TEXT) NOT LIKE '${tree}/%'")" 0
 check ddx0r "no events" "$(q 'SELECT count(*) FROM events')" 0
@@ -280,6 +283,7 @@ check ddx0t "database left in rollback mode" "$(q 'PRAGMA journal_mode')" delete
 rc="$(scan)"
 check ddx0v "second scan exit" "${rc}" 0
 check ddx0w "second scan hashed nothing" "$(grep -o 'hashed [0-9]*' "${work}/out.txt" | head -1)" "hashed 0"
+check df4x8 "folder skipped whole is done too" "$(pct)" "~100%"
 
 # 3. Change bytes, put the time back. All 3 references must notice.
 digest_of() { q "SELECT hex(f.b3) FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = '${1}'"; }
