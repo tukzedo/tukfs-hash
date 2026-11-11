@@ -145,13 +145,24 @@
 - An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
 	- ID: 2026111011092319
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 20
 	- Origin: `f05c368`, before the last review. Plausible, since no attribute EIO could be made here.
 	- Requirements [Feature]: The error is an event, and that file gets no attributes written.
 	- Note: The comment on `OnFile::read` chooses this. design.md's `db-error` rule refuses the same trade for a database lookup, since it would overwrite the row unseen.
+	- Decisions:
+		- `OnFile::read` returns the error, with the attribute's name. A scan logs it as `xattr-error`, still reads the file and checks it against its database row, and writes no attributes. design.md, "Mismatches", says so.
+		- No exit bit, as for a failed write, since the file is still read and recorded. A `Check:` entry in questions.md has the other options.
+		- Every read error is an event, with no cap of 20 as writes have, since each one is that file's own.
+		- `accept` takes the file in the database, logs `xattr-error`, and exits 1 with "its attributes couldn't be read, so they were left alone", as it does for a failed write.
+	- Branch: round-20261110b
+	- Test case: df4r3 and df4r4 in step 34 of `tests/integration.bash`, through step 33's shim, which now also fails `fgetxattr` for one file. Unit test df4r2 `an_unreadable_set_is_an_error`.
+	- Verified: df4r3 and df4r4 failed on the unfixed build, with the set written over and no event, and pass after, on ext4, and on ZFS in the quick gate. The quick gate, Miri and codeql-ours pass.
+	- Swept: every `OnFile::read` caller, `scan::Worker::one_file` and `accept::one`, and the tests. `fget` has no other caller outside tests. The Claim::Done path for other hard-link names writes no attributes.
+	- Acceptance signoff: Self-closed per memory.md's close policy.
+	- Closed: 20261110-164642
 
 - snapdiff keeps every run of differing bytes, so its memory grows with the file.
 	- ID: 2026111011092322

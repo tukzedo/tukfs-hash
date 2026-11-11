@@ -1941,7 +1941,17 @@ impl<'a> Worker<'a> {
 				.claim((before.dev(), before.ino()), before.nlink(), bytes, mt)
 		});
 		let fd = file.as_raw_fd();
-		let onfile = OnFile::read(fd);
+		// Unlike a write's, a read's error is the file's own, such as an EIO,
+		// so each one is an event. Taking it for no set would write over the
+		// set unseen.
+		let (onfile, set_unread) = match OnFile::read(fd) {
+			Ok(of) => (of, false),
+			Err(e) => {
+				self.g.stats.xattr_fail.fetch_add(1, Relaxed);
+				event(self.sh, Kind::XattrError, &job.path, e.to_string());
+				(OnFile::default(), true)
+			}
+		};
 		let hands_off = self.sh.no_write_devs.contains(&before.dev());
 		let refs = Refs::new(&onfile, prior, &before, hands_off);
 		if self.skip_unread(job, prior, &refs, &onfile, &before) {
@@ -1957,7 +1967,10 @@ impl<'a> Worker<'a> {
 		// Once nothing more can be recorded, an attribute would vouch for a read
 		// the database never got.
 		let pbytes = job.path.as_os_str().as_bytes();
-		if send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) && !sh.faults.any.load(Relaxed) {
+		if send(sh, hashed_msg(pbytes, &sums, &before, hashed_us))
+			&& !sh.faults.any.load(Relaxed)
+			&& !set_unread
+		{
 			self.write_attrs(job, &refs, &sums, fd, &before, hashed_us);
 		}
 		if let Some(c) = claim {
@@ -2774,7 +2787,11 @@ mod tests {
 		read_one(&g, &sh, &job(&r, "other"), &Links::default());
 		drop(sh);
 		drain.join().unwrap();
-		let b3 = |name: &str| OnFile::read(File::open(d.join(name)).unwrap().as_raw_fd()).b3;
+		let b3 = |name: &str| {
+			OnFile::read(File::open(d.join(name)).unwrap().as_raw_fd())
+				.unwrap()
+				.b3
+		};
 		if b3("plain").is_none() {
 			eprintln!("no user xattrs here; skipped");
 			return;
@@ -3482,7 +3499,7 @@ mod tests {
 		assert_eq!(g.stats.xattr_set.load(Relaxed), control);
 		assert_eq!(g.stats.xattr_fail.load(Relaxed), 0);
 		let fd = File::open(d.join("b")).unwrap();
-		assert!(OnFile::read(fd.as_raw_fd()).b3.is_none());
+		assert!(OnFile::read(fd.as_raw_fd()).unwrap().b3.is_none());
 		if control == 0 {
 			eprintln!("no user xattrs here; the control proves nothing");
 		}
@@ -3558,7 +3575,7 @@ mod tests {
 		read_one(&g, &sh, &known(&r, "f", &taken), &Links::default());
 		assert_eq!(g.stats.mismatch.load(Relaxed), 0);
 		assert_eq!(g.stats.hashed.load(Relaxed), 1);
-		assert_eq!(OnFile::read(raw).b3, Some(*old.as_bytes()));
+		assert_eq!(OnFile::read(raw).unwrap().b3, Some(*old.as_bytes()));
 		let unrecorded = test_group(&d);
 		read_one(&unrecorded, &sh, &job(&r, "f"), &Links::default());
 		assert_eq!(unrecorded.stats.mismatch.load(Relaxed), 1);
@@ -3587,7 +3604,7 @@ mod tests {
 		let r = Arc::new(Root::open(&d).unwrap());
 		read_one(&g, &sh, &job(&r, "a"), &Links::default());
 		assert_eq!(g.stats.xattr_set.load(Relaxed), 1);
-		let on = OnFile::read(fd.as_raw_fd());
+		let on = OnFile::read(fd.as_raw_fd()).unwrap();
 		assert_eq!(on.b3, Some(*blake3::hash(b"synced").as_bytes()));
 		assert_eq!(
 			xattr::fget(fd.as_raw_fd(), dbx).unwrap().as_deref(),
@@ -3627,7 +3644,9 @@ mod tests {
 		let b2b = |f: &str| -> [u8; 64] { *blake2b_simd::blake2b(f.as_bytes()).as_array() };
 		let now = |f: &str| {
 			let file = fd(f);
-			OnFile::read(file.as_raw_fd()).b2b_current(mtime_s(&file.metadata().unwrap()))
+			OnFile::read(file.as_raw_fd())
+				.unwrap()
+				.b2b_current(mtime_s(&file.metadata().unwrap()))
 		};
 		assert_eq!(go(&sh, job(&r, "plain")), None);
 		assert_eq!(now("plain"), None);

@@ -104,6 +104,8 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 
 - A database lookup that fails for any reason but a missing row is a `db-error` event, and the file isn't recorded. Taking such a failure for "no record" would overwrite the row unseen.
 
+- An attribute that can't be read, for any reason but a missing name or a filesystem that doesn't have them, is an `xattr-error` event, and the file doesn't get any attributes written. Taking it for "no set" would write over the set unseen, the same as with a row. The file is still read and recorded, and checked against its database row, and `accept` takes it in the database but leaves the attributes alone. Unlike write errors, every read error is an event, since each one is that file's own.
+
 ## Skipping
 
 - A file is skipped when the database or its attributes show it was read on or after the skip date with the same size, time, and inode. The default skip date is the start of today, so a rerun the same day is cheap, and a run on a later day reads everything again and compares.
@@ -171,7 +173,7 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 	| `unstable`, `xattr-error`                                                                    | none
 	| a kind this version doesn't know                                                             | 8
 
-- `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make the bit meaningless. `xattr-error` doesn't set one either, since the attribute write comes after the file was checked.
+- `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make the bit meaningless. `xattr-error` doesn't set one either. An attribute write comes after the file was checked, and a file whose attributes can't be read is still checked against its database row.
 
 - A folder that can't be listed, or stops listing part way, is a `dir-error`. The files in it aren't seen at all, so there isn't anything else to count them by.
 

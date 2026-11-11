@@ -1093,11 +1093,12 @@ cat > "${er}/eio.c" << 'EOF'
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
-// Whether fd is open on a path that ends in EIO_NAME.
-static int bad(int fd) {
-	const char *want = getenv("EIO_NAME");
+// Whether fd is open on a path that ends in the value of env.
+static int named(int fd, const char *env) {
+	const char *want = getenv(env);
 	char link[64], got[4096];
 	if (!want) return 0;
 	snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
@@ -1106,6 +1107,16 @@ static int bad(int fd) {
 	got[n] = 0;
 	size_t w = strlen(want);
 	return (size_t)n >= w && strcmp(got + n - w, want) == 0;
+}
+
+static int bad(int fd) { return named(fd, "EIO_NAME"); }
+
+// Step 34's: every attribute of EIO_XATTR_NAME fails to read.
+ssize_t fgetxattr(int fd, const char *name, void *value, size_t size) {
+	static ssize_t (*real)(int, const char *, void *, size_t);
+	if (!real) real = dlsym(RTLD_NEXT, "fgetxattr");
+	if (named(fd, "EIO_XATTR_NAME")) { errno = EIO; return -1; }
+	return real(fd, name, value, size);
 }
 
 ssize_t read(int fd, void *buf, size_t count) {
@@ -1140,6 +1151,28 @@ else
 	check df4ep "read error: --verify reports it" "$(erscan shim --verify)" "4 1 hashed 1"
 	check df4eq "read error: reported again on a plain run the same day" "$(erscan shim)" "4 1 hashed 0"
 	check df4er "read error: a clean read closes it" "$(erscan plain) $(erscan plain)" "0 0 hashed 1 0 0 hashed 0"
+fi
+
+# 34. An attribute that can't be read is an xattr-error, and the set it may
+# be is left alone rather than written over, by a scan or by accept. The same
+# shim fails the attribute reads of one file.
+xe="${work}/xe"; mkdir -p "${xe}/tree"
+printf 'xattr eio\n' > "${xe}/tree/f"
+xedb="${work}/db/xe.sqlite"
+# xescan [ARGS...]: the exit code, the run's events and the file's blake3.
+xescan() {
+	local rc=0
+	env "LD_PRELOAD=${er}/eio.so" "EIO_XATTR_NAME=/xe/tree/f" "${@}" > "${work}/xe.txt" 2>&1 || rc=$?
+	echo "${rc} $(sqlite3 "${xedb}" "SELECT group_concat(kind || ' ' || path, ', ') FROM events WHERE run_id = (SELECT max(id) FROM runs)") $(xget "${xe}/tree/f" user.blake3.b64u)"
+}
+if [[ ! -f "${er}/eio.so" ]]; then
+	skip df4r3 "attribute read error: a scan reports it and leaves the set (no C compiler for the shim)"
+	skip df4r4 "attribute read error: accept reports it and leaves the set (no C compiler for the shim)"
+else
+	"${bin}" scan --db "${xedb}" --root "${xe}/tree" --progress 3600 > /dev/null 2>&1
+	setfattr -n user.blake3.b64u -v keep "${xe}/tree/f"
+	check df4r3 "attribute read error: a scan reports it and leaves the set" "$(xescan "${bin}" scan --db "${xedb}" --root "${xe}/tree" --progress 3600 --since "${tomorrow}")" "0 xattr-error ${xe}/tree/f keep"
+	check df4r4 "attribute read error: accept reports it and leaves the set" "$(xescan "${bin}" accept --db "${xedb}" "${xe}/tree/f") $(grep -c "attributes couldn't be read" "${work}/xe.txt" || true)" "1 accepted ${xe}/tree/f, xattr-error ${xe}/tree/f keep 1"
 fi
 
 if [[ "${fails}" -eq 0 ]]; then
@@ -1217,3 +1250,5 @@ fi
 ##		  reported again until it reads clean.
 ##		- 20261110: snapdiff counts a file born after a read-only --old as new,
 ##		  with no inode walk.
+##		- 20261110: An attribute that can't be read is reported, and the set is
+##		  left alone by scan and accept.
