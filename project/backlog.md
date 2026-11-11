@@ -29,30 +29,60 @@
 
 ## Issues
 
-- A --log made under sudo stays root's.
-	- ID: 2026111019430926
+- Pre-next-cut: Make CLI output much nicer, and show progress %.
+	- ID: 2026111019070740
 	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261110-194309
-	- Opened by: 2026111019145405
-	- Related IDs: 2026111019145405, 2026111011092301
-	- Note: The database and its lock are handed back to SUDO_UID, but the log isn't, so a later scan by the user can't append to it. A link at the log's name is refused already (df4xq).
-	- Actual effort: Low
+	- Status: Waiting on UAT
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-190707
+	- Opened by: user
+	- Requirements [Feature]:
+		- Make CLI output much nicer.
+		- Show progress %.
+		- Lines should never wrap for being too long.
+			- One line per file.
+			- Lines can be arbitrarily long in logfile, e.g. `--log[=]<filespec>`.
+	- Note: A scan shows `| ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
 	- Progress log:
-		- `say::open_log` takes the sudo ids. It makes the log with `O_EXCL` through the folder's fd, and hands only a log it made to SUDO_UID, right away with `fchown`. One already there is opened for append and keeps its owner.
-		- Under sudo the log's folder goes through the same check as the database's, `scan::open_dir`, which now takes what it's for in its messages.
-		- design.md, Database, and README, Usage, say so.
+		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
+		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
+		- 20261110: children 2026111019145405 wait on UAT, and the rest are closed
+	- Test case: its children's: 2026111019145393: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.; 2026111019145405: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
+
+- Progress and summary lines wrap on a terminal, and there's no log of them in full.
+	- ID: 2026111019145405
+	- Type: Enhancement
+	- Status: Waiting on UAT
+		- Run a scan in a narrow terminal, and judge the look. See the Decisions row.
+	- Needs hand testing: whether the progress, root and summary lines read well in 80 and 200 columns.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-191454
+	- Opened by: 2026111019070740
+	- Parent ID: 2026111019070740
+	- Prereq IDs: 2026111019145393
+		- It changes the same lines, and adds the folder percent to them.
+	- Requirements [Feature]:
+		- The parent's "much nicer" output, its lines that never wrap, and its `--log[=]FILE`.
+		- On a terminal, each progress, summary and root line fits its width. Each file or root named takes one line, cut to fit.
+		- `--log FILE` gets every line in full, however long.
+	- Note: A progress line is about 200 characters today, and the summary line about 160.
+	- Note: tests/integration.bash greps `hashed N` and `files N` out of the summary line, and the demo's map matches `^\S+(?=: files \d+ hashed )`. Keep both working, or change them with the format.
+	- Estimated effort: Avg
+	- Actual effort: Avg
+	- Progress log:
+		- `src/say.rs` prints the scan's lines. On a terminal a progress or root line is cut to its width with `~`, and the summary is broken at its ` | ` marks, indented. A pipe or file gets them in full. stderr is never cut.
+		- A progress line now starts `[time] group ~N% of SIZE, RATE/s |`, so a cut keeps those. The summary line and what's stored in the database didn't change.
+		- `--log FILE` and `--log=FILE` append every line, stderr's included. The scan leaves the log out, and refuses a link at its name.
+		- 2026-11-10: `df1q3` (`each_command_takes_its_own_flags`) counts 31 command and option pairs, up from 30, for `--log`.
+		- Verified: `df4xn` and `df4xq` fail on the code from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. Seen on a pty at 80 and 100 columns.
 	- Decisions:
-		- Only a log the scan made is handed over, so a root log, such as one under `/var/log`, doesn't become the user's. A log an older build made under sudo stays root's until the user removes it.
-		- The log's folder has to be the user's or root's under sudo, as answered for the database. Without it, the hand-back would let a link at the folder have root make a file in another user's folder and give it to the user.
-		- A link at the log's name now reads "is a symbolic link; refused", as the lock's does.
-	- Swept: every caller of `open_log` (only `scan::run`) and of `open_dir` (`Held::take_as` and 5 tests). Only `scan` takes `--log`.
-	- Branch: round-20261111
-	- Test case: `df4y3` (`a_log_is_made_only_once`), `df4y4` (`a_log_folder_not_the_users_is_refused`), with `df4xq` and integration `df4xn` still passing. The root case is `sudo-log-standin.bash` in the private tools folder, which failed 4 of 8 checks on the build before and passes all 8.
-	- Verified: `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. As uid 0 in a user namespace with SUDO_UID set, a new log in the user's or root's folder was the user's, an old one kept its owner and was added to, a link at the folder to another user's folder and a link at the name were refused with nothing made, and a `sudo -u` style run gave no warning.
-	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
-	- Closed: 20261110-195616
+		- `~` marks a cut, as the demo gif's renderer does, and stays ASCII.
+		- Only the scan's own lines are fitted. `report`, `gone` and `snapdiff` print one line per file for scripts, and a cut there would lose the path.
+		- stderr isn't cut, since it says what went wrong.
+		- The width is asked for each line, so a resized window is followed. A char counts as one column, and a tab to the next stop of 8.
+		- The demo pipes its output, so it isn't cut, and the gif changes only by 2026111019145393's percent.
+	- Swept: every `out!` and `err!` in `scan.rs` outside its tests, and every `Opts` built, in `main.rs`, `soak.rs` and 3 tests.
+	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
 
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
@@ -109,87 +139,6 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
-
-- Pre-next-cut: Make CLI output much nicer, and show progress %.
-	- ID: 2026111019070740
-	- Type: Enhancement
-	- Status: Waiting on UAT
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-190707
-	- Opened by: user
-	- Requirements [Feature]:
-		- Make CLI output much nicer.
-		- Show progress %.
-		- Lines should never wrap for being too long.
-			- One line per file.
-			- Lines can be arbitrarily long in logfile, e.g. `--log[=]<filespec>`.
-	- Note: A scan shows `| ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
-	- Progress log:
-		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
-		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
-		- 20261110: children 2026111019145405 wait on UAT, and the rest are closed
-	- Test case: its children's: 2026111019145393: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.; 2026111019145405: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
-
-- A folder scan has no percent done.
-	- ID: 2026111019145393
-	- Type: Enhancement
-	- Status: Done
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-191453
-	- Opened by: 2026111019070740
-	- Parent ID: 2026111019070740
-	- Requirements [Feature]:
-		- A group with a folder root shows `| ~N% of SIZE` on its progress and summary lines, as a whole filesystem does.
-	- Estimated effort: Low
-	- Actual effort: Low
-	- Progress log:
-		- A folder root's bytes are counted by a walk beside the scan, by the walk's rules. Whole filesystems keep their used space. design.md, "Runs and exit codes", says so.
-		- 2026-11-10: `df1pk` and `df4jb` call `size_parts` in place of `used_under`, and assert a folder comes back to be counted, where they asserted no size.
-		- Verified: `df4x7` and `df4x8` fail on the build from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas.
-	- Decisions:
-		- The count runs beside the scan rather than first, so the scan starts at once. Until it's done, the lines have no percent. A stop ends it.
-		- The summary waits for the count, so a short scan such as the demo always ends with its percent.
-		- Each name of a hard link counts its share, as a skipped one does, so the done part and the total match.
-		- The total keeps its `~`, since files change under a scan.
-	- Swept: every `Group` built, in `groups` and 2 tests, and every reader of its size. Nothing outside `scan.rs` reads it.
-	- Test case: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.
-	- Acceptance signoff: Self-closed under the 2026-10-14 rule. It reverses 2026110407135700's no percent for a folder, as this item's parent asks, so a `Check:` entry in questions.md gives the options.
-	- Closed: 20261110-192856
-
-- Progress and summary lines wrap on a terminal, and there's no log of them in full.
-	- ID: 2026111019145405
-	- Type: Enhancement
-	- Status: Waiting on UAT
-		- Run a scan in a narrow terminal, and judge the look. See the Decisions row.
-	- Needs hand testing: whether the progress, root and summary lines read well in 80 and 200 columns.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-191454
-	- Opened by: 2026111019070740
-	- Parent ID: 2026111019070740
-	- Prereq IDs: 2026111019145393
-		- It changes the same lines, and adds the folder percent to them.
-	- Requirements [Feature]:
-		- The parent's "much nicer" output, its lines that never wrap, and its `--log[=]FILE`.
-		- On a terminal, each progress, summary and root line fits its width. Each file or root named takes one line, cut to fit.
-		- `--log FILE` gets every line in full, however long.
-	- Note: A progress line is about 200 characters today, and the summary line about 160.
-	- Note: tests/integration.bash greps `hashed N` and `files N` out of the summary line, and the demo's map matches `^\S+(?=: files \d+ hashed )`. Keep both working, or change them with the format.
-	- Estimated effort: Avg
-	- Actual effort: Avg
-	- Progress log:
-		- `src/say.rs` prints the scan's lines. On a terminal a progress or root line is cut to its width with `~`, and the summary is broken at its ` | ` marks, indented. A pipe or file gets them in full. stderr is never cut.
-		- A progress line now starts `[time] group ~N% of SIZE, RATE/s |`, so a cut keeps those. The summary line and what's stored in the database didn't change.
-		- `--log FILE` and `--log=FILE` append every line, stderr's included. The scan leaves the log out, and refuses a link at its name.
-		- 2026-11-10: `df1q3` (`each_command_takes_its_own_flags`) counts 31 command and option pairs, up from 30, for `--log`.
-		- Verified: `df4xn` and `df4xq` fail on the code from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. Seen on a pty at 80 and 100 columns.
-	- Decisions:
-		- `~` marks a cut, as the demo gif's renderer does, and stays ASCII.
-		- Only the scan's own lines are fitted. `report`, `gone` and `snapdiff` print one line per file for scripts, and a cut there would lose the path.
-		- stderr isn't cut, since it says what went wrong.
-		- The width is asked for each line, so a resized window is followed. A char counts as one column, and a tab to the next stop of 8.
-		- The demo pipes its output, so it isn't cut, and the gif changes only by 2026111019145393's percent.
-	- Swept: every `out!` and `err!` in `scan.rs` outside its tests, and every `Opts` built, in `main.rs`, `soak.rs` and 3 tests.
-	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1669,6 +1618,32 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 	- Closed: 20261015-130151
+
+- A folder scan has no percent done.
+	- ID: 2026111019145393
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-191453
+	- Opened by: 2026111019070740
+	- Parent ID: 2026111019070740
+	- Requirements [Feature]:
+		- A group with a folder root shows `| ~N% of SIZE` on its progress and summary lines, as a whole filesystem does.
+	- Estimated effort: Low
+	- Actual effort: Low
+	- Progress log:
+		- A folder root's bytes are counted by a walk beside the scan, by the walk's rules. Whole filesystems keep their used space. design.md, "Runs and exit codes", says so.
+		- 2026-11-10: `df1pk` and `df4jb` call `size_parts` in place of `used_under`, and assert a folder comes back to be counted, where they asserted no size.
+		- Verified: `df4x7` and `df4x8` fail on the build from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas.
+	- Decisions:
+		- The count runs beside the scan rather than first, so the scan starts at once. Until it's done, the lines have no percent. A stop ends it.
+		- The summary waits for the count, so a short scan such as the demo always ends with its percent.
+		- Each name of a hard link counts its share, as a skipped one does, so the done part and the total match.
+		- The total keeps its `~`, since files change under a scan.
+	- Swept: every `Group` built, in `groups` and 2 tests, and every reader of its size. Nothing outside `scan.rs` reads it.
+	- Test case: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.
+	- Acceptance signoff: Self-closed under the 2026-10-14 rule. It reverses 2026110407135700's no percent for a folder, as this item's parent asks, so a `Check:` entry in questions.md gives the options.
+	- Closed: 20261110-192856
 
 - snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
 	- ID: 2026111011092305
@@ -4017,6 +3992,31 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- A --log made under sudo stays root's.
+	- ID: 2026111019430926
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-194309
+	- Opened by: 2026111019145405
+	- Related IDs: 2026111019145405, 2026111011092301
+	- Note: The database and its lock are handed back to SUDO_UID, but the log isn't, so a later scan by the user can't append to it. A link at the log's name is refused already (df4xq).
+	- Actual effort: Low
+	- Progress log:
+		- `say::open_log` takes the sudo ids. It makes the log with `O_EXCL` through the folder's fd, and hands only a log it made to SUDO_UID, right away with `fchown`. One already there is opened for append and keeps its owner.
+		- Under sudo the log's folder goes through the same check as the database's, `scan::open_dir`, which now takes what it's for in its messages.
+		- design.md, Database, and README, Usage, say so.
+	- Decisions:
+		- Only a log the scan made is handed over, so a root log, such as one under `/var/log`, doesn't become the user's. A log an older build made under sudo stays root's until the user removes it.
+		- The log's folder has to be the user's or root's under sudo, as answered for the database. Without it, the hand-back would let a link at the folder have root make a file in another user's folder and give it to the user.
+		- A link at the log's name now reads "is a symbolic link; refused", as the lock's does.
+	- Swept: every caller of `open_log` (only `scan::run`) and of `open_dir` (`Held::take_as` and 5 tests). Only `scan` takes `--log`.
+	- Branch: round-20261111
+	- Test case: `df4y3` (`a_log_is_made_only_once`), `df4y4` (`a_log_folder_not_the_users_is_refused`), with `df4xq` and integration `df4xn` still passing. The root case is `sudo-log-standin.bash` in the private tools folder, which failed 4 of 8 checks on the build before and passes all 8.
+	- Verified: `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. As uid 0 in a user namespace with SUDO_UID set, a new log in the user's or root's folder was the user's, an old one kept its owner and was added to, a link at the folder to another user's folder and a link at the name were refused with nothing made, and a `sudo -u` style run gave no warning.
+	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261110-195616
 
 - CodeQL has no run short enough for a worker, so round code reaches it only at the gate step.
 	- ID: 2026111015123269
