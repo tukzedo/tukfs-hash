@@ -85,6 +85,19 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
+- Pre-next-cut: Make CLI output much nicer, and show progress %.
+	- ID: 2026111019070740
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-190707
+	- Opened by: user
+	- Requirements [Feature]:
+		- Make CLI output much nicer.
+		- Show progress %.
+		- Lines should never wrap for being too long.
+	- Note: A scan shows ` | ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
