@@ -98,7 +98,7 @@
 - Pre-next-cut: Make CLI output much nicer, and show progress %.
 	- ID: 2026111019070740
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Waiting on UAT
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-190707
 	- Opened by: user
@@ -112,6 +112,8 @@
 	- Progress log:
 		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
 		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
+		- 20261110: children 2026111019145405 wait on UAT, and the rest are closed
+	- Test case: its children's: 2026111019145393: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.; 2026111019145405: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
 
 - A folder scan has no percent done.
 	- ID: 2026111019145393
