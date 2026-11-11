@@ -103,14 +103,30 @@
 - CodeQL has no run short enough for a worker, so round code reaches it only at the gate step.
 	- ID: 2026111015123269
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-151232
 	- Opened by: round-20261110 gate step
 	- Requirements [Feature]: A CodeQL run under about 4 minutes over the crate's own code, such as a cached database for the vendored crates, or a note on why there can't be one.
 	- Estimated effort: Avg
+	- Actual effort: Avg
 	- Progress log:
 		- 2026-11-10: the gate step's codeql area found a rust/cleartext-logging false positive in test df4kq from 63957eb, which 51c258f suppressed. The area took 14m 20s at load 23.
+		- 2026-11-10: That run's logs: building the database took 7 minutes, 3m 35s of it rust-analyzer loading the vendored crates' full source, and the analysis 5m 16s over 1,880 files.
+		- 2026-11-10: `codeql-scan.bash --ours` leaves the crates in the cargo home, so only their signatures are extracted, and reports only on our code. Bait, file and crate root checks and suppressions are as before. `cicd/codeql/vendored-reviewed.tsv` isn't read. Output goes in `cicd/artifacts/codeql-ours/`. `--backlog-run-quick codeql-ours` runs it, and no other run does.
+		- 2026-11-10: An area whose text starts with `+` runs that text as its own leak check. Kept steps are now matched whole, since `codeql-ours codeql` lost the full step to the old substring check.
+		- 2026-11-10: Verified: `--ours` alone took 2m 40s wall at load 10 to 15, the database in about 1 minute. `--backlog-run-quick codeql-ours` passed in 2m 30s at load 12. Its findings in our code match the full run's SARIF: the suppressed df4kq line and the bait.
+		- 2026-11-10: Verified: the private `cicd-flags-check.bash` passes, 62 cases, and fails 6 of its new ones on the code from before. `--backlog-run-quick` passed in 2m 32s. `leak-lengths-check.bash` and `cicd-steps-check.bash` pass. A bad argument exits 2, and no image or tool is still a noted skip.
+		- 2026-11-10: Verified: the full scan, with no option, still passes, in 10m 34s at load 4 to 9, with 26 crate findings reviewed and no row stale.
+	- Decisions:
+		- Library mode rather than a cached database. CodeQL can't add our code to a saved database, and the crates' source was most of both phases. It's how CodeQL's default setup reads a Rust project.
+		- It doesn't replace the full scan. A finding in a crate, or one in our code whose flow runs through a crate's own code, shows up only there, so the gate step still runs `codeql`.
+		- An area of its own, rather than a flag, so a worker runs it the way it runs the other gates.
+	- Swept: every `codeql-scan.bash` caller in `cicd/`, `tests/`, the docs and the private tools, the leak step matching in `cicd.bash`, and the private checks that read `BACKLOG_AREAS`. `gate-record-check.bash` calls the scan with no argument, which is unchanged.
+	- Branch: round-20261110b
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). The private `cicd-flags-check.bash REPO`, its codeql-ours cases. The scan's own bait shows the mode reports on our code.
+	- Acceptance signoff: Self-closed per memory.md's close policy.
+	- Closed: 20261110-160844
 
 - An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
 	- ID: 2026111011092319

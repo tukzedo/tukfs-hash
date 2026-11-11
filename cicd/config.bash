@@ -283,8 +283,9 @@ GIF_ROTATE_DIR="${root}/../private/demo/gif"
 GIF_CMD='cicd/utility/demo-gif.bash "${release_dir}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
 
 ## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
-## A leak area keeps each leak check its text is in. With no area named it's
-## fmt, build, lint, unit and it.
+## A leak area keeps each leak check its text is in, and one whose text
+## starts with + runs that text as a leak check of its own, which no other
+## run has. With no area named it's fmt, build, lint, unit and it.
 BACKLOG_AREAS=(
 	"fmt||the format check"
 	"build||the debug build"
@@ -299,6 +300,7 @@ BACKLOG_AREAS=(
 	"miri|--miri|the unit tests under Miri"
 	"fuzz|fuzz.bash 20|the parser fuzz tests, 20 s each"
 	"codeql|codeql|CodeQL, about 11 minutes"
+	"codeql-ours|+cicd/utility/codeql-scan.bash --ours|CodeQL over our code alone, about 3 minutes"
 	"profile||the profiler"
 	"release||the release builds, packages and release checks"
 	"remote||the arm64 tests on vmDebARM64, with the release builds they need"

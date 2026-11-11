@@ -332,7 +332,7 @@ if ((gate_mode)); then
 		GIF_ENABLE=0; fOffWhy "${mode_flag}" gif
 		## Only what's named, when anything is. Each name is an area in
 		## config.bash, and a leak area keeps the leak checks its text is in.
-		_known=" "; _leakKept=()
+		_known=" "; _leakKept=(); _leakOwn=(); declare -A _keptSet=()
 		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
 		## The step each area runs in, so an area named with the --no- option
 		## that takes that step out is refused. off_why has only the options
@@ -348,12 +348,17 @@ if ((gate_mode)); then
 				if [[ -z "${_off}" && -n "${_pat}" ]] && ((no_leakcheck)); then _off="--no-leakcheck"; fi
 				if [[ -n "${_off}" ]]; then echo "--backlog-run-quick: area ${_name} and ${_off} can't go together (try --help)" >&2; exit 2; fi
 				[[ -n "${_pat}" ]] || continue
-				_matched=0; _codeql=0
-				for _step in "${LEAKCHECK_STEPS[@]}"; do
+				_matched=0; _codeql=0; _steps=("${LEAKCHECK_STEPS[@]}")
+				## A + area's step is its text, and matches nothing else.
+				if [[ "${_pat}" == +* ]]; then
+					_pat="${_pat#+}"; _steps=("${_pat}")
+					[[ -n "${_keptSet["${_pat}"]:-}" ]] || _leakOwn+=("${_pat}")
+				fi
+				for _step in "${_steps[@]}"; do
 					[[ "${_step}" == *"${_pat}"* ]] || continue
 					_matched=$((_matched + 1))
 					if [[ "${_step,,}" == *codeql* ]]; then _codeql=$((_codeql + 1)); fi
-					if [[ " ${_leakKept[*]} " != *" ${_step} "* ]]; then _leakKept+=("${_step}"); fi
+					if [[ -z "${_keptSet["${_step}"]:-}" ]]; then _keptSet["${_step}"]=1; _leakKept+=("${_step}"); fi
 				done
 				if ((no_codeql && _matched && _codeql == _matched)); then echo "--backlog-run-quick: area ${_name} and --no-codeql can't go together (try --help)" >&2; exit 2; fi
 			done
@@ -368,7 +373,8 @@ if ((gate_mode)); then
 			[[ "${_named}" == *" lint "* ]]  || { lint_off=1; fOffWhy "${_unnamed}" lint; }
 			[[ "${_named}" == *" unit "* ]]  || unit_off=1
 			[[ "${_named}" == *" it "* ]]    || it_off=1
-			((leakcheck_flag)) || LEAKCHECK_STEPS=("${_leakKept[@]}")
+			## --leakcheck keeps every leak check, and adds the + areas' own.
+			if ((leakcheck_flag)); then LEAKCHECK_STEPS+=("${_leakOwn[@]}"); else LEAKCHECK_STEPS=("${_leakKept[@]}"); fi
 		elif ((! leakcheck_flag)); then
 			LEAKCHECK_STEPS=()
 		fi

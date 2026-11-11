@@ -316,6 +316,8 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 
 - CodeQL runs over a copy of the tree with every crate vendored and its full source extracted. A finding in a crate counts only when it comes from a security or correctness query, and only in code that's built into the release binary. Findings that were looked at and aren't bugs are listed in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there would be lost. A crate update leaves its lines stale, which fails the run until they're looked at again.
 
+- `--backlog-run-quick codeql-ours` runs `codeql-scan.bash --ours`, which takes about 3 minutes rather than 10 to 15, so a worker can run it on its own change. It leaves the crates in the cargo home, where only their signatures are extracted, as CodeQL's default setup does for Rust, and reports only on our code, with the same bait, file checks and suppressions. Its output goes in `cicd/artifacts/codeql-ours/`. No other run takes it, since it doesn't stand in for the full scan: the crates' own findings, and any finding in our code whose flow runs through a crate's code, show up only there (2026111015123269).
+
 ## Profiling
 
 - A full run draws a flamegraph of a scan into `cicd/artifacts/profiling/`, GFS-rotated, and prints `cicd/utility/flame-report.py`'s summary of it in the log. `--quick` and `--gate` leave it out.
