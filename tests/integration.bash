@@ -380,17 +380,6 @@ kill -INT "${pid}"
 rc=0; wait "${pid}" || rc=$?
 rc2=0; "${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --resume --progress 3600 > "${work}/out.txt" 2>&1 || rc2=$?
 check des7m "new database: resume didn't report it twice" "${rc} ${rc2} $(sqlite3 "${work}/db/r5.sqlite" "SELECT count(*) FROM events WHERE path = '${tree}/rm-stale.txt'")" "6 4 1"
-# A second Ctrl+C ends the scan at once, with 130, as README and --help say.
-# The run is left marked running, and the next scan marks it killed.
-"${bin}" scan --db "${work}/db/r130.sqlite" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
-pid=$!
-st=0; { wait_started "${work}/stop.txt" && wait_reached "${pid}" "${tree}/many"; } || st=1
-kill -INT "${pid}"; wait_taken "${pid}" || st=1; kill -INT "${pid}" 2> /dev/null || true
-rc=0; wait "${pid}" || rc=$?
-check df4s0 "second INT: exit 130, run left running" "${st} ${rc} $(sqlite3 "${work}/db/r130.sqlite" 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "0 130 running"
-mkdir -p "${work}/r130"; printf 'k\n' > "${work}/r130/f"
-rc=0; "${bin}" scan --db "${work}/db/r130.sqlite" --root "${work}/r130" --progress 3600 > "${work}/r130.txt" 2>&1 || rc=$?
-check df4s1 "second INT: the next scan marks it killed" "${rc} $(sqlite3 "${work}/db/r130.sqlite" 'SELECT status FROM runs ORDER BY id LIMIT 1')" "0 killed"
 
 # 6. snapdiff: same size and time, different bytes.
 mkdir -p "${work}/old" "${work}/new"
@@ -1155,6 +1144,7 @@ cat > "${er}/eio.c" << 'EOF'
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1176,6 +1166,16 @@ static int named(int fd, const char *env) {
 
 static int bad(int fd) { return named(fd, "EIO_NAME"); }
 
+// Step 36's: a read of HANG_NAME makes HANG_IN, then sits for up to 60 s, so
+// a stop can't finish under it.
+static void hang(int fd) {
+	const char *in = getenv("HANG_IN");
+	if (!in || !named(fd, "HANG_NAME")) return;
+	int m = open(in, O_CREAT | O_WRONLY, 0644);
+	if (m >= 0) close(m);
+	for (int i = 0; i < 6000; i++) usleep(10000);
+}
+
 // Step 34's: every attribute of EIO_XATTR_NAME fails to read.
 ssize_t fgetxattr(int fd, const char *name, void *value, size_t size) {
 	static ssize_t (*real)(int, const char *, void *, size_t);
@@ -1187,6 +1187,7 @@ ssize_t fgetxattr(int fd, const char *name, void *value, size_t size) {
 ssize_t read(int fd, void *buf, size_t count) {
 	static ssize_t (*real)(int, void *, size_t);
 	if (!real) real = dlsym(RTLD_NEXT, "read");
+	hang(fd);
 	if (bad(fd)) { errno = EIO; return -1; }
 	return real(fd, buf, count);
 }
@@ -1194,6 +1195,7 @@ ssize_t read(int fd, void *buf, size_t count) {
 ssize_t pread64(int fd, void *buf, size_t count, off_t at) {
 	static ssize_t (*real)(int, void *, size_t, off_t);
 	if (!real) real = dlsym(RTLD_NEXT, "pread64");
+	hang(fd);
 	if (bad(fd)) { errno = EIO; return -1; }
 	return real(fd, buf, count, at);
 }
@@ -1246,6 +1248,32 @@ lg="${work}/lg"; mkdir -p "${lg}/tree"
 printf 'log\n' > "${lg}/tree/f"
 rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --progress 3600 --log="${lg}/tree/scan.log" > "${lg}/out.txt" 2>&1 || rc=$?
 check df4xn "--log: the scan's lines in full, and the log not read" "${rc} $(cmp -s "${lg}/out.txt" "${lg}/tree/scan.log" && echo same) $(grep -oE 'files [0-9]+' "${lg}/tree/scan.log" | head -1)" "0 same files 1"
+
+# 36. A second Ctrl+C ends the scan at once, with 130, as README and --help
+# say. The run is left marked running, and the next scan marks it killed. The
+# shim keeps the one worker in a read, since on a slow box the first stop
+# could finish before the second INT gets there.
+hg="${work}/hg"; mkdir -p "${hg}/tree" "${hg}/r130"
+head -c 200000 /dev/urandom > "${hg}/tree/slow"; printf 'k\n' > "${hg}/r130/f"
+hgdb="${work}/db/r130.sqlite"
+if [[ ! -f "${er}/eio.so" ]]; then
+	skip df4s0 "second INT: exit 130, run left running (no C compiler for the shim)"
+	skip df4s1 "second INT: the next scan marks it killed (no C compiler for the shim)"
+else
+	env "LD_PRELOAD=${er}/eio.so" "HANG_NAME=/hg/tree/slow" "HANG_IN=${hg}/in" "${bin}" scan --db "${hgdb}" --root "${hg}/tree" --threads "${hg}/tree=1" --progress 3600 > "${hg}/out.txt" 2>&1 &
+	pid=$!
+	st=1
+	for ((i = 0; i < 1200; i++)); do
+		if [[ -e "${hg}/in" ]]; then st=0; break; fi
+		kill -0 "${pid}" 2> /dev/null || break
+		sleep 0.05
+	done
+	kill -INT "${pid}"; wait_taken "${pid}" || st=1; kill -INT "${pid}" 2> /dev/null || true
+	rc=0; wait "${pid}" || rc=$?
+	check df4s0 "second INT: exit 130, run left running" "${st} ${rc} $(sqlite3 "${hgdb}" 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" "0 130 running"
+	rc=0; "${bin}" scan --db "${hgdb}" --root "${hg}/r130" --progress 3600 > "${hg}/r130.txt" 2>&1 || rc=$?
+	check df4s1 "second INT: the next scan marks it killed" "${rc} $(sqlite3 "${hgdb}" 'SELECT status FROM runs ORDER BY id LIMIT 1')" "0 killed"
+fi
 
 if [[ "${fails}" -eq 0 ]]; then
 	echo "all passed"
@@ -1328,3 +1356,6 @@ fi
 ##		  30 tells a first scan that leaves no file from no user namespace,
 ##		  and the sweep reads only marks that are plain files.
 ##		- 20261110: A folder scan's percent done, and --log.
+##		- 20261110: The second Ctrl+C checks moved to step 36, where the shim
+##		  keeps the scan in a read, so a slow box can't finish the first stop
+##		  before the second INT.

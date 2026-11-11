@@ -2539,6 +2539,21 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- The second Ctrl+C checks fail on vmDebARM64: the first stop finishes before the second INT gets there.
+	- ID: 2026111021192345
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261110-211923
+	- Opened by: plain run
+	- Progress log:
+		- Plain run 2026-11-10 failed at Other hosts: df4s0 got [0 130 stopped], df4s1 got [0 stopped]. They pass on b23.
+		- Cause: a stop winds down in about a chunk's read, and under TCG the test's wait loop is slower than that. Not from round-20261111. This was the checks' first run there.
+		- Fix: the checks moved to step 36, where the step 33 shim keeps the one worker in a read of a named file until the second INT ends the scan.
+		- Verified 2026-11-10: with a 1 s delay before the second INT, the old checks fail as on the VM and the new ones pass. With no second INT the new ones fail. The whole integration test passed on vmDebARM64 with the failed run's arm64 build, and --backlog-run-quick passed on b23.
+	- Test case: df4s0, df4s1
+	- Closed: 20261110-211944
+
 - A scan, `accept` or `prune` that fails after taking the lock leaves the database in WAL mode, and under sudo leaves it and its lock owned by root.
 	- ID: 2026111011092306
 	- Type: Bug
