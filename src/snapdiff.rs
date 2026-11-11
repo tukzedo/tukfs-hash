@@ -12,9 +12,11 @@ use std::ffi::OsStr;
 use std::fs::{self, File, Metadata};
 use std::io::{self, BufRead, BufReader, Read};
 use std::mem;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirEntryExt, MetadataExt};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::beneath::{self, Root};
 use crate::util::{escape_name, show_path};
@@ -400,19 +402,19 @@ fn describe(d: &Diff) -> String {
 }
 
 // A file whose old copy is looked for by inode once the list is read, with
-// the one under its own name to fall back on.
+// the one under its own name to fall back on. Both sides are stat'd again
+// then, so a file held costs little more than its name.
 struct Held {
-	name: String,
-	new_rel: PathBuf,
-	new_md: Metadata,
-	by_name: Option<(PathBuf, Metadata)>,
-	by_inode: Option<(PathBuf, Metadata)>,
+	rel: PathBuf,
+	born: Option<SystemTime>,
+	by_inode: Option<Box<(PathBuf, Metadata)>>,
 }
 
 #[derive(Default)]
 struct Tally {
 	checked: u64,
 	flagged: u64,
+	only_new: u64,
 	missing: u64,
 	missing_new: u64,
 	unchecked: u64,
@@ -439,6 +441,67 @@ fn stat_beneath(root: &Root, rel: &Path) -> io::Result<Option<Metadata>> {
 		Err(e) if beneath::moved(&e) => Ok(None),
 		Err(e) => Err(e),
 	}
+}
+
+// The kernel's btrfs_ioctl_get_subvol_info_args.
+#[repr(C)]
+struct BtrfsTime {
+	sec: u64,
+	nsec: u32,
+}
+
+#[repr(C)]
+struct SubvolInfo {
+	_treeid: u64,
+	_name: [u8; 256],
+	_parent_id: u64,
+	_dirid: u64,
+	_generation: u64,
+	flags: u64,
+	_uuid: [u8; 16],
+	_parent_uuid: [u8; 16],
+	received_uuid: [u8; 16],
+	_transids: [u64; 4],
+	_ctime: BtrfsTime,
+	otime: BtrfsTime,
+	_stime: BtrfsTime,
+	_rtime: BtrfsTime,
+	_reserved: [u64; 8],
+}
+
+const _: () = assert!(mem::size_of::<SubvolInfo>() == 504);
+// The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for
+// making snapshots.
+const BTRFS_ROOT_SUBVOL_RDONLY: u64 = 1;
+
+// When a read-only btrfs snapshot was taken, from its subvolume info, which
+// needs no root. Nothing born after that is in it. A received one is left
+// out, since its files are born after it.
+fn frozen_at(root: &Root) -> Option<SystemTime> {
+	let mut info = mem::MaybeUninit::<SubvolInfo>::zeroed();
+	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by
+	// size, and outlives the call.
+	let r = unsafe {
+		libc::ioctl(
+			root.as_raw_fd(),
+			libc::_IOR::<SubvolInfo>(0x94, 60),
+			info.as_mut_ptr(),
+		)
+	};
+	// Some kernels return 1 from a search left over, with the info filled in.
+	if r < 0 {
+		return None;
+	}
+	// SAFETY: all zeros is a valid SubvolInfo, and the kernel filled it in.
+	let info = unsafe { info.assume_init() };
+	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] {
+		return None;
+	}
+	let otime = &info.otime;
+	if otime.nsec >= 1_000_000_000 {
+		return None;
+	}
+	UNIX_EPOCH.checked_add(Duration::new(otime.sec, otime.nsec))
 }
 
 // Old copies of renamed files, found by inode. Snapshots of one btrfs
@@ -485,12 +548,12 @@ fn find_by_inode(
 			let Ok(md) = fs::symlink_metadata(&p) else {
 				continue;
 			};
-			let same_birth = match (md.created(), held[at].new_md.created()) {
-				(Ok(a), Ok(b)) => a == b,
+			let same_birth = match (md.created(), held[at].born) {
+				(Ok(a), Some(b)) => a == b,
 				_ => true,
 			};
 			if md.is_file() && same_birth {
-				held[at].by_inode = Some((old.rel(&p).to_path_buf(), md));
+				held[at].by_inode = Some(Box::new((old.rel(&p).to_path_buf(), md)));
 				wanted.remove(&ent.ino());
 				if wanted.is_empty() {
 					return;
@@ -507,13 +570,35 @@ struct Checker<'a> {
 	new: &'a Root,
 	src: &'a Source,
 	show_all: bool,
+	// When --old was frozen, where that's known.
+	frozen: Option<SystemTime>,
 	tally: Tally,
 	bufs: CompareBufs,
 	held: Vec<Held>,
 	wanted: HashMap<u64, usize>,
 }
 
-impl Checker<'_> {
+impl<'a> Checker<'a> {
+	fn new(
+		old: &'a Root,
+		new: &'a Root,
+		src: &'a Source,
+		show_all: bool,
+		frozen: Option<SystemTime>,
+	) -> Self {
+		Checker {
+			old,
+			new,
+			src,
+			show_all,
+			frozen,
+			tally: Tally::default(),
+			bufs: CompareBufs::default(),
+			held: Vec::new(),
+			wanted: HashMap::new(),
+		}
+	}
+
 	// Which side each listed file has to be on. zfs diff names files in both
 	// snapshots, find-new files in the new one, and a list can name anything.
 	fn need_old(&self) -> bool {
@@ -524,52 +609,87 @@ impl Checker<'_> {
 		!matches!(self.src, Source::List(_))
 	}
 
-	fn pair(&mut self, pair: &Pair) {
-		let name = show_path(&pair.new);
-		let new_md = match stat_beneath(self.new, &pair.new) {
+	// A name's stat results on both sides, or None when it can't be compared.
+	fn stat_pair(
+		&mut self,
+		name: &str,
+		old_rel: &Path,
+		new_rel: &Path,
+	) -> Option<(Metadata, Option<Metadata>)> {
+		let new_md = match stat_beneath(self.new, new_rel) {
 			Ok(Some(m)) => m,
-			Ok(None) if matches!(self.src, Source::ZfsDiff(..)) && self.is_attribute(&pair.new) => {
-				return;
+			Ok(None) if matches!(self.src, Source::ZfsDiff(..)) && self.is_attribute(new_rel) => {
+				return None;
 			}
 			Ok(None) => {
 				self.tally.missing_new += 1;
-				self.tally.missing(self.need_new(), &name, "--new");
-				return;
+				self.tally.missing(self.need_new(), name, "--new");
+				return None;
 			}
 			Err(e) => {
 				self.tally.unchecked += 1;
 				out!("stat-error\t{name}\t{e}");
-				return;
+				return None;
 			}
 		};
 		if !new_md.is_file() {
-			return;
+			return None;
 		}
-		let by_name = match stat_beneath(self.old, &pair.old) {
-			Ok(found) => found.map(|m| (pair.old.clone(), m)),
+		match stat_beneath(self.old, old_rel) {
+			Ok(found) => Some((new_md, found)),
 			Err(e) => {
 				self.tally.unchecked += 1;
 				out!("stat-error\t{name}\t{e}");
-				return;
+				None
 			}
+		}
+	}
+
+	fn pair(&mut self, pair: &Pair) {
+		let name = show_path(&pair.new);
+		let Some((new_md, by_name)) = self.stat_pair(&name, &pair.old, &pair.new) else {
+			return;
 		};
-		// The old name can be some other file, as after `mv c a`.
+		// The old name can be some other file, as after `mv c a`. A file born
+		// since --old was taken has no old copy to look for.
 		if let Some(ino) = pair.ino
-			&& by_name.as_ref().is_none_or(|(_, m)| m.ino() != ino)
+			&& by_name.as_ref().is_none_or(|m| m.ino() != ino)
+			&& !self.born_since_old(&new_md)
 		{
 			self.wanted.insert(ino, self.held.len());
 			self.held.push(Held {
-				name,
-				new_rel: pair.new.clone(),
-				new_md,
-				by_name,
+				rel: pair.new.clone(),
+				born: new_md.created().ok(),
 				by_inode: None,
 			});
 			return;
 		}
-		match by_name {
-			Some((old_rel, mo)) => self.check(&name, (&old_rel, &mo), (&pair.new, &new_md)),
-			None => self.tally.missing(self.need_old(), &name, "--old"),
+		let old = by_name.as_ref().map(|m| (pair.old.as_path(), m));
+		self.settle(&name, old, (&pair.new, &new_md));
+	}
+
+	fn born_since_old(&self, md: &Metadata) -> bool {
+		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f)
+	}
+
+	fn settle(&mut self, name: &str, old: Option<(&Path, &Metadata)>, new: (&Path, &Metadata)) {
+		let Some(old) = old else {
+			self.not_in_old(name);
+			return;
+		};
+		self.check(name, old, new);
+	}
+
+	// zfs diff names files in both snapshots, so one missing from --old is
+	// missing. find-new and lists can name new files.
+	fn not_in_old(&mut self, name: &str) {
+		if self.need_old() {
+			self.tally.missing(true, name, "--old");
+			return;
+		}
+		self.tally.only_new += 1;
+		if self.show_all {
+			out!("new\t{name}\tonly in --new");
 		}
 	}
 
@@ -593,12 +713,15 @@ impl Checker<'_> {
 			find_by_inode(self.old, &mut self.wanted, &mut self.held, &mut self.tally);
 		}
 		for h in mem::take(&mut self.held) {
-			match h.by_inode.or(h.by_name) {
-				Some((old_rel, mo)) => {
-					self.check(&h.name, (&old_rel, &mo), (&h.new_rel, &h.new_md));
-				}
-				None => self.tally.missing(self.need_old(), &h.name, "--old"),
-			}
+			let name = show_path(&h.rel);
+			let Some((new_md, by_name)) = self.stat_pair(&name, &h.rel, &h.rel) else {
+				continue;
+			};
+			let old = match &h.by_inode {
+				Some(found) => Some((found.0.as_path(), &found.1)),
+				None => by_name.as_ref().map(|m| (h.rel.as_path(), m)),
+			};
+			self.settle(&name, old, (&h.rel, &new_md));
 		}
 	}
 
@@ -659,6 +782,16 @@ impl Checker<'_> {
 
 /// The `snapdiff` command.
 pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, String> {
+	run_with(old, new, src, show_all, frozen_at)
+}
+
+fn run_with(
+	old: &Path,
+	new: &Path,
+	src: &Source,
+	show_all: bool,
+	frozen_at: impl Fn(&Root) -> Option<SystemTime>,
+) -> Result<i32, String> {
 	// The folders themselves were named by a person and may be symlinks. Only
 	// what's beneath them is held to no symlinks and no mounts, as scan does.
 	let open_root = |dir: &Path| -> Result<Root, String> {
@@ -687,16 +820,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 	let read_error = |e: io::Error| format!("{}: {e}", show_path(list));
 	let input = BufReader::new(File::open(list).map_err(read_error)?);
 
-	let mut checker = Checker {
-		old,
-		new,
-		src,
-		show_all,
-		tally: Tally::default(),
-		bufs: CompareBufs::default(),
-		held: Vec::new(),
-		wanted: HashMap::new(),
-	};
+	let mut checker = Checker::new(old, new, src, show_all, frozen_at(old));
 	let (mut listed, mut unusable) = (0u64, 0u64);
 	let mut outside: Option<(u64, usize, Vec<u8>)> = None;
 	for entry in ChangeList::new(input, format) {
@@ -741,8 +865,9 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 
 	let t = &checker.tally;
 	err!(
-		"{listed} listed, {} regular files in both, {} flagged, {} missing, {} not checked, {unusable} lines not understood",
+		"{listed} listed, {} regular files in both, {} only in --new, {} flagged, {} missing, {} not checked, {unusable} lines not understood",
 		t.checked,
+		t.only_new,
 		t.flagged,
 		t.missing,
 		t.unchecked,
@@ -990,6 +1115,46 @@ transid marker was 12\n";
 		let d = cmp(b"0123456789", b"0123456780");
 		assert_eq!((d.differing, d.runs), (1, vec![(9, 1)]));
 		assert_eq!(cmp(b"", b"").differing, 0);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn new_files_skip_the_walk() {
+		let _id = test_id("df4qe");
+		let dir = scratch("snapdiff_newer");
+		let (old, new) = (dir.join("old"), dir.join("new"));
+		fs::create_dir(&old).unwrap();
+		fs::create_dir(&new).unwrap();
+		let before = SystemTime::now() - Duration::from_secs(60);
+		// A new file, and an atomic save, which has another inode than its old copy.
+		fs::write(new.join("fresh"), b"f").unwrap();
+		fs::write(old.join("saved"), b"s").unwrap();
+		fs::copy(old.join("saved"), new.join("saved")).unwrap();
+		let Ok(born) = fs::metadata(new.join("fresh")).and_then(|m| m.created()) else {
+			eprintln!("no birth times in {}, skipped", dir.display());
+			return;
+		};
+		assert!(born > before);
+		let (old_root, new_root) = (Root::open(&old).unwrap(), Root::open(&new).unwrap());
+		let src = Source::FindNew(dir.join("unread"));
+		let found_in = |frozen| {
+			let mut c = Checker::new(&old_root, &new_root, &src, false, frozen);
+			for name in ["fresh", "saved"] {
+				let ino = fs::metadata(new.join(name)).unwrap().ino();
+				c.pair(&Pair {
+					ino: Some(ino),
+					..Pair::same(PathBuf::from(name))
+				});
+			}
+			let held = c.held.len();
+			c.finish();
+			(held, c.tally.only_new, c.tally.checked, c.tally.missing)
+		};
+		// Taken before both were made, so neither waits for the walk.
+		assert_eq!(found_in(Some(before)), (0, 1, 1, 0));
+		// Not known, or taken after, and both wait for it, to the same end.
+		assert_eq!(found_in(None), (2, 1, 1, 0));
+		assert_eq!(found_in(Some(born + Duration::from_secs(60))), (2, 1, 1, 0));
 	}
 
 	#[test]

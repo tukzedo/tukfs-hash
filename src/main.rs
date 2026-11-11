@@ -89,8 +89,8 @@ report and gone options:
 	                    everything, and stderr says how many lines were left off.
 
 snapdiff options:
-	--all               Also list files whose time moved, and files that
-	                    compared the same.
+	--all               Also list files whose time moved, files that
+	                    compared the same, and files only in --new.
 
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at

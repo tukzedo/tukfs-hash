@@ -63,6 +63,8 @@ fDropSubvols() {
 	local sv=''
 	[[ "$(stat -f -c %T -- "${1}" 2> /dev/null)" == btrfs ]] || return 0
 	while IFS= read -r -d '' sv; do
+		# A read-only snapshot can't be emptied as it is.
+		btrfs property set -ts "${sv}" ro false > /dev/null 2>&1 || true
 		find "${sv}" -xdev -mindepth 1 -delete 2> /dev/null || true
 		rmdir -- "${sv}" 2> /dev/null || true
 	done < <(find "${1}" -xdev -mindepth 1 -type d -inum 256 -print0 2> /dev/null)
@@ -958,6 +960,29 @@ if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/p/
 else
 	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
 fi
+# A file born after a read-only --old was taken can't be in it, so snapdiff
+# counts it new as it's read, rather than holding it for the inode walk. The
+# renamed one still waits, so it comes last (2026111011092305).
+if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/live" > /dev/null 2>&1; then
+	printf 'k\n' > "${bt}/live/kept"; printf 'r\n' > "${bt}/live/renamed"
+	if btrfs subvolume snapshot -r "${bt}/live" "${bt}/old" > /dev/null 2>&1; then
+		# File times come from a clock that can lag a tick behind.
+		sleep 0.1
+		printf 'n\n' > "${bt}/live/fresh"; mv -- "${bt}/live/renamed" "${bt}/live/moved"
+		for f in fresh moved kept; do
+			printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE %s\n' "$(stat -c %i "${bt}/live/${f}")" "${f}"
+		done > "${bt}/find-new"
+		rc=0; "${bin}" snapdiff --old "${bt}/old" --new "${bt}/live" --find-new "${bt}/find-new" --all > "${bt}/sd.txt" 2> "${bt}/sd-err.txt" || rc=$?
+		check df4qf "find-new: new files counted, not held" "${rc} $(cut -f1,2 "${bt}/sd.txt" | tr '\n\t' '  ')$(grep -c ', 1 only in --new, 0 flagged, 0 missing,' "${bt}/sd-err.txt" || true)" "0 new fresh same kept same moved 1"
+		btrfs property set -ts "${bt}/old" ro false > /dev/null 2>&1 || true
+		rm -f -- "${bt}/old/kept" "${bt}/old/renamed"; rmdir -- "${bt}/old" || true
+	else
+		skip df4qf "find-new: new files counted, not held (no read-only snapshot)"
+	fi
+	rm -f -- "${bt}/live/kept" "${bt}/live/fresh" "${bt}/live/moved"; rmdir -- "${bt}/live" || true
+else
+	skip df4qf "find-new: new files counted, not held (not on btrfs, or no btrfs tool)"
+fi
 
 # 28. Beside a database inside the root, only its own 5 names are left out,
 # not every name that starts with it (2026102814341408). A root below a
@@ -1190,3 +1215,5 @@ fi
 ##		  written, and no attributes on a new file after --verify.
 ##		- 20261110: A read error, through a preloaded shim, is read and
 ##		  reported again until it reads clean.
+##		- 20261110: snapdiff counts a file born after a read-only --old as new,
+##		  with no inode walk.

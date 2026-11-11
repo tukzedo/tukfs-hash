@@ -88,7 +88,7 @@
 - snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
 	- ID: 2026111011092305
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 6
@@ -99,6 +99,20 @@
 	- Note: A file born after the old snapshot was taken can skip the inode walk. The snapshot's time is in the subvolume's info, which needs no root. Otherwise keep only the path, inode and birth time.
 	- Note: design.md, "snapdiff", says files waiting on the walk are kept to the end, so this isn't a defect. 2026110715441806 covered zfs diff and `--list`.
 	- Related IDs: 2026110715441806
+	- Actual effort: Avg
+	- Decisions:
+		- The old snapshot's time comes from btrfs's subvolume info ioctl, which needs no root. It's trusted only for a read-only snapshot that wasn't received. Files can be added to a writable one later, and a received one's files are all born after it.
+		- A find-new file born after that time skips the walk: a new one is counted at once, and an atomic save is compared by name at once, which is where the walk ended up for it anyway.
+		- A file that still waits keeps its name and birth time, and the walk's map its inode. Both sides are stat'd again after the walk.
+		- The summary has "N only in --new" after the files in both. find-new and lists can name new files, so there one missing from `--old` is counted there and isn't an error. Lists counted it as missing before. zfs diff names files in both, so there it's still missing.
+		- `--all` prints a `new` line for each one, as it does `edited` and `same`.
+	- Branch: round-20261110b
+	- Test case: `df4qe` (`snapdiff::tests::new_files_skip_the_walk`): new files and an atomic save aren't held when `--old`'s time is before them, and are held when it isn't known or is after. `df4qf` in `tests/integration.bash`, on a real read-only btrfs snapshot: a new file comes out in list order, before the renamed one that waits, and the summary counts it only in `--new`. df4qf failed on a build from before the change, with `0 same kept same moved 0`, and passes after.
+	- Verified:
+		- Peak RSS for 100,000 new files over a read-only btrfs snapshot went from 73.6 MB to 2.5 MB, the same as 1 line. Over plain folders, where the time isn't known, from 72.2 MB to 11.5 MB. The summary says "100000 only in --new, 0 missing".
+		- `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Swept: `find_by_inode` is the only inode lookup, and `finish` the only reader of held files. The old-side "missing" call in `pair` and in `finish` both go through `not_in_old` now. zfs diff `+` lines alone name new files too, but they're never stat'd or counted.
+	- Closed: 20261110-162935
 
 - CodeQL has no run short enough for a worker, so round code reaches it only at the gate step.
 	- ID: 2026111015123269
