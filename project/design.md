@@ -104,6 +104,8 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 
 - A database lookup that fails for any reason but a missing row is a `db-error` event, and the file isn't recorded. Taking such a failure for "no record" would overwrite the row unseen.
 
+- An attribute that can't be read, for any reason but a missing name or a filesystem that doesn't have them, is an `xattr-error` event, and the file doesn't get any attributes written. Taking it for "no set" would write over the set unseen, the same as with a row. The file is still read and recorded, and checked against its database row, and `accept` takes it in the database but leaves the attributes alone. Unlike write errors, every read error is an event, since each one is that file's own.
+
 ## Skipping
 
 - A file is skipped when the database or its attributes show it was read on or after the skip date with the same size, time, and inode. The default skip date is the start of today, so a rerun the same day is cheap, and a run on a later day reads everything again and compares.
@@ -171,7 +173,7 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 	| `unstable`, `xattr-error`                                                                    | none
 	| a kind this version doesn't know                                                             | 8
 
-- `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make the bit meaningless. `xattr-error` doesn't set one either, since the attribute write comes after the file was checked.
+- `unstable` files are live ones, like a running VM's disk or a database in use. They'd set 8 on every run of the main scan and make the bit meaningless. `xattr-error` doesn't set one either. An attribute write comes after the file was checked, and a file whose attributes can't be read is still checked against its database row.
 
 - A folder that can't be listed, or stops listing part way, is a `dir-error`. The files in it aren't seen at all, so there isn't anything else to count them by.
 
@@ -220,9 +222,15 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 
 - `zfs diff` lists attributes that are stored as a folder, with `xattr=dir` or when a set is too big for `sa`, as `<xattrdir>` beneath their file, such as `a/<xattrdir>/user.blake3.date`. No path leads to them, and they aren't the file's bytes, so they're skipped like folders and links rather than counted as missing. A real folder named `<xattrdir>` is found by its path and compared, and a name whose owner isn't in `--new` is still missing.
 
-- btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, or names another inode there, as after `mv c a`, the old snapshot is walked once for the inode numbers that are still needed, since snapshots of one subvolume preserve them. A matching birth time rules out a number that was used again after a delete. A file that the walk doesn't find is compared with the one under its name, which is what an atomic save needs. The walk only runs when a listed file is missing from the old side or has another inode there, which new files and atomic saves also cause.
+- btrfs `find-new` names a file by its current name only. When that name isn't in the old snapshot, or names another inode there, as after `mv c a`, the old snapshot is walked once for the inode numbers that are still needed, since snapshots of one subvolume preserve them. A matching birth time rules out a number that was used again after a delete. A file that the walk doesn't find is compared with the one under its name, which is what an atomic save needs. The walk only runs when a listed file is missing from the old side or has another inode there.
 
-- The change list is read a line at a time, and each file is compared as it's read, so that way memory doesn't grow with the list. Only zfs diff's `-` and `+` names, and the files that wait on the walk, are stored until the end. A list of 100,000 lines took 66 MB before, and now takes the same as a list of 1 line. The integration test fails when 100,000 different names take 1 MB more than 1 line does, measured by peak RSS from GNU time, since a child of python3 starts at python's own peak. A line that's refused stops the run where it's read, with exit 1, after whatever was printed before it.
+- A file born after `--old` was taken can't be in it, so it skips the walk. A new one is counted as only in `--new` as it's read, and an atomic save is compared by its name right away. The time comes from btrfs's subvolume info, which needs no root. It's used only for a read-only snapshot that wasn't received, since files can be added to a writable one later, and a received one's files are all born after it. Otherwise new files wait for the walk like renamed ones. A clock that was set ahead when a file was made, and back by the snapshot, could make a renamed file look new, and then it's compared by name or counted as new.
+
+- find-new and lists can name new files, so a file only in `--new` is counted apart from missing ones and isn't an error. zfs diff names files that are in both snapshots, so there it's missing.
+
+- The change list is read a line at a time, and each file is compared as it's read, so that way memory doesn't grow with the list. Only zfs diff's `-` and `+` names, and the files that wait on the walk, are stored until the end. A file that waits keeps only its name and birth time, and the walk's list its inode, and both sides are stat'd again after the walk. A list of 100,000 lines took 66 MB before, and now takes the same as a list of 1 line. The integration test fails when 100,000 different names take 1 MB more than 1 line does, measured by peak RSS from GNU time, since a child of python3 starts at python's own peak. A line that's refused stops the run where it's read, with exit 1, after whatever was printed before it.
+
+- A changed file keeps only the first 8 runs of bytes that differ, which its line names, and counts for the rest. 2 files of 64 MiB that differ in 1 byte of every 8 took 135 MB before, and now take what a 1-byte change does. The integration test fails when a 4 MiB file with 524,288 runs takes 1 MB more than one with a byte changed.
 
 - Files are opened beneath `--old` and `--new` the same way scan opens them beneath a root, without following any symlink or crossing any mount on the way. A name that goes through a symlinked folder isn't in that snapshot, and counts as missing there. `--old` and `--new` themselves may be symlinks, since a person types them. Snapshots can't change, but a folder in one can still be a link to the live system, or a list can name one.
 
@@ -315,6 +323,8 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 - Miri skips what it can't run, which is SQLite, since it's C, plus xattrs, `openat2`, and `mktime`. It also skips 2 tests of safe code that take it over 15 minutes. Each says why in its `#[cfg_attr(miri, ignore = ...)]`.
 
 - CodeQL runs over a copy of the tree with every crate vendored and its full source extracted. A finding in a crate counts only when it comes from a security or correctness query, and only in code that's built into the release binary. Findings that were looked at and aren't bugs are listed in `cicd/codeql/vendored-reviewed.tsv` by crate version, since cargo vendor writes the code again each run and a comment there would be lost. A crate update leaves its lines stale, which fails the run until they're looked at again.
+
+- `--backlog-run-quick codeql-ours` runs `codeql-scan.bash --ours`, which takes about 3 minutes rather than 10 to 15, so a worker can run it on its own change. It leaves the crates in the cargo home, where only their signatures are extracted, as CodeQL's default setup does for Rust, and reports only on our code, with the same bait, file checks and suppressions. Its output goes in `cicd/artifacts/codeql-ours/`. No other run takes it, since it doesn't stand in for the full scan: the crates' own findings, and any finding in our code whose flow runs through a crate's code, show up only there (2026111015123269).
 
 ## Profiling
 

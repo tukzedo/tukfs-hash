@@ -26,8 +26,15 @@
 ##		leak check image, run with no network. With no docker, a noted skip,
 ##		which keeps a check-only run from recording its tree.
 ##		From shcl's cicd/utility/codeql-scan.bash.
+##		--ours leaves the crates as the cargo home has them, so only their
+##		signatures are extracted and only our code is reported on, the way
+##		CodeQL's default setup reads a Rust project. About 3 minutes rather
+##		than 10 to 15, for a worker's run. Its output goes in
+##		cicd/artifacts/codeql-ours/, and cicd/codeql/vendored-reviewed.tsv
+##		isn't read. A finding whose flow runs through a crate's own code can
+##		show up only in the full run.
 ##	Syntax:
-##		codeql-scan.bash
+##		codeql-scan.bash [--ours]
 ##		CPU_CAP caps the threads (default a quarter of the cores).
 ##	Exit: 0 = clean, 1 = a finding, a missed bait, a dropped file or a bad
 ##	      suppression, 2 = could not run.
@@ -45,12 +52,15 @@ me="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${me}/include/leak-common.bash"
 trap 'fStopDescendants; fScratchGone || true' EXIT
 
-if (($#)); then echo "codeql-scan: takes no arguments (see the header)" >&2; exit 2; fi
+ours=0; modeArg=()
+if [[ "${1:-}" == --ours ]]; then ours=1; modeArg=(--ours); shift; fi
+if (($#)); then echo "codeql-scan: takes only --ours (see the header)" >&2; exit 2; fi
 start="${SECONDS}"
 art="${root}/cicd/artifacts/codeql"
+((ours)) && art+="-ours"
 mkdir -p -- "${art}" "${LEAK_DIR}"
 leak_host_note=0
-fLeakInImage codeql-scan "${me}/codeql-scan.bash" "${art}"
+fLeakInImage codeql-scan "${me}/codeql-scan.bash" "${art}" "${modeArg[@]}"
 
 missing=()
 for t in codeql cargo rustup jq unzip; do
@@ -85,18 +95,23 @@ if grep -q '^name = "pprof"$' "${src}/Cargo.lock"; then echo "codeql-scan: the c
 bait="tests/codeql_bait.rs"
 printf '%s\n' '#[test]' 'fn codeql_bait() {' '	let p: *const u8 = std::ptr::null();' '	let _v = unsafe { *p };' '}' > "${src}/${bait}"
 ## Versioned dirs, so a crate's dir names its version, and a reviewed line
-## goes stale when the crate moves.
-if ! (cd "${src}" && cargo vendor --locked --quiet --versioned-dirs vendor > "${work}/vendor.log" 2>&1); then
-	cat "${work}/vendor.log"; echo "codeql-scan: cargo vendor failed" >&2; exit 2
+## goes stale when the crate moves. --ours reads the crates from the cargo
+## home instead, with only their signatures extracted.
+asSource=false
+if ((! ours)); then
+	asSource=true
+	if ! (cd "${src}" && cargo vendor --locked --quiet --versioned-dirs vendor > "${work}/vendor.log" 2>&1); then
+		cat "${work}/vendor.log"; echo "codeql-scan: cargo vendor failed" >&2; exit 2
+	fi
+	printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '[source.vendored-sources]' 'directory = "vendor"' > "${src}/.cargo/config.toml"
 fi
-printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '[source.vendored-sources]' 'directory = "vendor"' > "${src}/.cargo/config.toml"
 : > "${art}/findings.txt"
 rm -f -- "${art}/rust.sarif"
 
 log="${art}/rust-create.log"
 echo "codeql-scan: building the database"
 if ! codeql database create "${db}" --language=rust --source-root="${src}" --threads="${CPU_CAP}" --overwrite \
-	-O "rust.cargo_target_dir=${work}/rtarget" -O rust.extract_dependencies_as_source=true >"${log}" 2>&1; then
+	-O "rust.cargo_target_dir=${work}/rtarget" -O "rust.extract_dependencies_as_source=${asSource}" >"${log}" 2>&1; then
 	tail -n 20 "${log}"; echo "codeql-scan: the database didn't build, see ${log#"${root}/"}" >&2; exit 2
 fi
 
@@ -124,7 +139,7 @@ if grep -qF 'failed to load workspace' "${log}" || grep -qE "${src}/(src|tests)/
 	grep -E "failed to load workspace|${src}/(src|tests)/[^ ]*: semantic analyzer unavailable" "${log}" | head -n 3 || true
 	echo "codeql-scan: the workspace didn't load, so the extraction has no types or macros"; full=0
 fi
-echo "codeql-scan: the database has $(grep -c '\.rs$' <<<"${listed}") Rust files, ${nRoots} of them vendored crate roots"
+echo "codeql-scan: the database has $(grep -c '\.rs$' <<<"${listed}") Rust files, ${nRoots} of them crate roots"
 
 echo "codeql-scan: running the rust-security-and-quality suite"
 if ! codeql database analyze "${db}" codeql/rust-queries:codeql-suites/rust-security-and-quality.qls \
@@ -166,7 +181,9 @@ jq -r '.runs[] | (.tool.driver.rules // [] | map({(.id): ((.properties.tags // [
 ## The crates' code can't take a comment that would last past cargo vendor,
 ## so a finding there that was looked at and isn't a bug is a line of
 ## cicd/codeql/vendored-reviewed.tsv: path:line, query, why.
-grep -v '^#' cicd/codeql/vendored-reviewed.tsv 2>/dev/null | grep . > "${work}/reviewed.tsv" || true
+## --ours has no crate findings to match them to.
+: > "${work}/reviewed.tsv"
+((ours)) || grep -v '^#' cicd/codeql/vendored-reviewed.tsv 2>/dev/null | grep . > "${work}/reviewed.tsv" || true
 ## Ours is open unless a codeql[...] line covers it by its query ID. A
 ## crate's is left out when it isn't built, and otherwise open unless
 ## reviewed. A suppression or review that covers nothing is stale.
@@ -209,17 +226,19 @@ while IFS=$'\t' read -r state uri line rule msg; do
 		stalereview) echo "codeql-scan: cicd/codeql/vendored-reviewed.tsv: ${uri} ${line} has no such finding now"; suppressOk=0 ;;
 	esac
 done < "${work}/judged.tsv"
-echo "codeql-scan: of the crates' findings, ${nReviewed} were reviewed, ${nNotBuilt} are in files the build leaves out, and ${nUnshipped} in crates the release binary doesn't link"
+((ours)) || echo "codeql-scan: of the crates' findings, ${nReviewed} were reviewed, ${nNotBuilt} are in files the build leaves out, and ${nUnshipped} in crates the release binary doesn't link"
 bad=0
 if ((! baitSeen)); then echo "codeql-scan: nothing reported in the planted ${bait}"; bad=1; fi
 if ((! full)); then bad=1; fi
-if ((! clean)); then echo "codeql-scan: $(wc -l < "${art}/findings.txt") finding(s), listed in cicd/artifacts/codeql/findings.txt"; bad=1; fi
+if ((! clean)); then echo "codeql-scan: $(wc -l < "${art}/findings.txt") finding(s), listed in ${art#"${root}/"}/findings.txt"; bad=1; fi
 if ((! suppressOk)); then bad=1; fi
 ((bad == 0)) || exit 1
-echo "codeql-scan: OK: nothing found in our code or the crates, the bait was caught, and the SARIF is in cicd/artifacts/codeql/ ($((SECONDS - start)) s)"
+what="our code or the crates"; ((ours)) && what="our code, with the crates' code left out"
+echo "codeql-scan: OK: nothing found in ${what}, the bait was caught, and the SARIF is in ${art#"${root}/"}/ ($((SECONDS - start)) s)"
 
 
 ##	History:
 ##		- 2026-10-23: Copied from shcl's, for Rust alone, over the vendored tree.
 ##		- 2026-10-23: The profiling build's crates are left out of the copy.
 ##		- 2026-10-25: A quarter of the cores by default.
+##		- 2026-11-10: --ours.

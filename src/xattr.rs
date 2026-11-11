@@ -145,11 +145,17 @@ fn inode_text(dev: u64, ino: u64, digest: &[u8; 32]) -> String {
 }
 
 impl OnFile {
-	/// A missing or unreadable attribute reads as absent. Nothing here is
-	/// trusted until its size and time are checked against the file.
-	pub fn read(fd: RawFd) -> OnFile {
-		let get = |n| fget(fd, n).ok().flatten();
-		let b3 = text_of(get(B3_DIGEST))
+	/// A missing or unsupported attribute reads as absent. Any other error is
+	/// returned, since taking it for no set would get the set written over
+	/// unseen. Nothing here is trusted until its size and time are checked
+	/// against the file.
+	pub fn read(fd: RawFd) -> io::Result<OnFile> {
+		let get = |n: &CStr| {
+			fget(fd, n).map_err(|e| {
+				io::Error::new(e.kind(), format!("can't read {}: {e}", n.to_string_lossy()))
+			})
+		};
+		let b3 = text_of(get(B3_DIGEST)?)
 			.and_then(|t| b64u_decode(&t))
 			.and_then(|d| d.try_into().ok());
 		let mut of = OnFile {
@@ -157,20 +163,20 @@ impl OnFile {
 			..Default::default()
 		};
 		if of.b3.is_some() {
-			of.b3_bytes = int_of(get(B3_BYTES));
-			of.b3_mtime_us = int_of(get(B3_MTIME));
-			of.b3_date_us = int_of(get(B3_DATE));
-			of.b3_inode = inode_of(get(B3_INODE));
+			of.b3_bytes = int_of(get(B3_BYTES)?);
+			of.b3_mtime_us = int_of(get(B3_MTIME)?);
+			of.b3_date_us = int_of(get(B3_DATE)?);
+			of.b3_inode = inode_of(get(B3_INODE)?);
 		}
-		of.b2b = text_of(get(RM_B2B_CKSUM))
+		of.b2b = text_of(get(RM_B2B_CKSUM)?)
 			.and_then(|t| unhex(&t))
 			.and_then(|d| d.try_into().ok());
 		if of.b2b.is_some() {
-			of.b2b_mtime_s = text_of(get(RM_B2B_MTIME))
+			of.b2b_mtime_s = text_of(get(RM_B2B_MTIME)?)
 				.and_then(|t| String::from_utf8(t).ok())
 				.and_then(|s| s.parse().ok());
 		}
-		of
+		Ok(of)
 	}
 
 	/// The blake3 on the file still describes it.
@@ -280,6 +286,17 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't read xattrs")]
+	fn an_unreadable_set_is_an_error() {
+		let _id = test_id("df4r2");
+		let e = OnFile::read(-1).unwrap_err();
+		assert!(
+			e.to_string().starts_with("can't read user.blake3.b64u: "),
+			"{e}"
+		);
+	}
+
+	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_reads_back() {
 		let _id = test_id("de5g1");
@@ -296,7 +313,7 @@ mod tests {
 		let raw = fget(fd, RM_B2B_CKSUM).unwrap().unwrap();
 		assert_eq!(raw.len(), 129);
 		assert_eq!(raw.last(), Some(&0));
-		assert_eq!(OnFile::read(fd).b2b_current(mt), Some([0xab; 64]));
+		assert_eq!(OnFile::read(fd).unwrap().b2b_current(mt), Some([0xab; 64]));
 	}
 
 	#[test]

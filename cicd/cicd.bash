@@ -332,7 +332,7 @@ if ((gate_mode)); then
 		GIF_ENABLE=0; fOffWhy "${mode_flag}" gif
 		## Only what's named, when anything is. Each name is an area in
 		## config.bash, and a leak area keeps the leak checks its text is in.
-		_known=" "; _leakKept=()
+		_known=" "; _leakKept=(); _leakOwn=(); declare -A _keptSet=()
 		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
 		## The step each area runs in, so an area named with the --no- option
 		## that takes that step out is refused. off_why has only the options
@@ -348,12 +348,17 @@ if ((gate_mode)); then
 				if [[ -z "${_off}" && -n "${_pat}" ]] && ((no_leakcheck)); then _off="--no-leakcheck"; fi
 				if [[ -n "${_off}" ]]; then echo "--backlog-run-quick: area ${_name} and ${_off} can't go together (try --help)" >&2; exit 2; fi
 				[[ -n "${_pat}" ]] || continue
-				_matched=0; _codeql=0
-				for _step in "${LEAKCHECK_STEPS[@]}"; do
+				_matched=0; _codeql=0; _steps=("${LEAKCHECK_STEPS[@]}")
+				## A + area's step is its text, and matches nothing else.
+				if [[ "${_pat}" == +* ]]; then
+					_pat="${_pat#+}"; _steps=("${_pat}")
+					[[ -n "${_keptSet["${_pat}"]:-}" ]] || _leakOwn+=("${_pat}")
+				fi
+				for _step in "${_steps[@]}"; do
 					[[ "${_step}" == *"${_pat}"* ]] || continue
 					_matched=$((_matched + 1))
 					if [[ "${_step,,}" == *codeql* ]]; then _codeql=$((_codeql + 1)); fi
-					if [[ " ${_leakKept[*]} " != *" ${_step} "* ]]; then _leakKept+=("${_step}"); fi
+					if [[ -z "${_keptSet["${_step}"]:-}" ]]; then _keptSet["${_step}"]=1; _leakKept+=("${_step}"); fi
 				done
 				if ((no_codeql && _matched && _codeql == _matched)); then echo "--backlog-run-quick: area ${_name} and --no-codeql can't go together (try --help)" >&2; exit 2; fi
 			done
@@ -368,7 +373,8 @@ if ((gate_mode)); then
 			[[ "${_named}" == *" lint "* ]]  || { lint_off=1; fOffWhy "${_unnamed}" lint; }
 			[[ "${_named}" == *" unit "* ]]  || unit_off=1
 			[[ "${_named}" == *" it "* ]]    || it_off=1
-			((leakcheck_flag)) || LEAKCHECK_STEPS=("${_leakKept[@]}")
+			## --leakcheck keeps every leak check, and adds the + areas' own.
+			if ((leakcheck_flag)); then LEAKCHECK_STEPS+=("${_leakOwn[@]}"); else LEAKCHECK_STEPS=("${_leakKept[@]}"); fi
 		elif ((! leakcheck_flag)); then
 			LEAKCHECK_STEPS=()
 		fi
@@ -1853,6 +1859,8 @@ fCacheInUse(){   ## fCacheInUse DIR
 	[[ -n "${run_tmp_root}" && -d "${dir}" ]] || return 1
 	for d in "${run_tmp_root}/tukfs-hash/"[0-9]*_[0-9][0-9][0-9]; do
 		[[ -L "${d}/tree/target" && "${d}/tree/target" -ef "${dir}" ]] || continue
+		## A FIFO at run.pid would hang the read (2026111011092325).
+		[[ -O "${d}" && ! -L "${d}" && -f "${d}/run.pid" && ! -L "${d}/run.pid" ]] || continue
 		pid=""; { read -r pid < "${d}/run.pid"; } 2>/dev/null || continue
 		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${pid}" != "$$" && -d "/proc/${pid}" ]] && return 0
 	done
@@ -1870,6 +1878,10 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 	while IFS= read -r -d '' d; do
 		[[ -d "${d}" && ! -L "${d}" ]] || continue
 		fSafePath "${d}" 2>/dev/null || continue
+		## Ours, and plain files, before a read that a FIFO would hang
+		## (2026111011092325). fSafeRm checks the owner too, but only after
+		## git has been in it.
+		[[ -O "${d}" && -f "${d}/run.pid" && ! -L "${d}/run.pid" && -f "${d}/${run_mark}" && ! -L "${d}/${run_mark}" ]] || continue
 		pid=""; { read -r pid < "${d}/run.pid"; } 2>/dev/null || continue
 		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${pid}" != "$$" ]] || continue
 		## Not kill -0, which fails on another user's process too.
@@ -1880,8 +1892,6 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		size="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 		[[ "${size}" =~ ^[0-9]{1,15}$ ]] || size=0
 		repo=""
-		## fSafeRm checks this too, but only after git has been in it.
-		[[ -O "${d}" ]] || continue
 		if [[ -d "${d}/tree" && ! -L "${d}/tree" ]]; then
 			## The checkout it came from, which may not be this one.
 			repo="$(git -C "${d}/tree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
@@ -2094,3 +2104,5 @@ exit 0
 ##		  container, and the whole run in a user scope under it.
 ##		- 2026-11-10: The release upload's refusals run before publish, and
 ##		  no release image leaves it out of the plan.
+##		- 2026-11-10: The run folder sweeps check the owner, and that the marks
+##		  are plain files, before they read them.

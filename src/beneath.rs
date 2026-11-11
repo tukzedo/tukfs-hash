@@ -77,6 +77,12 @@ pub fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 	})
 }
 
+impl AsRawFd for Root {
+	fn as_raw_fd(&self) -> RawFd {
+		self.dir.as_raw_fd()
+	}
+}
+
 impl Root {
 	/// Opens a root folder.
 	pub fn open(path: &Path) -> io::Result<Root> {

@@ -77,7 +77,8 @@ fMake(){
 	for d in "${base}"/*_[0-9][0-9][0-9]; do
 		fMarked "${d}" || continue
 		[[ -n "$(find "${d}" -maxdepth 0 -mmin +2880 2> /dev/null)" ]] || continue
-		pid=""; { read -r pid < "${d}/run.pid"; } 2> /dev/null || true
+		## Only a plain file is read, since a FIFO would hang it (2026111011092325).
+		pid=""; [[ -f "${d}/run.pid" && ! -L "${d}/run.pid" ]] && { read -r pid < "${d}/run.pid"; } 2> /dev/null || true
 		if [[ "${pid}" =~ ^[0-9]+$ && -d "/proc/${pid}" ]]; then continue; fi
 		fSafeRm "${d}" || true
 	done
@@ -139,3 +140,4 @@ esac
 ##		  the removals take only folders make made.
 ##		- 2026-11-07: The mark is removed last, so a removal that fails
 ##		  partway leaves the folder for the sweep.
+##		- 2026-11-10: make's sweep reads run.pid only when it's a plain file.

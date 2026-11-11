@@ -98,7 +98,7 @@ The first scan reads every file and records it. Run the same scan again on a lat
 | `user.blake3.mtime`   | modified time when it was taken, microseconds since 1970
 | `user.blake3.inode`   | `device:inode:checksum` of the file it was taken from
 
-A reader trusts the checksum only when both the size and time match the file. The time is written after the checksum, and the inode is written last, so a write that stops part way is thrown away.
+A reader trusts the checksum only when both the size and time match the file. The time is written after the checksum, and the inode is written last, so a write that stops part way is thrown away. An attribute that can't be read, such as on a disk error, is reported as `xattr-error`, and that file's attributes are left as they are.
 
 A file is skipped without being read only when `user.blake3.inode` matches the file's own device and inode, and the checksum next to it. A copy that's made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. A file is never skipped by attributes from before `user.blake3.inode` existed.
 
