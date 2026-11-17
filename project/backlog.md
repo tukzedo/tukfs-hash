@@ -60,7 +60,7 @@
 - snapdiff `--find-new` trusts a birth time later than now, so after a backward clock step a renamed file can go uncompared at exit 0.
 	- ID: 2026111700232503
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261117-002325
 	- Opened by: pre-release review
@@ -70,6 +70,18 @@
 		- A read-only snapshot taken after the step is `--old`. The file is renamed before `--new`.
 		- Result: `--find-new` counts it as only in `--new` and never compares its bytes.
 	- Expected behavior [Bug]: A birth time later than now counts as unknown, and the file goes through the inode walk. The scan already never skips a file dated in the future.
+	- Reproduced [Bug]: Yes, with a unit test that sets the run's start time before the birth time. The renamed file was counted only in `--new` and not compared.
+	- Actual cause [Bug]: `born_since_old` compared the birth time only with the snapshot's time, so a birth time from a clock that was ahead looked later than the snapshot.
+	- Actual fix [Bug]: The run's start time is kept, and a birth time later than it doesn't count as born after `--old`, so the file waits for the inode walk. design.md, Snapshot diffs, says so.
+	- Decisions:
+		- Now is taken once when the run starts, not per file. A file born during the run then waits for the walk, which is the safe side and lets the test set the time.
+		- Once the clock catches up with the birth time, the file is trusted again. Nothing on disk tells a clock that was ahead from a file born after the snapshot. design.md says so.
+	- Branch: nov17-2026111700232503
+	- Test case: `dfe66` (`snapdiff::tests::a_birth_time_from_the_future_waits_for_the_walk`). It fails before the fix, `(0, 1, 0, 0)` where `(1, 0, 1, 0)` is wanted, and passes after.
+	- Swept: `born_since_old` is the only place a birth time is trusted to skip the walk. `find_by_inode` only checks that 2 birth times are equal.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Acceptance signoff: Self-closed: the item's expected behavior, pinned by a test that fails before and passes after.
+	- Closed: 20261117-095003
 
 - The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
 	- ID: 2026111700161500
