@@ -86,7 +86,7 @@
 - The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
 	- ID: 2026111700161500
 	- Type: Bug
-	- Status: Queued
+	- Status: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261117-001615
 	- Opened by: session start
@@ -96,6 +96,14 @@
 		- Result: "FAILED", with 15 error lines, all of them `PASS df4ep read error: ...` and its siblings.
 	- Expected behavior [Bug]: A PASS or SKIP line never counts as an error. A run that ends "CI/CD: done." with no FAIL line reports as passed.
 	- Probable fix [Bug]: The pattern `(^|[^[:alnum:]_-])error(\[|:)` matches the test name. Drop lines that start with the word `PASS` or `SKIP` before counting.
+	- Actual cause [Bug]: The `errs` grep matched `error:` inside the test name of a `PASS` or `SKIP` line.
+	- Actual fix [Bug]: Lines that start with `PASS` or `SKIP` are dropped from the error lines, after the grep, in the same way as the archived file list.
+	- Test case: None in the repo, since `lint-report.bash` has no test script. Checked by hand on synthetic logs.
+	- Verified: Old script reports `FAILED` (2 error lines) on a log of `PASS ... read error:` and `SKIP ... read error:` lines ending "CI/CD: done.", and the fixed one reports `CLEAN`. A log with `error: boom` and one with `FAIL ... read error:` still report `FAILED`. shellcheck passes.
+	- Swept: `lint-report.bash` has the only `errs` grep. The `warns` grep reads no `error:` pattern.
+	- Branch: nov17-2026111700161500
+	- Acceptance signoff: Self-closed: mechanical, matches the item's expected behavior.
+	- Closed: 20261117-175800
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
