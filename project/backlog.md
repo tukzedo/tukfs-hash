@@ -57,34 +57,6 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
-- snapdiff `--find-new` trusts a birth time later than now, so after a backward clock step a renamed file can go uncompared at exit 0.
-	- ID: 2026111700232503
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261117-002325
-	- Opened by: pre-release review
-	- Origin: `born_since_old` in `src/snapdiff.rs`, from 2026111011092305. Plausible, read only.
-	- Steps to reproduce [Bug]:
-		- The clock runs fast, a file is made, and then NTP steps the clock back.
-		- A read-only snapshot taken after the step is `--old`. The file is renamed before `--new`.
-		- Result: `--find-new` counts it as only in `--new` and never compares its bytes.
-	- Expected behavior [Bug]: A birth time later than now counts as unknown, and the file goes through the inode walk. The scan already never skips a file dated in the future.
-
-- The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
-	- ID: 2026111700161500
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261117-001615
-	- Opened by: session start
-	- Origin: `cicd/utility/lint-report.bash`, the `errs` grep. Confirmed.
-	- Steps to reproduce [Bug]:
-		- Run `cicd/utility/lint-report.bash --check` against `run_20261111-163431.log`, a run that passed and published.
-		- Result: "FAILED", with 15 error lines, all of them `PASS df4ep read error: ...` and its siblings.
-	- Expected behavior [Bug]: A PASS or SKIP line never counts as an error. A run that ends "CI/CD: done." with no FAIL line reports as passed.
-	- Probable fix [Bug]: The pattern `(^|[^[:alnum:]_-])error(\[|:)` matches the test name. Drop lines that start with the word `PASS` or `SKIP` before counting.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -2592,6 +2564,55 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- snapdiff `--find-new` trusts a birth time later than now, so after a backward clock step a renamed file can go uncompared at exit 0.
+	- ID: 2026111700232503
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261117-002325
+	- Opened by: pre-release review
+	- Origin: `born_since_old` in `src/snapdiff.rs`, from 2026111011092305. Plausible, read only.
+	- Steps to reproduce [Bug]:
+		- The clock runs fast, a file is made, and then NTP steps the clock back.
+		- A read-only snapshot taken after the step is `--old`. The file is renamed before `--new`.
+		- Result: `--find-new` counts it as only in `--new` and never compares its bytes.
+	- Expected behavior [Bug]: A birth time later than now counts as unknown, and the file goes through the inode walk. The scan already never skips a file dated in the future.
+	- Reproduced [Bug]: Yes, with a unit test that sets the run's start time before the birth time. The renamed file was counted only in `--new` and not compared.
+	- Actual cause [Bug]: `born_since_old` compared the birth time only with the snapshot's time, so a birth time from a clock that was ahead looked later than the snapshot.
+	- Actual fix [Bug]: The run's start time is kept, and a birth time later than it doesn't count as born after `--old`, so the file waits for the inode walk. design.md, Snapshot diffs, says so.
+	- Decisions:
+		- Now is taken once when the run starts, not per file. A file born during the run then waits for the walk, which is the safe side and lets the test set the time.
+		- Once the clock catches up with the birth time, the file is trusted again. Nothing on disk tells a clock that was ahead from a file born after the snapshot. design.md says so.
+	- Branch: nov17-2026111700232503
+	- Test case: `dfe66` (`snapdiff::tests::a_birth_time_from_the_future_waits_for_the_walk`). It fails before the fix, `(0, 1, 0, 0)` where `(1, 0, 1, 0)` is wanted, and passes after.
+	- Swept: `born_since_old` is the only place a birth time is trusted to skip the walk. `find_by_inode` only checks that 2 birth times are equal.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Acceptance signoff: Self-closed: the item's expected behavior, pinned by a test that fails before and passes after.
+	- Closed: 20261117-095003
+
+- The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
+	- ID: 2026111700161500
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261117-001615
+	- Opened by: session start
+	- Origin: `cicd/utility/lint-report.bash`, the `errs` grep. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Run `cicd/utility/lint-report.bash --check` against `run_20261111-163431.log`, a run that passed and published.
+		- Result: "FAILED", with 15 error lines, all of them `PASS df4ep read error: ...` and its siblings.
+	- Expected behavior [Bug]: A PASS or SKIP line never counts as an error. A run that ends "CI/CD: done." with no FAIL line reports as passed.
+	- Probable fix [Bug]: The pattern `(^|[^[:alnum:]_-])error(\[|:)` matches the test name. Drop lines that start with the word `PASS` or `SKIP` before counting.
+	- Actual cause [Bug]: The `errs` grep matched `error:` inside the test name of a `PASS` or `SKIP` line.
+	- Actual fix [Bug]: Lines that start with `PASS` or `SKIP` are dropped from the error lines, after the grep, in the same way as the archived file list.
+	- Test case: None in the repo, since `lint-report.bash` has no test script. Checked by hand on synthetic logs.
+	- Verified: Old script reports `FAILED` (2 error lines) on a log of `PASS ... read error:` and `SKIP ... read error:` lines ending "CI/CD: done.", and the fixed one reports `CLEAN`. A log with `error: boom` and one with `FAIL ... read error:` still report `FAILED`. shellcheck passes.
+	- Swept: `lint-report.bash` has the only `errs` grep. The `warns` grep reads no `error:` pattern.
+	- Branch: nov17-2026111700161500
+	- Acceptance signoff: Self-closed: mechanical, matches the item's expected behavior.
+	- Closed: 20261117-175800
+	- Verified 20261117: on the real `run_20261117-002927.log`, `--check --force --no-mark` gives CLEAN, and the script as of `713f61e` gives FAILED with 20 error lines.
 
 - A failed scan's reason isn't in its `--log`.
 	- ID: 2026111700232502

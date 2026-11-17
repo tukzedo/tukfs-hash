@@ -600,6 +600,9 @@ struct Checker<'a> {
 	show_all: bool,
 	// When --old was frozen, where that's known.
 	frozen: Option<SystemTime>,
+	// When the run started. A birth time past it came from a clock that was
+	// ahead and has since been set back.
+	now: SystemTime,
 	tally: Tally,
 	bufs: CompareBufs,
 	held: Vec<Held>,
@@ -620,6 +623,7 @@ impl<'a> Checker<'a> {
 			src,
 			show_all,
 			frozen,
+			now: SystemTime::now(),
 			tally: Tally::default(),
 			bufs: CompareBufs::default(),
 			held: Vec::new(),
@@ -696,8 +700,10 @@ impl<'a> Checker<'a> {
 		self.settle(&name, old, (&pair.new, &new_md));
 	}
 
+	// A birth time later than now isn't trusted, as scan doesn't trust a date
+	// in the future, so that file waits for the walk.
 	fn born_since_old(&self, md: &Metadata) -> bool {
-		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f)
+		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f && b <= self.now)
 	}
 
 	fn settle(&mut self, name: &str, old: Option<(&Path, &Metadata)>, new: (&Path, &Metadata)) {
@@ -1225,6 +1231,44 @@ transid marker was 12\n";
 		// Not known, or taken after, and both wait for it, to the same end.
 		assert_eq!(found_in(None), (2, 1, 1, 0));
 		assert_eq!(found_in(Some(born + Duration::from_secs(60))), (2, 1, 1, 0));
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_birth_time_from_the_future_waits_for_the_walk() {
+		let _id = test_id("dfe66");
+		let dir = scratch("snapdiff_clock");
+		let (old, new) = (dir.join("old"), dir.join("new"));
+		fs::create_dir(&old).unwrap();
+		fs::create_dir(&new).unwrap();
+		// Renamed since --old, with a link keeping its inode.
+		fs::write(old.join("was"), b"w").unwrap();
+		fs::hard_link(old.join("was"), new.join("now")).unwrap();
+		let Ok(born) = fs::metadata(new.join("now")).and_then(|m| m.created()) else {
+			eprintln!("no birth times in {}, skipped", dir.display());
+			return;
+		};
+		let (old_root, new_root) = (Root::open(&old).unwrap(), Root::open(&new).unwrap());
+		let src = Source::FindNew(dir.join("unread"));
+		let ino = fs::metadata(new.join("now")).unwrap().ino();
+		let found_at = |now| {
+			// The clock was ahead when the file was made, and set back before
+			// --old was taken.
+			let frozen = born - Duration::from_secs(60);
+			let mut c = Checker::new(&old_root, &new_root, &src, false, Some(frozen));
+			c.now = now;
+			c.pair(&Pair {
+				ino: Some(ino),
+				..Pair::same(PathBuf::from("now"))
+			});
+			let held = c.held.len();
+			c.finish();
+			(held, c.tally.only_new, c.tally.checked, c.tally.missing)
+		};
+		// Born later than now, so found by inode and compared.
+		assert_eq!(found_at(born - Duration::from_secs(30)), (1, 0, 1, 0));
+		// Once the clock is past it, it's trusted again.
+		assert_eq!(found_at(born + Duration::from_secs(30)), (0, 1, 0, 0));
 	}
 
 	#[test]
