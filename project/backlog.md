@@ -32,8 +32,7 @@
 - No one-line install script.
 	- ID: 2026110218175402
 	- Type: Feature
-	- Status: Stalled
-		- Held for: a published release, and the repo going public.
+	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0
 	- Opened: 20261102-181754
@@ -45,19 +44,19 @@
 		- README gets an Installation section, with the packages first, then the one-liner, then building it yourself.
 	- Progress log:
 		- 2026-11-02: README has the Installation section with "Build it yourself" only. Packages and the one-liner go in above it.
+		- 2026-11-17: Queued again. The release upload is in (2026110218175401), and the repo is public.
 	- Decisions:
 		- No `install.ps1`. The tool only runs on Linux.
 
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
-	- Status: Stalled
-		- Held for: the repo going public.
+	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
-	- Note: The repo is private, so this can wait until it goes public.
+	- Note: Queued again 2026-11-17, since the repo is public.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
