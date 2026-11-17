@@ -202,7 +202,8 @@ fn main() {
 	let code = match sampled(|| real_main(&argv)) {
 		Ok(c) => c,
 		Err(e) => {
-			err!("tukfs-hash: {e}");
+			// say::err, so a failed scan's reason is in its --log too.
+			say::err(&format!("tukfs-hash: {e}"));
 			1
 		}
 	};

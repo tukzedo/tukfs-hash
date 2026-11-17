@@ -695,15 +695,15 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 
 /// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
-	if let Some(l) = &o.log {
-		say::open_log(l, sudo_ids())?;
-	}
 	let Plan {
 		groups: planned,
 		dropped,
 		unresolved,
 		mounts,
 	} = plan(&o.roots, &o.threads)?;
+	if let Some(l) = &o.log {
+		say::open_log(l, sudo_ids(), &mounts)?;
+	}
 	for d in &dropped {
 		say::err(&format!("skipping root {d}"));
 	}

@@ -141,7 +141,7 @@ Names that aren't plain text are printed with `\xHH` escapes, and a backslash is
 
 ## Installation
 
-Release builds are on the [releases page](https://github.com/tukzedo/tukfs-hash/releases). The only one so far is 1.0.0-beta.1, which is marked as a pre-release. Each release has a binary for x86_64 Linux and one for arm64, a `.deb` and an `.rpm` of each, and a sha256 sums file. They need glibc 2.28 or newer, so they run on RHEL 8, Debian 10, Ubuntu 18.10, and anything newer.
+Release builds are on the [releases page](https://github.com/tukzedo/tukfs-hash/releases). The newest is 1.0.0-beta.2. Both releases so far are marked as pre-releases. Each release has a binary for x86_64 Linux and one for arm64, a `.deb` and an `.rpm` of each, and a sha256 sums file. They need glibc 2.28 or newer, so they run on RHEL 8, Debian 10, Ubuntu 18.10, and anything newer.
 
 Download the build for the box and the sums file into one folder. Then check it, and install the package or the plain binary. On arm64, put `arm64` in place of `x86_64`.
 
