@@ -104,6 +104,7 @@
 	- Branch: nov17-2026111700161500
 	- Acceptance signoff: Self-closed: mechanical, matches the item's expected behavior.
 	- Closed: 20261117-175800
+	- Verified 20261117: on the real `run_20261117-002927.log`, `--check --force --no-mark` gives CLEAN, and the script as of `713f61e` gives FAILED with 20 error lines.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
