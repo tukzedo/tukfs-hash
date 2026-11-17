@@ -29,61 +29,6 @@
 
 ## Issues
 
-- Pre-next-cut: Make CLI output much nicer, and show progress %.
-	- ID: 2026111019070740
-	- Type: Enhancement
-	- Status: Waiting on UAT
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-190707
-	- Opened by: user
-	- Requirements [Feature]:
-		- Make CLI output much nicer.
-		- Show progress %.
-		- Lines should never wrap for being too long.
-			- One line per file.
-			- Lines can be arbitrarily long in logfile, e.g. `--log[=]<filespec>`.
-	- Note: A scan shows `| ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
-	- Progress log:
-		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
-		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
-		- 20261110: children 2026111019145405 wait on UAT, and the rest are closed
-	- Test case: its children's: 2026111019145393: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.; 2026111019145405: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
-
-- Progress and summary lines wrap on a terminal, and there's no log of them in full.
-	- ID: 2026111019145405
-	- Type: Enhancement
-	- Status: Waiting on UAT
-		- Run a scan in a narrow terminal, and judge the look. See the Decisions row.
-	- Needs hand testing: whether the progress, root and summary lines read well in 80 and 200 columns.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Opened: 20261110-191454
-	- Opened by: 2026111019070740
-	- Parent ID: 2026111019070740
-	- Prereq IDs: 2026111019145393
-		- It changes the same lines, and adds the folder percent to them.
-	- Requirements [Feature]:
-		- The parent's "much nicer" output, its lines that never wrap, and its `--log[=]FILE`.
-		- On a terminal, each progress, summary and root line fits its width. Each file or root named takes one line, cut to fit.
-		- `--log FILE` gets every line in full, however long.
-	- Note: A progress line is about 200 characters today, and the summary line about 160.
-	- Note: tests/integration.bash greps `hashed N` and `files N` out of the summary line, and the demo's map matches `^\S+(?=: files \d+ hashed )`. Keep both working, or change them with the format.
-	- Estimated effort: Avg
-	- Actual effort: Avg
-	- Progress log:
-		- `src/say.rs` prints the scan's lines. On a terminal a progress or root line is cut to its width with `~`, and the summary is broken at its ` | ` marks, indented. A pipe or file gets them in full. stderr is never cut.
-		- A progress line now starts `[time] group ~N% of SIZE, RATE/s |`, so a cut keeps those. The summary line and what's stored in the database didn't change.
-		- `--log FILE` and `--log=FILE` append every line, stderr's included. The scan leaves the log out, and refuses a link at its name.
-		- 2026-11-10: `df1q3` (`each_command_takes_its_own_flags`) counts 31 command and option pairs, up from 30, for `--log`.
-		- Verified: `df4xn` and `df4xq` fail on the code from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. Seen on a pty at 80 and 100 columns.
-	- Decisions:
-		- `~` marks a cut, as the demo gif's renderer does, and stays ASCII.
-		- Only the scan's own lines are fitted. `report`, `gone` and `snapdiff` print one line per file for scripts, and a cut there would lose the path.
-		- stderr isn't cut, since it says what went wrong.
-		- The width is asked for each line, so a resized window is followed. A char counts as one column, and a tab to the next stop of 8.
-		- The demo pipes its output, so it isn't cut, and the gif changes only by 2026111019145393's percent.
-	- Swept: every `out!` and `err!` in `scan.rs` outside its tests, and every `Opts` built, in `main.rs`, `soak.rs` and 3 tests.
-	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
-
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
@@ -139,6 +84,20 @@
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
+
+- The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
+	- ID: 2026111700161500
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261117-001615
+	- Opened by: session start
+	- Origin: `cicd/utility/lint-report.bash`, the `errs` grep. Confirmed.
+	- Steps to reproduce [Bug]:
+		- Run `cicd/utility/lint-report.bash --check` against `run_20261111-163431.log`, a run that passed and published.
+		- Result: "FAILED", with 15 error lines, all of them `PASS df4ep read error: ...` and its siblings.
+	- Expected behavior [Bug]: A PASS or SKIP line never counts as an error. A run that ends "CI/CD: done." with no FAIL line reports as passed.
+	- Probable fix [Bug]: The pattern `(^|[^[:alnum:]_-])error(\[|:)` matches the test name. Drop lines that start with `PASS ` or `SKIP ` before counting.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -1619,6 +1578,66 @@
 	- Acceptance signoff: Self-closed.
 	- Closed: 20261015-130151
 
+- Pre-next-cut: Make CLI output much nicer, and show progress %.
+	- ID: 2026111019070740
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-190707
+	- Opened by: user
+	- Requirements [Feature]:
+		- Make CLI output much nicer.
+		- Show progress %.
+		- Lines should never wrap for being too long.
+			- One line per file.
+			- Lines can be arbitrarily long in logfile, e.g. `--log[=]<filespec>`.
+	- Note: A scan shows `| ~N% of SIZE` today only when every root in a group is a whole filesystem (`mounts::shows_whole`), so a folder scan, the demo included, shows none.
+	- Progress log:
+		- 2026-11-10: Split in 2. The folder percent is child 2026111019145393. The line layout, no wrapping and `--log` are child 2026111019145405.
+		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
+		- 20261110: children 2026111019145405 wait on UAT, and the rest are closed
+		- 2026-11-17: Both children are Done.
+	- Test case: its children's: 2026111019145393: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.; 2026111019145405: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
+	- Acceptance signoff: Self-closed: every requirement checks out on a pty and in the log, per 2026111019145405, and all 7 test IDs passed in the 2 full runs of 2026-11-11.
+	- Closed: 20261117-001500
+
+- Progress and summary lines wrap on a terminal, and there's no log of them in full.
+	- ID: 2026111019145405
+	- Type: Enhancement
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261110-191454
+	- Opened by: 2026111019070740
+	- Parent ID: 2026111019070740
+	- Prereq IDs: 2026111019145393
+		- It changes the same lines, and adds the folder percent to them.
+	- Requirements [Feature]:
+		- The parent's "much nicer" output, its lines that never wrap, and its `--log[=]FILE`.
+		- On a terminal, each progress, summary and root line fits its width. Each file or root named takes one line, cut to fit.
+		- `--log FILE` gets every line in full, however long.
+	- Note: A progress line is about 200 characters today, and the summary line about 160.
+	- Note: tests/integration.bash greps `hashed N` and `files N` out of the summary line, and the demo's map matches `^\S+(?=: files \d+ hashed )`. Keep both working, or change them with the format.
+	- Estimated effort: Avg
+	- Actual effort: Avg
+	- Progress log:
+		- `src/say.rs` prints the scan's lines. On a terminal a progress or root line is cut to its width with `~`, and the summary is broken at its ` | ` marks, indented. A pipe or file gets them in full. stderr is never cut.
+		- A progress line now starts `[time] group ~N% of SIZE, RATE/s |`, so a cut keeps those. The summary line and what's stored in the database didn't change.
+		- `--log FILE` and `--log=FILE` append every line, stderr's included. The scan leaves the log out, and refuses a link at its name.
+		- 2026-11-10: `df1q3` (`each_command_takes_its_own_flags`) counts 31 command and option pairs, up from 30, for `--log`.
+		- Verified: `df4xn` and `df4xq` fail on the code from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. Seen on a pty at 80 and 100 columns.
+		- 2026-11-17: Verified: scans of 120 files under a 230-character path, on a pty at 80 and 200 columns. No line went past the width, with tabs counted as 8. A root longer than the width was cut with `~`, and the summary broke into 4 lines at 80 and stayed one line at 200. Each `--log` had every line in full, up to 212 characters. `df4xk`, `df4xq` and `df4xn` passed in both full runs of 2026-11-11.
+		- 2026-11-17: Check answered (a): only the scan's lines are fitted, and each progress line is a new line.
+	- Decisions:
+		- `~` marks a cut, as the demo gif's renderer does, and stays ASCII.
+		- Only the scan's own lines are fitted. `report`, `gone` and `snapdiff` print one line per file for scripts, and a cut there would lose the path.
+		- stderr isn't cut, since it says what went wrong.
+		- The width is asked for each line, so a resized window is followed. A char counts as one column, and a tab to the next stop of 8.
+		- The demo pipes its output, so it isn't cut, and the gif changes only by 2026111019145393's percent.
+	- Swept: every `out!` and `err!` in `scan.rs` outside its tests, and every `Opts` built, in `main.rs`, `soak.rs` and 3 tests.
+	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
+	- Acceptance signoff: Self-closed: the requirements are measurable, and a pty check at 80 and 200 columns met each one. The look follows the Decisions row.
+	- Closed: 20261117-001500
+
 - A folder scan has no percent done.
 	- ID: 2026111019145393
 	- Type: Enhancement
@@ -1635,6 +1654,7 @@
 		- A folder root's bytes are counted by a walk beside the scan, by the walk's rules. Whole filesystems keep their used space. design.md, "Runs and exit codes", says so.
 		- 2026-11-10: `df1pk` and `df4jb` call `size_parts` in place of `used_under`, and assert a folder comes back to be counted, where they asserted no size.
 		- Verified: `df4x7` and `df4x8` fail on the build from before and pass after. `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas.
+		- 2026-11-17: Check answered (a): a counting walk beside the scan. It's what the parent item asked for, and backup tools such as restic do the same.
 	- Decisions:
 		- The count runs beside the scan rather than first, so the scan starts at once. Until it's done, the lines have no percent. A stop ends it.
 		- The summary waits for the count, so a short scan such as the demo always ends with its percent.
