@@ -31,9 +31,19 @@ pub enum Fit {
 /// Appends every line from here on to `path`. Under sudo a log the scan
 /// makes is handed to that user, as the database is, so their own scan can
 /// add to it. One that was already there keeps its owner (2026111019430926).
-pub fn open_log(path: &Path, sudo: Option<(u32, u32)>) -> Result<(), String> {
+pub fn open_log(
+	path: &Path,
+	sudo: Option<(u32, u32)>,
+	mounts: &[crate::mounts::Mount],
+) -> Result<(), String> {
 	let failed = |e: String| format!("--log {e}");
 	let path = crate::util::canonical_name(path).map_err(failed)?;
+	if let Some(t) = crate::mounts::hands_off_at(mounts, &path) {
+		return Err(failed(format!(
+			"{} is on {t}, which isn't written to from Linux; put the log elsewhere",
+			show_path(&path)
+		)));
+	}
 	let dir = crate::scan::open_dir("--log", &path, sudo)?;
 	let (f, made) = open_append(&dir, path.file_name().unwrap_or_default()).map_err(|e| match e
 		.raw_os_error()
@@ -210,9 +220,28 @@ mod tests {
 		let _id = test_id("df4xq");
 		let d = crate::testutil::scratch("say_log_link");
 		std::os::unix::fs::symlink(d.join("elsewhere"), d.join("scan.log")).unwrap();
-		let got = open_log(&d.join("scan.log"), None).unwrap_err();
+		let got = open_log(&d.join("scan.log"), None, &[]).unwrap_err();
 		assert!(got.starts_with("--log "), "{got}");
 		assert!(!d.join("elsewhere").exists());
+	}
+
+	// Nothing is written to NTFS, APFS or HFS+, the log included.
+	#[test]
+	fn a_log_on_ntfs_is_refused() {
+		let _id = test_id("dfdmk");
+		let d = crate::testutil::scratch("say_log_ntfs");
+		let win = crate::mounts::Mount {
+			id: 1,
+			parent: 0,
+			dev: "0:1".into(),
+			root: "/".into(),
+			point: std::fs::canonicalize(&*d).unwrap(),
+			fstype: "ntfs3".into(),
+			source: "/dev/sdz1".into(),
+		};
+		let got = open_log(&d.join("scan.log"), None, &[win]).unwrap_err();
+		assert!(got.contains("is on ntfs3"), "{got}");
+		assert!(!d.join("scan.log").exists());
 	}
 
 	// Only a log this made is handed over under sudo, so root's own file
@@ -237,7 +266,7 @@ mod tests {
 		let d = crate::testutil::scratch("say_log_folder");
 		let me = std::fs::metadata(&*d).unwrap();
 		let log = d.join("scan.log");
-		let said = open_log(&log, Some((me.uid() + 1, me.gid()))).unwrap_err();
+		let said = open_log(&log, Some((me.uid() + 1, me.gid())), &[]).unwrap_err();
 		assert!(
 			said.starts_with("--log folder ") && said.ends_with("; refused"),
 			"{said}"

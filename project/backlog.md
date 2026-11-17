@@ -85,6 +85,20 @@
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
 
+- snapdiff `--find-new` trusts a birth time later than now, so after a backward clock step a renamed file can go uncompared at exit 0.
+	- ID: 2026111700232503
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261117-002325
+	- Opened by: pre-release review
+	- Origin: `born_since_old` in `src/snapdiff.rs`, from 2026111011092305. Plausible, read only.
+	- Steps to reproduce [Bug]:
+		- The clock runs fast, a file is made, and then NTP steps the clock back.
+		- A read-only snapshot taken after the step is `--old`. The file is renamed before `--new`.
+		- Result: `--find-new` counts it as only in `--new` and never compares its bytes.
+	- Expected behavior [Bug]: A birth time later than now counts as unknown, and the file goes through the inode walk. The scan already never skips a file dated in the future.
+
 - The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
 	- ID: 2026111700161500
 	- Type: Bug
@@ -1039,6 +1053,25 @@
 	- Verified: 2026-10-15 06:49 root run. The lock was taken on all 3 hosts before the first shutdown and released at 06:50, after all 3 were running again. Nothing else waited on it.
 	- Acceptance signoff: Self-closed after the root run.
 	- Closed: 20261015-130151
+
+- A scan's `--log` can be made and written on NTFS, APFS or HFS+.
+	- ID: 2026111700232501
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Opened: 20261117-002325
+	- Opened by: pre-release review
+	- Origin: 2026111019145405. Confirmed by reading. No NTFS mount here to run it on.
+	- Steps to reproduce [Bug]:
+		- `scan --root /mnt/win --db ~/t.sqlite --log /mnt/win/scan.log`, with `/mnt/win` on ntfs3.
+		- Result: the log is made there and written for the whole scan. The same path as `--db` is refused.
+	- Progress log:
+		- 2026-11-17: `say::open_log` refuses a hands-off mount, as the database does. The log opens right after the plan, so it uses the plan's mount table.
+		- Verified: `dfdmk` fails without the check and passes with it.
+	- Swept: every file the scan makes or appends to: the database, its lock and journal, and the log. `accept` and `prune` write only the database.
+	- Test case: `dfdmk` (`a_log_on_ntfs_is_refused`).
+	- Acceptance signoff: Self-closed: the rule is in design.md and memory, and the test fails before and passes after.
+	- Closed: 20261117-002325
 
 - Integration check df0pq can't see snapdiff memory growth under about 13 MB.
 	- ID: 2026111011092302
@@ -2558,6 +2591,24 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- A failed scan's reason isn't in its `--log`.
+	- ID: 2026111700232502
+	- Type: Bug
+	- Status: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261117-002325
+	- Opened by: pre-release review
+	- Origin: 2026111019145405. Confirmed.
+	- Steps to reproduce [Bug]:
+		- `scan --root T --exclude T --log L`.
+		- Result: exit 1, and "nothing to scan" is on stderr but not in L. A locked database or a failed run's cause is lost the same way.
+	- Progress log:
+		- 2026-11-17: `main` prints the error through `say::err`, which also writes the log.
+		- Verified: `dfdmm` fails without the fix and passes with it.
+	- Test case: integration `dfdmm`.
+	- Acceptance signoff: Self-closed: design.md already says the log has stderr's lines. Test fails before and passes after.
+	- Closed: 20261117-002325
 
 - The second Ctrl+C checks fail on vmDebARM64: the first stop finishes before the second INT gets there.
 	- ID: 2026111021192345

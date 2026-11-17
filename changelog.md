@@ -4,6 +4,32 @@
 
 # Changelog
 
+## 1.0.0-beta.2
+
+- A scan shows how far along it is, as `~N% of SIZE`, for whole filesystems and for folders.
+
+- On a terminal, a scan's lines fit its width. `--log FILE` appends every line in full, error lines included.
+
+- A read error found by `--verify` stays open until a clean read, so a plain scan the same day reads the file again.
+
+- `--exclude` and `--no-xattr` match a folder under any of its names, bind mounts included. A path that can't be resolved stops the scan, and a root inside an excluded folder is skipped.
+
+- A root that's a bind mount of a folder inside another root is skipped.
+
+- Under sudo, a database or log folder owned by neither the user nor root is refused.
+
+- An attribute that can't be read is reported as `xattr-error`, and the file's attributes are left alone.
+
+- On NTFS, APFS and HFS+, a scan goes by the database row when it matches the file's size and time. Nothing is written there, the log included.
+
+- Each command refuses an option it doesn't take.
+
+- snapdiff reads its change list as it goes, so a long list doesn't grow its memory. `--find-new` lists files in the change list's order.
+
+- SQLite 3.54.1, for RUSTSEC-2026-0459.
+
+- A release run on `main` tags the commit and puts the release set on the git host.
+
 ## 1.0.0-beta.1
 
 - First version: scan, plan, runs, report, gone, accept, prune and snapdiff.

@@ -1248,6 +1248,9 @@ lg="${work}/lg"; mkdir -p "${lg}/tree"
 printf 'log\n' > "${lg}/tree/f"
 rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --progress 3600 --log="${lg}/tree/scan.log" > "${lg}/out.txt" 2>&1 || rc=$?
 check df4xn "--log: the scan's lines in full, and the log not read" "${rc} $(cmp -s "${lg}/out.txt" "${lg}/tree/scan.log" && echo same) $(grep -oE 'files [0-9]+' "${lg}/tree/scan.log" | head -1)" "0 same files 1"
+# A scan that stops on an error has the reason in its log too.
+rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --exclude "${lg}/tree" --log "${lg}/why.log" > /dev/null 2>&1 || rc=$?
+check dfdmm "--log: a refused scan's reason is in the log" "${rc} $(grep -cxF 'tukfs-hash: nothing to scan' "${lg}/why.log" || true)" "1 1"
 
 # 36. A second Ctrl+C ends the scan at once, with 130, as README and --help
 # say. The run is left marked running, and the next scan marks it killed. The
