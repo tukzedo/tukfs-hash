@@ -111,7 +111,7 @@
 		- Run `cicd/utility/lint-report.bash --check` against `run_20261111-163431.log`, a run that passed and published.
 		- Result: "FAILED", with 15 error lines, all of them `PASS df4ep read error: ...` and its siblings.
 	- Expected behavior [Bug]: A PASS or SKIP line never counts as an error. A run that ends "CI/CD: done." with no FAIL line reports as passed.
-	- Probable fix [Bug]: The pattern `(^|[^[:alnum:]_-])error(\[|:)` matches the test name. Drop lines that start with `PASS ` or `SKIP ` before counting.
+	- Probable fix [Bug]: The pattern `(^|[^[:alnum:]_-])error(\[|:)` matches the test name. Drop lines that start with the word `PASS` or `SKIP` before counting.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
