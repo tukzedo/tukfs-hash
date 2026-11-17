@@ -29,11 +29,13 @@
 
 ## Issues
 
-- No one-line install script.
+- There is currently no one-line install script.
 	- ID: 2026110218175402
 	- Type: Feature
-	- Status: Queued
+	- Status: Waiting on UAT
+		- The README section and the script's plan and messages are wording to judge. The one-liner's raw URL on `main` works only once a release takes `install.bash` there.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Needs hand testing: read README's "Direct stable and dev install scripts", and run `bash install.bash --target system` once, with the real sudo. After the next release, run the one-liner from README as given.
 	- Target version: 1.0.0
 	- Opened: 20261102-181754
 	- Opened by: CICD review
@@ -45,8 +47,23 @@
 	- Progress log:
 		- 2026-11-02: README has the Installation section with "Build it yourself" only. Packages and the one-liner go in above it.
 		- 2026-11-17: Queued again. The release upload is in (2026110218175401), and the repo is public.
+		- 2026-11-17: `install.bash` is in the repo's top folder, and README's Installation has the packages, then the one-liner and its install paths, then "Build it yourself". design.md, "Build and release", says how it picks a release.
+	- Verified:
+		- `install-check.bash REPO` passes 88 of 88: options, refusals of another OS, CPU or glibc, a folder at the name, a folder it can't write, a fresh install, a second run that changes nothing, an upgrade, a link at the name, compact JSON, stable and dev picks, drafts skipped, a bad or missing sum, a build that won't start, an odd tag, the PATH notes, the system target through a stand-in sudo, the prompt on a pty, and 4 runs against the real GitHub releases.
+		- The same installer passes a stable, dev, repeat, bad-sum and old-glibc run under Bash 3.2.57.
+		- The check of the release list failed on JSON with `{"tag_name"` at a line start, before the fix that splits on braces too. The folder-at-the-name check failed on `54a9b27` and passes on `e7e61ab`.
+		- shellcheck is clean, and so are mdcheck and markdownlint on README.md and design.md.
 	- Decisions:
 		- No `install.ps1`. The tool only runs on Linux.
+		- The system target installs the plain binary to `/usr/local/bin`, through sudo when not root, rather than the `.deb` or `.rpm`. One way for every distro, and the packages stay the first way README gives.
+		- Linux only, x86_64 and arm64. It refuses a box without glibc 2.28 or newer before downloading, and runs the download once with `--version` before it replaces anything.
+		- "Already installed" goes by the sha256 of the file in place, not by `--version`, so a dev build of the same version is still replaced.
+		- The answer is read from the terminal, so it also works as `curl ... | bash`. With no terminal and no `--yes`, it stops before downloading.
+		- README's new headings are the house names, "Packages and installers" and "Direct stable and dev install scripts". "Build it yourself" keeps its name.
+		- Copyright t00mietum, MIT, the same as the repo's other scripts.
+	- Branch: nov17b-2026110218175402
+	- Commit: `54a9b27`, `e7e61ab`
+	- Test case: none with an ID. The private `install-check.bash REPO` in the tools folder, since private checks stay out of the pipeline (2026102508462883).
 
 - No public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637

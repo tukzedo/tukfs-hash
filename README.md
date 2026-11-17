@@ -28,6 +28,8 @@ It's a utility under [tukfs](https://github.com/tukzedo/tukfs), which is part of
 - [Attributes](#attributes)
 - [Usage](#usage)
 - [Installation](#installation)
+	- [Packages and installers](#packages-and-installers)
+	- [Direct stable and dev install scripts](#direct-stable-and-dev-install-scripts)
 	- [Build it yourself](#build-it-yourself)
 - [Set up development environment](#set-up-development-environment)
 - [Copyright and license](#copyright-and-license)
@@ -143,6 +145,8 @@ Names that aren't plain text are printed with `\xHH` escapes, and a backslash is
 
 Release builds are on the [releases page](https://github.com/tukzedo/tukfs-hash/releases). The newest is 1.0.0-beta.2. Both releases so far are marked as pre-releases. Each release has a binary for x86_64 Linux and one for arm64, a `.deb` and an `.rpm` of each, and a sha256 sums file. They need glibc 2.28 or newer, so they run on RHEL 8, Debian 10, Ubuntu 18.10, and anything newer.
 
+### Packages and installers
+
 Download the build for the box and the sums file into one folder. Then check it, and install the package or the plain binary. On arm64, put `arm64` in place of `x86_64`.
 
 ~~~bash
@@ -153,6 +157,19 @@ sudo install -m 0755 tukfs-hash-*-linux-x86_64 /usr/local/bin/tukfs-hash    # an
 ~~~
 
 The packages put it at `/usr/bin/tukfs-hash`.
+
+### Direct stable and dev install scripts
+
+~~~bash
+bash <(curl -fsSL https://raw.githubusercontent.com/tukzedo/tukfs-hash/main/install.bash)
+~~~
+
+It picks the build for the CPU, checks it against the release's sums file, and says what it'll do before it asks to go ahead. The defaults are sane, and `--help` lists the options. While there's no stable release, it takes the newest pre-release. Running it again is safe, and changes nothing when that build is already in place.
+
+| Install for | Path
+| :---        | :---
+| The user    | `~/.local/bin/tukfs-hash`
+| The system  | `/usr/local/bin/tukfs-hash`
 
 ### Build it yourself
 
