@@ -2661,6 +2661,25 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- Containers kept by --keep-temp, or left by a killed run, stay after the sweep takes their run folder.
+	- ID: 2026111713584936
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261117-135849
+	- Opened by: CICD review
+	- Steps to reproduce [Bug]: Run with `--keep-temp` and wait 2 days. The next run sweeps the folder, and `docker ps -a` still lists its stopped containers. 20 from 5 runs of 2026-11-02 and 2026-11-07 were on b23.
+	- Expected behavior [Bug]: A stopped container goes with its run's folder, as Cleanup after a run asks.
+	- Actual cause [Bug]: The sweep removes folders only. `fCtrsGone` removes only the current run's containers.
+	- Actual fix [Bug]: `fCtrsStale` removes stopped containers labeled `dev.project=tukfs-hash` whose run started over 2 days ago and whose folder is gone from every sweep root. A running container, one without a run label, and this run's are left. The cleanup line counts them.
+	- Origin: `fCleanup` in `cicd/cicd.bash`. Confirmed.
+	- Verified: a real `--backlog-run-quick fmt` on b23 removed all 20, and `temp-ctr-check.bash` `stub` and `sweep` still pass.
+	- Swept: images already go by label and tag in `fCtrBuild`, and the pipeline makes no volumes. The kept containers came from `gate-record-check.bash`'s `--keep-temp` case.
+	- Test case: none with an ID, since the cicd scripts have no test IDs. The private `temp-ctr-check.bash REPO stale`, which fails 3 checks on the old `cicd.bash`.
+	- Closed: 20261117-135849
+
 - snapdiff `--find-new` trusts a birth time later than now, so after a backward clock step a renamed file can go uncompared at exit 0.
 	- ID: 2026111700232503
 	- Type: Bug
@@ -4631,6 +4650,7 @@
 		- The allow entry for the template's placeholder rows used `\t`, which grep's extended regex doesn't read as a tab, so it never matched. It uses `[[:space:]]` now.
 	- Verified: `private/hooks/scrub.bash` reports clean.
 	- Closed: 20261108-115016
+	- Test case: none with an ID, since the lint stage's scrub is the check and a hit fails it. The private `scrub-fail-check.bash REPO` watches it fail.
 
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430

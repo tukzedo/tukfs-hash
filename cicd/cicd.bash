@@ -1916,6 +1916,36 @@ fSweepKilled(){
 	return 0
 }
 
+## Stopped containers of ours whose run dir is gone and whose run started over
+## 2 days ago: kept by --keep-temp, or left by a run killed outright. The sweep
+## above takes the dir, and these went on forever without this.
+fCtrsStale(){   ## -> prints "COUNT KB"
+	local engine="${TUKFS_DOCKER:-docker}" out="" id="" run="" size="" r="" when=0 cutoff=0 lost=0 kb=0
+	local -a ids=() szs=() limit=()
+	command -v "${engine}" >/dev/null 2>&1 || { echo "0 0"; return 0; }
+	if command -v timeout >/dev/null 2>&1; then limit=(timeout 30); fi
+	cutoff=$(($(date +%s) - 172800))
+	out="$("${limit[@]}" "${engine}" ps -a --size --filter "label=dev.project=${APP_NAME}" \
+		--filter status=exited --filter status=created --filter status=dead \
+		--format '{{.ID}}	{{.Label "dev.run"}}	{{.Size}}' 2>/dev/null || true)"
+	while IFS=$'\t' read -r id run size; do
+		[[ "${id}" =~ ^[0-9a-f]{12,64}$ && "${run}" != "${TUKFS_RUN_NAME:-}" ]] || continue
+		[[ "${run}" =~ ^([0-9]{8})-([0-9]{2})([0-9]{2})([0-9]{2})_[0-9]{3}$ ]] || continue
+		when="$(date -d "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}:${BASH_REMATCH[3]}:${BASH_REMATCH[4]}" +%s 2>/dev/null)" || continue
+		((when < cutoff)) || continue
+		lost=1
+		for r in "${run_tmp_root}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do [[ -e "${r}/tukfs-hash/${run}" ]] && lost=0; done
+		((lost)) || continue
+		ids+=("${id}"); szs+=("${size}")
+	done <<< "${out}"
+	((${#ids[@]})) || { echo "0 0"; return 0; }
+	"${limit[@]}" "${engine}" rm "${ids[@]}" >/dev/null 2>&1 || { echo "0 0"; return 0; }
+	kb="$(printf '%s\n' "${szs[@]}" | awk '{ v = $1; u = v; sub(/^[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
+		m = (u == "kB") ? 1 : (u == "MB") ? 1e3 : (u == "GB") ? 1e6 : (u == "TB") ? 1e9 : 0; t += v * m } END { printf "%d", t / 1.024 }')"
+	[[ "${kb}" =~ ^[0-9]{1,15}$ ]] || kb=0
+	echo "${#ids[@]} ${kb}"
+}
+
 ## What's gone stale that the pipeline made, then this run's temp files, in one
 ## line. The run on the frozen copy only removes its own.
 fCleanup(){
@@ -1942,6 +1972,8 @@ fCleanup(){
 	fi
 	fSweepKilled
 	gone+=("${swept[@]}"); total=$((total + swept_kb))
+	out="$(fCtrsStale)"; read -r n kb <<< "${out}"
+	if ((n)); then gone+=("${n} stale container(s)"); total=$((total + kb)); fi
 	fCtrsGone
 	if [[ "${ctrs_said}" == kept* ]]; then fEcho_Clean "${ctrs_said}"
 	elif [[ -n "${ctrs_said}" ]]; then gone+=("${ctrs_said}"); total=$((total + ctrs_kb)); fi
