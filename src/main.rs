@@ -21,6 +21,7 @@ mod beneath;
 mod db;
 mod gone;
 mod mounts;
+mod say;
 mod scan;
 mod snapdiff;
 #[cfg(all(test, feature = "soak"))]
@@ -58,6 +59,9 @@ Usage:
 	tukfs-hash prune --db FILE
 	tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 
+Each command refuses an option that isn't shown for it. -h or --help after a
+command shows this help.
+
 scan options:
 	--exclude DIR       Don't go into DIR. Repeatable.
 	--no-xattr DIR      Checksum files under DIR, but leave no attributes on them. Repeatable.
@@ -74,6 +78,9 @@ scan options:
 	                    time, however recently, and compare. New and edited files
 	                    are left for the next full scan. Writes no attributes.
 	--progress SECS     Seconds between progress lines. Default 30.
+	--log FILE          Append every line the scan prints to FILE, in full. On a
+	                    terminal, a line too long for it is cut with a ~ at the
+	                    end, and a summary line is broken at its | marks.
 
 plan takes --threads as scan does, and shows the groups a scan would use.
 
@@ -86,14 +93,15 @@ report and gone options:
 	                    everything, and stderr says how many lines were left off.
 
 snapdiff options:
-	--all               Also list files whose time moved, and files that
-	                    compared the same.
+	--all               Also list files whose time moved, files that
+	                    compared the same, and files only in --new.
 
 A scan never crosses into another mount. Each root's mount is walked on its
 own, and roots on the same disks share workers so no disk is read by two at
 once. Ctrl+C stops after the files in hand; --resume picks up from there.
-A second Ctrl+C ends it at once, with exit 130. A root that can't be
-resolved stops the scan before it starts.
+A second Ctrl+C ends it at once, with exit 130. A root, or a path given to
+--exclude or --no-xattr, that can't be resolved stops the scan before it
+starts. A root in an --exclude folder is skipped, and named.
 
 A file that reads differently from what was stored, at the same size and
 time, is read again with its cache dropped. If the second read matches, it's
@@ -167,13 +175,35 @@ fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<St
 		.ok_or_else(|| format!("{flag}: {} isn't text", util::escape_name(v.as_bytes())))
 }
 
+const COMMANDS: [&str; 8] = [
+	"scan", "plan", "runs", "report", "gone", "accept", "prune", "snapdiff",
+];
+
+// The commands that take each option. One that isn't listed for the command
+// is refused by name, so a filter asked for is never quietly left out.
+fn takers(flag: &str) -> Option<&'static [&'static str]> {
+	Some(match flag {
+		"--db" => &["scan", "runs", "report", "gone", "accept", "prune"],
+		"--root" | "--threads" => &["scan", "plan"],
+		"--exclude" | "--no-xattr" | "--no-xattrs" | "--rmlint" | "--since" | "--resume"
+		| "--verify" | "--progress" | "--log" => &["scan"],
+		"--run" | "--limit" => &["report", "gone"],
+		"--kind" => &["report"],
+		"--old" | "--new" | "--zfs-diff" | "--mount" | "--find-new" | "--list" | "--all" => {
+			&["snapdiff"]
+		}
+		_ => return None,
+	})
+}
+
 fn main() {
 	// Paths can be any bytes, so not env::args, which panics on them.
 	let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
 	let code = match sampled(|| real_main(&argv)) {
 		Ok(c) => c,
 		Err(e) => {
-			err!("tukfs-hash: {e}");
+			// say::err, so a failed scan's reason is in its --log too.
+			say::err(&format!("tukfs-hash: {e}"));
 			1
 		}
 	};
@@ -195,6 +225,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		out!("{}", version_line(BUILD_MINUTES));
 		return Ok(0);
 	}
+	if !COMMANDS.contains(&cmd) {
+		return Err(format!("unknown command {}; see --help", shown(&argv[0])));
+	}
 
 	let mut db = None;
 	let mut roots = Vec::new();
@@ -207,6 +240,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut write_xattrs = true;
 	let mut rmlint = false;
 	let mut progress = 30;
+	let mut log = None;
 	let mut run_id = None;
 	let mut kind = None;
 	let mut limit = 200;
@@ -229,7 +263,26 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				continue;
 			}
 		}
+		// The one option that also takes --log=FILE.
+		if let Some(v) = arg.as_bytes().strip_prefix(b"--log=") {
+			if cmd != "scan" {
+				return Err(format!("{cmd} doesn't take --log; see --help"));
+			}
+			log = Some(p(OsStr::from_bytes(v)));
+			continue;
+		}
 		let a = arg.to_str().unwrap_or_default();
+		if a == "-h" || a == "--help" {
+			let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+			return Ok(0);
+		}
+		match takers(a) {
+			None => return Err(format!("unknown option {}; see --help", shown(arg))),
+			Some(c) if !c.contains(&cmd) => {
+				return Err(format!("{cmd} doesn't take {a}; see --help"));
+			}
+			Some(_) => {}
+		}
 		match a {
 			"--db" => db = Some(p(take_value(&mut it, a)?)),
 			"--root" => roots.push(p(take_value(&mut it, a)?)),
@@ -258,6 +311,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 			"--resume" => resume = true,
 			"--verify" => mode = scan::Mode::Verify,
+			"--log" => log = Some(p(take_value(&mut it, a)?)),
 			"--progress" => {
 				progress = take_text(&mut it, a)?
 					.parse()
@@ -330,6 +384,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 					write_xattrs,
 					rmlint,
 					progress_secs: progress,
+					log,
 					args: arg_line(),
 				},
 				&stop,
@@ -443,16 +498,9 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	if !db_path.is_file() {
 		return Err(format!("{}: no such database", util::show_path(&db_path)));
 	}
-	let _lock = scan::lock(&db_path, &mounts::read_mounts()?)?;
-	let conn = db::open_rw(&db_path)?;
-	let n = db::prune(&conn).map_err(|e| format!("database: {e}"))?;
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			util::show_path(&db_path)
-		);
-	}
-	scan::give_back(&db_path);
+	let mut held = scan::Held::take(&db_path, &mounts::read_mounts()?)?;
+	let n = db::prune(held.open()?).map_err(|e| format!("database: {e}"))?;
+	drop(held);
 	out!("removed {n} content(s) no name points at");
 	Ok(0)
 }
@@ -527,7 +575,7 @@ fn report(
 		.query_map(rusqlite::params![run, kind, limit], |r| {
 			Ok((
 				r.get::<_, String>(0)?,
-				db::path_text(r.get_ref(1)?),
+				db::path_text(r, 1)?,
 				r.get::<_, Option<String>>(2)?,
 			))
 		})
@@ -586,6 +634,87 @@ mod tests {
 			};
 			assert_eq!(damage_first(k), was, "{n}");
 		}
+	}
+
+	fn argv(a: &[&str]) -> Vec<OsString> {
+		a.iter().map(OsString::from).collect()
+	}
+
+	#[test]
+	fn a_flag_for_another_command_is_refused() {
+		let _id = test_id("df1q2");
+		for (cmd, flag) in [
+			("gone", "--root"),
+			("report", "--since"),
+			("accept", "--rmlint"),
+			("runs", "--limit"),
+			("plan", "--exclude"),
+			("prune", "--run"),
+			("scan", "--all"),
+			("snapdiff", "--db"),
+		] {
+			assert_eq!(
+				real_main(&argv(&[cmd, flag, "x"])),
+				Err(format!("{cmd} doesn't take {flag}; see --help"))
+			);
+		}
+		assert_eq!(
+			real_main(&argv(&["scan", "--bogus"])),
+			Err("unknown option --bogus; see --help".into())
+		);
+		assert_eq!(
+			real_main(&argv(&["bogus", "--db", "x"])),
+			Err("unknown command bogus; see --help".into())
+		);
+	}
+
+	// Each command's own options get past the check and into the parser. With
+	// nothing else given, every one stops at an error before touching a file.
+	#[test]
+	fn each_command_takes_its_own_flags() {
+		let _id = test_id("df1q3");
+		let flags = [
+			"--db",
+			"--root",
+			"--exclude",
+			"--no-xattr",
+			"--no-xattrs",
+			"--rmlint",
+			"--threads",
+			"--since",
+			"--resume",
+			"--verify",
+			"--progress",
+			"--log",
+			"--run",
+			"--kind",
+			"--limit",
+			"--old",
+			"--new",
+			"--zfs-diff",
+			"--mount",
+			"--find-new",
+			"--list",
+			"--all",
+		];
+		let mut taken = 0;
+		for cmd in COMMANDS {
+			for flag in flags {
+				let Some(cmds) = takers(flag) else {
+					panic!("{flag} has no commands");
+				};
+				if !cmds.contains(&cmd) {
+					continue;
+				}
+				taken += 1;
+				let got = real_main(&argv(&[cmd, flag])).unwrap_err();
+				assert!(
+					!got.contains("unknown") && !got.contains("doesn't take"),
+					"{cmd} {flag}: {got}"
+				);
+			}
+		}
+		assert_eq!(taken, 31);
 	}
 
 	#[test]

@@ -53,7 +53,7 @@ if [[ -f "${root}/cicd/docs-paths" ]]; then
 fi
 fIsDoc(){ local g; for g in "${docGlobs[@]}"; do [[ "$1" == ${g} ]] && return 0; done; return 1; }
 
-## True when every file that differs between the two commits is a doc. A
+## True when every file that differs between the 2 commits is a doc. A
 ## missing commit, or none at all, reads as code, and so does a failed diff,
 ## which hands back a name that isn't a doc.
 fDocsOnly(){   ## fDocsOnly OLD_SHA NEW_SHA

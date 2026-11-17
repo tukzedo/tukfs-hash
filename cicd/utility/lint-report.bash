@@ -3,7 +3,7 @@
 ##	Purpose:
 ##		Show the warnings and errors from the newest cicd run log. cicd tees each
 ##		run to cicd/artifacts/lint/run_<ts>.log (gitignored, GFS-rotated); this
-##		greps out the warning and error lines so they can be dealt with. Two modes:
+##		greps out the warning and error lines so they can be dealt with. 2 modes:
 ##		plain, which reports on the newest log, and --check, for a look at session
 ##		start that says nothing new until a new run has happened.
 ##		- --check prints one "SEEN ..." line when the newest log is the one the
@@ -91,7 +91,7 @@ if ((check)) && ((! force)) && [[ -z "${file}" ]]; then
 fi
 
 ## Finished means the last line is the done line, or the run printed one of the
-## two abort lines.
+## 2 abort lines.
 lastLine="$(grep -v '^[[:space:]]*$' "${log}" 2>/dev/null | tail -n 1 || true)"
 finished=0
 if [[ "${lastLine}" == *"CI/CD: done."* ]] || grep -qE '^\[ FAILED: |CICD ABORTED' "${log}" 2>/dev/null; then finished=1; fi
@@ -105,7 +105,7 @@ fi
 ## a finding.
 archived='^[0-9]+:(Adding|Updating)  '
 
-## Warnings. Drop the "0 warnings" noise, and the echoed command lines that hold
+## Warnings. Drop the "0 warnings" noise, and the echoed command lines that have
 ## the word, such as clippy's `-D warnings`.
 warns="$(grep -inE 'warning|rustsec-|vulnerab|unmaintained|yanked' "${log}" 2>/dev/null | grep -vE "${archived}" \
 	| grep -viE 'generated 0 warnings|: 0 warnings|no warnings|0 warnings emitted|-D warnings' || true)"
@@ -114,7 +114,7 @@ if [[ -n "${warns}" ]]; then n=$(printf '%s\n' "${warns}" | grep -c .); else n=0
 ## A failed run is never clean. Case-sensitive, since each tool says it one way
 ## and the lower-case words turn up in passing output. markdownlint says
 ## "error MD033/...", with no colon.
-errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null | grep -vE "${archived}" || true)"
+errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|^\[ [0-9.-]+: Step [0-9]+ of [0-9]+; FAIL |panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null | grep -vE "${archived}" || true)"
 if [[ -n "${errs}" ]]; then e=$(printf '%s\n' "${errs}" | grep -c .); else e=0; fi
 
 lead=""; ((check)) && lead="NEW "
@@ -145,3 +145,4 @@ fi
 ##		- 2026-10-23: Copied into tukfs-hash from shcl's cicd. Under --check every
 ##		  report that isn't SEEN starts with NEW. markdownlint's error lines count.
 ##		- 2026-10-25: rar's file list from the backup step isn't read as findings.
+##		- 2026-11-08: A step's timed FAIL close line counts as an error.

@@ -71,7 +71,7 @@ pub fn b64u_decode(s: &[u8]) -> Option<Vec<u8>> {
 			acc &= (1 << bits) - 1;
 		}
 	}
-	// Leftover bits must be zero, or two texts would decode the same.
+	// Leftover bits must be zero, or 2 texts would decode the same.
 	if acc != 0 {
 		return None;
 	}
@@ -341,7 +341,7 @@ mod tests {
 	#[cfg_attr(miri, ignore = "Miri can't call mktime")]
 	fn fuzz_dates() {
 		let _id = test_id("deeb9");
-		fuzz("dates", |r| {
+		fuzz("dates", 0xf, |r| {
 			let mut covered = 0;
 			let year = 1960 + r.below(8100) as i32;
 			let month = r.below(15) as i32 - 1;
@@ -375,14 +375,14 @@ mod tests {
 			}
 			covered
 		})
-		.covers(0xf);
+		.covers();
 	}
 
 	#[test]
 	#[cfg_attr(miri, ignore = "safe code, and too few cases in the time to matter")]
 	fn fuzz_b64u_hex_and_values() {
 		let _id = test_id("deeba");
-		fuzz("b64u and hex", |r| {
+		fuzz("b64u and hex", 0xf, |r| {
 			let mut covered = 0;
 			let data: Vec<u8> = (0..r.below(80)).map(|_| r.next_u64() as u8).collect();
 			let text = b64u_encode(&data);
@@ -418,6 +418,6 @@ mod tests {
 			assert!(t.last().is_none_or(|&c| c != 0 && !c.is_ascii_whitespace()));
 			covered
 		})
-		.covers(0xf);
+		.covers();
 	}
 }

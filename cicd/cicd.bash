@@ -28,10 +28,17 @@
 ##	   9. demo gif (a scenario run against the release build, drawn as a
 ##	      fake terminal, GFS-rotated, and copied to GIF_OUT when it changed)
 ##	  10. backup + publish to git
+##	  11. release upload (on main only: the release set to the git host as
+##	      release v<version>, through utility/release-upload.bash. The run
+##	      tags HEAD v<version> before it builds, when it isn't yet, and takes
+##	      the tag off again if it stops before this stage. A skip, or a set
+##	      that isn't a release build, stops the run before publish, and
+##	      no release image leaves this stage out of the plan)
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
 ##	   is the second of 5 in this run. The plan at the start lists the ones
 ##	   off, with the flag or reason. Each step opens with a timed "Starting"
-##	   line and closes with PASS or FAIL and its name. Cleanup comes last.
+##	   line and closes with a timed PASS, FAIL or SKIP line in the same form.
+##	   Cleanup comes last.
 ##	- Syntax:
 ##	  cicd/cicd.bash [options]
 ##	  Options:
@@ -93,7 +100,9 @@
 ##	                       made from them
 ##	   --no-dogfood        skip the dogfood install
 ##	   --no-gif            skip the demo gif
-##	   --no-publish        skip the backup + publish
+##	   --no-publish        skip the backup + publish, and the release upload,
+##	                       which needs the commit pushed
+##	   --no-upload         skip the release upload, and the tag it makes
 ##	   --no-freeze         run stages 2-7 in the checkout, not in a copy
 ##	   -h, --help          show this help
 ##	- An area named with the --no- option that takes its step out, and a plan
@@ -101,7 +110,7 @@
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
 ##	  stops the whole run.
-##	- Publish refuses when the checkout no longer holds the tree the run
+##	- Publish refuses when the checkout's tree is no longer the one the run
 ##	  tested, other than the demo gif it drew, or when the upstream has
 ##	  commits the run didn't take.
 ##	- The job count is half the logical CPUs, or a quarter when the 1-minute
@@ -112,6 +121,12 @@
 ##	  caller wins. utility/include/cpu-cap.bash works it out.
 ##	- Everything runs at nice 19 in the idle I/O class, containers too, which
 ##	  also get --cpu-shares 256.
+##	- Memory: CICD_MEM_CAP, a docker size such as 24g, at least 512m, or none. The default
+##	  is a third of the RAM, 4g to 32g. Each container gets it with no swap
+##	  and --oom-score-adj 1000, and the run on the host gets it in a systemd
+##	  user scope under choom 1000, where there is one. A step killed at the
+##	  cap exits 137. Any other value fails the run before it starts.
+##	  utility/include/mem-cap.bash works it out.
 ##	- A run at least as thorough as the merge gate records the tree it tested
 ##	  once the release checks pass (utility/green-tree.bash), and the pre-push
 ##	  hook lets a push of that tree through without running the gate again.
@@ -157,6 +172,14 @@ root="$(cd "${here}/.." && pwd)"
 ## rust-toolchain.toml.
 export PATH="${HOME}/.cargo/bin:${PATH}"
 
+## A runaway step has to die alone, so the whole run goes in a user scope at
+## the memory cap, once, before anything starts. Each container gets the cap
+## too, in fCtrRun. A step killed at the cap exits 137. A bad CICD_MEM_CAP
+## stops the run here.
+source "${here}/utility/include/mem-cap.bash"
+fMemCap || exit 2
+fMemScope "${here}/${BASH_SOURCE[0]##*/}" "$@" || exit 2
+
 ## The box usually has something else running. Before config.bash, which
 ## reads CPU_CAP.
 source "${here}/utility/include/cpu-cap.bash"
@@ -170,6 +193,7 @@ TEST_ID_LIST_CMD=(); REMOTE_HOSTS=(); REMOTE_VM_WRAP=''; REMOTE_LOCK_WAIT=900
 PROFILE_ENABLE=0; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0
 PROFILE_BUILD_CMD=(); PROFILE_TIMED=(); PROFILE_BIN=''; PROFILE_OUT_DIR=''; PROFILE_ROOT=''; PROFILE_CHECK=''; PROFILE_WORKLOAD_GEN=''
 PACKAGE_CMD=''; GIF_CMD=''; GIF_OUT=''; RELEASE_ARTIFACT_DIR=''; RELEASE_NATIVE_OSARCH='native'
+UPLOAD_ENABLE=0; RELEASE_BRANCH=''
 ## -q for eval'd config strings that pass it on to a tool. Empty otherwise.
 QUIET_FLAG=""
 
@@ -248,10 +272,11 @@ while (($#)); do case "$1" in
 	--no-package)             PACKAGE_ENABLE=0; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-profile)             PROFILE_ENABLE=0; fOffWhy "$1" profile; gate_partial=1; inner_pass+=("$1"); shift ;;
 	## Dogfood and the gif take the release binary, so a stale one would go out.
-	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; fOffWhy "$1" release remote dogfood gif; gate_partial=1; inner_pass+=("$1"); shift ;;
+	--no-release)             release_off=1; PACKAGE_ENABLE=0; DOGFOOD_ENABLE=0; GIF_ENABLE=0; UPLOAD_ENABLE=0; fOffWhy "$1" release remote dogfood gif upload; gate_partial=1; inner_pass+=("$1"); shift ;;
 	--no-dogfood)             DOGFOOD_ENABLE=0; fOffWhy "$1" dogfood; shift ;;
 	--no-gif)                 GIF_ENABLE=0; fOffWhy "$1" gif; gate_partial=1; shift ;;
-	--no-publish)             GIT_PUBLISH=(); fOffWhy "$1" publish; shift ;;
+	--no-publish)             GIT_PUBLISH=(); UPLOAD_ENABLE=0; fOffWhy "$1" publish upload; shift ;;
+	--no-upload)              UPLOAD_ENABLE=0; fOffWhy "$1" upload; shift ;;
 	--no-freeze)              no_freeze=1; shift ;;
 	--message=*|--msg=*|-m=*) cli_message="${1#*=}"; shift ;;
 	-m|--message|--msg)       (($# >= 2)) || { echo "$1 needs a message (try --help)" >&2; exit 2; }; cli_message="$2"; shift 2 ;;
@@ -262,7 +287,7 @@ while (($#)); do case "$1" in
 		exit 0 ;;
 	*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
 esac; done
-## Two options that say opposite things are refused, rather than the last winning.
+## 2 options that say opposite things are refused, rather than the last winning.
 if ((leakcheck_flag && no_leakcheck)); then echo "--leakcheck and --no-leakcheck can't go together (try --help)" >&2; exit 2; fi
 if ((quick && slow)); then echo "--quick and --long can't go together (try --help)" >&2; exit 2; fi
 if [[ -n "${mode}" ]] && ((quick || slow)); then echo "${mode_flag} has its own steps; drop --quick and --long" >&2; exit 2; fi
@@ -298,8 +323,8 @@ if ((gate_mode)); then
 	gate_strict=1
 	sync_enable=0
 	FMT_CMD=()
-	DOGFOOD_ENABLE=0; GIT_PUBLISH=()
-	fOffWhy "${mode_flag}" sync dogfood publish
+	DOGFOOD_ENABLE=0; GIT_PUBLISH=(); UPLOAD_ENABLE=0
+	fOffWhy "${mode_flag}" sync dogfood publish upload
 	## The gif is drawn, as a check, but goes nowhere the tree or the private
 	## dir would see it. A rotate dir under a parent that isn't there is a note.
 	gif_to_tmp=1
@@ -307,10 +332,10 @@ if ((gate_mode)); then
 		GIF_ENABLE=0; fOffWhy "${mode_flag}" gif
 		## Only what's named, when anything is. Each name is an area in
 		## config.bash, and a leak area keeps the leak checks its text is in.
-		_known=" "; _leakKept=()
+		_known=" "; _leakKept=(); _leakOwn=(); declare -A _keptSet=()
 		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
 		## The step each area runs in, so an area named with the --no- option
-		## that takes that step out is refused. off_why holds only the options
+		## that takes that step out is refused. off_why has only the options
 		## given so far.
 		declare -A _areaStep=([fmt]=format [build]=build [lint]=lint [unit]=tests [it]=tests [profile]=profile [release]=release [remote]=remote)
 		for _name in "${areas[@]}"; do
@@ -323,12 +348,17 @@ if ((gate_mode)); then
 				if [[ -z "${_off}" && -n "${_pat}" ]] && ((no_leakcheck)); then _off="--no-leakcheck"; fi
 				if [[ -n "${_off}" ]]; then echo "--backlog-run-quick: area ${_name} and ${_off} can't go together (try --help)" >&2; exit 2; fi
 				[[ -n "${_pat}" ]] || continue
-				_matched=0; _codeql=0
-				for _step in "${LEAKCHECK_STEPS[@]}"; do
+				_matched=0; _codeql=0; _steps=("${LEAKCHECK_STEPS[@]}")
+				## A + area's step is its text, and matches nothing else.
+				if [[ "${_pat}" == +* ]]; then
+					_pat="${_pat#+}"; _steps=("${_pat}")
+					[[ -n "${_keptSet["${_pat}"]:-}" ]] || _leakOwn+=("${_pat}")
+				fi
+				for _step in "${_steps[@]}"; do
 					[[ "${_step}" == *"${_pat}"* ]] || continue
 					_matched=$((_matched + 1))
 					if [[ "${_step,,}" == *codeql* ]]; then _codeql=$((_codeql + 1)); fi
-					if [[ " ${_leakKept[*]} " != *" ${_step} "* ]]; then _leakKept+=("${_step}"); fi
+					if [[ -z "${_keptSet["${_step}"]:-}" ]]; then _keptSet["${_step}"]=1; _leakKept+=("${_step}"); fi
 				done
 				if ((no_codeql && _matched && _codeql == _matched)); then echo "--backlog-run-quick: area ${_name} and --no-codeql can't go together (try --help)" >&2; exit 2; fi
 			done
@@ -343,7 +373,8 @@ if ((gate_mode)); then
 			[[ "${_named}" == *" lint "* ]]  || { lint_off=1; fOffWhy "${_unnamed}" lint; }
 			[[ "${_named}" == *" unit "* ]]  || unit_off=1
 			[[ "${_named}" == *" it "* ]]    || it_off=1
-			((leakcheck_flag)) || LEAKCHECK_STEPS=("${_leakKept[@]}")
+			## --leakcheck keeps every leak check, and adds the + areas' own.
+			if ((leakcheck_flag)); then LEAKCHECK_STEPS+=("${_leakOwn[@]}"); else LEAKCHECK_STEPS=("${_leakKept[@]}"); fi
 		elif ((! leakcheck_flag)); then
 			LEAKCHECK_STEPS=()
 		fi
@@ -388,7 +419,7 @@ fQuickDrop(){   ## fQuickDrop ARRAY_NAME
 ## Packages stay in, since nfpm takes about a second for all of them.
 if ((quick)); then
 	## The other hosts too, since an emulated box takes several minutes.
-	PROFILE_ENABLE=0; GIF_ENABLE=0; remote_off=1; fOffWhy --quick profile remote gif
+	PROFILE_ENABLE=0; GIF_ENABLE=0; remote_off=1; UPLOAD_ENABLE=0; fOffWhy --quick profile remote gif upload
 	for list in LEAKCHECK_STEPS CROSS_TARGETS RELEASE_CHECKS IT_ROOTS; do fQuickDrop "${list}"; done
 fi
 ## --quick kept the fast leak checks above, and --backlog-run-quick picked its own.
@@ -403,6 +434,17 @@ fi
 ## A run at least as thorough as the merge gate records the tree it tested.
 record_green=1
 if ((quick || gate_partial)) || [[ "${mode}" == bq ]]; then record_green=0; fi
+## Only what passed every check the merge gate makes goes out, and only from
+## the release branch, since a dev to main merge is the release.
+if ((! record_green)); then UPLOAD_ENABLE=0; fOffWhy "a --no- option that drops a check" upload; fi
+cur_branch="$(git -C "${root}" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [[ -z "${RELEASE_BRANCH}" || "${cur_branch}" != "${RELEASE_BRANCH}" ]]; then UPLOAD_ENABLE=0; fOffWhy "not on ${RELEASE_BRANCH:-a release branch}" upload; fi
+## Without the release image the set is a host build, which the upload refuses
+## (2026102509342993), so say so now rather than after the whole run.
+if ((UPLOAD_ENABLE && ! release_off && ! inner_run)); then
+	_why="$(fCtrWhyNot)"
+	if [[ -n "${_why}" ]]; then UPLOAD_ENABLE=0; fOffWhy "the release builds would be on the host, since ${_why}" upload; fi
+fi
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -429,20 +471,23 @@ declare -A step_no=()
 cpu_shown=""
 fCpuShow(){ if [[ "${CPU_CAP}" != "${cpu_shown}" ]]; then fEcho_Clean "jobs: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}"; cpu_shown="${CPU_CAP}"; fi; }
 ## In the order they run.
-step_keys=(sync format build lint tests profile release remote dogfood gif publish)
+step_keys=(sync format build lint tests profile release remote dogfood gif publish upload)
 declare -A step_title=([sync]="Remote sync" [format]="Format" [build]="Build (debug)" [lint]="Lint" [tests]="Tests"
-	[profile]="Profiler" [release]="Release builds" [remote]="Other hosts" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish")
+	[profile]="Profiler" [release]="Release builds" [remote]="Other hosts" [dogfood]="Dogfood" [gif]="Demo gif" [publish]="Backup + publish"
+	[upload]="Release upload")
 ## fStep KEY -> 1 when the plan has the step off, which then prints nothing.
 fStep(){
 	[[ -n "${step_no["$1"]:-}" ]] || return 1
 	step_n="${step_no["$1"]}"; step_name="${step_title["$1"]}"; step_open=1
-	fSection "$(fNow): Step ${step_n} of ${step_total}; Starting ${step_name}"
+	fSection "$(fStepLine Starting)"
 	fCpuCap; fCpuShow
 }
-fStepPass(){ step_open=0; fEcho_Clean "PASS ${step_name}"; fEcho_Clean; }
-fStepFail(){ if ((step_open)); then step_open=0; echo "FAIL ${step_name}"; fi; }
+## The open and close lines differ only in the word, so a close reads like its open.
+fStepLine(){ printf '%s: Step %s of %s; %s %s' "$(fNow)" "${step_n}" "${step_total}" "$1" "${step_name}"; }
+fStepPass(){ step_open=0; fEcho "$(fStepLine PASS)"; fEcho_Clean; }
+fStepFail(){ if ((step_open)); then step_open=0; echo "[ $(fStepLine FAIL) ]"; fi; }
 ## A step with nothing it could run. The summary at the end lists why.
-fStepSkip(){ step_open=0; fEcho_Clean "SKIP ${step_name}"; fEcho_Clean; }
+fStepSkip(){ step_open=0; fEcho "$(fStepLine SKIP)"; fEcho_Clean; }
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 ## KB to a size a person reads.
 fSize(){ if (($1 >= 1048576)); then printf '%d.%d GB' $(($1 / 1048576)) $(($1 % 1048576 * 10 / 1048576)); else printf '%d MB' $((($1 + 512) / 1024)); fi; }
@@ -519,7 +564,7 @@ fSafePath(){
 }
 
 ## rm -rf, but only on a dir that passes fSafePath, is still where it was made
-## with no links on the way, and holds the mark with TOKEN in it.
+## with no links on the way, and has the mark with TOKEN in it.
 fSafeRm(){   ## fSafeRm PATH TOKEN
 	local p="${1:-}" token="${2:-}" real="" got=""
 	fSafePath "${p}" || return 1
@@ -533,10 +578,17 @@ fSafeRm(){   ## fSafeRm PATH TOKEN
 		printf 'cleanup: not removed, no mark from this run: %s\n' "${p}" >&2; return 1
 	fi
 	## A test that failed can leave a dir it made read-only.
-	if ! rm -rf --one-file-system -- "${p}" 2>/dev/null; then
+	if ! fRmMarksLast "${p}" 2>/dev/null; then
 		chmod -R u+rwX -- "${p}" 2>/dev/null || true
-		rm -rf --one-file-system -- "${p}" 2>/dev/null || { printf 'cleanup: could not remove all of %s\n' "${p}" >&2; return 1; }
+		fRmMarksLast "${p}" 2>/dev/null || { printf 'cleanup: could not remove all of %s\n' "${p}" >&2; return 1; }
 	fi
+}
+
+## rm -rf DIR with its marks last, so a removal that fails partway leaves a
+## dir the next run's sweep still knows (2026110210514819).
+fRmMarksLast(){   ## fRmMarksLast DIR
+	find "$1" -mindepth 1 -maxdepth 1 ! -name run.pid ! -name "${run_mark}" ! -name "${kept_mark}" -exec rm -rf --one-file-system -- {} + &&
+		rm -f -- "$1/${kept_mark}" "$1/run.pid" "$1/${run_mark}" && rmdir -- "$1"
 }
 
 ## Make one of this run's dirs under BASE/tukfs-hash/, and set made_dir to it.
@@ -676,6 +728,9 @@ fRunTmpGone(){
 	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
+	## After the trap above, so a TERM in its git calls can't skip the rest
+	## (2026111011092309), and after the stop, so no git of ours has the ref locked.
+	fTagUndo || true
 	fCtrsGone || true
 	if [[ "${ctrs_said}" == kept* ]]; then printf '[ %s ]\n' "${ctrs_said}" >&2
 	elif [[ -n "${ctrs_said}" ]]; then printf '[ cleanup: removed %s, about %s ]\n' "${ctrs_said}" "$(fSize "${ctrs_kb}")" >&2; fi
@@ -696,6 +751,18 @@ fRunTmpGone(){
 	## git's record of a copy it couldn't take down, now that the dir is gone.
 	if [[ -n "${left_frozen}" ]]; then fFrozenRemove "${root}" "${left_frozen}" || true; fi
 	if ((! inner_run)); then printf '[ cleanup: removed this run'\''s temp files, about %s ]\n' "$(fSize "${total}")" >&2; fi
+	return 0
+}
+## The tag fReleaseTag made, as TAG=OBJECT, until the the upload starts.
+tag_made=""
+## Only the tag this run made, and only while it's still the one it made.
+fTagUndo(){
+	local tag="${tag_made%%=*}" obj="${tag_made#*=}"
+	[[ -n "${tag_made}" ]] || return 0
+	tag_made=""
+	if [[ "$(git -C "${root}" rev-parse -q --verify "refs/tags/${tag}" 2>/dev/null)" == "${obj}" ]] && git -C "${root}" tag -d "${tag}" >/dev/null 2>&1; then
+		printf '[ took tag %s off, since the run stopped before the upload ]\n' "${tag}" >&2
+	fi
 	return 0
 }
 trap 'fRunTmpGone || true' EXIT
@@ -728,14 +795,14 @@ fBuildNumber(){   ## fBuildNumber EPOCH_SECONDS
 	printf '%s\n' "${out}"
 }
 
-## From the commit, not the clock, so a rebuild of one commit gives the same
+## From the commit rather than the clock, so a rebuild of one commit gives the same
 ## bytes. Every cargo call in the run sees the same value, so none rebuilds
 ## over it.
 ## A release is a commit tagged v<version>, so tag before building one. Any
 ## other build prints its date too.
 ## A tree that isn't the commit's, such as uncommitted work in the frozen copy,
 ## gets -dirty after the number and is never a release, since the number names
-## a commit that doesn't hold what was built. The run on the frozen copy works
+## a commit that isn't what was built. The run on the frozen copy works
 ## it out again from the copy, and a run with no copy does after its format
 ## stage, which can rewrite the tree.
 build_number=""; build_release=""; build_date=""; build_mark=""
@@ -764,6 +831,40 @@ fBuildStamp(){
 	export SOURCE_DATE_EPOCH="${commit_time}"
 }
 fBuildStamp
+
+## A release is a commit tagged v<version>, so a run that uploads one tags HEAD
+## before it builds. A tag of that name anywhere else, here or on the git host,
+## means the version wasn't bumped. A stop before the upload takes the tag off
+## again, so it never names a commit that didn't pass. After the format stage,
+## since that can change the tree.
+fReleaseTag(){
+	local tag at="" head obj="" out="" remote tree="" headTree="" more=""
+	local -a changed=()
+	[[ -n "${step_no[upload]:-}" ]] || return 0
+	tag="v$(fVersion)"; head="$(git -C "${root}" rev-parse HEAD)" || fDie "no HEAD"
+	at="$(git -C "${root}" rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
+	if [[ -n "${at}" && "${at}" != "${head}" ]]; then fDie "${tag} is already on ${at:0:12}, not HEAD. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	## Even with the tag on HEAD here, since the upload only pushes this one,
+	## and refuses another of that name there.
+	remote="$(git -C "${root}" config --get "branch.${RELEASE_BRANCH}.remote" || echo origin)"
+	out="$(fGitRemote -C "${root}" ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "could not list the tags on ${remote}, to see if ${tag} is taken. Run with --no-upload to build without it."
+	out="$(awk -v r="refs/tags/${tag}" '$2 == r { print $1; exit }' <<< "${out}")"
+	if [[ -n "${at}" ]]; then obj="$(git -C "${root}" rev-parse "refs/tags/${tag}")" || fDie "could not read tag ${tag}"; fi
+	if [[ -n "${out}" && -z "${obj}" ]]; then fDie "${remote} already has ${tag}. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	if [[ -n "${out}" && "${out}" != "${obj}" ]]; then fDie "${remote} has another ${tag} than the one on HEAD here. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
+	tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "could not read the checkout's tree"
+	headTree="$(git -C "${root}" rev-parse 'HEAD^{tree}')" || fDie "no tree for HEAD"
+	if [[ "${tree}" != "${headTree}" ]]; then
+		mapfile -t changed < <(git -C "${root}" diff --name-only --no-renames "${headTree}" "${tree}")
+		((${#changed[@]} <= 10)) || more=" and $((${#changed[@]} - 10)) more"
+		fDie "the checkout has changes that aren't committed after the format stage, so its build can't be a release: ${changed[*]:0:10}${more}. Commit them, or run with --no-upload."
+	fi
+	[[ -z "${at}" ]] || return 0
+	git -C "${root}" tag -a -m "${tag}" "${tag}" HEAD || fDie "could not tag HEAD ${tag}"
+	tag_made="${tag}=$(git -C "${root}" rev-parse "refs/tags/${tag}")"
+	fEcho "tagged HEAD ${tag}; taken off again if the run stops before the upload"
+	fBuildStamp
+}
 
 
 #•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••
@@ -794,6 +895,7 @@ fStepOn(){   ## fStepOn KEY -> 0 when the step runs
 		dogfood) ((DOGFOOD_ENABLE && ${#DOGFOOD_DESTS[@]})) ;;
 		gif)     ((GIF_ENABLE)) && [[ -n "${GIF_CMD}" ]] ;;
 		publish) ((${#GIT_PUBLISH[@]})) ;;
+		upload)  ((UPLOAD_ENABLE && ! release_off && ${#GIT_PUBLISH[@]})) && [[ -n "${RELEASE_ARTIFACT_DIR}" ]] ;;
 		*)       return 1 ;;
 	esac
 }
@@ -834,6 +936,10 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Version ........: v$(fVersion)${build_number:+ build ${build_number}${build_mark}${build_date}}"
 	fEcho_Clean "Jobs ...........: ${CPU_CAP} of ${cpu_cores} cores, ${cpu_why}; checked again at each step"
 	cpu_shown="${CPU_CAP}"
+	if [[ -z "${mem_cap}" ]]; then _mem="no cap, since CICD_MEM_CAP is none"
+	elif [[ -n "${TUKFS_MEM_SCOPE:-}" ]]; then _mem="${mem_cap} with no swap, each container and the run on the host"
+	else _mem="${mem_cap} with no swap, each container. The run on the host isn't capped, with no user scope here"; fi
+	fEcho_Clean "Memory .........: ${_mem}"
 	fEcho_Clean "Temp dir .......: ${run_tmp}"
 	fEcho_Clean "Remote sync ....: $(fOnOff "${sync_enable}" 'fast-forward when behind; stop when diverged')"
 	fEcho_Clean "Format .........: $( ((gate_mode)) && echo "${FMT_CHECK_CMD[*]:-(skipped)}" || echo "${FMT_CMD[*]:-(skipped)}")"
@@ -841,7 +947,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 	fEcho_Clean "Lint ...........: $( ((lint_off)) && echo '(skipped)' || echo "${LINT_CMD[*]}, shellcheck, markdownlint, PSScriptAnalyzer, ruff, mypy$( ((${#LINT_EXTRA[@]})) && echo ", ${#LINT_EXTRA[@]} more")")"
 	_its=""; for _r in "${IT_ROOTS[@]}"; do _its+="${_r%%|*} (${_r#*|}), "; done
 	fEcho_Clean "Tests ..........: $( ((tests_off || unit_off)) && echo '(skipped)' || echo "${TEST_CMD[*]}")"
-	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }")"
+	fEcho_Clean "Integration ....: $( ((tests_off || it_off)) && echo '(skipped)' || echo "${_its%, }${IT_BTRFS:+; des5x in ${IT_BTRFS} when on btrfs}")"
 	fEcho_Clean "Leak checks ....: $( ((${#LEAKCHECK_STEPS[@]})) && echo "${#LEAKCHECK_STEPS[@]}, at the end of the tests" || echo '(none in this run)')"
 	fEcho_Clean "Profiler .......: $(fOnOff "${PROFILE_ENABLE}" "${#PROFILE_TIMED[@]} step(s) on a tree under ${PROFILE_ROOT:-the temp dir} -> ${PROFILE_OUT_DIR:-(nowhere)}/")"
 	if ((release_off)); then
@@ -866,6 +972,12 @@ if ((list_only || (! quiet && ! inner_run))); then
 		fEcho_Clean "Publish (last) .: ${GIT_PUBLISH[*]}$( [[ -n "${publish_msg}" ]] && echo " (\"${publish_msg}\")" || echo ' (asks for the message now)')"
 	else
 		fEcho_Clean "Publish (last) .: (skipped)"
+	fi
+	if [[ -n "${step_no[upload]:-}" ]]; then
+		_tags=$'\n'"$(git -C "${root}" tag --points-at HEAD 2>/dev/null || true)"$'\n'
+		fEcho_Clean "Release upload .: v$(fVersion) to the git host, after publish$([[ "${_tags}" == *$'\n'"v$(fVersion)"$'\n'* ]] || echo "; tags HEAD v$(fVersion) before the build")"
+	else
+		fEcho_Clean "Release upload .: (off, ${off_why[upload]:-off in config.bash})"
 	fi
 	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-7 run from a copy taken after the format stage' || echo '(off)')"
 	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host; the build and tests in the release image')"
@@ -980,7 +1092,7 @@ fi
 ## Stages
 
 ## A stash the sync stage or the publisher left, when a run stopped between
-## its stash and its pop, or the pop conflicted. It holds uncommitted work.
+## its stash and its pop, or the pop conflicted. It has uncommitted work in it.
 ## Syncing or publishing past it leaves that work stashed, and the next stash
 ## buries it deeper. The publisher looks only for its own. Prints the entry.
 fLeftStash(){
@@ -1186,11 +1298,10 @@ fStageLint(){
 		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
 	done
 	## The content scrub lives with the private project files, so a clone
-	## without them skips it. It only reports until 2026110218175403 is done.
+	## without them skips it.
 	if [[ -x "${checkout}/../private/hooks/scrub.bash" ]]; then
 		fEcho_Clean "content scrub: ../private/hooks/scrub.bash"
-		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"
-		else fEcho "NOTE: the content scrub found lines to look at; they're above, and in the lint log"; fi
+		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"; else failed+=(scrub); fi
 	fi
 	if [[ "${lint_log}" != /dev/null ]]; then gfs_rotate "${root}/${LINT_LOG_DIR}" lint log >/dev/null 2>&1 || true; fi
 	lint_log="/dev/null"
@@ -1200,8 +1311,9 @@ fStageLint(){
 
 ## The integration test once on ROOT, which makes its own dir under it, and
 ## sweeps its own stale ones.
+it_btrfs=""
 fRunIt(){   ## fRunIt LABEL ROOT
-	local label="$1" itRoot="$2" real="" fsType="" want="" rc=0
+	local label="$1" itRoot="$2" real="" fsType="" want="" rc=0 btRw=()
 	if [[ ! -d "${itRoot}" ]]; then
 		fEcho "NOTE: integration test on ${label} skipped, since ${itRoot} isn't there"
 		echo "it-${label}" >> "${gate_skips}"
@@ -1211,11 +1323,25 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
 	case "${label}" in ext4) want="ext2/ext3" ;; *) want="${label}" ;; esac
 	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; echo "it-${label}" >> "${gate_skips}"; fi
-	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real} ${RELEASE_NATIVE_BIN}, writing only to ${real}/${APP_NAME}"
+	if [[ -n "${it_btrfs}" ]]; then btRw=("${it_btrfs}/${APP_NAME}"); fi
+	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real}${it_btrfs:+ TUKFS_IT_BTRFS=${it_btrfs}} ${RELEASE_NATIVE_BIN}, writing only to ${real}/${APP_NAME}${it_btrfs:+ and ${it_btrfs}/${APP_NAME}}"
 	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
-	HOST_TEMP="${real}" fBg "${here}/utility/sandbox.bash" "${real}/${APP_NAME}" -- "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
+	HOST_TEMP="${real}" TUKFS_IT_BTRFS="${it_btrfs}" fBg "${here}/utility/sandbox.bash" "${real}/${APP_NAME}" "${btRw[@]}" -- "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
 	fEcho "OK: integration test on ${label}"
+}
+
+## The folder for des5x, from IT_BTRFS, in it_btrfs, or empty with a note when
+## it isn't a folder on btrfs. Not a gate skip, since few boxes have btrfs.
+fItBtrfs(){
+	local real="" fsType=""
+	it_btrfs=""
+	[[ -n "${IT_BTRFS}" ]] || { fEcho_Clean "btrfs subvolume check (des5x): turned off, since IT_BTRFS is empty"; return 0; }
+	real="$(realpath -e -- "${IT_BTRFS}" 2>/dev/null)" || { fEcho_Clean "btrfs subvolume check (des5x): skips, since ${IT_BTRFS} isn't there"; return 0; }
+	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
+	[[ "${fsType}" == btrfs ]] || { fEcho_Clean "btrfs subvolume check (des5x): skips, since ${IT_BTRFS} is ${fsType:-unknown}, not btrfs"; return 0; }
+	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
+	it_btrfs="${real}"
 }
 
 ## Stage 4: tests, then the slow leak checks.
@@ -1233,6 +1359,7 @@ fStageTests(){
 		fEcho_Clean "${RELEASE_NATIVE_CMD[*]}"
 		fBg fInTests "${RELEASE_NATIVE_CMD[@]}" || fDie "release build failed"
 		[[ -x "${root}/${RELEASE_NATIVE_BIN}" ]] || fDie "no release binary at ${RELEASE_NATIVE_BIN}"
+		fItBtrfs
 		for r in "${IT_ROOTS[@]}"; do fRunIt "${r%%|*}" "${r#*|}"; done
 	fi
 	## Last, since the slow ones take a long time and the rest should report first.
@@ -1518,6 +1645,40 @@ fStageGif(){
 	fStepPass
 }
 
+## Stage 11's own refusals, before publish, so a set that can't go out stops
+## the run before it commits and pushes (2026111011092304).
+upload_ver=""; upload_line=""
+fUploadReady(){
+	local ver bin line rest
+	local -r nothing="Nothing was committed or pushed. Run with --no-upload to publish without the release."
+	[[ -n "${step_no[upload]:-}" ]] || return 0
+	if [[ -s "${gate_skips}" ]]; then fDie "release not uploaded, since this run skipped: $(sort -u "${gate_skips}" | paste -sd ' '). ${nothing}"; fi
+	ver="$(fVersion)"; bin="${release_dir}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}"
+	[[ -x "${bin}" ]] || fDie "no ${bin#"${root}/"} to upload. ${nothing}"
+	line="$("${bin}" --version | sed -n 1p)" || fDie "${bin#"${root}/"} --version failed. ${nothing}"
+	rest="${line#"${EXE_NAME} v${ver} build "}"
+	[[ "${rest}" != "${line}" && "${rest}" =~ ^[0-9a-z]+$ ]] || fDie "the release set isn't a release build: ${line}. ${nothing}"
+	upload_ver="${ver}"; upload_line="${line}"
+}
+
+## Stage 11: the release set to the git host, from the release branch only.
+## fReleaseTag put the tag on before the build, or it was there already.
+## The set has to be this run's and a release build, so the binary's version
+## line has no date and no -dirty. The upload pushes the tag and makes the
+## release, and a rerun by hand picks up where it stopped.
+fStageUpload(){
+	local ver="${upload_ver}" line="${upload_line}"
+	fStep upload || return 0
+	[[ -n "${line}" ]] || fDie "the release set wasn't checked before publish"
+	## From here the tag may be on the git host, so it stays.
+	tag_made=""
+	if ! fBg "${here}/utility/release-upload.bash" "${root}" "${ver}" "${release_dir}" "${line}" "${RELEASE_BRANCH}"; then
+		fDie "release upload failed. Once it's sorted out: cicd/utility/release-upload.bash \"${root}\" ${ver} \"${release_dir}\" \"${line}\" ${RELEASE_BRANCH}"
+	fi
+	fEcho "OK: release v${ver} on the git host"
+	fStepPass
+}
+
 ## Stage 10: backup + publish through the copied publisher. It commits and
 ## pushes the checkout as it is, after its own pull, so first make sure that's
 ## what was tested. The gif this run drew is the one change it makes itself.
@@ -1698,6 +1859,8 @@ fCacheInUse(){   ## fCacheInUse DIR
 	[[ -n "${run_tmp_root}" && -d "${dir}" ]] || return 1
 	for d in "${run_tmp_root}/tukfs-hash/"[0-9]*_[0-9][0-9][0-9]; do
 		[[ -L "${d}/tree/target" && "${d}/tree/target" -ef "${dir}" ]] || continue
+		## A FIFO at run.pid would hang the read (2026111011092325).
+		[[ -O "${d}" && ! -L "${d}" && -f "${d}/run.pid" && ! -L "${d}/run.pid" ]] || continue
 		pid=""; { read -r pid < "${d}/run.pid"; } 2>/dev/null || continue
 		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${pid}" != "$$" && -d "/proc/${pid}" ]] && return 0
 	done
@@ -1715,6 +1878,10 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 	while IFS= read -r -d '' d; do
 		[[ -d "${d}" && ! -L "${d}" ]] || continue
 		fSafePath "${d}" 2>/dev/null || continue
+		## Ours, and plain files, before a read that a FIFO would hang
+		## (2026111011092325). fSafeRm checks the owner too, but only after
+		## git has been in it.
+		[[ -O "${d}" && -f "${d}/run.pid" && ! -L "${d}/run.pid" && -f "${d}/${run_mark}" && ! -L "${d}/${run_mark}" ]] || continue
 		pid=""; { read -r pid < "${d}/run.pid"; } 2>/dev/null || continue
 		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${pid}" != "$$" ]] || continue
 		## Not kill -0, which fails on another user's process too.
@@ -1725,8 +1892,6 @@ fSweepStale(){   ## fSweepStale BASE -> prints "COUNT KB"
 		size="$(du -sk -- "${d}" 2>/dev/null | cut -f1 || true)"
 		[[ "${size}" =~ ^[0-9]{1,15}$ ]] || size=0
 		repo=""
-		## fSafeRm checks this too, but only after git has been in it.
-		[[ -O "${d}" ]] || continue
 		if [[ -d "${d}/tree" && ! -L "${d}/tree" ]]; then
 			## The checkout it came from, which may not be this one.
 			repo="$(git -C "${d}/tree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
@@ -1799,7 +1964,7 @@ fCleanup(){
 ## Run
 
 fmt_done=0
-## Here too, and not only at the end, so a run that's stopped as well still
+## Here as well as at the end, so a run that's stopped still
 ## takes down what the last one left.
 if ((! inner_run)); then
 	fSweepKilled
@@ -1809,6 +1974,7 @@ fi
 if ((freeze)); then
 	## Rewrites the checkout, before the copy is taken. A check runs in the copy.
 	if ((${#FMT_CMD[@]})); then fStageFormat; fmt_done=1; fi
+	fReleaseTag
 	fFreeze
 fi
 if [[ -n "${frozen_root}" ]]; then
@@ -1816,6 +1982,7 @@ if [[ -n "${frozen_root}" ]]; then
 else
 	## The run on the frozen copy only checks, and only in the check-only modes.
 	if ((! fmt_done)) && { ((gate_mode)) || [[ "${run_part}" != build ]]; }; then fStageFormat; fBuildStamp; fi
+	if ((! inner_run && ! freeze)); then fReleaseTag; fi
 	if ((! inner_run)) && { ((record_green)) || ((${#GIT_PUBLISH[@]})); }; then tested_tree="$("${here}/utility/green-tree.bash" tree "${root}" || true)"; fi
 	if ((record_green && ! inner_run)); then green_tree="${tested_tree}"; fi
 	fStageBuild
@@ -1829,7 +1996,9 @@ if ((! inner_run)); then
 	fStageDogfood
 	fStageGif
 	fRecordGreen
+	fUploadReady
 	fStagePublish
+	fStageUpload
 fi
 ## Before the cleanup takes the file away.
 declare -a skipped=()
@@ -1922,3 +2091,18 @@ exit 0
 ##		  --no-sandbox.
 ##		- 2026-11-02: The content scrub in the lint stage, when the private
 ##		  folder has one.
+##		- 2026-11-08: A scrub hit fails the lint stage.
+##		- 2026-11-07: A run dir's marks are removed last, so a removal that
+##		  fails partway leaves it for the next run's sweep.
+##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it
+##		  puts on before the build. --no-upload.
+##		- 2026-11-08: A step closes with a timed, numbered PASS, FAIL or SKIP line,
+##		  in the same form as its Starting line.
+##		- 2026-11-08: IT_BTRFS, a btrfs folder for the integration test's
+##		  subvolume check, given to each run as TUKFS_IT_BTRFS.
+##		- 2026-11-09: A memory cap with no swap, CICD_MEM_CAP, on every
+##		  container, and the whole run in a user scope under it.
+##		- 2026-11-10: The release upload's refusals run before publish, and
+##		  no release image leaves it out of the plan.
+##		- 2026-11-10: The run folder sweeps check the owner, and that the marks
+##		  are plain files, before they read them.

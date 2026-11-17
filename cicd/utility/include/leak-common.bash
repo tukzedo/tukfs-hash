@@ -7,9 +7,11 @@
 ##	Purpose:
 ##		What the leak checks share. Set me to the calling script's dir, then
 ##		source this. It sets root, here (cicd/), CPU_CAP and in_image, and
-##		sources config.bash, stop-descendants.bash, scratch.bash and
-##		cpu-cap.bash. CPU_CAP is a quarter of the cores, since the leak checks
-##		are heavy, and the script runs at nice 19 with idle I/O.
+##		sources config.bash, stop-descendants.bash, scratch.bash, cpu-cap.bash
+##		and mem-cap.bash. CPU_CAP is a quarter of the cores, since the leak
+##		checks are heavy, and the script runs at nice 19 with idle I/O. The
+##		image gets the memory cap, and a run from cicd.bash is under it on
+##		the host too.
 ##			fLeakInImage NAME SCRIPT RW [ARG...]
 ##			                    run SCRIPT ARG... in the leak check image and
 ##			                    exit with its exit, when docker answers and
@@ -33,6 +35,7 @@ cd "${root}" || exit 2
 source "${here}/utility/include/cpu-cap.bash"
 fCpuLow
 fCpuCap heavy
+source "${here}/utility/include/mem-cap.bash"
 export PATH="${HOME}/.cargo/bin:${PATH}"
 in_image=0
 if [[ -n "${TUKFS_IN_IMAGE:-}" ]]; then in_image=1; fi
@@ -98,3 +101,4 @@ fLeakSandbox(){   ## fLeakSandbox SCRIPT [ARG...]
 ##		- 2026-10-25: A quarter of the cores, through cpu-cap.bash, at low
 ##		  priority.
 ##		- 2026-11-02: fLeakSandbox.
+##		- 2026-11-09: mem-cap.bash, for the image's memory cap.

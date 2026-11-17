@@ -61,7 +61,10 @@ fSafeRm(){
 	if ! fMarked "${p}"; then
 		printf 'safe-rm: refused, not one make made: %s\n' "${p}" >&2; return 1
 	fi
-	rm -rf --one-file-system -- "${p}"
+	## The mark goes last, so a removal that fails partway leaves a folder the
+	## sweep still knows (2026110210514819).
+	find "${p}" -mindepth 1 -maxdepth 1 ! -name "${mark}" -exec rm -rf --one-file-system -- {} + &&
+		rm -f -- "${p}/${mark}" && rmdir -- "${p}"
 }
 
 fMake(){
@@ -74,7 +77,8 @@ fMake(){
 	for d in "${base}"/*_[0-9][0-9][0-9]; do
 		fMarked "${d}" || continue
 		[[ -n "$(find "${d}" -maxdepth 0 -mmin +2880 2> /dev/null)" ]] || continue
-		pid=""; { read -r pid < "${d}/run.pid"; } 2> /dev/null || true
+		## Only a plain file is read, since a FIFO would hang it (2026111011092325).
+		pid=""; [[ -f "${d}/run.pid" && ! -L "${d}/run.pid" ]] && { read -r pid < "${d}/run.pid"; } 2> /dev/null || true
 		if [[ "${pid}" =~ ^[0-9]+$ && -d "/proc/${pid}" ]]; then continue; fi
 		fSafeRm "${d}" || true
 	done
@@ -134,3 +138,6 @@ esac
 ##		- 2026-10-25: HOST_TEMP for the integration test.
 ##		- 2026-10-28: The .box-run mark and an owner check, so make's sweep and
 ##		  the removals take only folders make made.
+##		- 2026-11-07: The mark is removed last, so a removal that fails
+##		  partway leaves the folder for the sweep.
+##		- 2026-11-10: make's sweep reads run.pid only when it's a plain file.

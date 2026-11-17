@@ -1,4 +1,4 @@
-## The pipeline's own Python, from shclwrap's. Four spaces, and a wider line
+## The pipeline's own Python, from shclwrap's. 4 spaces, and a wider line
 ## since the report's tables read better unwrapped.
 line-length = 120
 target-version = "py311"

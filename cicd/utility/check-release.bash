@@ -10,7 +10,7 @@
 ##		  number can't be traced to its commit. BUILD may end in -dirty, for a
 ##		  tree that isn't its commit's, and then RELEASE can't be 1.
 ##		- arch: `file` names the architecture each os-arch says.
-##		- package: each .deb and .rpm holds /usr/bin/NAME and nothing else,
+##		- package: each .deb and .rpm has /usr/bin/NAME and nothing else,
 ##		  with the same bytes as the binary beside it, and its name, version,
 ##		  arch and glibc floor are right. WORK_DIR takes rpm's empty database.
 ##		- glibc: no build needs a glibc newer than FLOOR, so a build that
@@ -102,7 +102,7 @@ fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
 	## Names only, then the binary's mode and owner.
 	list="$(dpkg-deb -c "${deb}")"
 	got="$(awk '{print $6}' <<<"${list}" | paste -sd ' ')"
-	[[ "${got}" == "./usr/ ./usr/bin/ ./usr/bin/${name}" ]] || fDie "${deb##*/} holds '${got}', not ./usr/bin/${name} alone"
+	[[ "${got}" == "./usr/ ./usr/bin/ ./usr/bin/${name}" ]] || fDie "${deb##*/} has '${got}', not ./usr/bin/${name} alone"
 	grep -q "^-rwxr-xr-x root/root .* ./usr/bin/${name}\$" <<<"${list}" || fDie "${deb##*/}: /usr/bin/${name} isn't 0755 root:root"
 	got="$(dpkg-deb --fsys-tarfile "${deb}" | tar -xOf - "./usr/bin/${name}" | sha256sum)"
 	[[ "${got%% *}" == "$(sha256sum < "${bin}" | cut -d' ' -f1)" ]] || fDie "${deb##*/}: /usr/bin/${name} isn't ${bin##*/}"
@@ -121,7 +121,7 @@ fRpmCheck(){   ## fRpmCheck RPM BIN NAME VERSION ARCH GLIBC GCC DBDIR
 	got="$("${q[@]}" --qf '%{NAME} %{VERSION} %{ARCH}' "${rpmf}")"
 	[[ "${got}" == "${name} ${dver} ${arch}" ]] || fDie "${rpmf##*/} is '${got}', not '${name} ${dver} ${arch}'"
 	got="$("${q[@]}" --qf '[%{FILEMODES:perms} %{FILEUSERNAME}:%{FILEGROUPNAME} %{FILENAMES}\n]' "${rpmf}")"
-	[[ "${got}" == "-rwxr-xr-x root:root /usr/bin/${name}" ]] || fDie "${rpmf##*/} holds '${got//$'\n'/; }', not /usr/bin/${name} alone at 0755 root:root"
+	[[ "${got}" == "-rwxr-xr-x root:root /usr/bin/${name}" ]] || fDie "${rpmf##*/} has '${got//$'\n'/; }', not /usr/bin/${name} alone at 0755 root:root"
 	got="$(rpm2cpio "${rpmf}" | cpio -i --quiet --to-stdout "./usr/bin/${name}" | sha256sum)"
 	[[ "${got%% *}" == "$(sha256sum < "${bin}" | cut -d' ' -f1)" ]] || fDie "${rpmf##*/}: /usr/bin/${name} isn't ${bin##*/}"
 	reqs="$("${q[@]}" --requires "${rpmf}" | paste -sd ',')"

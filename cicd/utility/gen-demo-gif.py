@@ -33,9 +33,11 @@ import subprocess
 import sys
 import tempfile
 from collections import deque
+from dataclasses import dataclass
+from difflib import get_close_matches
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn
+from typing import Any, NamedTuple, NoReturn, TypeVar
 
 try:
     import tomllib
@@ -57,7 +59,8 @@ PAD = 12
 
 Rgb = tuple[int, int, int]
 Span = tuple[str, str]  # (text, THEME key)
-Step = dict[str, Any]
+T = TypeVar("T")
+KINDS = {str: "a string", int: "a whole number", float: "a number", bool: "true or false"}
 
 THEME: dict[str, Rgb] = {
     "outer": (0, 0, 0),
@@ -126,6 +129,45 @@ class Ident(NamedTuple):
     host: str
 
 
+@dataclass(frozen=True)
+class Step:
+    note: list[str]
+    show: str
+    run: str | None  # None: run show
+    expect_exit: int
+    pause: float
+    overflow: str
+    clear: bool | None  # None: when the output wouldn't fit
+    recall: bool
+    scrollrate: float
+    linems: float
+    gap: bool
+    preenter: float
+    typescale: float
+    notepause: float
+
+
+@dataclass(frozen=True)
+class MapRule:
+    find: re.Pattern[str]
+    put: str
+
+
+@dataclass(frozen=True)
+class Scenario:
+    title: str | None
+    prog: str | None
+    seed: int
+    font: list[str]
+    fontsize: float
+    end_hold: float
+    end_black: float
+    home_as: str
+    setup: str
+    maps: list[MapRule]
+    steps: list[Step]
+
+
 def skip(msg: str) -> NoReturn:
     ##	2 is a skip the stage warns about and gets past.
     sys.stderr.write(f"gen-demo-gif: {msg}\n")
@@ -192,9 +234,59 @@ def find_font(prefs: list[str], size: float) -> tuple[ImageFont.FreeTypeFont, st
     skip("no monospace font found")
 
 
-def load_scenario(path: str) -> dict[str, Any]:
+class Table:
+    ##	One TOML table, read a key at a time. A key nothing read, such as a
+    ##	misspelled one, fails the render once the table is done.
+    def __init__(self, raw: object, where: str) -> None:
+        if not isinstance(raw, dict):
+            fail(f"scenario: {where} isn't a table")
+        self.left: dict[str, Any] = dict(raw)
+        self.known: list[str] = []
+        self.where = where
+
+    def get(self, key: str, default: T) -> T:
+        self.known.append(key)
+        val = self.left.pop(key, default)
+        if isinstance(default, float) and type(val) is int:
+            val = float(val)
+        if type(val) is not type(default):
+            fail(f"scenario: {self.where}: {key} = {val!r} isn't {KINDS[type(default)]}")
+        return val
+
+    def maybe(self, key: str, kind: T) -> T | None:
+        return self.get(key, kind) if key in self.left else None
+
+    def need(self, key: str, kind: T) -> T:
+        if key not in self.left:
+            fail(f"scenario: {self.where} has no {key}")
+        return self.get(key, kind)
+
+    def strs(self, key: str) -> list[str]:
+        ##	One string, or a list of them.
+        self.known.append(key)
+        val = self.left.pop(key, [])
+        val = [val] if isinstance(val, str) else val
+        if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
+            fail(f"scenario: {self.where}: {key} isn't a string or a list of them")
+        return val
+
+    def tables(self, key: str) -> list[Table]:
+        self.known.append(key)
+        val = self.left.pop(key, [])
+        if not isinstance(val, list):
+            fail(f"scenario: {key} isn't an array of tables")
+        return [Table(t, f"[[{key}]] {i}") for i, t in enumerate(val, 1)]
+
+    def done(self) -> None:
+        for key in self.left:
+            near = get_close_matches(key, self.known, n=1)
+            fail(f"scenario: {self.where}: no such key: {key}{f' (meant {near[0]}?)' if near else ''}")
+
+
+def load_scenario(path: str) -> Scenario:
     ##	Scenario, TOML:
     ##	  title, prog, seed, font = [...]   window title, name typed, typing seed, fonts to try
+    ##	  fontsize = 15                      the font size
     ##	  end_hold = 2.0, end_black = 3.0    seconds on the last frame, then on black
     ##	  home_as = "/home/{user}"           what the demo home shows as in output
     ##	  setup = "..."                      runs first in the demo home, unseen
@@ -210,28 +302,65 @@ def load_scenario(path: str) -> dict[str, Any]:
     ##	    recall = true                    the last command comes back, as with the up arrow,
     ##	                                     and the rest of show is typed
     ##	    scrollrate, linems, gap, preenter, typescale, notepause
+    ##	Any other key fails it, as does a value of the wrong type.
     try:
         with Path(path).open("rb") as f:
-            sc = tomllib.load(f)
+            top = Table(tomllib.load(f), "top level")
     except (OSError, tomllib.TOMLDecodeError) as e:
         fail(f"scenario: {e}")
-    if not sc.get("step"):
+    maps = [load_map(t) for t in top.tables("map")]
+    steps = [load_step(t) for t in top.tables("step")]
+    if not steps:
         fail("scenario has no [[step]]")
-    for step in sc["step"]:
-        if not step.get("show") and not step.get("run") and not step_notes(step):
-            fail("scenario has a step with no show, run or note")
-    for m in sc.get("map", []):
-        try:
-            re.compile(m["find"])
-            str(m["put"])
-        except (KeyError, re.error) as e:
-            fail(f"scenario: bad [[map]]: {e}")
+    sc = Scenario(
+        title=top.maybe("title", ""),
+        prog=top.maybe("prog", ""),
+        seed=top.get("seed", 11),
+        font=top.strs("font"),
+        fontsize=top.get("fontsize", 15.0),
+        end_hold=top.get("end_hold", 2.0),
+        end_black=top.get("end_black", 3.0),
+        home_as=top.get("home_as", "/home/{user}"),
+        setup=top.get("setup", ""),
+        maps=maps,
+        steps=steps,
+    )
+    top.done()
     return sc
 
 
-def step_notes(step: Step) -> list[str]:
-    note = step.get("note", [])
-    return [note] if isinstance(note, str) else list(note)
+def load_map(t: Table) -> MapRule:
+    find, put = t.need("find", ""), t.need("put", "")
+    t.done()
+    try:
+        return MapRule(re.compile(find), put)
+    except re.error as e:
+        fail(f"scenario: {t.where}: {e}")
+
+
+def load_step(t: Table) -> Step:
+    step = Step(
+        note=t.strs("note"),
+        show=t.get("show", ""),
+        run=t.maybe("run", ""),
+        expect_exit=t.get("expect_exit", 0),
+        pause=t.get("pause", 2.6),
+        overflow=t.get("overflow", "wrap"),
+        clear=t.maybe("clear", False),
+        recall=t.get("recall", False),
+        scrollrate=t.get("scrollrate", float(SCROLL_RATE)),
+        linems=t.get("linems", 26.0),
+        gap=t.get("gap", False),
+        preenter=t.get("preenter", 0.0),
+        typescale=t.get("typescale", 1.0),
+        notepause=t.get("notepause", 0.0),
+    )
+    t.done()
+    if step.overflow not in ("wrap", "truncate"):
+        fail(f"scenario: {t.where}: overflow is wrap or truncate, not {step.overflow!r}")
+    if not step.show and not step.run and not step.note:
+        fail(f"scenario: {t.where} has no show, run or note")
+    return step
 
 
 def demo_env(home: Path) -> dict[str, str]:
@@ -277,15 +406,15 @@ class Scrubber:
     ##	Output is from a temp dir on this box, so the dir is shown as a generic
     ##	home, and this box's names as the prompt's. Then anything personal still
     ##	left fails the render rather than going into the README.
-    def __init__(self, sc: dict[str, Any], home: Path, binpath: str, prog: str, ident: Ident) -> None:
-        shown_home = str(sc.get("home_as", "/home/{user}")).replace("{user}", ident.user)
+    def __init__(self, sc: Scenario, home: Path, binpath: str, prog: str, ident: Ident) -> None:
+        shown_home = sc.home_as.replace("{user}", ident.user)
         homes = sorted({str(home), str(home.resolve())}, key=len, reverse=True)
         self.literal = [(binpath, prog), *((h, shown_home) for h in homes)]
         self.tokens: list[tuple[re.Pattern[str], str]] = []
         for real, fake in ((socket.gethostname(), ident.host), (getpass.getuser(), ident.user)):
             if len(real) >= 2:
                 self.tokens.append((token_re(real), fake))
-        self.maps = [(re.compile(m["find"]), str(m["put"])) for m in sc.get("map", [])]
+        self.maps = sc.maps
         self.leaks = {getpass.getuser(), os.environ.get("HOME", ""), str(home), str(home.resolve())}
         self.leaks |= {str(Path(tempfile.gettempdir()).resolve()), "/mnt/", "/tmp/", "/media/", "/run/user"}
         self.leaks = {s for s in self.leaks if len(s) >= 3}
@@ -296,8 +425,8 @@ class Scrubber:
             text = text.replace(real, fake)
         for pat, fake in self.tokens:
             text = pat.sub(fake, text)
-        for pat, put in self.maps:
-            text = pat.sub(put, text)
+        for m in self.maps:
+            text = m.find.sub(m.put, text)
         return text
 
     def leak(self, text: str) -> str | None:
@@ -323,27 +452,27 @@ def near_re(word: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])")
 
 
-def run_all(sc: dict[str, Any], binpath: str, here: str, home: Path, scrub: Scrubber) -> list[list[str]]:
+def run_all(sc: Scenario, binpath: str, here: str, home: Path, scrub: Scrubber) -> list[list[str]]:
     ##	Every command runs before the first frame, in order, in one home.
     env = demo_env(home)
-    if sc.get("setup"):
-        rc, out = run_cmd(expand(sc["setup"], binpath, here), home, env)
+    if sc.setup:
+        rc, out = run_cmd(expand(sc.setup, binpath, here), home, env)
         if rc:
             fail(f"setup exited {rc}: {out.strip()}")
     last_rc = 0
     outs: list[list[str]] = []
-    for step in sc["step"]:
-        cmd = step.get("run", step.get("show", ""))
+    for step in sc.steps:
+        cmd = step.show if step.run is None else step.run
         if not cmd:
             outs.append([])
             continue
         rc, out = run_cmd(f"(exit {last_rc}); " + expand(cmd, binpath, here), home, env)
         ##	A renamed flag would print an error, and the gif would show it as
         ##	if it were the tool working.
-        want = int(step.get("expect_exit", 0))
+        want = step.expect_exit
         if rc != want:
             fail(f"step exited {rc}, not {want}: {cmd}\n{out}")
-        if step.get("show"):
+        if step.show:
             last_rc = rc
         else:
             out = ""
@@ -737,40 +866,31 @@ class Player:
 
     def play_step(self, step: Step, out: list[str]) -> None:
         scr = self.scr
-        rate = float(step.get("scrollrate", SCROLL_RATE))
-        overflow = step.get("overflow", "wrap")
+        rate, overflow = step.scrollrate, step.overflow
         rows_out = sum(len(scr.wrap(t, "fg", overflow)) for t in out)
-        rows_in = len(step_notes(step)) + (1 if step.get("show") else 0) + rows_out + 2
-        if step.get("clear", rows_in > scr.rows) and scr.lines:
+        rows_in = len(step.note) + (1 if step.show else 0) + rows_out + 2
+        if (rows_in > scr.rows if step.clear is None else step.clear) and scr.lines:
             scr.clear()
             self.shown = scr.cursor_target()
             self.snap(260)
-        typing = [TypedLine("# " + n, "dim", WPM_NOTES, False, 1.0) for n in step_notes(step)]
-        if step.get("show"):
-            typing.append(
-                TypedLine(
-                    step["show"].replace("{prog}", self.prog),
-                    "fg",
-                    WPM_LETTERS,
-                    True,
-                    float(step.get("typescale", 1.0)),
-                )
-            )
+        typing = [TypedLine("# " + n, "dim", WPM_NOTES, False, 1.0) for n in step.note]
+        if step.show:
+            typing.append(TypedLine(step.show.replace("{prog}", self.prog), "fg", WPM_LETTERS, True, step.typescale))
         for tl in typing:
             self.type_line(tl, step)
             if tl.color == "dim":
                 self.after_note(step, rate)
             else:
                 self.show_output(step, out, rate, overflow)
-        if not step.get("show"):
-            self.blink_pause(1000 * float(step.get("pause", 2.6)))
+        if not step.show:
+            self.blink_pause(1000 * step.pause)
 
     def type_line(self, tl: TypedLine, step: Step) -> None:
         ##	Typed, then Enter, leaving the line in the scrollback.
         scr, rng = self.scr, self.rng
         line, key = tl.text, tl.color
         scr.typed_key = key
-        if key == "fg" and step.get("recall"):
+        if key == "fg" and step.recall:
             ##	Up arrow: the last command comes back whole, and only the
             ##	rest is typed.
             if not self.last_cmd or not line.startswith(self.last_cmd):
@@ -786,8 +906,8 @@ class Player:
                 scr.typed = scr.typed[:-1]
             self.glide_cursor(event.delay)
         self.snap(rng.uniform(260, 480) if key == "fg" else 130)  # a beat before Enter
-        if key == "fg" and step.get("preenter"):
-            self.blink_pause(1000 * float(step["preenter"]))
+        if key == "fg" and step.preenter:
+            self.blink_pause(1000 * step.preenter)
         for row in scr.wrap_spans([*scr.prompt, (scr.typed, key)]):
             scr.put(row)
         if key == "fg":
@@ -800,8 +920,8 @@ class Player:
         else:
             self.glide_cursor(130)
         self.snap(140)
-        if step.get("notepause"):
-            self.blink_pause(1000 * float(step["notepause"]))
+        if step.notepause:
+            self.blink_pause(1000 * step.notepause)
 
     def show_output(self, step: Step, out: list[str], rate: float, overflow: str) -> None:
         scr = self.scr
@@ -809,8 +929,8 @@ class Player:
         scr.show_prompt = False
         if scr.rest_scroll() > scr.scroll + 0.5:
             self.settle(rate, cursor=False)
-        out_lines = ([""] if step.get("gap") else []) + out
-        self.emit(out_lines, rate, float(step.get("linems", 26)), overflow)
+        out_lines = ([""] if step.gap else []) + out
+        self.emit(out_lines, rate, step.linems, overflow)
         ##	A blank line before the next prompt, to read it apart.
         if out_lines and out_lines[-1].strip():
             scr.put([("", "fg")])
@@ -819,7 +939,7 @@ class Player:
         if scr.rest_scroll() > scr.scroll + 0.5:
             self.settle(rate)
         self.snap(60)
-        self.blink_pause(1000 * float(step.get("pause", 2.6)))
+        self.blink_pause(1000 * step.pause)
 
     def finish(self, hold_ms: float, black_ms: float) -> None:
         ##	A still last frame, then a cut to black, so the loop's seam is plain.
@@ -854,12 +974,12 @@ def main() -> None:
     binpath = str(Path(args.bin).resolve())
     if not os.access(binpath, os.X_OK):
         fail(f"no program to run at {args.bin}")
-    rng = random.Random(args.seed if args.seed is not None else sc.get("seed", 11))
-    prog = sc.get("prog", Path(binpath).name)
+    rng = random.Random(args.seed if args.seed is not None else sc.seed)
+    prog = Path(binpath).name if sc.prog is None else sc.prog
 
-    prefs = [args.font] if args.font else list(sc.get("font", []))
+    prefs = [args.font] if args.font else list(sc.font)
     prefs += ["Monaspace Argon SemiBold", "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono"]
-    font, font_name = find_font([p for p in prefs if p], float(sc.get("fontsize", 15)))
+    font, font_name = find_font([p for p in prefs if p], sc.fontsize)
 
     user_tint, host_tint = rng.sample(IDENT_TINTS, 2)
     ident = Ident(rng.choice(IDENT_USERS), rng.choice(IDENT_HOSTS))
@@ -872,7 +992,7 @@ def main() -> None:
         ("$ ", "gray"),
     ]
     colors = dict(THEME, user=user_tint, host=host_tint)
-    scr = Screen(font, sc.get("title", prog), prompt, build_palette(user_tint, host_tint))
+    scr = Screen(font, prog if sc.title is None else sc.title, prompt, build_palette(user_tint, host_tint))
 
     here = str(Path(args.scenario).resolve().parent)
     home, token = make_home()
@@ -882,15 +1002,15 @@ def main() -> None:
     finally:
         remove_home(home, token)
 
-    typed = [step.get("show", "").replace("{prog}", prog) for step in sc["step"]]
-    typed += [n for step in sc["step"] for n in step_notes(step)]
+    typed = [step.show.replace("{prog}", prog) for step in sc.steps]
+    typed += [n for step in sc.steps for n in step.note]
     check_shown([ln for lines in step_out for ln in lines] + typed, scrub)
 
     player = Player(scr, colors, rng, prog)
     player.snap(700)
-    for step, out in zip(sc["step"], step_out, strict=True):
+    for step, out in zip(sc.steps, step_out, strict=True):
         player.play_step(step, out)
-    player.finish(1000 * float(sc.get("end_hold", 2.0)), 1000 * float(sc.get("end_black", 3.0)))
+    player.finish(1000 * sc.end_hold, 1000 * sc.end_black)
 
     out_path = Path(args.out)
     player.mov.save(out_path)
@@ -923,3 +1043,5 @@ if __name__ == "__main__":
 ##		  running, with its error, not as missing. The playback moved out of
 ##		  main() into Player.
 ##		- 2026-10-28: The leak check finds the host next to -, _ and . too.
+##		- 2026-11-08: The scenario and its steps are dataclasses. An unknown key,
+##		  or a value of the wrong type, fails the render.

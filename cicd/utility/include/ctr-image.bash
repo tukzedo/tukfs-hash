@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
-#  shellcheck disable=2154  ## 'referenced but not assigned.' root, APP_NAME, CPU_CAP, the CTR_ settings, the PINs and stop_cidfile come from config.bash and stop-descendants.bash, sourced first.
+#  shellcheck disable=2154  ## 'referenced but not assigned.' root, APP_NAME, CPU_CAP, the CTR_ settings, the PINs, stop_cidfile and mem_ctr_args come from config.bash, stop-descendants.bash and mem-cap.bash, sourced first.
 
 ##	Purpose:
 ##		The leak check image, or the release one, for the scripts that run
-##		their tools in it. Source stop-descendants.bash and config.bash
-##		first, with root set to the repo root.
+##		their tools in it. Source stop-descendants.bash, mem-cap.bash and
+##		config.bash first, with root set to the repo root.
 ##			fCtrUseRelease      the functions below work on the release image
-##			                    from then on, not the leak check one.
+##			                    from then on, in place of the leak check one.
 ##			fCtrWhyNot          nothing when the image can run here, else why
 ##			                    not: it's x86_64 only, and docker (or
 ##			                    TUKFS_DOCKER) counts once its daemon answers.
@@ -21,10 +21,10 @@
 ##			fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##			                    run SCRIPT in the image, with no network, as
 ##			                    the caller's uid, on CPU_CAP cores, at nice 19
-##			                    and idle I/O. The repo goes in read only at
-##			                    its own path. WORK, CTR_CARGO_HOME and RW,
-##			                    dirs joined by ':', are all it writes, each
-##			                    at its own real path.
+##			                    and idle I/O, under the memory cap. The repo
+##			                    goes in read only at its own path. WORK,
+##			                    CTR_CARGO_HOME and RW, dirs joined by ':', are
+##			                    all it writes, each at its own real path.
 ##			                    TMPDIR and HOME are in WORK, so on the host's
 ##			                    filesystem, with its user xattrs.
 ##			                    TUKFS_IN_IMAGE=1 tells the script where it is.
@@ -38,8 +38,9 @@
 ##		ctr_step, which the caller sets. cicd.bash removes a run's
 ##		containers by that label at its end.
 ##		A build keeps the new tag and the one before it, once the new one has
-##		answered, and then prunes build cache over a week old and any <none>
-##		image of ours.
+##		answered, and then removes any <none> image of ours. Docker's build
+##		cache is left to the daemon's own gc, since every project shares it.
+##		b23 sets that in /etc/docker/daemon.json, under builder.gc.
 ##		From shcl's cicd/utility/include/ctr-image.bash.
 ##	History: At bottom of script.
 
@@ -101,12 +102,15 @@ fCtrSize(){ "${TUKFS_DOCKER:-docker}" image inspect --format '{{.Size}}' "$1" 2>
 ## docker run, with a cidfile a stop finds, for every container here. The
 ## cidfile goes in TUKFS_CID_DIR, else in DIR. nice on the client doesn't
 ## reach a container, so each gets CPU_CAP cores at a low share, and the ones
-## that do real work run nice inside too.
+## that do real work run nice inside too. Each gets the memory cap with no
+## swap, first in line for the OOM killer, and a bad CICD_MEM_CAP starts
+## nothing. A container killed at the cap exits 137.
 ## <n> is taken with a plain mkdir in the cid dir, which the whole run
 ## shares, so a name kept by --keep-temp can't come up twice.
 fCtrRun(){   ## fCtrRun DIR STEP RUN_ARG...
 	local engine="${TUKFS_DOCKER:-docker}" rc=0 cidfile="" f step="${2:-ctr}" n=1
 	local -a kept=() args=()
+	fMemCtrArgs || return 2
 	fStopCidfile "$1" || { echo "ctr-image: no dir for a cidfile" >&2; return 2; }
 	cidfile="${stop_cidfile}"
 	shift 2
@@ -123,7 +127,7 @@ fCtrRun(){   ## fCtrRun DIR STEP RUN_ARG...
 	fi
 	stop_cidfiles+=("${cidfile}")
 	"${engine}" run --cidfile "${cidfile}" --name "${APP_NAME}-${ctr_run}-${step}-${n}" "${ctr_labels[@]}" \
-		--cpus "${CPU_CAP:-1}" --cpu-shares 256 "$@" || rc=$?
+		--cpus "${CPU_CAP:-1}" --cpu-shares 256 "${mem_ctr_args[@]}" "$@" || rc=$?
 	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
 	stop_cidfiles=("${kept[@]}")
 	if [[ -n "${TUKFS_KEEP_TEMP:-}" && -s "${cidfile}" ]]; then echo "[ kept (--keep-temp): container $(head -c 12 -- "${cidfile}") ]" >&2; fi
@@ -134,7 +138,7 @@ fCtrGB(){ awk -v b="${1:-0}" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 
 ## The label is what finds a <none> image of ours, and only ours.
 fCtrBuild(){   ## fCtrBuild TAG DIR
-	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" prev="" id="" have="" bytes=0 freed=0 pruned=""
+	local engine="${TUKFS_DOCKER:-docker}" tag="$1" ctx="$2" old="" prev="" id="" have="" bytes=0 freed=0
 	local -a gone=() args=()
 	fCtrLabels
 	if [[ "${ctr_kind}" == leak ]]; then
@@ -166,14 +170,12 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 		bytes="$(fCtrSize "${old}")"
 		if "${engine}" rmi "${old}" >/dev/null 2>&1; then gone+=("${old}"); freed=$((freed + bytes)); else echo "ctr-image: kept ${old}, which is in use"; fi
 	done < <("${engine}" image ls "${CTR_IMAGE}" --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' 2>/dev/null | LC_ALL=C sort -r || true)
-	## A week of every project's cache stays, since a cold one costs minutes.
-	pruned="$("${engine}" builder prune -f --filter until=168h 2>/dev/null | sed -n 's/^Total\( reclaimed space\)\{0,1\}:[[:space:]]*//p' || true)"
 	while IFS= read -r id; do
 		[[ -n "${id}" ]] || continue
 		bytes="$(fCtrSize "${id}")"
 		if "${engine}" rmi "${id}" >/dev/null 2>&1; then gone+=("<none> ${id:0:12}"); freed=$((freed + bytes)); fi
 	done < <("${engine}" image ls -q --filter dangling=true --filter "label=${CTR_IMAGE}" 2>/dev/null || true)
-	echo "ctr-image: built ${tag} ($(fCtrGB "$(fCtrSize "${tag}")")); kept ${prev:-no older tag}; removed ${gone[*]:-no old image}, freeing $(fCtrGB "${freed}"), and ${pruned:-0B} of build cache"
+	echo "ctr-image: built ${tag} ($(fCtrGB "$(fCtrSize "${tag}")")); kept ${prev:-no older tag}; removed ${gone[*]:-no old image}, freeing $(fCtrGB "${freed}")"
 	return 0
 }
 
@@ -248,3 +250,7 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		  build keeps the tag before the new one, and the cache prune keeps a
 ##		  week.
 ##		- 2026-10-29: The dirty flag goes in with the build number.
+##		- 2026-11-07: No build cache prune. It reached every project's cache,
+##		  and the daemon's gc trims it now.
+##		- 2026-11-09: The memory cap from mem-cap.bash on every container,
+##		  with no swap and --oom-score-adj 1000.

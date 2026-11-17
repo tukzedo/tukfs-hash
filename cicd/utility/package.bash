@@ -5,8 +5,8 @@
 ##	Purpose:
 ##		- A .deb and an .rpm through nfpm for each Linux binary in the stage
 ##		  dir, named into the same tukfs-hash-<version>-<os-arch> family, beside
-##		  it. The binary is all they hold.
-##		- Two builds of one commit give the same bytes: the mtimes inside are
+##		  it. The binary is all that's in them.
+##		- 2 builds of one commit give the same bytes: the mtimes inside are
 ##		  SOURCE_DATE_EPOCH, which the engine sets from the commit.
 ##		- Writes only into STAGE_DIR and WORK_DIR, and removes nothing. Both are
 ##		  in the run's temp dir, which cicd.bash removes.

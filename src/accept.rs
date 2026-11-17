@@ -29,8 +29,8 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	}
 	// Read before the run row goes in, so a failure leaves none.
 	let mounts = crate::mounts::read_mounts()?;
-	let _lock = scan::lock(&db_path, &mounts)?;
-	let mut conn = db::open_rw(&db_path)?;
+	let mut held = scan::Held::take(&db_path, &mounts)?;
+	let conn = held.open()?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Its own status, so `scan --resume` never takes it for a stopped scan.
 	conn.execute(
@@ -42,7 +42,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	let mut buf = vec![0u8; 1 << 20];
 	let mut taken = 0;
 	for p in paths {
-		match one(&mut conn, run_id, p, &mounts, &mut buf) {
+		match one(conn, run_id, p, &mounts, &mut buf) {
 			Ok(()) => taken += 1,
 			Err(msg) => err!("{}: {msg}", show_path(p)),
 		}
@@ -56,13 +56,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 		],
 	)
 	.map_err(e)?;
-	if let Err(x) = db::close_rw(conn) {
-		err!(
-			"warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.",
-			show_path(&db_path)
-		);
-	}
-	scan::give_back(&db_path);
+	drop(held);
 	out!("run {run_id}: accepted {taken} of {}", paths.len());
 	Ok(i32::from(taken != paths.len()))
 }
@@ -77,6 +71,33 @@ fn fail_text(f: ReadFail) -> String {
 
 fn digest_text(d: Option<&[u8]>) -> String {
 	d.map_or_else(|| "none".into(), b64u_encode)
+}
+
+// The file is in the database by now, so only the attributes are left undone.
+fn xattr_failed(
+	conn: &mut Connection,
+	run_id: i64,
+	path: &[u8],
+	x: &std::io::Error,
+	what: &str,
+) -> Result<(), String> {
+	let e = |e: rusqlite::Error| format!("database: {e}");
+	let tx = conn.transaction().map_err(e)?;
+	db::apply(
+		&tx,
+		run_id,
+		now_us(),
+		Msg::Event {
+			kind: Kind::XattrError,
+			path: path.to_vec(),
+			detail: x.to_string(),
+		},
+	)
+	.map_err(e)?;
+	tx.commit().map_err(e)?;
+	Err(format!(
+		"taken in the database, but its attributes {what}: {x}"
+	))
 }
 
 #[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
@@ -101,7 +122,10 @@ fn one(
 	}
 	let fd = file.as_raw_fd();
 	let onfile = OnFile::read(fd);
-	let rmlint = onfile.b2b_current(scan::mtime_s(&before));
+	let rmlint = onfile
+		.as_ref()
+		.ok()
+		.and_then(|of| of.b2b_current(scan::mtime_s(&before)));
 
 	// Read twice, so a fault in memory during this read isn't what gets
 	// taken as good.
@@ -128,7 +152,10 @@ fn one(
 		"now {}; database had {}, file had {}",
 		b64u_encode(&sums.b3),
 		digest_text(prior.as_ref().map(|p| &p.b3[..])),
-		digest_text(onfile.b3.as_ref().map(|d| &d[..])),
+		onfile.as_ref().map_or_else(
+			|_| "an unreadable set".into(),
+			|of| digest_text(of.b3.as_ref().map(|d| &d[..]))
+		),
 	);
 	let drop_rmlint =
 		hands_off.is_none() && matches!((rmlint, sums.b2b), (Some(old), Some(new)) if old != new);
@@ -170,6 +197,19 @@ fn one(
 	.map_err(e)?;
 	tx.commit().map_err(e)?;
 
+	// A set that can't be read may be there, so it's left alone.
+	let onfile = match onfile {
+		Ok(of) => of,
+		Err(x) => {
+			return xattr_failed(
+				conn,
+				run_id,
+				pbytes,
+				&x,
+				"couldn't be read, so they were left alone",
+			);
+		}
+	};
 	// Only a set that's already there is replaced. Where a scan left none,
 	// such as in a git work tree, accept doesn't add one.
 	let mut written = Ok(());
@@ -181,25 +221,16 @@ fn one(
 		written = xattr::remove_rmlint(fd);
 	}
 	if let Err(x) = written {
-		let tx = conn.transaction().map_err(e)?;
-		db::apply(
-			&tx,
-			run_id,
-			now_us(),
-			Msg::Event {
-				kind: Kind::XattrError,
-				path: pbytes.to_vec(),
-				detail: x.to_string(),
-			},
-		)
-		.map_err(e)?;
-		tx.commit().map_err(e)?;
-		return Err(format!(
-			"taken in the database, but its attributes weren't updated: {x}"
-		));
+		return xattr_failed(conn, run_id, pbytes, &x, "weren't updated");
 	}
 
 	out!("accepted\t{}\t{}", show_path(&path), b64u_encode(&sums.b3));
+	// The scan's row stays as it was, and goes on being reported.
+	if prior.is_none() {
+		out!(
+			"\tno scan has a record under this name; one may have it under another, such as through a bind mount"
+		);
+	}
 	if before.nlink() > 1 {
 		out!(
 			"\t{} other name(s) for this file keep their own records; accept those too",

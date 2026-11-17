@@ -124,6 +124,13 @@ IT_ROOTS=(
 	"ext4|${TUKFS_CICD_IT_EXT4:-/mnt/ext/wip2/wip/tmp}"
 	"zfs|${TUKFS_CICD_IT_ZFS:-${HOME}/tmp/tukfs-hash-zfs-it}"
 )
+## A folder on btrfs for the btrfs subvolume check, des5x, given to each run
+## above as TUKFS_IT_BTRFS. That check makes 3 small files there, and the run
+## can write only to <folder>/tukfs-hash. Few boxes have btrfs, so when it
+## isn't there or isn't on btrfs, des5x skips with a note, and the tree is
+## still recorded for the pre-push hook. TUKFS_CICD_IT_BTRFS overrides it, and
+## an empty one turns it off.
+IT_BTRFS="${TUKFS_CICD_IT_BTRFS-/tmp}"
 
 ## Stage 4, last: the leak and memory checks, eval'd in order, each
 ## "length|command", with length fast, mid or long. Any report fails. See
@@ -220,7 +227,7 @@ CROSS_TARGETS=(
 ## the run's temp dir.
 RELEASE_ARTIFACT_DIR="cicd/artifacts/release"
 ## A .deb and an .rpm per build, from cicd/packaging/nfpm.yaml, into the stage
-## dir before the checks run. The binary is all they hold.
+## dir before the checks run. The binary is all that's in them.
 PACKAGE_ENABLE=1
 PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_work}"'
 ## Over the stage dir, once everything's built and packaged; "label|command",
@@ -229,7 +236,7 @@ PACKAGE_CMD='cicd/utility/package.bash "${release_stage}" "${ver}" "${release_wo
 RELEASE_CHECKS=(
 	'native --version shows the stamped build|cicd/utility/check-release.bash version "${release_stage}/${EXE_NAME}-${ver}-${RELEASE_NATIVE_OSARCH}" "${EXE_NAME}" "${ver}" "${build_number}${build_mark}" "${build_release}"'
 	'file names the architecture of each build|cicd/utility/check-release.bash arch "${release_stage}" "${EXE_NAME}-${ver}" "${staged_osarchs[@]}"'
-	'each package holds the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
+	'each package has the binary and nothing else|if ((PACKAGE_ENABLE)); then cicd/utility/check-release.bash package "${release_stage}" "${EXE_NAME}" "${ver}" "${release_work}" "${staged_osarchs[@]}"; else echo "no packages in this run"; fi'
 	'no build needs a glibc newer than GLIBC_FLOOR|cicd/utility/check-release.bash "${release_glibc}" "${release_stage}" "${EXE_NAME}-${ver}" "${GLIBC_FLOOR}" "${staged_osarchs[@]}"'
 	## The release builds aren't the ones stage 4 tested, so the integration
 	## test runs again on the x86_64 one, in the sandbox, and the unit tests on
@@ -276,8 +283,9 @@ GIF_ROTATE_DIR="${root}/../private/demo/gif"
 GIF_CMD='cicd/utility/demo-gif.bash "${release_dir}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
 
 ## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
-## A leak area keeps each leak check its text is in. With no area named it's
-## fmt, build, lint, unit and it.
+## A leak area keeps each leak check its text is in, and one whose text
+## starts with + runs that text as a leak check of its own, which no other
+## run has. With no area named it's fmt, build, lint, unit and it.
 BACKLOG_AREAS=(
 	"fmt||the format check"
 	"build||the debug build"
@@ -292,6 +300,7 @@ BACKLOG_AREAS=(
 	"miri|--miri|the unit tests under Miri"
 	"fuzz|fuzz.bash 20|the parser fuzz tests, 20 s each"
 	"codeql|codeql|CodeQL, about 11 minutes"
+	"codeql-ours|+cicd/utility/codeql-scan.bash --ours|CodeQL over our code alone, about 3 minutes"
 	"profile||the profiler"
 	"release||the release builds, packages and release checks"
 	"remote||the arm64 tests on vmDebARM64, with the release builds they need"
@@ -324,6 +333,11 @@ LINT_LOG_DIR="cicd/artifacts/lint"
 GIT_PUBLISH=(cicd/utility/n8git_backup-and-publish)
 PUBLISH_AUTO_MESSAGE=""
 
+## Stage 11: the release set to the git host as release v<version>, in a run
+## with no options on this branch. See design.md, Build and release.
+UPLOAD_ENABLE=1
+RELEASE_BRANCH="main"
+
 
 ##	History:
 ##		- 2026-10-23: Created from shcl's config.bash, trimmed to one crate.
@@ -355,3 +369,5 @@ PUBLISH_AUTO_MESSAGE=""
 ##		  release check's integration test gets HOST_TEMP, which it reads first.
 ##		- 2026-10-29: BUILD_DIRTY_ENV_NAME, and the release check takes the
 ##		  marked build number.
+##		- 2026-11-08: The release upload, from main.
+##		- 2026-11-08: IT_BTRFS, for des5x.

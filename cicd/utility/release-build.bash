@@ -73,7 +73,7 @@ for t in "$@"; do
 		cargo build --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" || exit 1
 		continue
 	fi
-	## The image mounts the target dir at the same path, so these hold outside.
+	## The image mounts the target dir at the same path, so these paths work outside too.
 	if [[ "${mode}" == bins ]]; then
 		cargo test --release --locked --no-run -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" --message-format json \
 			| sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' || exit 1

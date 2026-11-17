@@ -79,6 +79,7 @@ fn scan(t: &Tree, since: Option<i64>) -> i32 {
 		write_xattrs: true,
 		rmlint: true,
 		progress_secs: 3600,
+		log: None,
 		args: "soak".into(),
 	};
 	scan::run(&o, &Arc::new(AtomicBool::new(false))).unwrap()
