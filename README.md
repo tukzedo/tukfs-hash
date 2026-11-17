@@ -28,8 +28,11 @@ It's a utility under [tukfs](https://github.com/tukzedo/tukfs), which is part of
 - [Attributes](#attributes)
 - [Usage](#usage)
 - [Installation](#installation)
+	- [Packages and installers](#packages-and-installers)
+	- [Direct stable and dev install scripts](#direct-stable-and-dev-install-scripts)
 	- [Build it yourself](#build-it-yourself)
 - [Set up development environment](#set-up-development-environment)
+- [Contributing](#contributing)
 - [Copyright and license](#copyright-and-license)
 
 <!-- /TOC -->
@@ -143,6 +146,8 @@ Names that aren't plain text are printed with `\xHH` escapes, and a backslash is
 
 Release builds are on the [releases page](https://github.com/tukzedo/tukfs-hash/releases). The newest is 1.0.0-beta.2. Both releases so far are marked as pre-releases. Each release has a binary for x86_64 Linux and one for arm64, a `.deb` and an `.rpm` of each, and a sha256 sums file. They need glibc 2.28 or newer, so they run on RHEL 8, Debian 10, Ubuntu 18.10, and anything newer.
 
+### Packages and installers
+
 Download the build for the box and the sums file into one folder. Then check it, and install the package or the plain binary. On arm64, put `arm64` in place of `x86_64`.
 
 ~~~bash
@@ -153,6 +158,19 @@ sudo install -m 0755 tukfs-hash-*-linux-x86_64 /usr/local/bin/tukfs-hash    # an
 ~~~
 
 The packages put it at `/usr/bin/tukfs-hash`.
+
+### Direct stable and dev install scripts
+
+~~~bash
+bash <(curl -fsSL https://raw.githubusercontent.com/tukzedo/tukfs-hash/main/install.bash)
+~~~
+
+It picks the build for the CPU, checks it against the release's sums file, and says what it'll do before it asks to go ahead. The defaults are sane, and `--help` lists the options. While there's no stable release, it takes the newest pre-release. Running it again is safe, and changes nothing when that build is already in place.
+
+| Install for | Path
+| :---        | :---
+| The user    | `~/.local/bin/tukfs-hash`
+| The system  | `/usr/local/bin/tukfs-hash`
 
 ### Build it yourself
 
@@ -189,6 +207,10 @@ The integration test needs `sqlite3`, `getfattr`, `setfattr`, `b2sum`, and `pyth
 `rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline. It formats, builds, lints, and tests, then makes release builds for x86_64 and arm64 Linux with a `.deb` and an `.rpm` of each, and then runs dogfood, draws the demo gif above, and publishes. On `main` it also uploads the release set to the git host as release `v<version>`, and tags the commit first if it isn't tagged yet. The release builds run in a Debian 10 image under docker, so each one needs only glibc 2.28 or newer. The test steps that run on the box, such as the integration test, run in a bubblewrap sandbox where they can write only to their own temp and build folders, so the pipeline needs `bwrap`. `--no-sandbox` runs them without it. Without docker, or with `--no-container`, only the x86_64 build is made, on the box, and it needs the box's glibc. Where an arm64 Linux test VM is set up, the arm64 build's unit and integration tests also run there. A VM that isn't there is skipped, and `--no-remote` skips it on purpose. The gif needs Pillow, and is skipped without it. `cicd/cicd.bash --merge-gate` runs every check without publishing anything, and the pre-push hook runs it on pushes to `main` after `git config core.hooksPath cicd/hooks`. It's skipped on pushes that only change docs. `--help` lists the rest.
 
 A full run also runs the leak and memory checks. Those are the tests under ASan, TSan, and Miri on the nightly that `cicd/tool-pins.env` names, a heap soak of repeated scans, fuzz tests of the parsers, CodeQL over every crate, and `cargo deny check advisories`. The sanitizers, Miri, and CodeQL run in a docker image that's built from `cicd/container/` the first time, which takes a few minutes and about 4 GB. Without docker they use the host's nightly, and CodeQL is skipped. `--quick` keeps the ones that take under a minute, and any that take hours run only with `--long`. `--no-leakcheck` leaves them all out, and `--no-codeql` leaves out only CodeQL.
+
+## Contributing
+
+Bug reports and pull requests are welcome. [contributing.md](contributing.md) says how they go, and the [code style guide](project/style-guide_code.md) says how the code is written.
 
 ## Copyright and license
 

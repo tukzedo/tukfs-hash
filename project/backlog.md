@@ -29,11 +29,13 @@
 
 ## Issues
 
-- No one-line install script.
+- There is currently no one-line install script.
 	- ID: 2026110218175402
 	- Type: Feature
-	- Status: Queued
+	- Status: Waiting on UAT
+		- The README section and the script's plan and messages are wording to judge. The one-liner's raw URL on `main` works only once a release takes `install.bash` there.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Needs hand testing: read README's "Direct stable and dev install scripts", and run `bash install.bash --target system` once, with the real sudo. After the next release, run the one-liner from README as given.
 	- Target version: 1.0.0
 	- Opened: 20261102-181754
 	- Opened by: CICD review
@@ -45,18 +47,47 @@
 	- Progress log:
 		- 2026-11-02: README has the Installation section with "Build it yourself" only. Packages and the one-liner go in above it.
 		- 2026-11-17: Queued again. The release upload is in (2026110218175401), and the repo is public.
+		- 2026-11-17: `install.bash` is in the repo's top folder, and README's Installation has the packages, then the one-liner and its install paths, then "Build it yourself". design.md, "Build and release", says how it picks a release.
+	- Verified:
+		- `install-check.bash REPO` passes 88 of 88: options, refusals of another OS, CPU or glibc, a folder at the name, a folder it can't write, a fresh install, a second run that changes nothing, an upgrade, a link at the name, compact JSON, stable and dev picks, drafts skipped, a bad or missing sum, a build that won't start, an odd tag, the PATH notes, the system target through a stand-in sudo, the prompt on a pty, and 4 runs against the real GitHub releases.
+		- The same installer passes a stable, dev, repeat, bad-sum and old-glibc run under Bash 3.2.57.
+		- The check of the release list failed on JSON with `{"tag_name"` at a line start, before the fix that splits on braces too. The folder-at-the-name check failed on `54a9b27` and passes on `e7e61ab`.
+		- shellcheck is clean, and so are mdcheck and markdownlint on README.md and design.md.
 	- Decisions:
 		- No `install.ps1`. The tool only runs on Linux.
+		- The system target installs the plain binary to `/usr/local/bin`, through sudo when not root, rather than the `.deb` or `.rpm`. One way for every distro, and the packages stay the first way README gives.
+		- Linux only, x86_64 and arm64. It refuses a box without glibc 2.28 or newer before downloading, and runs the download once with `--version` before it replaces anything.
+		- "Already installed" goes by the sha256 of the file in place, not by `--version`, so a dev build of the same version is still replaced.
+		- The answer is read from the terminal, so it also works as `curl ... | bash`. With no terminal and no `--yes`, it stops before downloading.
+		- README's new headings are the house names, "Packages and installers" and "Direct stable and dev install scripts". "Build it yourself" keeps its name.
+		- Copyright t00mietum, MIT, the same as the repo's other scripts.
+	- Branch: nov17b-2026110218175402
+	- Commit: `54a9b27`, `e7e61ab`
+	- Test case: none with an ID. The private `install-check.bash REPO` in the tools folder, since private checks stay out of the pipeline (2026102508462883).
 
-- No public code style guide or contributing.md, and README points to neither.
+- There is currently no public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
-	- Status: Queued
+	- Status: Waiting on UAT
+		- Read `project/style-guide_code.md`, `contributing.md`, and README's new Contributing section, for wording and for what they ask of contributors.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: Queued again 2026-11-17, since the repo is public.
+	- Done:
+		- `project/style-guide_code.md` says where each formatter and linter config is, why a few settings are as they are, and the rules the tools can't check, from memory.md's Code rules and the skip and write rules in design.md.
+		- `contributing.md` covers issues, bug reports, branching from `dev`, the quick run before a pull request, and licensing.
+		- README has a short Contributing section, before Copyright and license, and a TOC line for it.
+	- Decisions:
+		- No support links, since those are for jim-collier projects. No code of conduct link, since this repo doesn't have one.
+		- GitHub's private vulnerability reporting is off for the repo, so a security problem goes in an issue with no details, asking for a private way to send them. Turning it on would be the better route.
+		- The license part names each file's header as the license for a change to it, since the program is GPL-2.0-only and most of the pipeline is MIT.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, markdownlint and the content scrub included. The markdown check is clean on all 3 files.
+	- Stand-in: none (20261117). The result is public wording, which only a person can judge.
+	- Branch: nov17b-2026102808215637
+	- Commit: `1cabf24`
+	- Test case: none, since it's docs only.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
