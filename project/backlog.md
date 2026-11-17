@@ -35,6 +35,7 @@
 	- Status: Stalled
 		- Held for: a published release, and the repo going public.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0
 	- Opened: 20261102-181754
 	- Opened by: CICD review
 	- Prereq IDs: 2026110218175401
@@ -53,6 +54,7 @@
 	- Status: Stalled
 		- Held for: the repo going public.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: The repo is private, so this can wait until it goes public.
@@ -60,7 +62,8 @@
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -95,7 +98,8 @@
 - `snapdiff` skips input it can't use without a word, and exits 0 having checked nothing.
 	- ID: 2026101406340905
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -138,7 +142,8 @@
 - A mismatch overwrites both stored checksums with the new digest, so the next run calls the damaged file clean.
 	- ID: 2026101406340901
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -184,7 +189,8 @@
 - `vm-scan` stops at the first disk image, after the guests are already frozen or shut down and the snapshots taken.
 	- ID: 2026101406340903
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -204,7 +210,8 @@
 - `diffs` writes the root filesystem's btrfs results and bf7's to the same file names, so bf7's overwrite the root's.
 	- ID: 2026101406340904
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Critical
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -226,7 +233,8 @@
 - A read error found by `--verify` is skipped by a plain scan later the same day, which exits 0.
 	- ID: 2026111011092300
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 1
@@ -258,7 +266,8 @@
 - The pipeline prunes every project's docker build cache
 	- ID: 2026110311291911
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261103-112919
 	- Opened by: JC
@@ -282,7 +291,8 @@
 - `scan`, `accept` and `prune` follow a symlink at the database's lock file or name, so a run through sudo creates and chowns a file of another user's choosing.
 	- ID: 2026102814341403
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
@@ -311,7 +321,8 @@
 - A merge gate whose demo gif fails has already recorded its tree, so the retried push skips the gate.
 	- ID: 2026102814341404
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
@@ -333,7 +344,8 @@
 - The check-only modes pass when the advisory scan, a sanitizer or CodeQL skips for a missing tool, and still record the tree.
 	- ID: 2026102814341405
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
@@ -356,7 +368,8 @@
 - A database row with a read date in the future skips its file on every scan, `--verify` included, and the scan exits 0.
 	- ID: 2026102814341401
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
@@ -383,7 +396,8 @@
 - After `--verify` or `--since` reports a damaged file, a plain scan later that day skips it and exits 0.
 	- ID: 2026102814341402
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261028-143414
@@ -413,7 +427,8 @@
 - `vm-scan` drops its snapshots on exit 4, so flagged files can't be read again.
 	- ID: 2026101406340913
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs external testing: A real `vm-scan` run as root.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
@@ -432,7 +447,8 @@
 - A hard-linked file's other names take the first name's digest and are never compared with their own DB rows.
 	- ID: 2026101406340906
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -457,7 +473,8 @@
 - A directory that can't be read, in full or in part, drops its files with no event, and the run still exits 0.
 	- ID: 2026101406340908
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -490,7 +507,8 @@
 - A stopped run exits 2 even with mismatches found, and `--resume` then reports 0 for them.
 	- ID: 2026101406340909
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs external testing: A real scan and vm-scan as root, stopped and resumed.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
@@ -523,7 +541,8 @@
 - `--resume` can pick the wrong run.
 	- ID: 2026101406340910
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -557,7 +576,8 @@
 - `diffs` can lose its snapshots partway through and report nothing for them.
 	- ID: 2026101406340912
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -588,7 +608,8 @@
 - `status` reads only the current boot's kernel log, so it misses checksum errors from before the bad RAM was fenced off.
 	- ID: 2026101406340907
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -607,7 +628,8 @@
 - `vm-scan` can leave a guest frozen, shut down, or frozen for minutes while another guest shuts down.
 	- ID: 2026101406340911
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs external testing: A real `vm-scan` run as root, with vm925w and a guest with an agent running.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-063409
@@ -647,7 +669,8 @@
 - Run the pipeline's test steps on the host in a sandbox, so a bug in the code under test can't change other files.
 	- ID: 2026110218175400
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261102-175400
 	- Opened by: CICD review
@@ -668,9 +691,10 @@
 - CICD reset: release builds without docker
 	- ID: 2026102509342993
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- Answered 2026-10-25: don't fail if there's no docker. That's option (a), build x86_64 on the host with a note from the floor check and arm64 skipped, and the merge gate doesn't fail on it either.
 		- Done but for the tree record, which only a run as thorough as the merge gate shows.
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261025-093429
@@ -698,8 +722,9 @@
 - CICD reset: other hosts and VMs
 	- ID: 2026102416215927
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- It departs from the wording in one way. Where the box's temp root is in memory, as vmDebARM64's tmpfs `/tmp` is, the work folder goes under `/var/tmp`, since the scan refuses tmpfs.
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
@@ -735,8 +760,9 @@
 - CICD reset: container cleanup
 	- ID: 2026102416215928
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- Done, but for the leak check and profiler containers, which only a full run starts.
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
@@ -770,8 +796,9 @@
 - CICD reset: containers
 	- ID: 2026102416215926
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- Its own part is in. It closes with child 2026102509342993, the release builds without docker, which waits on a question.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -804,8 +831,9 @@
 - CICD reset: CPU and priority
 	- ID: 2026102416215929
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- It departs from the wording in 2 small ways. The version probes run in an image get `--cpus` and the low share, but no `nice` inside, and `docker build` gets neither.
+	- Closed reason: Done
 	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
@@ -835,8 +863,9 @@
 - CICD reset: standard flags
 	- ID: 2026102416215930
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- It departs from the wording in one way. `--list` prints the plan but not the test IDs, which went to child 2026102507210235.
+	- Closed reason: Done
 	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
@@ -872,7 +901,8 @@
 - CICD reset: step output
 	- ID: 2026102416215931
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: Ran 2026-10-25, see the progress log.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
@@ -900,7 +930,8 @@
 - CICD reset: a test for every Done item
 	- ID: 2026102416215932
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -926,7 +957,8 @@
 - CICD reset: test IDs
 	- ID: 2026102416215933
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -952,7 +984,8 @@
 - Nothing is written to NTFS, APFS or HFS+ from Linux.
 	- ID: 2026101409545200
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-095452
 	- Requirements [Feature]:
@@ -977,7 +1010,8 @@
 - vm-scan shuts every guest down for the snapshot, under the test host lock.
 	- ID: 2026101417560000
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs external testing: The b23 root run of `vm-scan`, with vm925w, vmDebARM64 and vmFreeBSD running.
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261014-175600
@@ -1001,7 +1035,8 @@
 - A scan's `--log` can be made and written on NTFS, APFS or HFS+.
 	- ID: 2026111700232501
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261117-002325
 	- Opened by: pre-release review
@@ -1020,7 +1055,8 @@
 - Integration check df0pq can't see snapdiff memory growth under about 13 MB.
 	- ID: 2026111011092302
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 3
@@ -1052,7 +1088,8 @@
 - The bundled SQLite 3.53.2 can hand back stale memory for a database whose `-wal` has another page size (RUSTSEC-2026-0459, CVE-2026-119375).
 	- ID: 2026110912585556
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261109-125855
 	- Opened by: advisories check in a run with no options
@@ -1069,7 +1106,8 @@
 - The release check's integration test fails its sandbox probe when `--backlog-run-quick release` runs alone on b23.
 	- ID: 2026110709102100
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261107-091021
 	- Opened by: JC
@@ -1084,7 +1122,8 @@
 - A root that's missing or can't be resolved is dropped with one line on stderr, and the scan exits 0.
 	- ID: 2026102814341406
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 6
@@ -1119,7 +1158,8 @@
 - A mount that's been mounted over is treated as live, so the walk skips a folder without a word, and a root's filesystem type can come from the hidden mount.
 	- ID: 2026102814341407
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 7
@@ -1152,7 +1192,8 @@
 - A file or folder beside the database whose name starts with the database's file name is skipped with no event.
 	- ID: 2026102814341408
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
@@ -1174,7 +1215,8 @@
 - A root that's an unmounted btrfs subvolume inside another root is dropped from the plan, and the other root's walk stops at it.
 	- ID: 2026102814341412
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 12
@@ -1200,7 +1242,8 @@
 - `box-side.bash make` on a test box removes any old run-shaped folder, with no mark or owner check.
 	- ID: 2026102814341410
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
@@ -1231,7 +1274,8 @@
 - The publish stage fails on a box with no rar, though cicd turns the backup off for that case.
 	- ID: 2026102814341411
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 11
@@ -1257,7 +1301,8 @@
 - The dogfood launcher expands wildcards and `~` in its arguments, and exits 0 on Ctrl+C whatever tukfs-hash exited.
 	- ID: 2026102814341409
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate lints both files, and the dogfood check below runs them.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
@@ -1289,7 +1334,8 @@
 - A scan that fails reading the mount table after it starts leaves its run marked running.
 	- ID: 2026102808215852
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-082158
@@ -1312,7 +1358,8 @@
 - The integration test stops with no FAIL line when 2 of its checks find nothing.
 	- ID: 2026102808215842
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No. The quick run's integration test on ext4 and ZFS covers the one file changed.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-082158
@@ -1334,7 +1381,8 @@
 - The default run's backup rar grew from 1.7 MB to 130 MB, since it now takes the cargo homes under `target/`.
 	- ID: 2026102516000001
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-160000
 	- Opened by: round-20261025b startup lint check
@@ -1361,7 +1409,8 @@
 - A stopped cicd run can leave its temp dir and a locked frozen copy.
 	- ID: 2026102407311809
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-073118
 	- Opened by: testing 2026102407030600
@@ -1398,7 +1447,8 @@
 - A failed DB lookup counts as "no prior record", which skips the DB comparison.
 	- ID: 2026101406340915
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -1418,7 +1468,8 @@
 - `vm-scan` skips a partition it can't mount when another partition in the same image mounts, so that partition is never checked at all.
 	- ID: 2026101406340918
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -1441,7 +1492,8 @@
 - The scan's last step fails with exit 1 when anything else has the database open.
 	- ID: 2026101406340914
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs external testing: A scan as root through sudo with a reader open, to see the WAL files handed back too.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
@@ -1471,7 +1523,8 @@
 - A writer error throws away its batch of events, and the run never records a summary.
 	- ID: 2026101406340916
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -1500,7 +1553,8 @@
 - `vm-scan` freezes guests and takes snapshots before finding out the main scan has the database locked.
 	- ID: 2026101406340917
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -1518,7 +1572,8 @@
 - `clear-btrfs` zeroes the btrfs error counters without saving them first.
 	- ID: 2026101406340919
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -1536,7 +1591,8 @@
 - Files ntfs3 can't decode are reported as read errors, exit 4, the same as damage.
 	- ID: 2026101513014365
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261015-130143
 	- Opened by: me
@@ -1558,7 +1614,8 @@
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261102-181754
 	- Opened by: CICD review
@@ -1587,7 +1644,8 @@
 - Pre-next-cut: Make CLI output much nicer, and show progress %.
 	- ID: 2026111019070740
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-190707
 	- Opened by: user
@@ -1610,7 +1668,8 @@
 - Progress and summary lines wrap on a terminal, and there's no log of them in full.
 	- ID: 2026111019145405
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-191454
 	- Opened by: 2026111019070740
@@ -1647,7 +1706,8 @@
 - A folder scan has no percent done.
 	- ID: 2026111019145393
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-191453
 	- Opened by: 2026111019070740
@@ -1674,7 +1734,8 @@
 - snapdiff's find-new mode keeps every new file in memory to the end, and counts new files as missing.
 	- ID: 2026111011092305
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 6
@@ -1703,7 +1764,8 @@
 - Under sudo, a link at the database's folder makes root create the database and its lock in any folder, then hand them to the user.
 	- ID: 2026111011092301
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 2
@@ -1733,7 +1795,8 @@
 - A mistyped `--no-xattr` or `--exclude` path is ignored without a word, so attributes are written where none were wanted.
 	- ID: 2026111011092303
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 4
@@ -1760,7 +1823,8 @@
 - A release run that skipped a check commits and pushes `main`, and only then refuses the upload.
 	- ID: 2026111011092304
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 5
@@ -1783,7 +1847,8 @@
 - Every command takes every other command's flags without a word, and `scan --help` is an error.
 	- ID: 2026102814341425
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 15
@@ -1814,7 +1879,8 @@
 - The scan output has no percent complete.
 	- ID: 2026110407135700
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261104-071357
 	- Opened by: JC
@@ -1842,7 +1908,8 @@
 - snapdiff compares a renamed file with whatever has its new name in `--old`, not its own old copy.
 	- ID: 2026102814341424
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 14
@@ -1866,7 +1933,8 @@
 - snapdiff keeps every listed file's names and stat results in memory until the end, about 880 bytes per name.
 	- ID: 2026110715441806
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 7
@@ -1894,7 +1962,8 @@
 - The bundled SQLite is 3.50.2, before the FTS5 fix in 3.50.3, and a root scan runs `quick_check` over a database the user owns.
 	- ID: 2026102814341423
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 13
@@ -1930,7 +1999,8 @@
 - `--backlog-run-full` and `--backlog-run-quick release` replace the checkout's release set, with an x86_64-only one when docker is missing.
 	- ID: 2026102814341427
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
@@ -1955,7 +2025,8 @@
 - The publish stage commits and pushes the live checkout rather than the tree the run tested.
 	- ID: 2026102814341426
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 16
@@ -1980,7 +2051,8 @@
 - snapdiff allocates and zeroes 2 MiB for every file pair it compares.
 	- ID: 2026102808215768
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-082157
@@ -2001,7 +2073,8 @@
 - cicd scripts start a process per item in several loops.
 	- ID: 2026102808215748
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-082157
@@ -2029,7 +2102,8 @@
 - The 2 PowerShell scripts aren't plain ASCII, and both have banner lines.
 	- ID: 2026102808215758
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate lints both scripts.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261028-082157
@@ -2049,7 +2123,8 @@
 - CICD reset: CICD process gaps
 	- ID: 2026102416215935
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
@@ -2070,7 +2145,8 @@
 - CICD reset: fuzz tests for the parsers
 	- ID: 2026102517244907
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-172449
 	- Opened by: split from 2026102416215935
@@ -2100,8 +2176,9 @@
 - CICD reset: temp files and safe removal
 	- ID: 2026102416215934
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- Done, but for the profiler's dir and the run on vmDebARM64, which only a full run has.
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261024-162159
@@ -2138,8 +2215,9 @@
 - CICD reset: leak checks in 3 lengths
 	- ID: 2026102517244901
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- It departs from the wording in one way. `--backlog-run-quick` still runs no leak checks but for a leak area or `--leakcheck`, so "every run" leaves out `--backlog-run-quick`. Filed as a Check.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-172449
 	- Opened by: split from 2026102416215935
@@ -2163,7 +2241,8 @@
 - `cicd.bash --list` prints the plan, but not the test IDs the run would print.
 	- ID: 2026102507210235
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261025-072102
 	- Opened by: round-20261025
@@ -2188,8 +2267,9 @@
 - Builds between releases show their date after the build number.
 	- ID: 2026102320093189
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
 		- `--version` shows the date in parentheses after the build number, unless the build is a tagged release.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-200931
 	- Opened by: request
@@ -2206,8 +2286,9 @@
 - The x86_64 release needs glibc 2.39, since it's built against this box's.
 	- ID: 2026102318460622
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
 		- Both builds need glibc 2.28 now, and the packages depend on that.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-184606
 	- Opened by: answer on the cicd decisions
@@ -2225,8 +2306,9 @@
 - The pre-push gate runs on every push, docs-only ones and pushes to `main` included.
 	- ID: 2026102318460623
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
 		- Pushes to `main` and docs-only pushes go through without the gate.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-184606
 	- Opened by: answer on the cicd decisions
@@ -2243,8 +2325,9 @@
 - A full cicd pipeline, per the directives' "CICD process" section.
 	- ID: 2026102309501600
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
 		- All 7 children are Done, and a full run passed with every stage on.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2266,7 +2349,8 @@
 - cicd release builds, packages and dogfood.
 	- ID: 2026102309501603
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2291,7 +2375,8 @@
 - cicd profiler stage and flamegraph report.
 	- ID: 2026102309501604
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2316,7 +2401,8 @@
 - cicd demo gif.
 	- ID: 2026102309501605
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2337,7 +2423,8 @@
 - Test IDs for every test.
 	- ID: 2026102309501606
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2355,9 +2442,10 @@
 - With `--rmlint`, blake2b costs about 3 times the CPU of blake3 per byte.
 	- ID: 2026101916404101
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
 		- It departs from the wording. It was timed by user CPU on a test tree, not by a scan of b23's NVMe group, and blake2b still costs about 3.5 times blake3.
 		- Self-closed per the project's working preferences. The CPU numbers settle it, and a quiet-box NVMe timing can reopen it.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -2379,7 +2467,8 @@
 - Event kinds are passed around as plain strings, next to the `Kind` enum.
 	- ID: 2026101916404103
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -2406,7 +2495,8 @@
 - Run statuses are plain strings, compared in 4 files.
 	- ID: 2026101916404104
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -2428,7 +2518,8 @@
 - Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
 	- ID: 2026101916404102
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -2457,7 +2548,8 @@
 - The release build uses thin LTO and 4 codegen units, and keeps its symbols.
 	- ID: 2026101916404100
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -2478,7 +2570,8 @@
 - Write rmlint's blake2b too, to the database and its xattrs, from the same read.
 	- ID: 2026101912101896
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-115500
 	- Opened by: request
@@ -2504,7 +2597,8 @@
 - Should the main scan write xattrs on Dropbox files?
 	- ID: 2026101406340929
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -2518,7 +2612,8 @@
 - cicd leak and security checks.
 	- ID: 2026102309501602
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2543,7 +2638,8 @@
 - cicd core: the engine, config, gate and pre-push hook.
 	- ID: 2026102309501601
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -2568,8 +2664,10 @@
 - snapdiff `--find-new` trusts a birth time later than now, so after a backward clock step a renamed file can go uncompared at exit 0.
 	- ID: 2026111700232503
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
 	- Opened: 20261117-002325
 	- Opened by: pre-release review
 	- Origin: `born_since_old` in `src/snapdiff.rs`, from 2026111011092305. Plausible, read only.
@@ -2594,8 +2692,10 @@
 - The session-start lint check reports a passed run as FAILED when a test's name has "error:" in it.
 	- ID: 2026111700161500
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
 	- Opened: 20261117-001615
 	- Opened by: session start
 	- Origin: `cicd/utility/lint-report.bash`, the `errs` grep. Confirmed.
@@ -2617,7 +2717,8 @@
 - A failed scan's reason isn't in its `--log`.
 	- ID: 2026111700232502
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261117-002325
 	- Opened by: pre-release review
@@ -2635,7 +2736,8 @@
 - The second Ctrl+C checks fail on vmDebARM64: the first stop finishes before the second INT gets there.
 	- ID: 2026111021192345
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-211923
 	- Opened by: plain run
@@ -2650,7 +2752,8 @@
 - A scan, `accept` or `prune` that fails after taking the lock leaves the database in WAL mode, and under sudo leaves it and its lock owned by root.
 	- ID: 2026111011092306
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's unit test covers the mode, and the hand-back ran in a root stand-in.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
@@ -2678,7 +2781,8 @@
 - A root that's a bind mount of a subfolder isn't checked against `--exclude`, `--no-xattr` or a git work tree above its source.
 	- ID: 2026111011092307
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 8
@@ -2709,7 +2813,8 @@
 - A release run with a local `v<version>` tag already on HEAD doesn't check the git host for that tag on another commit.
 	- ID: 2026111011092308
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 9
@@ -2731,7 +2836,8 @@
 - A TERM while the EXIT trap takes the release tag off skips the run's cleanup.
 	- ID: 2026111011092309
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 10
@@ -2751,7 +2857,8 @@
 - The publisher goes on after a TERM or HUP to its own PID, then commits, pushes and exits 0.
 	- ID: 2026111011092310
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 11
@@ -2777,7 +2884,8 @@
 - A scan root on a snapshot of a pool's top dataset fails planning.
 	- ID: 2026111011092311
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 12
@@ -2801,7 +2909,8 @@
 - snapdiff reads zfs diff's `<xattrdir>` lines as files missing from `--new`, and adds exit 8.
 	- ID: 2026111011092312
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 13
@@ -2825,7 +2934,8 @@
 - Percent done shows the whole filesystem for a root that's a bind mount of a subfolder from another filesystem.
 	- ID: 2026111011092313
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 14
@@ -2852,7 +2962,8 @@
 - A release run tags HEAD and checks the tree before the format stage, which can then make the build `-dirty`.
 	- ID: 2026111011092314
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 15
@@ -2873,7 +2984,8 @@
 - The dogfood launcher now always prints a pool path, and design.md and the private dogfood check still expect the fixed name.
 	- ID: 2026111011092315
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, design.md is a doc, and the private check below runs the launcher.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
@@ -2895,7 +3007,8 @@
 - README's Installation says no release is published, but 1.0.0-beta.1 is.
 	- ID: 2026111011092316
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 17
@@ -2914,7 +3027,8 @@
 - design.md says `xattr=on` keeps a file's attributes in a hidden folder.
 	- ID: 2026111011092317
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 18
@@ -2932,7 +3046,8 @@
 - `--exclude` and `--no-xattr` miss a folder that a root's walk reaches under another name, such as through a bind mount.
 	- ID: 2026110720070507
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-200705
 	- Opened by: 2026110719570617's sweep
@@ -2962,7 +3077,8 @@
 - Mount-table filtering takes time that grows with the square of the mount count, so 2,000 mounts add over a second to every scan, accept and prune start.
 	- ID: 2026110715441800
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 1
@@ -2990,7 +3106,8 @@
 - The database writer tracks a failure with an `Option` and a bool, which allows a state that can't happen.
 	- ID: 2026110715441803
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 4
@@ -3013,7 +3130,8 @@
 - A database reached through a bind mount is hashed by the walk of a root that contains its folder under another name, with attributes written on it.
 	- ID: 2026110719570617
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-195706
@@ -3040,7 +3158,8 @@
 - 2 private cicd checks fail on dev: build-mark-check.bash and gate-record-check.bash's strict image case.
 	- ID: 2026110718460111
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-184601
@@ -3061,7 +3180,8 @@
 - When rm -rf fails partway in the integration test, it can delete run.pid and .test-run first, so no later run sweeps the folder.
 	- ID: 2026110210514819
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-105148
 	- Opened by: work on 2026102814341421
@@ -3082,7 +3202,8 @@
 - A bind mount of a subfolder of another root is read twice, and the 2 names give false `unstable` events.
 	- ID: 2026102814341414
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 19
@@ -3114,7 +3235,8 @@
 - The lines that close a cicd step read `PASS Format` rather than the style guide's `[ <time>: Step 1 of 9; PASS Format ]`.
 	- ID: 2026110715441801
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 2
@@ -3137,7 +3259,8 @@
 - `xattr::write_b3` turns its `B3Write` back into a bool, so a new variant would be written as `DateOnly`.
 	- ID: 2026110715441802
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 3
@@ -3158,7 +3281,8 @@
 - `test-ids.py` uses strings for its lexer states and reads a 5-field tuple by position.
 	- ID: 2026110715441804
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 5
@@ -3182,7 +3306,8 @@
 - `sandbox.bash`'s header repeats design.md's "Test sandbox" before pointing to it.
 	- ID: 2026110715441805
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 6
@@ -3205,7 +3330,8 @@
 - Docs disagree with the code in 3 places.
 	- ID: 2026102814341422
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 27
@@ -3225,7 +3351,8 @@
 - In a run with no options, a demo gif that changed keeps fRecordGreen from recording the tree, since the checkout no longer matches it.
 	- ID: 2026102819580272
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-195802
 	- Opened by: work on 2026102814341426
@@ -3247,7 +3374,8 @@
 - Attributes are written when a root is inside a git work tree.
 	- ID: 2026102814341413
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
@@ -3270,7 +3398,8 @@
 - A resumed run reads and reports again a mismatch an earlier part found, when the file has no current database row.
 	- ID: 2026102814341415
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 20
@@ -3298,7 +3427,8 @@
 - A `fuseblk` mount with a subtype isn't treated as hands-off.
 	- ID: 2026102814341416
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 21
@@ -3319,7 +3449,8 @@
 - 3 integration checks pass whether or not what they check is true.
 	- ID: 2026102814341420
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 25
@@ -3345,7 +3476,8 @@
 - Ctrl+C in the integration test stops only the running scan, and the test goes on.
 	- ID: 2026102814341421
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 26
@@ -3372,7 +3504,8 @@
 - With `--keep-temp`, the default run's cleanup line counts the kept temp folder as freed.
 	- ID: 2026102820562867
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-205628
 	- Opened by: found while working 2026102814341438
@@ -3394,7 +3527,8 @@
 - The dogfood launcher's rotation can't see a pool version another user runs, such as through sudo.
 	- ID: 2026102819305559
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the dogfood stage runs only in a run with no options, the quick gate lints the script, and the check below runs it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-193055
@@ -3421,7 +3555,8 @@
 - The demo gif still shows the box's real disk name and worker count, so it's drawn again after a reboot or on another box.
 	- ID: 2026102814341418
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 23
@@ -3448,7 +3583,8 @@
 - The demo gif's leak check misses the host name next to `-`, `_` or `.`.
 	- ID: 2026102814341419
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 24
@@ -3476,7 +3612,8 @@
 - The dogfood stage's check for a running copy can't see a scan run through sudo.
 	- ID: 2026102814341417
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the dogfood stage runs only in a run with no options, and the check below runs `fInUse` itself.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
@@ -3498,7 +3635,8 @@
 - The demo gif shows a scan's real time, so a slow run redraws it.
 	- ID: 2026102808415586
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-084155
@@ -3522,7 +3660,8 @@
 - The elapsed-time math in cicd.bash and demo-gif.bash fails in a locale with a decimal comma.
 	- ID: 2026102808215799
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -3544,7 +3683,8 @@
 - gen-demo-gif.py says gifsicle is missing when it's installed but failed or timed out.
 	- ID: 2026102808215809
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082158
@@ -3568,7 +3708,8 @@
 - The dogfood launcher loops forever on a cyclic link to itself.
 	- ID: 2026102808215789
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the launcher runs only in the default run's dogfood step.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -3587,7 +3728,8 @@
 - `report --kind` takes any text, so a misspelled kind prints no rows and exits 0.
 	- ID: 2026102808215831
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's integration test covers it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082158
@@ -3611,7 +3753,8 @@
 - Scan progress shows no growth while a large file is read, then a jump.
 	- ID: 2026102808215779
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's unit tests cover it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -3630,7 +3773,8 @@
 - A writer-thread panic in a scan can still leave its run marked running.
 	- ID: 2026102809213002
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's unit tests cover it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-092130
@@ -3648,7 +3792,8 @@
 - Lock and ownership errors on the database are misreported or dropped.
 	- ID: 2026102808215819
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082158
@@ -3669,7 +3814,8 @@
 - Any mount point whose name isn't UTF-8 stops every `scan` and `accept`, wherever it's mounted.
 	- ID: 2026102519331112
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-193311
 	- Opened by: 2026102517244907, while writing the mount table fuzz test
@@ -3693,7 +3839,8 @@
 - A killed cicd run's folder and frozen copy now wait 2 days for the sweep.
 	- ID: 2026102518150001
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No. `--backlog-run-quick` runs the sweep at its start and end.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-181500
@@ -3721,7 +3868,8 @@
 - `lint-report.bash --check` counts archived file names with "warning" in them as warnings.
 	- ID: 2026102516000002
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-160000
 	- Opened by: round-20261025b startup lint check
@@ -3744,7 +3892,8 @@
 - Integration check 0vCUrc fails now and then on ZFS at load around 30, with the scan stopped before it reads the damaged file.
 	- ID: 2026102507222620
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No. `--backlog-run-quick` ran the changed test on ext4 and ZFS on 2026-10-25. The round's full run runs it again.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-072226
@@ -3770,7 +3919,8 @@
 - Integration checks 0vCUrb and 0vCUrc fail now and then at load around 40.
 	- ID: 2026102409041301
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No. Ran 2026-10-24, in the progress log.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261024-090413
@@ -3795,7 +3945,8 @@
 - A stopped integration test can leave part of its work folder.
 	- ID: 2026102408015248
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261024-080152
 	- Opened by: testing 2026102407311809
@@ -3819,7 +3970,8 @@
 - Rust unit tests leave `test_tukfs-hash_*` folders in TMPDIR when they fail or are stopped.
 	- ID: 2026102309501607
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
@@ -3836,7 +3988,8 @@
 - The main scan reads `/var/lib/containerd` and the TinyCore64 image, though the wrapper means to leave out container layers and VM images.
 	- ID: 2026101406340925
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs external testing: A real `vm-scan` run as root, to see TinyCore64's image mounted from the snapshot.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
@@ -3859,7 +4012,8 @@
 - A path argument that isn't valid UTF-8 panics.
 	- ID: 2026101406340924
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -3882,7 +4036,8 @@
 - `vm-scan` names mount folders and fsck logs after the image file name alone, so 2 images with one name in different subfolders of a dataset share them.
 	- ID: 2026101414100001
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-141000
 	- Opened by: backlog round
@@ -3905,7 +4060,8 @@
 - The scan can hang forever if every worker in a group fails to start, or if a worker panics.
 	- ID: 2026101406340920
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -3932,7 +4088,8 @@
 - The walk keeps a whole directory's paths in memory before queuing any, and hard-link entries can stay in memory for the whole run.
 	- ID: 2026101406340921
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -3964,7 +4121,8 @@
 - The walk follows the mount table read at the start, and a directory swapped for a symlink mid-walk is followed.
 	- ID: 2026101406340922
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -3997,7 +4155,8 @@
 - Integration step 1's "hard link read once" check fails now and then on ZFS, with links 0.
 	- ID: 2026101407522499
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-075224
 	- Opened by: test run
@@ -4015,7 +4174,8 @@
 - `diffs` uses a btrfs snapshot's current generation, so changes could be missed if a balance touched the older snapshot.
 	- ID: 2026101406340927
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -4037,7 +4197,8 @@
 - `vm-scan` leaves mounts and loop devices behind on a Ctrl+C during the mount phase, and `e2fsck` ignores Ctrl+C.
 	- ID: 2026101406340926
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -4057,7 +4218,8 @@
 - `--since` takes impossible dates such as 2026-02-31.
 	- ID: 2026101406340923
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -4075,7 +4237,8 @@
 - Integration step 6 fails now and then, with 15 bytes differing in place of 16.
 	- ID: 2026101414300001
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-143000
 	- Opened by: backlog round
@@ -4089,7 +4252,8 @@
 - The integration suite stops partway with "bad input encoding" about 1 run in 1000.
 	- ID: 2026101409000001
 	- Type: Bug
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-090000
 	- Opened by: backlog round
@@ -4104,7 +4268,8 @@
 - A --log made under sudo stays root's.
 	- ID: 2026111019430926
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-194309
 	- Opened by: 2026111019145405
@@ -4129,7 +4294,8 @@
 - CodeQL has no run short enough for a worker, so round code reaches it only at the gate step.
 	- ID: 2026111015123269
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-151232
 	- Opened by: round-20261110 gate step
@@ -4157,7 +4323,8 @@
 - An attribute read error other than "not there" or "not supported" reads as no attributes, and the set is then written over.
 	- ID: 2026111011092319
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 20
@@ -4179,7 +4346,8 @@
 - snapdiff keeps every run of differing bytes, so its memory grows with the file.
 	- ID: 2026111011092322
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 23
@@ -4202,7 +4370,8 @@
 - Exit 130 on a second Ctrl+C is in README and `--help`, and nothing checks it.
 	- ID: 2026111011092323
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 24
@@ -4221,7 +4390,8 @@
 - Integration check df1qb skips as "no user namespace here" when the first full disk scan leaves no database file.
 	- ID: 2026111011092324
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 25
@@ -4241,7 +4411,8 @@
 - The integration test's sweep reads `run.pid` before it checks that the folder is its own, so a FIFO there hangs it.
 	- ID: 2026111011092325
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 26
@@ -4262,7 +4433,8 @@
 - `testutil::Fuzzed` isn't `#[must_use]`, so a fuzz test that never calls `covers()` passes without proving its generator works.
 	- ID: 2026111011092326
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 27
@@ -4276,7 +4448,8 @@
 - Comments in `tests/integration.bash` are out of date.
 	- ID: 2026111011092327
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 28
@@ -4297,7 +4470,8 @@
 - A root inside an `--exclude` folder scans nothing and exits 0 without saying why.
 	- ID: 2026111011092318
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 19
@@ -4323,7 +4497,8 @@
 - `CICD_MEM_CAP` takes sizes too small to run anything.
 	- ID: 2026111011092320
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 21
@@ -4336,7 +4511,8 @@
 - A mount whose source names no device node, such as `/dev/root`, stops planning.
 	- ID: 2026111011092321
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 22
@@ -4363,7 +4539,8 @@
 - README.md and design.md break the Grammar rules added to the directives on 2026-11-08.
 	- ID: 2026111011092328
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 29, directives 2026-11-08
@@ -4392,7 +4569,8 @@
 - The lint stage only reports content scrub hits, rather than failing on them.
 	- ID: 2026110811422141
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261108-114221
 	- Opened by: split from 2026110218175403
@@ -4413,7 +4591,8 @@
 - The content scrub finds about 200 lines in comments, messages and the backlog that break the writing rules, so it only reports.
 	- ID: 2026110218175403
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-181754
 	- Opened by: repo housecleaning
@@ -4438,7 +4617,8 @@
 - The content scrub finds about 100 lines in the backlog that break the writing rules.
 	- ID: 2026110811422129
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261108-114221
 	- Opened by: split from 2026110218175403
@@ -4455,7 +4635,8 @@
 - A database whose first creation failed is refused on every later run, and the message prints Rust's debug form.
 	- ID: 2026102814341430
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 30
@@ -4481,7 +4662,8 @@
 - `accept` says "accepted" with no note when the database has no row under that name.
 	- ID: 2026102814341431
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 31
@@ -4504,7 +4686,8 @@
 - On NTFS, APFS or HFS+, `accept` can't clear an attribute set an older build wrote, so the file is reported on every scan.
 	- ID: 2026102814341432
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 32
@@ -4529,7 +4712,8 @@
 - The integration test has no checks for `xattr-error` exiting 0, for `unstable`, or for `--verify` leaving a new file's attributes alone.
 	- ID: 2026102814341442
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 42
@@ -4548,7 +4732,8 @@
 - A link at the database's name, `-wal` or `-shm` is refused as "unable to open database file", which doesn't say it's a link.
 	- ID: 2026102822062342
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-220623
 	- Opened by: work on 2026102814341403
@@ -4571,7 +4756,8 @@
 - The scan's walk and worker pass the same context through 3 functions, and repeat the "seen once per run" rule at 4 sites.
 	- ID: 2026110715441808
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 9
@@ -4594,7 +4780,8 @@
 - 3 lists and maps in the scan's planning still use bare tuples read by position.
 	- ID: 2026110715441809
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 10
@@ -4615,7 +4802,8 @@
 - 4 places turn a stored path into bytes, and each one handles a value that isn't text or a blob its own way.
 	- ID: 2026110715441810
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 11
@@ -4635,7 +4823,8 @@
 - The pipeline's integration test has no btrfs root, so the btrfs subvolume check never runs there.
 	- ID: 2026110211132205
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261102-111322
 	- Opened by: work on 2026102814341412
@@ -4662,7 +4851,8 @@
 - snapdiff follows symlinked folders inside `--old`, and anywhere in a `--list` name.
 	- ID: 2026102814341428
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 28
@@ -4687,7 +4877,8 @@
 - The demo gif's scenario takes any key, so a misspelled one is ignored without a word.
 	- ID: 2026110715441811
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 12
@@ -4712,7 +4903,8 @@
 - `--help` and README leave out some flags and defaults.
 	- ID: 2026102814341433
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 33
@@ -4733,7 +4925,8 @@
 - A second name of a hard-linked file can read a half-written attribute set from the worker that claimed it.
 	- ID: 2026102814341429
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 29
@@ -4760,7 +4953,8 @@
 - A burst of dogfood builds pushes the week and day versions out of the pool before the newer hour ones.
 	- ID: 2026102814341441
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate lints the script, and the check below runs it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
@@ -4778,7 +4972,8 @@
 - `test-ids.py check` passes on tests and checks it can't see.
 	- ID: 2026102814341440
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 40
@@ -4804,7 +4999,8 @@
 - A build from a tree with uncommitted changes gets HEAD's build number, with no mark.
 	- ID: 2026102814341434
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
@@ -4829,7 +5025,8 @@
 - A TERM to cicd.bash waits for the profiler, cross build, packages and release checks to finish before it stops.
 	- ID: 2026102814341436
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 36
@@ -4850,7 +5047,8 @@
 - A leak area named with `--no-leakcheck` or `--no-codeql` gives a run with 0 steps that exits 0.
 	- ID: 2026102814341435
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 35
@@ -4871,7 +5069,8 @@
 - The release check sets `TMPDIR` for the integration test, which the test ignores.
 	- ID: 2026102814341439
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 39
@@ -4891,7 +5090,8 @@
 - The publisher's check for a leftover stash misses the stash cicd's sync stage leaves.
 	- ID: 2026102814341437
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 37
@@ -4916,7 +5116,8 @@
 - `fPruneCache` judges `target/ctr` by the host's toolchain and `target-gate` by the checkout's lock file.
 	- ID: 2026102814341438
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 38
@@ -4943,7 +5144,8 @@
 - Each file's own `SELECT` costs about a sixth of a small-file scan's user CPU.
 	- ID: 2026102810135573
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-101355
@@ -4964,7 +5166,8 @@
 - Lint configs don't enforce all of the style rules.
 	- ID: 2026102808215708
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -4989,7 +5192,8 @@
 - Small files cost more sys CPU read direct than read plain.
 	- ID: 2026102809554675
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-095546
@@ -5011,7 +5215,8 @@
 - The Python scripts in cicd/utility depart from the Python style rules.
 	- ID: 2026102808215658
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
@@ -5036,7 +5241,8 @@
 - Per-file allocations and syscalls in the scan's read path haven't been measured.
 	- ID: 2026102808215738
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -5057,7 +5263,8 @@
 - PSScriptAnalyzer's Information level and its constant-string rule are off.
 	- ID: 2026102809033225
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check ran it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-090332
@@ -5079,7 +5286,8 @@
 - Comments run long, repeat design.md, or use words the house rules avoid.
 	- ID: 2026102808215668
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
@@ -5110,7 +5318,8 @@
 - Some Rust types and helpers hide what their parts mean.
 	- ID: 2026102808215688
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's unit and integration tests cover it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
@@ -5136,7 +5345,8 @@
 - About 50 public Rust items have no doc comment.
 	- ID: 2026102808215678
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
@@ -5157,7 +5367,8 @@
 - Per-entry checks and copies in the scan's walk and record path haven't been measured.
 	- ID: 2026102809554785
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, nothing was kept.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-095547
@@ -5177,7 +5388,8 @@
 - The directory walk would treat a new entry kind as a file.
 	- ID: 2026102808215728
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate's build, lint, unit and integration steps cover it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -5194,7 +5406,8 @@
 - dogfood_tukfs-hash.ps1 departs from the PowerShell style rules.
 	- ID: 2026102808215717
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No, the quick gate lints it, and the dogfood check below runs it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082157
@@ -5219,7 +5432,8 @@
 - Shellcheck lines that do nothing hide later warnings.
 	- ID: 2026102808215698
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: Yes
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
@@ -5244,7 +5458,8 @@
 - The integration test has a duplicate helper name, an odd header, and 2 hard-to-read one-liners.
 	- ID: 2026102808215647
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No. The quick run's integration test on ext4 and ZFS covers the one file changed.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261028-082156
@@ -5265,8 +5480,9 @@
 - `opt-level = "z"` hasn't been measured on a quiet box.
 	- ID: 2026101916404105
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- Kept opt-level 3, so the profile is unchanged but for a comment saying why.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5287,9 +5503,10 @@
 - Dropping each file's cached pages before reading it costs about as much CPU as blake3.
 	- ID: 2026102316421705
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
 		- Answered 2026-10-25: the hard drive timing is run by hand, not by a round, since the scan writes to real data outside the project.
 		- It departs from the wording. Neither idea in the note was taken. The read is `O_DIRECT` now, and the drops stay.
+	- Closed reason: Done
 	- Needs hand testing: None left. A read-only timing on bf7 stood in for the `--rmlint` scan, since a scan writes there.
 		- Stand-in: the scan's read path, one reader as on any hard drive, with 990 us per MiB of hashing time (blake3 plus blake2b at b23's speed). It showed direct reads within 3 percent of plain ones by median, per the Progress log.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
@@ -5319,7 +5536,8 @@
 - Help-related flags don't leave a blank line before the prompt returns.
 	- ID: 2026102515550002
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-155500
 	- Opened by: user
@@ -5341,7 +5559,8 @@
 - `--version` prints a copyright line and blank lines.
 	- ID: 2026102515550001
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-155500
 	- Opened by: user
@@ -5364,7 +5583,8 @@
 - Test case rows name a private folder by its full path.
 	- ID: 2026102507092407
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-070924
 	- Opened by: round-20261025
@@ -5379,7 +5599,8 @@
 - A cicd run's temp folder defaults to `/tmp`, so the release stage's integration test runs on b23's btrfs `/tmp`.
 	- ID: 2026102409041302
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Needs local test suite run?: No. Ran 2026-10-24, in the progress log.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261024-090413
@@ -5400,8 +5621,9 @@
 - The full run's debug build stage has no flag to turn it off.
 	- ID: 2026102407030600
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
 		- `--no-debug` skips stage 2, and `--no-codeql` leaves out only the CodeQL leak check.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261024-070306
 	- Opened by: round settings
@@ -5418,9 +5640,10 @@
 - The integration test has 3 copies of the byte-flip Python.
 	- ID: 2026101916404122
 	- Type: Task
-	- Status: Done
+	- Status: Closed
 		- It departs from the wording. `fFlipByte` takes an optional fourth COUNT argument, default 1, since step 3 and step 6 flip 16 bytes.
 		- Self-closed per the project's working preferences, since the extra argument is what the 16-byte callers need.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5438,7 +5661,8 @@
 - The integration test uses `[ ]` for 7 checks passed through `expect`.
 	- ID: 2026101916404121
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5456,7 +5680,8 @@
 - The integration test's setup forks 400 times in one loop.
 	- ID: 2026101916404123
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5474,7 +5699,8 @@
 - The integration test keeps old checks as commented-out code.
 	- ID: 2026101916404118
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5490,7 +5716,8 @@
 - The integration test has no `##` header block and no History section.
 	- ID: 2026101916404119
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5504,7 +5731,8 @@
 - The integration test's helpers and variables don't follow the house names, and most expansions aren't braced.
 	- ID: 2026101916404120
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5524,7 +5752,8 @@
 - The integration test removes its work folder with no check right before that it's the one it made.
 	- ID: 2026101916404124
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5545,7 +5774,8 @@
 - There's no `rust-version`, so a toolchain older than 1.88 fails on let-chains instead of saying what it needs.
 	- ID: 2026102308303246
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-083032
 	- Opened by: round review
@@ -5563,7 +5793,8 @@
 - Some clones have no comment saying why.
 	- ID: 2026101916404114
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5583,7 +5814,8 @@
 - Public items have `//` comments instead of `///`.
 	- ID: 2026101916404113
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5601,7 +5833,8 @@
 - 6 functions run past 100 lines.
 	- ID: 2026101916404110
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5625,7 +5858,8 @@
 - The crate is on edition 2021, so nested `if let` can't be collapsed with let-chains.
 	- ID: 2026101916404116
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5646,7 +5880,8 @@
 - Mutex locks are unwrapped with no reason given, and `Faults` handles a poisoned lock another way.
 	- ID: 2026101916404109
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5668,7 +5903,8 @@
 - Every skipped file updates its database row by path.
 	- ID: 2026101916404106
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5690,7 +5926,8 @@
 - The walk builds each file's full path twice.
 	- ID: 2026101916404107
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5708,7 +5945,8 @@
 - `scan::Opts` keeps full scan versus `--verify` as a bool.
 	- ID: 2026101916404111
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5727,7 +5965,8 @@
 - `hex` and `escape_name` allocate a new string for every byte.
 	- ID: 2026101916404108
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5745,7 +5984,8 @@
 - Some public types don't derive `Debug`.
 	- ID: 2026101916404112
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
@@ -5760,7 +6000,8 @@
 - vm-scan writes nothing to its log until the snapshots are taken.
 	- ID: 2026101416080001
 	- Type: Enhancement
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-160800
 	- Opened by: vm-scan root run
@@ -5774,7 +6015,8 @@
 - Report paths that a finished run didn't see, as gone.
 	- ID: 2026101406340930
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
 	- Decisions:
@@ -5793,7 +6035,8 @@
 - A `verify` mode that rereads only files whose blake3 is already known, for a quick check between full runs.
 	- ID: 2026101406340931
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
 	- Decisions:
@@ -5813,7 +6056,8 @@
 - A way to prune `files` rows no path points at.
 	- ID: 2026101406340932
 	- Type: Feature
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261013-110127
 	- Note: Every content change orphans a row, which only inflates the "distinct contents" count.
@@ -5830,7 +6074,8 @@
 - The `xattr-sa` step changes nothing on OpenZFS 2.3, and its comment is wrong.
 	- ID: 2026101406340928
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261014-063409
 	- Opened by: code review
@@ -5847,7 +6092,8 @@
 - markdownlint flags README.md and design.md.
 	- ID: 2026102308554905
 	- Type: Task
-	- Status: Done
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-085549
 	- Opened by: round gate
@@ -5857,6 +6103,19 @@
 	- Branch: cicd
 	- Test case: none with an ID. The lint stage's markdownlint over every tracked `.md` but `license.md` fails on a recurrence.
 	- Closed: 20261023-103907
+
+- vmFreeBSD is shut down for the snapshot, though its agent can freeze.
+	- ID: 2026101416080000
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Superseded
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261014-160800
+	- Opened by: vm-scan root run
+	- Related IDs: 2026101406340911
+	- Note: `tukfs-hash_vm-scan-b23.bash` picks freeze or shutdown by `domfsinfo`. FreeBSD's agent has no `guest-get-fsinfo`, but lists `guest-fsfreeze-freeze` as enabled in `guest-info`. Asking `guest-info` would let it freeze.
+	- Superseded by ID: 2026101417560000
+	- Closed: 20261014-175600
 
 - Each path is stored twice, once in `paths` and once in its unique index.
 	- ID: 2026101916404125
@@ -6104,18 +6363,6 @@
 	- Decided against: `posix_fadvise` at 10.6% of the session-start flame graph. Dropping the cached pages makes the scan read the disk (2026102809554675).
 	- Note: Coverage is in the private notes, "Code review 20261110 coverage".
 
-- vmFreeBSD is shut down for the snapshot, though its agent can freeze.
-	- ID: 2026101416080000
-	- Type: Enhancement
-	- Status: Moot
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261014-160800
-	- Opened by: vm-scan root run
-	- Related IDs: 2026101406340911
-	- Note: `tukfs-hash_vm-scan-b23.bash` picks freeze or shutdown by `domfsinfo`. FreeBSD's agent has no `guest-get-fsinfo`, but lists `guest-fsfreeze-freeze` as enabled in `guest-info`. Asking `guest-info` would let it freeze.
-	- Superseded by ID: 2026101417560000
-	- Closed: 20261014-175600
-
 ## Template
 
 - Notes:
@@ -6124,10 +6371,14 @@
 
 	- The ID is the local time to the hundredth of a second. Opened is when it was written down, which may differ. (Use a keyboard macro and possibly something like project 'zuid' to generate.)
 
-	- Status values meaning: Testing means the fix is in and checks are running or still to run. Waiting on UAT means automated testing passed and a person has to try it. Moot means something else changed that made it irrelevant. Canceled means it still applies but was decided against. Waiting on automated testing means the fix is in and waits on a long CI run or an outside test host, with no person needed. Waiting on a full CICD run means its test is a whole pipeline run, and Waiting on a partial CICD run means only some stages, such as a quick run. Either can be started by a person or a round. Can't reproduce means a real attempt to reproduce it failed.
+	- Status values meaning: Testing means the fix is in and checks are running or still to run. Waiting on UAT means automated testing passed and a person has to try it. Closed means work on it is over, and its Closed reason row says why. Canceled means it still applies but was decided against. Waiting on automated testing means the fix is in and waits on a long CI run or an outside test host, with no person needed. Waiting on a full CICD run means its test is a whole pipeline run, and Waiting on a partial CICD run means only some stages, such as a quick run. Either can be started by a person or a round.
+
+	- Closed reason values: Done means fixed or built, with nothing left to do. Could not reproduce means a real attempt to reproduce it failed, and the item says what was tried. Won't fix means the bug is real and stays as it is, and the item says why. Moot means something else changed that made it irrelevant. Duplicate and Superseded mean another item covers it, or a newer one replaces it, named in Superseded by ID. Works as intended means the behavior is right as it is, and the item says why.
+
+	- Target version is the release an item is meant for. Every open item has one, and so does every item closed since the last release.
 
 	- As issues are worked, and statuses change, place them in correct sorting order within the list:
-		- First by status: Waiting for answers, Waiting on UAT, Testing, Waiting on automated testing, Waiting on a full CICD run, Waiting on a partial CICD run, Can't reproduce, Stalled, Started, Queued, Done, Deferred, Canceled, Moot
+		- First by status: Waiting for answers, Waiting on UAT, Testing, Waiting on automated testing, Waiting on a full CICD run, Waiting on a partial CICD run, Stalled, Started, Queued, Closed, Deferred, Canceled
 		- Then by severity|priority: Critical, High, Avg, Low
 		- Then by type: Bugs, [not bugs together]
 
@@ -6138,10 +6389,12 @@ Template:
 - Title
 	- ID: YYYYmmDDHHMMSSNN
 	- Type: [Bug|Feature|Enhancement|Task]
-	- Status: [Queued|Waiting for answers|Waiting on UAT|Waiting on automated testing|Waiting on a full CICD run|Waiting on a partial CICD run|Started|Testing|Stalled|Can't reproduce|Moot|Canceled|Deferred|Done]
+	- Status: [Queued|Waiting for answers|Waiting on UAT|Waiting on automated testing|Waiting on a full CICD run|Waiting on a partial CICD run|Started|Testing|Stalled|Closed|Deferred|Canceled]
+	- Closed reason: [Done|Could not reproduce|Won't fix|Moot|Duplicate|Superseded|Works as intended]
 	- Needs local test suite run?:
 	- Needs external testing:
 	- Priority [Feature|Enhancement] | Severity [Bug]: [Critical|High|Avg|Low]
+	- Target version:
 	- Opened:
 	- Opened by:
 	- Assigned to:
