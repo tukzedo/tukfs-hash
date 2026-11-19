@@ -75,7 +75,7 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 	- A path given to `--exclude` or `--no-xattr` that can't be resolved stops the scan the same way, with exit 1. A typo there would read a folder or write attributes where it was told not to, and nothing else would show it.
 	- A root that's an `--exclude` folder, or inside one under any name, is dropped before the run begins, with a line on stderr naming the folder. Its walk wouldn't read anything, and every name under it would show in `gone`. When no root is left, it's "nothing to scan", with exit 1.
 
-- Every file and folder is opened from the root's own folder, without following any symlink or crossing any mount on the way. A folder that's swapped for a symlink after it was listed counts as gone, rather than sending the scan somewhere else as root. Kernels before 5.6 don't have `openat2`, so on those the open goes one folder at a time.
+- Every file and folder is opened from the root's own folder, without following any symlink or crossing any mount on the way. A folder that's swapped for a symlink after it was listed counts as gone, rather than sending the scan somewhere else as root. Kernels before 5.6 don't have `openat2`, so on those the open goes one folder at a time. Each thread keeps the last folder it opened something in, and starts there when the next path runs through it. A failure from there is tried again from the root, since the folder may have been moved or replaced.
 
 - Roots on the same disks share one group of workers. A group with a hard drive gets 1 worker, a group on SATA flash gets 2, and a group on NVMe gets 4. A hard drive with 2 readers seeks back and forth between them.
 

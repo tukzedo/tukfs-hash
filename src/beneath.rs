@@ -4,7 +4,7 @@
 // Opening what the walk found, from the root's own folder, without following a symlink or crossing onto another filesystem anywhere on the way. The scan runs as root, and a folder swapped for a symlink after it was listed would otherwise send it somewhere else to read files and set attributes.
 
 use crate::util::cpath;
-use std::ffi::{CStr, OsStr};
+use std::ffi::{CStr, OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
@@ -13,6 +13,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::{Mutex, PoisonError};
+use std::thread::{self, ThreadId};
 
 /// A scan root, held open so every path is opened beneath it.
 #[derive(Debug)]
@@ -22,6 +24,15 @@ pub struct Root {
 	dir: File,
 	// Cleared on a kernel before 5.6, which has no openat2.
 	openat2: AtomicBool,
+	// Without openat2, the folder each thread last opened something in, so its next open there doesn't pay a lookup per level again.
+	near: Mutex<Vec<Near>>,
+}
+
+#[derive(Debug)]
+struct Near {
+	thread: ThreadId,
+	above: Vec<OsString>,
+	dir: File,
 }
 
 #[repr(C)]
@@ -75,6 +86,7 @@ impl Root {
 			dev: dir.metadata()?.dev(),
 			dir,
 			openat2: AtomicBool::new(true),
+			near: Mutex::new(Vec::new()),
 		})
 	}
 
@@ -120,16 +132,42 @@ impl Root {
 			}
 		}
 		let (last, above) = parts.split_last().map_or((OsStr::new("."), &[][..]), |(l, a)| (*l, a));
-		let mut held: Option<File> = None;
-		for name in above {
+		if let Some(near) = self.recall(above) {
+			// The folder may have been moved or replaced since, so a failure from it is tried again from the root.
+			if let Ok(f) = self.descend(Some(near), above, last, flags) {
+				return Ok(f);
+			}
+		}
+		self.descend(None, above, last, flags)
+	}
+
+	// Opens the folders in above past the ones near already has open, then last in the deepest.
+	fn descend(&self, near: Option<Near>, above: &[&OsStr], last: &OsStr, flags: libc::c_int) -> io::Result<File> {
+		let (mut names, mut held) = near.map_or((Vec::new(), None), |n| (n.above, Some(n.dir)));
+		for name in &above[names.len()..] {
 			let at = held.as_ref().unwrap_or(&self.dir).as_raw_fd();
 			let f = openat(at, name, libc::O_PATH | libc::O_DIRECTORY)?;
 			if f.metadata()?.dev() != self.dev {
 				return Err(io::Error::from_raw_os_error(libc::EXDEV));
 			}
+			names.push(name.to_os_string());
 			held = Some(f);
 		}
-		openat(held.as_ref().unwrap_or(&self.dir).as_raw_fd(), last, flags)
+		let f = openat(held.as_ref().unwrap_or(&self.dir).as_raw_fd(), last, flags)?;
+		if let Some(dir) = held {
+			let mut near = self.near.lock().unwrap_or_else(PoisonError::into_inner);
+			near.push(Near { thread: thread::current().id(), above: names, dir });
+		}
+		Ok(f)
+	}
+
+	// Takes this thread's folder when it's above or one of the folders above.
+	fn recall(&self, above: &[&OsStr]) -> Option<Near> {
+		let me = thread::current().id();
+		let mut near = self.near.lock().unwrap_or_else(PoisonError::into_inner);
+		let i = near.iter().position(|n| n.thread == me)?;
+		let n = near.swap_remove(i);
+		(n.above.len() <= above.len() && n.above.iter().zip(above).all(|(a, b)| a == b)).then_some(n)
 	}
 
 	/// Opens a file to read without moving its atime, where allowed.
@@ -308,6 +346,42 @@ mod tests {
 			let e = r.open_at(Path::new("shm/x"), libc::O_PATH).unwrap_err();
 			assert!(moved(&e), "{e}");
 		}
+	}
+
+	// Without openat2, a folder kept from an earlier open that's since been replaced, or swapped for a symlink.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_kept_folder_is_checked_again() {
+		let _id = test_id("dfh8m");
+		let d = scratch("beneath_near");
+		let (root, outside) = (d.join("root"), d.join("outside"));
+		fs::create_dir_all(root.join("a/b/c")).unwrap();
+		fs::create_dir_all(outside.join("c")).unwrap();
+		fs::write(root.join("a/b/f"), "old").unwrap();
+		fs::write(root.join("a/b/c/h"), "deep").unwrap();
+		fs::write(outside.join("c/f"), "secret").unwrap();
+		let [_, r] = both(&root);
+		let read = |p: &str| -> io::Result<String> {
+			let mut s = String::new();
+			r.open_read(Path::new(p))?.read_to_string(&mut s)?;
+			Ok(s)
+		};
+		let kept = || r.near.lock().unwrap().iter().map(|n| n.above.join(OsStr::new("/"))).collect::<Vec<_>>();
+		assert_eq!(read("a/b/f").unwrap(), "old");
+		assert_eq!(kept(), ["a/b"]);
+		assert_eq!(read("a/b/c/h").unwrap(), "deep");
+		assert_eq!(kept(), ["a/b/c"]);
+		fs::rename(root.join("a/b"), root.join("a/gone")).unwrap();
+		fs::create_dir_all(root.join("a/b/c")).unwrap();
+		fs::write(root.join("a/b/c/g"), "new").unwrap();
+		assert_eq!(read("a/b/c/g").unwrap(), "new");
+		fs::rename(root.join("a/b"), root.join("a/gone2")).unwrap();
+		fs::remove_dir_all(root.join("a/gone2")).unwrap();
+		std::os::unix::fs::symlink(&outside, root.join("a/b")).unwrap();
+		// The kept folder is deleted, and the path from the root now runs through the symlink.
+		let e = read("a/b/c/f").unwrap_err();
+		assert!(moved(&e), "{e}");
+		assert!(kept().is_empty());
 	}
 
 	#[test]
