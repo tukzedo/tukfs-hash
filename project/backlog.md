@@ -62,32 +62,6 @@
 	- Requirements [Feature]:
 		- Time it first with `profile-ab.bash` and `AB_SMALL_FILES`. Change it only if a byte-keyed hash set saves more than the noise.
 
-- There is currently no public code style guide or contributing.md, and README points to neither.
-	- ID: 2026102808215637
-	- Type: Task
-	- Status: Closed
-		- Read `project/style-guide_code.md`, `contributing.md`, and README's new Contributing section, for wording and for what they ask of contributors.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0
-	- Opened: 20261028-082156
-	- Opened by: style and performance review
-	- Note: Queued again 2026-11-17, since the repo is public.
-	- Done:
-		- `project/style-guide_code.md` says where each formatter and linter config is, why a few settings are as they are, and the rules the tools can't check, from memory.md's Code rules and the skip and write rules in design.md.
-		- `contributing.md` covers issues, bug reports, branching from `dev`, the quick run before a pull request, and licensing.
-		- README has a short Contributing section, before Copyright and license, and a TOC line for it.
-		- 2026-11-19: the style guide was reworded as plain instructions, and it now names `say::out` and `say::err` for a scan's own lines.
-	- Decisions:
-		- No support links, since those are for jim-collier projects. No code of conduct link, since this repo doesn't have one.
-		- GitHub's private vulnerability reporting is off for the repo, so a security problem goes in an issue with no details, asking for a private way to send them. Turning it on would be the better route.
-		- The license part names each file's header as the license for a change to it, since the program is GPL-2.0-only and most of the pipeline is MIT.
-	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, markdownlint and the content scrub included. The markdown check is clean on all 3 files.
-	- Verified: 2026-11-18, every path, config setting, command and code name in the style guide and contributing.md is in the tree, such as `SIM108` in cicd/ruff.toml, `test-ids.py new`, and `Kind::exit_bits`. Only the wording is left to read.
-	- Stand-in: none (20261117). The result is public wording, which only a person can judge.
-	- Branch: nov17b-2026102808215637
-	- Commit: `1cabf24`
-	- Test case: none, since it's docs only.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -4313,6 +4287,32 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
 
+- There is currently no public code style guide or contributing.md, and README points to neither.
+	- ID: 2026102808215637
+	- Type: Task
+	- Status: Closed
+		- Read `project/style-guide_code.md`, `contributing.md`, and README's new Contributing section, for wording and for what they ask of contributors.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0
+	- Opened: 20261028-082156
+	- Opened by: style and performance review
+	- Note: Queued again 2026-11-17, since the repo is public.
+	- Done:
+		- `project/style-guide_code.md` says where each formatter and linter config is, why a few settings are as they are, and the rules the tools can't check, from memory.md's Code rules and the skip and write rules in design.md.
+		- `contributing.md` covers issues, bug reports, branching from `dev`, the quick run before a pull request, and licensing.
+		- README has a short Contributing section, before Copyright and license, and a TOC line for it.
+		- 2026-11-19: the style guide was reworded as plain instructions, and it now names `say::out` and `say::err` for a scan's own lines.
+	- Decisions:
+		- No support links, since those are for jim-collier projects. No code of conduct link, since this repo doesn't have one.
+		- GitHub's private vulnerability reporting is off for the repo, so a security problem goes in an issue with no details, asking for a private way to send them. Turning it on would be the better route.
+		- The license part names each file's header as the license for a change to it, since the program is GPL-2.0-only and most of the pipeline is MIT.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, markdownlint and the content scrub included. The markdown check is clean on all 3 files.
+	- Verified: 2026-11-18, every path, config setting, command and code name in the style guide and contributing.md is in the tree, such as `SIM108` in cicd/ruff.toml, `test-ids.py new`, and `Kind::exit_bits`. Only the wording is left to read.
+	- Stand-in: none (20261117). The result is public wording, which only a person can judge.
+	- Branch: nov17b-2026102808215637
+	- Commit: `1cabf24`
+	- Test case: none, since it's docs only.
+
 - There is currently no one-line install script.
 	- ID: 2026110218175402
 	- Type: Feature
@@ -4438,7 +4438,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261110-110923
 	- Opened by: code review 20261110, item 23
-	- Origin: `f05c368`, before the last review. Confirmed: 2 files of 64 MiB that differ at every 8th byte took 135 MB.
+	- Origin: `f05c368`, before the last review. Confirmed: 2 files of 64 MiB that differ in 1 byte of every 8 took 135 MB.
 	- Requirements [Feature]: Keep the first 8 runs that `describe` shows, the last run for merging, and counts for the rest.
 	- Actual effort: Low
 	- Decisions:
