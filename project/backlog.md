@@ -32,7 +32,7 @@
 - There is currently no public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
-	- Status: Waiting on UAT
+	- Status: Closed
 		- Read `project/style-guide_code.md`, `contributing.md`, and README's new Contributing section, for wording and for what they ask of contributors.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0
@@ -43,6 +43,7 @@
 		- `project/style-guide_code.md` says where each formatter and linter config is, why a few settings are as they are, and the rules the tools can't check, from memory.md's Code rules and the skip and write rules in design.md.
 		- `contributing.md` covers issues, bug reports, branching from `dev`, the quick run before a pull request, and licensing.
 		- README has a short Contributing section, before Copyright and license, and a TOC line for it.
+		- 2026-11-19: the style guide was reworded as plain instructions, and it now names `say::out` and `say::err` for a scan's own lines.
 	- Decisions:
 		- No support links, since those are for jim-collier projects. No code of conduct link, since this repo doesn't have one.
 		- GitHub's private vulnerability reporting is off for the repo, so a security problem goes in an issue with no details, asking for a private way to send them. Turning it on would be the better route.

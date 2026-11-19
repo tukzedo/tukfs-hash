@@ -8,7 +8,7 @@
 
 [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)](license.md) [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
 
-tukfs-hash checksums every file on a Linux box, remembers what each one read as, and says when a file's contents changed while its size and modified time didn't. That kind of change is what bad RAM, a bad cable, or a filesystem bug leaves behind. A normal edit always moves the time.
+tukfs-hash checksums every file on a Linux box, remembers what each one read as, and reports when a file's contents changed while its size and modified time didn't. That kind of change is what bad RAM, a bad cable, or a filesystem bug leaves behind. A normal edit always moves the time.
 
 It's a utility under [tukfs](https://github.com/tukzedo/tukfs), which is part of [tukzedo](https://github.com/tukzedo/tukzedo-linux). Its database is also the start of tukfs's own, which will use the checksums to find duplicate files.
 
