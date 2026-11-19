@@ -54,11 +54,7 @@ pub fn fget(fd: RawFd, name: &CStr) -> io::Result<Option<Vec<u8>>> {
 pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
 	// SAFETY: value is value.len() bytes, and name is NUL-terminated.
 	let r = unsafe { libc::fsetxattr(fd, name.as_ptr(), value.as_ptr().cast(), value.len(), 0) };
-	if r == 0 {
-		Ok(())
-	} else {
-		Err(io::Error::last_os_error())
-	}
+	if r == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
 /// A name that isn't there is already gone.
@@ -81,11 +77,7 @@ fn g17(v: f64) -> String {
 	let (mant, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
 	let exp: i32 = exp.parse().unwrap_or(0);
 	let trim = |s: &str| {
-		if s.contains('.') {
-			s.trim_end_matches('0').trim_end_matches('.').to_string()
-		} else {
-			s.to_string()
-		}
+		if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s.to_string() }
 	};
 	if (-4..17).contains(&exp) {
 		trim(&format!("{v:.*}", (16 - exp) as usize))
@@ -150,67 +142,41 @@ impl OnFile {
 	/// unseen. Nothing here is trusted until its size and time are checked
 	/// against the file.
 	pub fn read(fd: RawFd) -> io::Result<OnFile> {
-		let get = |n: &CStr| {
-			fget(fd, n).map_err(|e| {
-				io::Error::new(e.kind(), format!("can't read {}: {e}", n.to_string_lossy()))
-			})
-		};
-		let b3 = text_of(get(B3_DIGEST)?)
-			.and_then(|t| b64u_decode(&t))
-			.and_then(|d| d.try_into().ok());
-		let mut of = OnFile {
-			b3,
-			..Default::default()
-		};
+		let get = |n: &CStr| fget(fd, n).map_err(|e| io::Error::new(e.kind(), format!("can't read {}: {e}", n.to_string_lossy())));
+		let b3 = text_of(get(B3_DIGEST)?).and_then(|t| b64u_decode(&t)).and_then(|d| d.try_into().ok());
+		let mut of = OnFile { b3, ..Default::default() };
 		if of.b3.is_some() {
 			of.b3_bytes = int_of(get(B3_BYTES)?);
 			of.b3_mtime_us = int_of(get(B3_MTIME)?);
 			of.b3_date_us = int_of(get(B3_DATE)?);
 			of.b3_inode = inode_of(get(B3_INODE)?);
 		}
-		of.b2b = text_of(get(RM_B2B_CKSUM)?)
-			.and_then(|t| unhex(&t))
-			.and_then(|d| d.try_into().ok());
+		of.b2b = text_of(get(RM_B2B_CKSUM)?).and_then(|t| unhex(&t)).and_then(|d| d.try_into().ok());
 		if of.b2b.is_some() {
-			of.b2b_mtime_s = text_of(get(RM_B2B_MTIME)?)
-				.and_then(|t| String::from_utf8(t).ok())
-				.and_then(|s| s.parse().ok());
+			of.b2b_mtime_s = text_of(get(RM_B2B_MTIME)?).and_then(|t| String::from_utf8(t).ok()).and_then(|s| s.parse().ok());
 		}
 		Ok(of)
 	}
 
 	/// The blake3 on the file still describes it.
 	pub fn b3_current(&self, bytes: i64, mtime_us: i64) -> Option<[u8; 32]> {
-		(self.b3_bytes == Some(bytes) && self.b3_mtime_us == Some(mtime_us))
-			.then_some(self.b3)
-			.flatten()
+		(self.b3_bytes == Some(bytes) && self.b3_mtime_us == Some(mtime_us)).then_some(self.b3).flatten()
 	}
 
 	/// Good enough to skip reading: current, read by us from this very inode,
 	/// and dated between the cutoff and now. A copy made with `cp -a` or
 	/// `rsync -aX` brings the set along but is on another inode. Returns
 	/// the digest and its date.
-	pub fn b3_fresh(
-		&self,
-		bytes: i64,
-		mtime_us: i64,
-		dev: u64,
-		ino: u64,
-		cutoff_us: i64,
-		now_us: i64,
-	) -> Option<([u8; 32], i64)> {
+	pub fn b3_fresh(&self, bytes: i64, mtime_us: i64, dev: u64, ino: u64, cutoff_us: i64, now_us: i64) -> Option<([u8; 32], i64)> {
 		let digest = self.b3_current(bytes, mtime_us)?;
 		let date = self.b3_date_us?;
-		(self.b3_inode == Some((dev, ino, digest)) && (cutoff_us..=now_us).contains(&date))
-			.then_some((digest, date))
+		(self.b3_inode == Some((dev, ino, digest)) && (cutoff_us..=now_us).contains(&date)).then_some((digest, date))
 	}
 
 	/// rmlint keeps no size, so the time is all there is to go on.
 	pub fn b2b_current(&self, mtime_s: f64) -> Option<[u8; 64]> {
 		let stored = self.b2b_mtime_s?;
-		((stored - mtime_s).abs() < 1e-5)
-			.then_some(self.b2b)
-			.flatten()
+		((stored - mtime_s).abs() < 1e-5).then_some(self.b2b).flatten()
 	}
 }
 
@@ -226,15 +192,7 @@ pub enum B3Write {
 /// and the inode goes last, since a skip needs its digest to match. A write
 /// that stops part way leaves an old value next to the new checksum and gets
 /// thrown away.
-pub fn write_b3(
-	fd: RawFd,
-	digest: &[u8; 32],
-	bytes: i64,
-	mtime_us: i64,
-	date_us: i64,
-	(dev, ino): (u64, u64),
-	what: B3Write,
-) -> io::Result<()> {
+pub fn write_b3(fd: RawFd, digest: &[u8; 32], bytes: i64, mtime_us: i64, date_us: i64, (dev, ino): (u64, u64), what: B3Write) -> io::Result<()> {
 	match what {
 		B3Write::All => {
 			fset(fd, B3_DIGEST, b64u_encode(digest).as_bytes())?;
@@ -290,10 +248,7 @@ mod tests {
 	fn an_unreadable_set_is_an_error() {
 		let _id = test_id("df4r2");
 		let e = OnFile::read(-1).unwrap_err();
-		assert!(
-			e.to_string().starts_with("can't read user.blake3.b64u: "),
-			"{e}"
-		);
+		assert!(e.to_string().starts_with("can't read user.blake3.b64u: "), "{e}");
 	}
 
 	#[test]
@@ -349,16 +304,10 @@ mod tests {
 		assert!(of.b3_fresh(10, 5, 7, 42, 1001, 2000).is_none());
 		assert!(of.b3_fresh(10, 5, 7, 42, 900, 999).is_none());
 		// A set from before the inode attribute.
-		let old = OnFile {
-			b3_inode: None,
-			..of.clone()
-		};
+		let old = OnFile { b3_inode: None, ..of.clone() };
 		assert!(old.b3_fresh(10, 5, 7, 42, 900, 2000).is_none());
 		// Another digest written since, as nemo-anywhere would.
-		let other = OnFile {
-			b3: Some([2; 32]),
-			..of.clone()
-		};
+		let other = OnFile { b3: Some([2; 32]), ..of.clone() };
 		assert!(other.b3_fresh(10, 5, 7, 42, 900, 2000).is_none());
 	}
 
@@ -367,10 +316,7 @@ mod tests {
 		let _id = test_id("ddy5a");
 		let d = [9u8; 32];
 		let t = inode_text(u64::MAX, 3, &d);
-		assert_eq!(
-			inode_of(Some(format!("{t}\n").into_bytes())),
-			Some((u64::MAX, 3, d))
-		);
+		assert_eq!(inode_of(Some(format!("{t}\n").into_bytes())), Some((u64::MAX, 3, d)));
 		assert!(inode_of(Some(b"1:2".to_vec())).is_none());
 		assert!(inode_of(Some(b"x:2:abc".to_vec())).is_none());
 	}
@@ -392,10 +338,7 @@ mod tests {
 			assert_eq!(inode_of(Some(stored.clone())), Some((dev, ino, digest)));
 			let bad = mutate(r, &stored);
 			if let Some((d, i, g)) = inode_of(Some(bad)) {
-				assert_eq!(
-					inode_of(Some(inode_text(d, i, &g).into_bytes())),
-					Some((d, i, g))
-				);
+				assert_eq!(inode_of(Some(inode_text(d, i, &g).into_bytes())), Some((d, i, g)));
 				covered |= 2;
 			} else {
 				covered |= 4;

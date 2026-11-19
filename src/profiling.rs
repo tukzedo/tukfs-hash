@@ -30,18 +30,12 @@ const BLOCKLIST: [&str; 3] = ["libgcc", "vdso", "ld-linux"];
 /// one defined in the binary wins over the shared library's, so answering with
 /// the address itself files each instruction on its own. From shcl's.
 #[unsafe(no_mangle)]
-pub extern "C" fn _Unwind_FindEnclosingFunction(
-	pc: *mut std::ffi::c_void,
-) -> *mut std::ffi::c_void {
+pub extern "C" fn _Unwind_FindEnclosingFunction(pc: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
 	pc
 }
 
 fn sampler() -> Result<pprof::ProfilerGuard<'static>, String> {
-	pprof::ProfilerGuardBuilder::default()
-		.frequency(FREQ)
-		.blocklist(&BLOCKLIST)
-		.build()
-		.map_err(|e| format!("profiler: {e}"))
+	pprof::ProfilerGuardBuilder::default().frequency(FREQ).blocklist(&BLOCKLIST).build().map_err(|e| format!("profiler: {e}"))
 }
 
 // User and system time, apart. SIGPROF counts both, but a thread in the
@@ -65,16 +59,11 @@ pub fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
 	let Some(dir) = std::env::var_os("TUKFS_PROFILE_DIR") else {
 		return f();
 	};
-	let label = std::env::var("TUKFS_PROFILE_LABEL")
-		.unwrap_or_else(|_| "run".into())
-		.replace(|c: char| c == ';' || c.is_whitespace(), "-");
+	let label = std::env::var("TUKFS_PROFILE_LABEL").unwrap_or_else(|_| "run".into()).replace(|c: char| c == ';' || c.is_whitespace(), "-");
 	let (wall0, cpu0) = (Instant::now(), cpu_us());
 	let guard = sampler()?;
 	let code = f();
-	let report = guard
-		.report()
-		.build_unresolved()
-		.map_err(|e| format!("profiler: {e}"))?;
+	let report = guard.report().build_unresolved().map_err(|e| format!("profiler: {e}"))?;
 	drop(guard);
 	let ((user, sys), wall) = (cpu_us(), wall0.elapsed().as_micros());
 	let (user, sys) = (user - cpu0.0, sys - cpu0.1);
@@ -100,18 +89,10 @@ pub fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
 	}
 	let add = |name: &str, text: &str| -> Result<(), String> {
 		let p = dir.join(name);
-		OpenOptions::new()
-			.create(true)
-			.append(true)
-			.open(&p)
-			.and_then(|mut f| f.write_all(text.as_bytes()))
-			.map_err(|e| format!("{}: {e}", p.display()))
+		OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| f.write_all(text.as_bytes())).map_err(|e| format!("{}: {e}", p.display()))
 	};
 	add("stacks.folded", &folded)?;
-	add(
-		"runs.tsv",
-		&format!("{label}\t{kept}\t{user}\t{sys}\t{wall}\n"),
-	)?;
+	add("runs.tsv", &format!("{label}\t{kept}\t{user}\t{sys}\t{wall}\n"))?;
 	draw(dir)?;
 	code
 }
@@ -170,27 +151,16 @@ fn draw(dir: &Path) -> Result<(), String> {
 		kept += num(1);
 		cpu_total += user + sys;
 		let s = |us: i64| us as f64 / 1e6;
-		parts.push(format!(
-			"{} {:.2} s user + {:.2} s system in {:.2} s",
-			f[0],
-			s(user),
-			s(sys),
-			s(wall)
-		));
+		parts.push(format!("{} {:.2} s user + {:.2} s system in {:.2} s", f[0], s(user), s(sys), s(wall)));
 	}
 	let mut opt = pprof::flamegraph::Options::default();
 	opt.title = "tukfs-hash scan".into();
-	opt.subtitle = Some(format!(
-		"{}; {kept} of about {} samples kept",
-		parts.join(", "),
-		cpu_total * i64::from(FREQ) / 1_000_000
-	));
+	opt.subtitle = Some(format!("{}; {kept} of about {} samples kept", parts.join(", "), cpu_total * i64::from(FREQ) / 1_000_000));
 	// Colors by name, so 2 graphs of the same code look alike.
 	opt.hash = true;
 	let tmp = dir.join("flame.svg.tmp");
 	let out = File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-	pprof::flamegraph::from_lines(&mut opt, folded.lines(), out)
-		.map_err(|e| format!("flamegraph: {e}"))?;
+	pprof::flamegraph::from_lines(&mut opt, folded.lines(), out).map_err(|e| format!("flamegraph: {e}"))?;
 	fs::rename(&tmp, dir.join("flame.svg")).map_err(|e| format!("{}: {e}", tmp.display()))
 }
 
@@ -232,13 +202,7 @@ fn check() -> i32 {
 	let (mut three, mut one, mut reads, mut kept) = (0isize, 0isize, 0isize, 0isize);
 	for (frames, n) in &report.data {
 		kept += n;
-		let has = |want: &str| {
-			frames
-				.frames
-				.iter()
-				.flatten()
-				.any(|s| s.name().contains(want))
-		};
+		let has = |want: &str| frames.frames.iter().flatten().any(|s| s.name().contains(want));
 		if has("calibrate_three") {
 			three += n;
 		} else if has("calibrate_one") {
@@ -251,10 +215,7 @@ fn check() -> i32 {
 	let split = 100 * three / loops.max(1);
 	let read_share = 100 * reads / (loops + reads).max(1);
 	let kept_share = 100 * kept as i64 / expected.max(1);
-	let ok = loops + reads >= 300
-		&& (65..=85).contains(&split)
-		&& (15..=70).contains(&read_share)
-		&& kept_share >= 40;
+	let ok = loops + reads >= 300 && (65..=85).contains(&split) && (15..=70).contains(&read_share) && kept_share >= 40;
 	err!(
 		"profiler attribution {}: the 3-to-1 loops split {split}% where 75% is right, the reading thread had {read_share}% where about 35% is usual, and {kept} of about {expected} samples were kept ({kept_share}%)",
 		if ok { "ok" } else { "WRONG" },
@@ -267,10 +228,7 @@ fn calibrate_both(n: u64) -> u64 {
 	calibrate_three(black_box(3 * n)) ^ calibrate_one(black_box(n))
 }
 
-#[allow(
-	clippy::inline_always,
-	reason = "the check needs both loops in one function"
-)]
+#[allow(clippy::inline_always, reason = "the check needs both loops in one function")]
 #[inline(always)]
 fn calibrate_three(n: u64) -> u64 {
 	let mut x = 0x9e37u64;
@@ -280,10 +238,7 @@ fn calibrate_three(n: u64) -> u64 {
 	x
 }
 
-#[allow(
-	clippy::inline_always,
-	reason = "the check needs both loops in one function"
-)]
+#[allow(clippy::inline_always, reason = "the check needs both loops in one function")]
 #[inline(always)]
 fn calibrate_one(n: u64) -> u64 {
 	let mut x = 0x7f4au64;

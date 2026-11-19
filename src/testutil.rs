@@ -26,11 +26,7 @@ pub fn test_id(id: &'static str) -> TestId {
 
 impl Drop for TestId {
 	fn drop(&mut self) {
-		let status = if std::thread::panicking() {
-			"FAIL"
-		} else {
-			"PASS"
-		};
+		let status = if std::thread::panicking() { "FAIL" } else { "PASS" };
 		// libtest names each test's thread after the test, and captures only
 		// the print macros, so this goes past it. One write, so another
 		// test's line can't end up in the middle of it.
@@ -74,22 +70,14 @@ impl Drop for Scratch {
 }
 
 fn tag_ok(tag: &str) -> bool {
-	!tag.is_empty()
-		&& tag
-			.bytes()
-			.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+	!tag.is_empty() && tag.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// An empty <TMPDIR>/tukfs-hash/test_tukfs-hash_unit_<TAG>_<pid>. TAG is
 /// a-z, 0-9 and _, and no 2 tests share one.
 pub fn scratch(tag: &str) -> Scratch {
 	assert!(tag_ok(tag), "bad scratch tag: {tag}");
-	let base = base().unwrap_or_else(|e| {
-		panic!(
-			"no scratch base under {}: {e}",
-			std::env::temp_dir().display()
-		)
-	});
+	let base = base().unwrap_or_else(|e| panic!("no scratch base under {}: {e}", std::env::temp_dir().display()));
 	let dir = base.join(format!("{PREFIX}{tag}_{}", std::process::id()));
 	// From an earlier run that had this pid.
 	if fs::symlink_metadata(&dir).is_ok() {
@@ -106,10 +94,7 @@ fn base() -> io::Result<PathBuf> {
 		_ => {}
 	}
 	if !fs::symlink_metadata(&base)?.is_dir() || fs::canonicalize(&base)? != base {
-		return Err(io::Error::other(format!(
-			"{} is a link or not a folder",
-			base.display()
-		)));
+		return Err(io::Error::other(format!("{} is a link or not a folder", base.display())));
 	}
 	SWEEP.call_once(|| sweep(&base));
 	Ok(base)
@@ -118,8 +103,7 @@ fn base() -> io::Result<PathBuf> {
 /// The pid in a name `scratch()` gives, or None for any other name.
 fn pid_of(name: &str) -> Option<u32> {
 	let (tag, pid) = name.strip_prefix(PREFIX)?.rsplit_once('_')?;
-	let digits =
-		!pid.is_empty() && !pid.starts_with('0') && pid.bytes().all(|b| b.is_ascii_digit());
+	let digits = !pid.is_empty() && !pid.starts_with('0') && pid.bytes().all(|b| b.is_ascii_digit());
 	if !tag_ok(tag) || !digits {
 		return None;
 	}
@@ -143,11 +127,7 @@ fn sweep(base: &Path) {
 			continue;
 		}
 		let p = e.path();
-		let old = fs::symlink_metadata(&p)
-			.and_then(|m| m.modified())
-			.ok()
-			.and_then(|t| t.elapsed().ok())
-			.is_some_and(|age| age > STALE);
+		let old = fs::symlink_metadata(&p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > STALE);
 		if old && let Err(err) = safe_rm(&p, base) {
 			eprintln!("left {}: {err}", p.display());
 		}
@@ -159,10 +139,7 @@ fn sweep(base: &Path) {
 /// and nothing past the filesystem it's on.
 fn safe_rm(dir: &Path, base: &Path) -> io::Result<()> {
 	let refuse = |why: &str| Err(io::Error::other(format!("not removed, {why}")));
-	let named = dir
-		.file_name()
-		.and_then(|n| n.to_str())
-		.is_some_and(|n| pid_of(n).is_some());
+	let named = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| pid_of(n).is_some());
 	if !named || dir.parent() != Some(base) {
 		return refuse("not a scratch folder");
 	}
@@ -182,10 +159,7 @@ fn safe_rm(dir: &Path, base: &Path) -> io::Result<()> {
 
 fn remove_tree(dir: &Path, md: &fs::Metadata, dev: u64) -> io::Result<()> {
 	if md.dev() != dev {
-		return Err(io::Error::other(format!(
-			"not removed, {} is on another filesystem",
-			dir.display()
-		)));
+		return Err(io::Error::other(format!("not removed, {} is on another filesystem", dir.display())));
 	}
 	// A test can leave a folder it made read-only.
 	if md.mode() & 0o700 != 0o700 {
@@ -248,12 +222,7 @@ impl Fuzzed {
 	/// of `want` is something some case must have hit. A replayed seed can't
 	/// hit them all.
 	pub fn covers(&self) {
-		assert!(
-			self.replay || self.covered & self.want == self.want,
-			"{} cases never hit {:#b}",
-			self.cases,
-			self.want & !self.covered
-		);
+		assert!(self.replay || self.covered & self.want == self.want, "{} cases never hit {:#b}", self.cases, self.want & !self.covered);
 	}
 }
 
@@ -271,48 +240,20 @@ fn fuzz_env(name: &str) -> Option<String> {
 /// returns the coverage bits it hit, and the run goes on past its time until
 /// it has all of `want`, for up to `FUZZ_EXTRA` more.
 pub fn fuzz(name: &str, want: u32, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
-	let secs: f64 = fuzz_env("TUKFS_FUZZ_SECS").map_or(1.0, |s| {
-		s.parse()
-			.ok()
-			.filter(|s: &f64| s.is_finite() && *s >= 0.0)
-			.expect("TUKFS_FUZZ_SECS is seconds")
-	});
+	let secs: f64 = fuzz_env("TUKFS_FUZZ_SECS").map_or(1.0, |s| s.parse().ok().filter(|s: &f64| s.is_finite() && *s >= 0.0).expect("TUKFS_FUZZ_SECS is seconds"));
 	fuzz_for(name, want, Duration::from_secs_f64(secs), FUZZ_EXTRA, case)
 }
 
-fn fuzz_for(
-	name: &str,
-	want: u32,
-	time: Duration,
-	extra: Duration,
-	case: impl Fn(&mut Rng) -> u32,
-) -> Fuzzed {
-	let one = |seed: u64| {
-		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| case(&mut Rng(seed))))
-			.unwrap_or_else(|_| {
-				panic!("{name}: seed {seed} failed; TUKFS_FUZZ_SEED={seed} runs it again")
-			})
-	};
+fn fuzz_for(name: &str, want: u32, time: Duration, extra: Duration, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
+	let one = |seed: u64| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| case(&mut Rng(seed)))).unwrap_or_else(|_| panic!("{name}: seed {seed} failed; TUKFS_FUZZ_SEED={seed} runs it again"));
 	if let Some(seed) = fuzz_env("TUKFS_FUZZ_SEED") {
 		let seed = seed.parse().expect("TUKFS_FUZZ_SEED is a number");
-		return Fuzzed {
-			cases: 1,
-			covered: one(seed),
-			want,
-			replay: true,
-		};
+		return Fuzzed { cases: 1, covered: one(seed), want, replay: true };
 	}
 	let until = std::time::Instant::now() + time;
 	let cap = until + extra;
-	let start = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map_or(0, |d| d.as_nanos() as u64);
-	let mut done = Fuzzed {
-		cases: 0,
-		covered: 0,
-		want,
-		replay: false,
-	};
+	let start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+	let mut done = Fuzzed { cases: 0, covered: 0, want, replay: false };
 	// At least a few hundred, so a busy box still gets some coverage.
 	loop {
 		let now = std::time::Instant::now();
@@ -329,26 +270,7 @@ fn fuzz_for(
 /// Real input gone bad: bits flipped, cut short, bytes dropped, doubled or
 /// changed, and the bytes the parsers split on put in.
 pub fn mutate(rng: &mut Rng, input: &[u8]) -> Vec<u8> {
-	const SPLICE: &[&[u8]] = &[
-		b"\n",
-		b"\t",
-		b" ",
-		b"\\",
-		b" - ",
-		b" -> ",
-		b":",
-		b"-",
-		b"\\0040",
-		b"\\040",
-		b"\\777",
-		b"\r",
-		b"\0",
-		b"(+1)",
-		b"\xff",
-		b"/",
-		b"..",
-		b"9999999999999999999999",
-	];
+	const SPLICE: &[&[u8]] = &[b"\n", b"\t", b" ", b"\\", b" - ", b" -> ", b":", b"-", b"\\0040", b"\\040", b"\\777", b"\r", b"\0", b"(+1)", b"\xff", b"/", b"..", b"9999999999999999999999"];
 	let mut out = input.to_vec();
 	for _ in 0..=rng.below(8) {
 		let at = rng.below(out.len() + 1);
@@ -392,15 +314,9 @@ mod tests {
 		.join();
 		assert!(failed.is_err());
 		let dir = rx.recv().unwrap();
-		let base = fs::canonicalize(std::env::temp_dir())
-			.unwrap()
-			.join("tukfs-hash");
+		let base = fs::canonicalize(std::env::temp_dir()).unwrap().join("tukfs-hash");
 		assert_eq!(dir.parent(), Some(base.as_path()));
-		assert!(
-			fs::symlink_metadata(&dir).is_err(),
-			"{} is still there",
-			dir.display()
-		);
+		assert!(fs::symlink_metadata(&dir).is_err(), "{} is still there", dir.display());
 	}
 
 	#[test]
@@ -438,13 +354,7 @@ mod tests {
 		let f = fuzz_for("late", 0b11, Duration::ZERO, Duration::from_secs(600), late);
 		assert_eq!(f.cases, 5000);
 		f.covers();
-		let f = fuzz_for(
-			"never",
-			0b11,
-			Duration::ZERO,
-			Duration::from_millis(50),
-			|_| 1,
-		);
+		let f = fuzz_for("never", 0b11, Duration::ZERO, Duration::from_millis(50), |_| 1);
 		assert!(f.cases >= 300);
 		assert!(std::panic::catch_unwind(|| f.covers()).is_err());
 	}

@@ -494,16 +494,7 @@ def remove_home(home: Path, token: str) -> None:
     base = Path(tempfile.gettempdir()).resolve()
     try:
         got = (home / HOME_MARK).read_text().strip()
-        ok = (
-            home.is_absolute()
-            and home.parent == base
-            and re.fullmatch(r"gen-demo-gif\.[A-Za-z0-9_]{6,}", home.name) is not None
-            and not home.is_symlink()
-            and home.resolve() == home
-            and home.stat().st_uid == os.getuid()
-            and str(home) not in ("/", "/tmp", os.environ.get("HOME", "/"))
-            and got == token
-        )
+        ok = home.is_absolute() and home.parent == base and re.fullmatch(r"gen-demo-gif\.[A-Za-z0-9_]{6,}", home.name) is not None and not home.is_symlink() and home.resolve() == home and home.stat().st_uid == os.getuid() and str(home) not in ("/", "/tmp", os.environ.get("HOME", "/")) and got == token
     except OSError:
         ok = False
     if not ok:
@@ -776,9 +767,7 @@ class Movie:
             frames = [self._lead, *frames]
             durs = [self.durs[self._done - 1], *durs]
         buf = io.BytesIO()
-        frames[0].save(
-            buf, format="GIF", save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=False
-        )
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=False)
         gif = buf.getvalue()
         cut = after_first_image(gif) if self._lead is not None else 0
         self._gif.append(gif[cut:-1])  # one trailer, at the end
@@ -1021,11 +1010,7 @@ def main() -> None:
     if not args.quiet:
         secs = sum(delays) / 1000.0
         kb = out_path.stat().st_size // 1024
-        print(
-            f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB"
-            f"{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, "
-            f"{scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}"
-        )
+        print(f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, {scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
-## The pipeline's own Python, from shclwrap's. 4 spaces, and a wider line
-## since the report's tables read better unwrapped.
-line-length = 120
+## The pipeline's own Python, from shclwrap's. 4 spaces, and no line limit,
+## so 320, ruff's max.
+line-length = 320
 target-version = "py311"
 
 [lint]

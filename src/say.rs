@@ -31,23 +31,14 @@ pub enum Fit {
 /// Appends every line from here on to `path`. Under sudo a log the scan
 /// makes is handed to that user, as the database is, so their own scan can
 /// add to it. One that was already there keeps its owner (2026111019430926).
-pub fn open_log(
-	path: &Path,
-	sudo: Option<(u32, u32)>,
-	mounts: &[crate::mounts::Mount],
-) -> Result<(), String> {
+pub fn open_log(path: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(), String> {
 	let failed = |e: String| format!("--log {e}");
 	let path = crate::util::canonical_name(path).map_err(failed)?;
 	if let Some(t) = crate::mounts::hands_off_at(mounts, &path) {
-		return Err(failed(format!(
-			"{} is on {t}, which isn't written to from Linux; put the log elsewhere",
-			show_path(&path)
-		)));
+		return Err(failed(format!("{} is on {t}, which isn't written to from Linux; put the log elsewhere", show_path(&path))));
 	}
 	let dir = crate::scan::open_dir("--log", &path, sudo)?;
-	let (f, made) = open_append(&dir, path.file_name().unwrap_or_default()).map_err(|e| match e
-		.raw_os_error()
-	{
+	let (f, made) = open_append(&dir, path.file_name().unwrap_or_default()).map_err(|e| match e.raw_os_error() {
 		Some(libc::ELOOP) => failed(format!("{}: is a symbolic link; refused", show_path(&path))),
 		_ => failed(format!("{}: {e}", show_path(&path))),
 	})?;
@@ -55,10 +46,7 @@ pub fn open_log(
 		&& let Some((uid, gid)) = sudo
 		&& let Err(e) = std::os::unix::fs::fchown(&f, Some(uid), Some(gid))
 	{
-		err(&format!(
-			"warning: can't give {} to uid {uid}: {e}",
-			show_path(&path)
-		));
+		err(&format!("warning: can't give {} to uid {uid}: {e}", show_path(&path)));
 	}
 	let _ = LOG.set(Mutex::new(f));
 	Ok(())
@@ -70,9 +58,7 @@ fn open_append(dir: &File, name: &OsStr) -> io::Result<(File, bool)> {
 	let flags = libc::O_WRONLY | libc::O_APPEND | libc::O_NOCTTY;
 	match beneath::openat(dir.as_raw_fd(), name, flags | libc::O_CREAT | libc::O_EXCL) {
 		Ok(f) => Ok((f, true)),
-		Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-			beneath::openat(dir.as_raw_fd(), name, flags).map(|f| (f, false))
-		}
+		Err(e) if e.kind() == io::ErrorKind::AlreadyExists => beneath::openat(dir.as_raw_fd(), name, flags).map(|f| (f, false)),
 		Err(e) => Err(e),
 	}
 }
@@ -108,12 +94,7 @@ fn width(fd: RawFd, tty: bool) -> Option<usize> {
 	if !tty {
 		return None;
 	}
-	let mut ws = libc::winsize {
-		ws_row: 0,
-		ws_col: 0,
-		ws_xpixel: 0,
-		ws_ypixel: 0,
-	};
+	let mut ws = libc::winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
 	// SAFETY: fd is stdout's or stderr's, open for the whole run, and
 	// TIOCGWINSZ fills the winsize it's given, which outlives the call.
 	if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &raw mut ws) } != 0 || ws.ws_col == 0 {
@@ -124,11 +105,7 @@ fn width(fd: RawFd, tty: bool) -> Option<usize> {
 
 // The column after c, a tab going to the next stop.
 fn step(n: usize, c: char) -> usize {
-	if c == '\t' {
-		n / TAB * TAB + TAB
-	} else {
-		n + 1
-	}
+	if c == '\t' { n / TAB * TAB + TAB } else { n + 1 }
 }
 
 fn cols(s: &str) -> usize {
@@ -191,21 +168,8 @@ mod tests {
 		// A tab takes columns to the next stop.
 		assert_eq!(fitted("\t/a/b/c/d/e", Some(12), Fit::Cut), ["\t/a/~"]);
 		let line = "sda: files 3 hashed 3 | MISMATCH 1 read-err 0 | ~100% of 3 MiB";
-		assert_eq!(
-			fitted(line, Some(30), Fit::Break),
-			[
-				"sda: files 3 hashed 3",
-				"\tMISMATCH 1 read-err 0",
-				"\t~100% of 3 MiB"
-			]
-		);
-		assert_eq!(
-			fitted(line, Some(48), Fit::Break),
-			[
-				"sda: files 3 hashed 3 | MISMATCH 1 read-err 0",
-				"\t~100% of 3 MiB"
-			]
-		);
+		assert_eq!(fitted(line, Some(30), Fit::Break), ["sda: files 3 hashed 3", "\tMISMATCH 1 read-err 0", "\t~100% of 3 MiB"]);
+		assert_eq!(fitted(line, Some(48), Fit::Break), ["sda: files 3 hashed 3 | MISMATCH 1 read-err 0", "\t~100% of 3 MiB"]);
 		for w in 10..80 {
 			for r in fitted(line, Some(w), Fit::Break) {
 				assert!(cols(&r) <= w, "{w}: {r}");
@@ -267,10 +231,7 @@ mod tests {
 		let me = std::fs::metadata(&*d).unwrap();
 		let log = d.join("scan.log");
 		let said = open_log(&log, Some((me.uid() + 1, me.gid())), &[]).unwrap_err();
-		assert!(
-			said.starts_with("--log folder ") && said.ends_with("; refused"),
-			"{said}"
-		);
+		assert!(said.starts_with("--log folder ") && said.ends_with("; refused"), "{said}");
 		assert!(!log.exists());
 	}
 }

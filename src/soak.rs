@@ -98,12 +98,7 @@ fn heap() -> Heap {
 	let s = dhat::HeapStats::get();
 	// SAFETY: these read and reset SQLite's own counts of what it has
 	// allocated, and take nothing that could dangle.
-	let (sqlite, sqlite_peak) = unsafe {
-		(
-			rusqlite::ffi::sqlite3_memory_used(),
-			rusqlite::ffi::sqlite3_memory_highwater(1),
-		)
-	};
+	let (sqlite, sqlite_peak) = unsafe { (rusqlite::ffi::sqlite3_memory_used(), rusqlite::ffi::sqlite3_memory_highwater(1)) };
 	Heap {
 		rust: s.curr_bytes,
 		blocks: s.curr_blocks,
@@ -120,10 +115,7 @@ fn the_heap_holds_steady() {
 	let t = tree();
 	// On the stack, so the table itself isn't growth.
 	let mut rows = [Heap::default(); ROUNDS];
-	let prof = dhat::Profiler::builder()
-		.testing()
-		.file_name(out.join("dhat-heap.json"))
-		.build();
+	let prof = dhat::Profiler::builder().testing().file_name(out.join("dhat-heap.json")).build();
 	// Past tomorrow's midnight, so every file is read again.
 	let tomorrow = local_midnight_us(now_us()) + 36 * 3_600_000_000;
 	for (i, row) in rows.iter_mut().enumerate() {
@@ -140,49 +132,15 @@ fn the_heap_holds_steady() {
 	}
 
 	let (n, n2) = (rows[ROUNDS / 2 - 1], rows[ROUNDS - 1]);
-	let mut table = String::from(
-		"round\trust live bytes\trust live blocks\trust allocated\tsqlite live bytes\tsqlite peak\n",
-	);
+	let mut table = String::from("round\trust live bytes\trust live blocks\trust allocated\tsqlite live bytes\tsqlite peak\n");
 	for (i, r) in rows.iter().enumerate() {
-		_ = writeln!(
-			table,
-			"{}\t{}\t{}\t{}\t{}\t{}",
-			i + 1,
-			r.rust,
-			r.blocks,
-			r.rust_total,
-			r.sqlite,
-			r.sqlite_peak
-		);
+		_ = writeln!(table, "{}\t{}\t{}\t{}\t{}\t{}", i + 1, r.rust, r.blocks, r.rust_total, r.sqlite, r.sqlite_peak);
 	}
-	_ = writeln!(
-		table,
-		"round {} to {}: rust {:+} bytes, sqlite {:+} bytes, margin {MARGIN}",
-		ROUNDS / 2,
-		ROUNDS,
-		n2.rust as i64 - n.rust as i64,
-		n2.sqlite - n.sqlite
-	);
+	_ = writeln!(table, "round {} to {}: rust {:+} bytes, sqlite {:+} bytes, margin {MARGIN}", ROUNDS / 2, ROUNDS, n2.rust as i64 - n.rust as i64, n2.sqlite - n.sqlite);
 	fs::write(out.join("soak.txt"), &table).unwrap();
 	// Counters that saw nothing would pass any leak.
-	assert!(
-		n2.rust_total > rows[0].rust_total && rows.iter().all(|r| r.sqlite_peak > 0),
-		"a heap counter saw nothing; see {}",
-		out.join("soak.txt").display()
-	);
-	dhat::assert!(
-		n2.rust <= n.rust + MARGIN,
-		"the Rust heap grew from {} to {} bytes between rounds {} and {ROUNDS}",
-		n.rust,
-		n2.rust,
-		ROUNDS / 2
-	);
-	dhat::assert!(
-		n2.sqlite <= n.sqlite + MARGIN as i64,
-		"SQLite's heap grew from {} to {} bytes between rounds {} and {ROUNDS}",
-		n.sqlite,
-		n2.sqlite,
-		ROUNDS / 2
-	);
+	assert!(n2.rust_total > rows[0].rust_total && rows.iter().all(|r| r.sqlite_peak > 0), "a heap counter saw nothing; see {}", out.join("soak.txt").display());
+	dhat::assert!(n2.rust <= n.rust + MARGIN, "the Rust heap grew from {} to {} bytes between rounds {} and {ROUNDS}", n.rust, n2.rust, ROUNDS / 2);
+	dhat::assert!(n2.sqlite <= n.sqlite + MARGIN as i64, "SQLite's heap grew from {} to {} bytes between rounds {} and {ROUNDS}", n.sqlite, n2.sqlite, ROUNDS / 2);
 	drop(prof);
 }

@@ -41,7 +41,7 @@ The pipeline's format and lint steps check most code style, so the formatter and
 
 ## Rust
 
-- Run `cargo fmt` and don't hand-format against it. The gate runs `cargo fmt --check`. [rustfmt.toml](../rustfmt.toml) only turns on `hard_tabs`, and the rest is rustfmt's edition 2024 style. If a data table reads better laid out by hand, mark it `#[rustfmt::skip]`.
+- Run `cargo fmt` and don't hand-format against it. The gate runs `cargo fmt --check`. [rustfmt.toml](../rustfmt.toml) turns on `hard_tabs` and sets `max_width` to 320, since lines have no length limit. The rest is rustfmt's edition 2024 style. If a data table reads better laid out by hand, mark it `#[rustfmt::skip]`.
 
 - The toolchain is pinned in [rust-toolchain.toml](../rust-toolchain.toml). Only rustup's `cargo` reads that file, and a distro's cargo ignores it. The oldest supported Rust is `rust-version` in [Cargo.toml](../Cargo.toml). Clippy warns about standard library calls newer than that, but not about newer language features.
 
@@ -99,7 +99,7 @@ The pipeline's format and lint steps check most code style, so the formatter and
 
 - Python is only used for the pipeline's own tools under `cicd/`. Scripts run as `python3`, from a `#!/usr/bin/env python3` shebang.
 
-- ruff checks it with the rules in [cicd/ruff.toml](../cicd/ruff.toml), for Python 3.11. Lines can be 120 columns, because the report tables read better unwrapped. `ruff format --check` runs too. `SIM108` is off, because it turns a long `if`/`else` into a one-line ternary that's harder to read.
+- ruff checks it with the rules in [cicd/ruff.toml](../cicd/ruff.toml), for Python 3.11. Lines can be 320 columns, ruff's max, since lines have no length limit. `ruff format --check` runs too. `SIM108` is off, because it turns a long `if`/`else` into a one-line ternary that's harder to read.
 
 - mypy runs in strict mode with `warn_unreachable`, per [cicd/mypy.ini](../cicd/mypy.ini). So every function needs full type hints.
 
