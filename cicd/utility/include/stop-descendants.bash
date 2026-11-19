@@ -101,7 +101,7 @@ fStopDescendants(){
 		kids["${ppid}"]+=" ${pid}"
 	done
 	for pid in "${stop_keep[@]}"; do keep["${pid}"]=1; done
-	todo=($$)
+	todo=("$$")
 	while ((${#todo[@]})); do
 		pid="${todo[0]}"; todo=("${todo[@]:1}")
 		for f in ${kids[${pid}]:-}; do

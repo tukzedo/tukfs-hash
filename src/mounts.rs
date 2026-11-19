@@ -232,8 +232,8 @@ fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 		}
 	}
 	if sys.join("partition").exists()
-		&& let Some(parent) = fs::canonicalize(&sys).ok().and_then(|p| p.parent().map(Path::to_path_buf))
-		&& let Some(name) = parent.file_name()
+		&& let Ok(real) = fs::canonicalize(&sys)
+		&& let Some(name) = real.parent().and_then(Path::file_name)
 	{
 		out.insert(name.to_string_lossy().into_owned());
 		return;

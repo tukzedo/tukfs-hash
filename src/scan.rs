@@ -409,13 +409,12 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		let disks = mounts::disks_for(m, &mounts)?;
 		kept.push(mounts::RootDisks { root: c, disks });
 	}
+	let given: Vec<(PathBuf, usize)> = threads.iter().filter_map(|(p, t)| fs::canonicalize(p).ok().map(|c| (c, *t))).collect();
 	let mut groups = Vec::new();
 	for mounts::DiskGroup { disks, roots: rs } in mounts::group_roots(kept) {
 		let mut n = mounts::default_threads(&disks);
-		for (p, t) in threads {
-			if let Ok(c) = fs::canonicalize(p)
-				&& rs.iter().any(|r| c.starts_with(r) || r.starts_with(&c))
-			{
+		for (c, t) in &given {
+			if rs.iter().any(|r| c.starts_with(r) || r.starts_with(c)) {
 				n = *t;
 			}
 		}
@@ -786,7 +785,7 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>, mounts
 	groups
 }
 
-// Used space on the filesystems of the roots that are whole ones, which stands in for the bytes under them, since counting a whole filesystem would mean a second walk of it. The other roots are folders, whose bytes are counted. None when a filesystem's used space can't be read. See design.md, Runs and exit codes.
+// Used space of the roots that are whole filesystems, and the folder roots left to count. None when a used space can't be read. See design.md, Runs and exit codes.
 fn size_parts(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<(u64, Vec<PathBuf>)> {
 	let mut devs = BTreeSet::new();
 	let mut used = 0u64;
@@ -804,7 +803,7 @@ fn size_parts(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<(u64, Vec<P
 	Some((used, folders))
 }
 
-// Runs beside the scan, so the percent shows once the count is in. A stop ends it, and the summary then has a percent only if it got that far.
+// Runs beside the scan. See design.md, Runs and exit codes.
 fn count_group(g: &Group, sh: &Shared) {
 	let Some(c) = &g.to_count else {
 		return;
@@ -834,15 +833,17 @@ fn bytes_under(root: &Path, sh: &Shared) -> Option<u64> {
 			continue;
 		};
 		let on_zfs = sh.mount_points.get(&dir).is_some_and(|t| t == "zfs");
+		let in_db_dir = id == sh.db_dir;
 		for ent in list.flatten() {
 			if sh.stop.load(Relaxed) {
 				return None;
 			}
 			let p = ent.path();
-			if (on_zfs && ent.file_name() == ".zfs") || sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
+			if (on_zfs && ent.file_name() == ".zfs") || sh.mount_points.contains_key(&p) || excluded(sh, &p, in_db_dir) {
 				continue;
 			}
-			let Ok(md) = fs::symlink_metadata(&p) else {
+			// Doesn't follow a link.
+			let Ok(md) = ent.metadata() else {
 				continue;
 			};
 			let sub = (md.dev(), md.ino());
@@ -859,8 +860,7 @@ fn bytes_under(root: &Path, sh: &Shared) -> Option<u64> {
 fn fs_used(p: &Path) -> Option<u64> {
 	let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
 	let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-	// SAFETY: c is NUL-terminated and outlives the call, and st is only read
-	// after the call says it filled it.
+	// SAFETY: c is NUL-terminated and outlives the call, and st is only read after the call says it filled it.
 	if unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) } != 0 {
 		return None;
 	}
@@ -902,7 +902,7 @@ fn finish(conn: rusqlite::Connection, p: &Part, mut why: Vec<String>, stopped: b
 	for g in p.groups {
 		let _ = writeln!(part, "{}: {}", g.name, g.line());
 	}
-	let counts = run_events(&conn, run_id).map_err(|x| why.push(format!("database: {x}"))).ok();
+	let counts = run_events(&conn, run_id).inspect_err(|x| why.push(format!("database: {x}"))).ok();
 	part.push_str(&events_line(counts.as_deref()));
 	let mut summary = String::new();
 	if let Some(prev) = &p.earlier {
@@ -1195,6 +1195,7 @@ impl Walker<'_> {
 			in_git: above.in_git || list.has(".git"),
 			no_xattr: above.no_xattr || sh.no_xattr_ids.contains(&id),
 		};
+		let in_db_dir = id == sh.db_dir;
 		let mut files: Vec<(u64, PathBuf)> = Vec::new();
 		let mut subdirs = Vec::new();
 		for (seen, ent) in list.enumerate() {
@@ -1228,7 +1229,7 @@ impl Walker<'_> {
 				continue;
 			}
 			let p = dir.join(&*ent.name);
-			if sh.mount_points.contains_key(&p) || excluded(sh, &p, id == sh.db_dir) {
+			if sh.mount_points.contains_key(&p) || excluded(sh, &p, in_db_dir) {
 				continue;
 			}
 			if is_dir {
@@ -1525,7 +1526,7 @@ fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 			st.other_err.fetch_add(1, Relaxed);
 			event(sh, Kind::Unsupported, path, format!("{err} at byte {at}"));
 		}
-		// On ZFS an EIO here is a block that failed its checksum with no good copy left. That is the same news as a mismatch.
+		// On ZFS an EIO here is a block that failed its checksum with no good copy left. That's the same news as a mismatch.
 		ReadFail::Io { err, at } => {
 			st.read_err.fetch_add(1, Relaxed);
 			event(sh, Kind::ReadError, path, format!("{err} at byte {at}"));
@@ -2027,7 +2028,7 @@ mod tests {
 		assert_eq!(why.len(), 1, "{why:?}");
 	}
 
-	// ntfs3 answers EOPNOTSUPP for compressed and EFS files. That's not damage.
+	// ntfs3 returns EOPNOTSUPP for compressed and EFS files. That's not damage.
 	#[test]
 	fn unsupported_read_is_not_damage() {
 		let _id = test_id("ddzxh");
@@ -2269,9 +2270,7 @@ mod tests {
 		assert_eq!(jobs, want);
 	}
 
-	// --exclude and --no-xattr know their folders by device and inode too, so
-	// a walk that reaches one under another name, as through a bind mount,
-	// still leaves it out or marks it, and so does a root inside one.
+	// --exclude and --no-xattr know their folders by device and inode too, so a walk that reaches one under another name, as through a bind mount, still leaves it out or marks it, and so does a root inside one.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn excluded_and_no_xattr_folders_under_another_name() {
@@ -3081,8 +3080,7 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// --rmlint leaves rmlint's set where none is current, and the blake2b goes
-	// to the database either way.
+	// --rmlint leaves rmlint's set where none is current, and the blake2b goes to the database either way.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn rmlint_set_only_with_the_flag() {

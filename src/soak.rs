@@ -90,8 +90,7 @@ struct Heap {
 
 fn heap() -> Heap {
 	let s = dhat::HeapStats::get();
-	// SAFETY: these read and reset SQLite's own counts of what it has
-	// allocated, and take nothing that could dangle.
+	// SAFETY: these read and reset SQLite's own counts of what it has allocated, and take nothing that could dangle.
 	let (sqlite, sqlite_peak) = unsafe { (rusqlite::ffi::sqlite3_memory_used(), rusqlite::ffi::sqlite3_memory_highwater(1)) };
 	Heap {
 		rust: s.curr_bytes,

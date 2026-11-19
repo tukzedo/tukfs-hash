@@ -122,12 +122,12 @@ command -v curl      >/dev/null 2>&1 || fDie "curl is needed"
 command -v sha256sum >/dev/null 2>&1 || fDie "sha256sum is needed"
 
 fEcho "Looking up the newest ${release} release"
-## The list rather than releases/latest, which skips pre-releases and has nothing while every release is one. Commas and braces to newlines, so compact JSON reads like the pretty kind, one field per line.
+## The list rather than releases/latest, which skips pre-releases and has nothing while every release is one.
 releaseJson="$(curl -fsSL "${API}")" || fDie "couldn't list the releases on GitHub (offline, or rate-limited?)"
 
-## Each release's tag, then 1 for a pre-release. Drafts aren't public, but are skipped all the same.
+## Each release's tag, then 1 for a pre-release. Drafts aren't public, but are skipped all the same. Commas and braces to newlines, so compact JSON reads like the pretty kind, one field per line.
 fListReleases(){
-	tr ',' '\n' <<<"${releaseJson}" | tr '{' '\n' | awk '
+	tr ',{' '\n' <<<"${releaseJson}" | awk '
 		/^[[:space:]]*"tag_name":[[:space:]]*"/ { tag = $0; sub(/^[[:space:]]*"tag_name":[[:space:]]*"/, "", tag); sub(/".*/, "", tag) }
 		/^[[:space:]]*"draft":[[:space:]]*true/ { tag = "" }
 		/^[[:space:]]*"prerelease":[[:space:]]*(true|false)/ { if (tag != "") print tag " " ($0 ~ /true/ ? 1 : 0); tag = "" }

@@ -1,8 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// A scan's own lines. On a terminal none is longer than its width, and
-// --log gets each in full. See design.md, Runs and exit codes.
+// A scan's own lines. On a terminal none is longer than its width, and --log gets each in full. See design.md, Runs and exit codes.
 
 use crate::beneath;
 use crate::util::show_path;
@@ -90,8 +89,7 @@ fn width(fd: RawFd, tty: bool) -> Option<usize> {
 		return None;
 	}
 	let mut ws = libc::winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
-	// SAFETY: fd is stdout's or stderr's, open for the whole run, and
-	// TIOCGWINSZ fills the winsize it's given, which outlives the call.
+	// SAFETY: fd is stdout's or stderr's, open for the whole run, and TIOCGWINSZ fills the winsize it's given, which outlives the call.
 	if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &raw mut ws) } != 0 || ws.ws_col == 0 {
 		return None;
 	}

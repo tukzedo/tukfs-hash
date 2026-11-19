@@ -468,7 +468,7 @@ fStepSkip(){ step_open=0; fEcho "$(fStepLine SKIP)"; fEcho_Clean; }
 fMinSec(){ printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 ## KB to a size a person reads.
 fSize(){ if (($1 >= 1048576)); then printf '%d.%d GB' $(($1 / 1048576)) $(($1 % 1048576 * 10 / 1048576)); else printf '%d MB' $((($1 + 512) / 1024)); fi; }
-trap 'rc=$?; run_said=1; { printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n" "$rc" "$LINENO" "$BASH_COMMAND"; fStepFail; echo; } >&2; exit $rc' ERR
+trap 'rc="${?}"; run_said=1; { printf "\n[ CICD ABORTED (exit %s) at line %s: %s ]\n" "${rc}" "${LINENO}" "${BASH_COMMAND}"; fStepFail; echo; } >&2; exit "${rc}"' ERR
 
 ## Git that talks to the remote goes through gitsby where it's installed, so it uses the account the repo belongs to. Plain git on a box without it.
 fGitRemote(){ if command -v gitsby >/dev/null 2>&1; then gitsby raw git "$@"; else git "$@"; fi; }
@@ -633,7 +633,7 @@ fi
 gate_skips="${run_tmp}/gate-skips"
 if ((inner_run)) && [[ "${TUKFS_GATE_SKIPS:-}" == /* ]]; then gate_skips="${TUKFS_GATE_SKIPS}"; else : > "${gate_skips}"; fi
 export TUKFS_GATE_SKIPS="${gate_skips}"
-## Where stage 6 puts the release set, and 7 to 9 read it. The check-only modes keep theirs in the outer run's temp dir, so the checkout's set stays the one the last run that can ship built (2026102814341427).
+## Where stage 6 puts the release set, and 7 to 9 read it. The check-only modes keep theirs in the outer run's temp dir, so the checkout's set stays the one built by the last run that can publish (2026102814341427).
 release_dir=""
 if [[ -z "${RELEASE_ARTIFACT_DIR}" ]]; then :
 elif ((! gate_mode)); then release_dir="${root}/${RELEASE_ARTIFACT_DIR}"
@@ -703,7 +703,7 @@ fRunTmpGone(){
 	if ((! inner_run)); then printf '[ cleanup: removed this run'\''s temp files, about %s ]\n' "$(fSize "${total}")" >&2; fi
 	return 0
 }
-## The tag fReleaseTag made, as TAG=OBJECT, until the the upload starts.
+## The tag fReleaseTag made, as TAG=OBJECT, until the upload starts.
 tag_made=""
 ## Only the tag this run made, and only while it's still the one it made.
 fTagUndo(){
@@ -1786,19 +1786,18 @@ fSweepKilled(){
 
 ## Stopped containers of ours whose run dir is gone and whose run started over 2 days ago: kept by --keep-temp, or left by a run killed outright. The sweep above takes the dir, and these went on forever without this.
 fCtrsStale(){   ## -> prints "COUNT KB"
-	local engine="${TUKFS_DOCKER:-docker}" out="" id="" run="" size="" r="" when=0 cutoff=0 lost=0 kb=0
+	local engine="${TUKFS_DOCKER:-docker}" out="" id="" run="" size="" r="" cutoff="" lost=0 kb=0
 	local -a ids=() szs=() limit=()
 	command -v "${engine}" >/dev/null 2>&1 || { echo "0 0"; return 0; }
 	if command -v timeout >/dev/null 2>&1; then limit=(timeout 30); fi
-	cutoff=$(($(date +%s) - 172800))
+	## Run names are local-time stamps, so they compare as text.
+	printf -v cutoff '%(%Y%m%d-%H%M%S)T' $((EPOCHSECONDS - 172800))
 	out="$("${limit[@]}" "${engine}" ps -a --size --filter "label=dev.project=${APP_NAME}" \
 		--filter status=exited --filter status=created --filter status=dead \
 		--format '{{.ID}}	{{.Label "dev.run"}}	{{.Size}}' 2>/dev/null || true)"
 	while IFS=$'\t' read -r id run size; do
 		[[ "${id}" =~ ^[0-9a-f]{12,64}$ && "${run}" != "${TUKFS_RUN_NAME:-}" ]] || continue
-		[[ "${run}" =~ ^([0-9]{8})-([0-9]{2})([0-9]{2})([0-9]{2})_[0-9]{3}$ ]] || continue
-		when="$(date -d "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}:${BASH_REMATCH[3]}:${BASH_REMATCH[4]}" +%s 2>/dev/null)" || continue
-		((when < cutoff)) || continue
+		[[ "${run}" =~ ^([0-9]{8}-[0-9]{6})_[0-9]{3}$ && "${BASH_REMATCH[1]}" < "${cutoff}" ]] || continue
 		lost=1
 		for r in "${run_tmp_root}" ${PROFILE_ROOT:+"${PROFILE_ROOT}"}; do [[ -e "${r}/tukfs-hash/${run}" ]] && lost=0; done
 		((lost)) || continue

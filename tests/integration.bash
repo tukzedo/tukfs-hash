@@ -96,7 +96,8 @@ fSweep() {   ## fSweep BASE
 		read -r got 2> /dev/null < "${old}/.test-run" || continue
 		[[ "${pid}" =~ ^[0-9]{1,10}$ && "${got}" == "${pid}-"* && ! -d "/proc/${pid}" ]] || continue
 		if [[ -e "${old}/.test-kept" && -n "$(find "${old}/.test-kept" -maxdepth 0 -mmin -2880 2> /dev/null)" ]]; then continue; fi
-		fSafeRm "${old}" && printf 'removed a stale test folder: %s\n' "${old}"
+		# Not &&, or a refusal on the last folder is fSweep's status and set -e ends the run.
+		if fSafeRm "${old}"; then printf 'removed a stale test folder: %s\n' "${old}"; fi
 	done < <(find "${1}" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*_[0-9][0-9][0-9]' -print0 2> /dev/null)
 }
 
@@ -276,7 +277,7 @@ check ddx0x "corruption exit code" "${rc}" 4
 check ddx0y "xattr mismatch found" "$(q "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${tree}/big.bin ${tree}/rm.txt ${tree}/sub dir/big-link.bin"
 check ddx0z "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 3
 check ddx10 "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2b-rmlint-mismatch'")" "${tree}/rm.txt"
-"${bin}" report --db "${db}" > "${work}/report.txt"
+"${bin}" report --db "${db}" > "${work}/report.txt" || true
 expect ddx11 "report lists it" "report misses big.bin" grep -q $'^b3-xattr-mismatch\t'"${tree}/big.bin" "${work}/report.txt"
 check ddx12 "unchanged attributes keep their digest" "$(xget "${tree}/empty" user.blake3.b64u)" "rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI"
 # The stored checksums stay, so the next run reports the same again, until the files are accepted.
@@ -308,7 +309,7 @@ check dejdh "future read date: read and reported" "${rc} $(last_run "AND kind = 
 rc=0; "${bin}" accept --db "${db}" "${ob}" > /dev/null 2>&1 || rc=$?
 check dejdj "future read date: accepted" "${rc} $(scan --since "${tomorrow}")" "0 0"
 
-# 4. A real edit moves the time and is not a mismatch.
+# 4. A real edit moves the time and isn't a mismatch.
 sleep 0.01
 printf 'edited\n' >> "${tree}/small.txt"
 rc="$(scan --since "${tomorrow}")"
@@ -507,7 +508,7 @@ head -c 3000 /dev/urandom > "${rt}/${tab}"
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
 fFlipByte "${rt}/${tab}" 100 1
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || true
-"${bin}" report --db "${work}/db/rt.sqlite" > "${work}/report2.txt"
+"${bin}" report --db "${work}/db/rt.sqlite" > "${work}/report2.txt" || true
 check ddy6f "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"${rt}/t\\\\x09ab"$'\t' "${work}/report2.txt")" 1
 
 # 11. Each name of a hard-linked file is held to its own row, with no
@@ -1187,7 +1188,7 @@ if [[ ! -f "${er}/eio.so" ]]; then
 	skip df4r3 "attribute read error: a scan reports it and leaves the set (no C compiler for the shim)"
 	skip df4r4 "attribute read error: accept reports it and leaves the set (no C compiler for the shim)"
 else
-	"${bin}" scan --db "${xedb}" --root "${xe}/tree" --progress 3600 > /dev/null 2>&1
+	"${bin}" scan --db "${xedb}" --root "${xe}/tree" --progress 3600 > /dev/null 2>&1 || true
 	setfattr -n user.blake3.b64u -v keep "${xe}/tree/f"
 	check df4r3 "attribute read error: a scan reports it and leaves the set" "$(xescan "${bin}" scan --db "${xedb}" --root "${xe}/tree" --progress 3600 --since "${tomorrow}")" "0 xattr-error ${xe}/tree/f keep"
 	check df4r4 "attribute read error: accept reports it and leaves the set" "$(xescan "${bin}" accept --db "${xedb}" "${xe}/tree/f") $(grep -c "attributes couldn't be read" "${work}/xe.txt" || true)" "1 accepted ${xe}/tree/f, xattr-error ${xe}/tree/f keep 1"
@@ -1313,3 +1314,5 @@ fi
 ##		- 20261110: The second Ctrl+C checks moved to step 36, where the shim
 ##		  keeps the scan in a read, so a slow box can't finish the first stop
 ##		  before the second INT.
+##		- 20261119: A stale folder the sweep can't remove no longer ends the
+##		  run, and a report or setup scan that fails gets its FAIL line.

@@ -151,6 +151,10 @@ fn version_line(minutes: &str) -> String {
 	}
 }
 
+fn usage() {
+	let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+}
+
 fn take_value<'a>(args: &mut std::slice::Iter<'a, OsString>, flag: &str) -> Result<&'a OsStr, String> {
 	args.next().map(OsString::as_os_str).ok_or_else(|| format!("{flag} needs a value"))
 }
@@ -193,11 +197,11 @@ fn main() {
 fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let shown = |a: &OsStr| util::escape_name(a.as_bytes());
 	let Some(cmd) = argv.first().map(|c| c.to_str().unwrap_or_default()) else {
-		let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+		usage();
 		return Ok(1);
 	};
 	if cmd == "-h" || cmd == "--help" || cmd == "help" {
-		let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+		usage();
 		return Ok(0);
 	}
 	if cmd == "--version" {
@@ -228,9 +232,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut files = Vec::new();
 	let mut only_files = false;
 
+	let p = |v: &OsStr| PathBuf::from(v);
 	let mut it = argv[1..].iter();
 	while let Some(arg) = it.next() {
-		let p = |v: &OsStr| PathBuf::from(v);
 		if cmd == "accept" {
 			if only_files || !arg.as_bytes().starts_with(b"-") {
 				files.push(p(arg));
@@ -251,7 +255,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		}
 		let a = arg.to_str().unwrap_or_default();
 		if a == "-h" || a == "--help" {
-			let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+			usage();
 			return Ok(0);
 		}
 		match takers(a) {
@@ -414,7 +418,7 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 		} else {
 			format!(", skipping since {}", util::fmt_local(cutoff))
 		};
-		out!("run {id} on {} {status}: started {}, finished {}{skipping}", host.unwrap_or_default(), util::fmt_local(start), fin.map_or_else(|| "-".into(), util::fmt_local),);
+		out!("run {id} on {} {status}: started {}, finished {}{skipping}", host.unwrap_or_default(), util::fmt_local(start), fin.map_or_else(|| "-".into(), util::fmt_local));
 		if let Some(s) = summary {
 			for l in s.lines() {
 				out!("\t{l}");

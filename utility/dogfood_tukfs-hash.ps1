@@ -469,8 +469,7 @@ function Get-RunTarget {
 	.SYNOPSIS
 	The newest version by its own path, never the fixed name.
 	.DESCRIPTION
-	A run that repoints the name while this one starts can't swap the build,
-	and the process shows which version it is. The fixed name is there for PATH.
+	A run that repoints the name while this one starts can't swap the build, and the process shows which version it is. The fixed name is there for PATH.
 	#>
 	[CmdletBinding()]
 	[OutputType([string])]

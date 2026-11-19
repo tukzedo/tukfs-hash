@@ -109,7 +109,10 @@ pub struct OnFile {
 }
 
 fn text_of(v: Option<Vec<u8>>) -> Option<Vec<u8>> {
-	v.map(|v| trim_value(&v).to_vec())
+	v.map(|mut v| {
+		v.truncate(trim_value(&v).len());
+		v
+	})
 }
 
 fn int_of(v: Option<Vec<u8>>) -> Option<i64> {

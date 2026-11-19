@@ -66,7 +66,7 @@ export TMPDIR="${scratch}/tmp"
 ## The suite's own pass lines were shown by the tests stage, so only what failed, and what a sanitizer or Miri said.
 fShow(){ grep -vE '^test .+ \.\.\. (ok|ignored.*)$|^ +(Compiling|Finished|Running) ' "$1" || true; }
 
-## The SQLite build has to be one of the the sanitizer's, or its C goes unchecked. nm -u lists the runtime calls the instrumentation added.
+## The SQLite build has to be one of the sanitizer's, or its C goes unchecked. nm -u lists the runtime calls the instrumentation added.
 fInstrumented(){   ## fInstrumented DIR SAN
 	local lib="" syms=""
 	lib="$(find "$1" -name libsqlite3.a -path '*libsqlite3-sys*' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1)"

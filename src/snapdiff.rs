@@ -166,7 +166,7 @@ fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
-/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names are held to the end, since the 2 lines of a replaced file can be far apart.
+/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names are kept to the end, since the 2 lines of a replaced file can be far apart.
 struct ChangeList<'a, R> {
 	input: R,
 	format: Format<'a>,
@@ -374,7 +374,7 @@ fn describe(d: &Diff) -> String {
 	format!("{} bytes differ in {} run(s), {} starting on a 16-byte boundary: {}{}", d.differing, d.runs, d.aligned, shown.join(" "), if d.runs > d.shown.len() as u64 { " ..." } else { "" })
 }
 
-// A file whose old copy is looked for by inode once the list is read, with the one under its own name to fall back on. Both sides are stat'd again then, so a file held costs little more than its name.
+// A file whose old copy is looked for by inode once the list is read, with the one under its own name to fall back on. Both sides are stat'd again then, so a Held costs little more than its name.
 struct Held {
 	rel: PathBuf,
 	born: Option<SystemTime>,
@@ -488,17 +488,15 @@ fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held]
 			};
 			let Ok(ft) = ent.file_type() else { continue };
 			if ft.is_dir() {
-				let p = ent.path();
-				if fs::symlink_metadata(&p).is_ok_and(|m| m.dev() == dev) {
-					dirs.push(p);
+				if ent.metadata().is_ok_and(|m| m.dev() == dev) {
+					dirs.push(ent.path());
 				}
 				continue;
 			}
 			let Some(&at) = wanted.get(&ent.ino()) else {
 				continue;
 			};
-			let p = ent.path();
-			let Ok(md) = fs::symlink_metadata(&p) else {
+			let Ok(md) = ent.metadata() else {
 				continue;
 			};
 			let same_birth = match (md.created(), held[at].born) {
@@ -506,7 +504,7 @@ fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held]
 				_ => true,
 			};
 			if md.is_file() && same_birth {
-				held[at].by_inode = Some(Box::new((old.rel(&p).to_path_buf(), md)));
+				held[at].by_inode = Some(Box::new((old.rel(&ent.path()).to_path_buf(), md)));
 				wanted.remove(&ent.ino());
 				if wanted.is_empty() {
 					return;
@@ -516,7 +514,7 @@ fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held]
 	}
 }
 
-// Compares each file as it's read off the list, holding back only the ones whose old copy has to be found by inode.
+// Compares each file as it's read off the list, putting off only the ones whose old copy has to be found by inode.
 struct Checker<'a> {
 	old: &'a Root,
 	new: &'a Root,
@@ -588,7 +586,7 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	fn pair(&mut self, pair: &Pair) {
+	fn pair(&mut self, pair: Pair) {
 		let name = show_path(&pair.new);
 		let Some((new_md, by_name)) = self.stat_pair(&name, &pair.old, &pair.new) else {
 			return;
@@ -599,11 +597,7 @@ impl<'a> Checker<'a> {
 			&& !self.born_since_old(&new_md)
 		{
 			self.wanted.insert(ino, self.held.len());
-			self.held.push(Held {
-				rel: pair.new.clone(),
-				born: new_md.created().ok(),
-				by_inode: None,
-			});
+			self.held.push(Held { rel: pair.new, born: new_md.created().ok(), by_inode: None });
 			return;
 		}
 		let old = by_name.as_ref().map(|m| (pair.old.as_path(), m));
@@ -710,7 +704,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 }
 
 fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: impl Fn(&Root) -> Option<SystemTime>) -> Result<i32, String> {
-	// The folders themselves were named by a person and may be symlinks. Only what's beneath them is held to no symlinks and no mounts, as scan does.
+	// The folders themselves were named by a person and may be symlinks. Only the names beneath them are kept from following a symlink or crossing a mount, as scan does.
 	let open_root = |dir: &Path| -> Result<Root, String> {
 		let fail = |e: io::Error| format!("{}: {e}", show_path(dir));
 		if !fs::metadata(dir).map_err(fail)?.is_dir() {
@@ -756,7 +750,7 @@ fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: imp
 				if let Some(p) = [&pair.old, &pair.new].into_iter().find(|p| !stays_inside(p)) {
 					return Err(format!("{}: names have to be relative to --old and --new, with no ..", show_path(p)));
 				}
-				checker.pair(&pair);
+				checker.pair(pair);
 			}
 		}
 	}
@@ -768,7 +762,7 @@ fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: imp
 	checker.finish();
 
 	let t = &checker.tally;
-	err!("{listed} listed, {} regular files in both, {} only in --new, {} flagged, {} missing, {} not checked, {unusable} lines not understood", t.checked, t.only_new, t.flagged, t.missing, t.unchecked,);
+	err!("{listed} listed, {} regular files in both, {} only in --new, {} flagged, {} missing, {} not checked, {unusable} lines not understood", t.checked, t.only_new, t.flagged, t.missing, t.unchecked);
 	// A list with CRLF ends, or the wrong folders, finds nothing to compare.
 	let nothing = t.checked == 0 && t.missing_new > 0;
 	if nothing {
@@ -1025,7 +1019,7 @@ transid marker was 12\n";
 			let mut c = Checker::new(&old_root, &new_root, &src, false, frozen);
 			for name in ["fresh", "saved"] {
 				let ino = fs::metadata(new.join(name)).unwrap().ino();
-				c.pair(&Pair { ino: Some(ino), ..Pair::same(PathBuf::from(name)) });
+				c.pair(Pair { ino: Some(ino), ..Pair::same(PathBuf::from(name)) });
 			}
 			let held = c.held.len();
 			c.finish();
@@ -1062,7 +1056,7 @@ transid marker was 12\n";
 			let frozen = born - Duration::from_secs(60);
 			let mut c = Checker::new(&old_root, &new_root, &src, false, Some(frozen));
 			c.now = now;
-			c.pair(&Pair { ino: Some(ino), ..Pair::same(PathBuf::from("now")) });
+			c.pair(Pair { ino: Some(ino), ..Pair::same(PathBuf::from("now")) });
 			let held = c.held.len();
 			c.finish();
 			(held, c.tally.only_new, c.tally.checked, c.tally.missing)
@@ -1081,7 +1075,7 @@ transid marker was 12\n";
 		let (old, new) = (dir.join("old"), dir.join("new"));
 		fs::create_dir(&old).unwrap();
 		fs::create_dir(&new).unwrap();
-		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let when = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 		let put = |p: &Path, bytes: &[u8]| {
 			fs::write(p, bytes).unwrap();
 			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
@@ -1112,7 +1106,7 @@ transid marker was 12\n";
 		for d in [&old, &new, &elsewhere, &new.join("in"), &old.join("out")] {
 			fs::create_dir(d).unwrap();
 		}
-		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let when = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 		let put = |p: &Path, bytes: &[u8]| {
 			fs::write(p, bytes).unwrap();
 			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
@@ -1154,7 +1148,7 @@ transid marker was 12\n";
 		for d in [&old, &new, &old.join("d"), &new.join("d")] {
 			fs::create_dir(d).unwrap();
 		}
-		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let when = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 		let put = |p: &Path, bytes: &[u8]| {
 			fs::write(p, bytes).unwrap();
 			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();

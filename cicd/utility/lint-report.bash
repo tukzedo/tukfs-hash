@@ -39,8 +39,8 @@ while (($#)); do case "$1" in
 	--check)    check=1; shift ;;
 	--force)    force=1; shift ;;
 	--no-mark)  noMark=1; shift ;;
-	--dir)      dir="${2:-}"; shift 2 ;;
-	--file)     file="${2:-}"; shift 2 ;;
+	--dir|--file) (($# >= 2)) || { echo "lint-report: $1 needs a value" >&2; exit 2; }
+	              if [[ "$1" == --dir ]]; then dir="$2"; else file="$2"; fi; shift 2 ;;
 	-h|--help)  sed -n '/^##	Purpose:/,/^##	History:/p' "${BASH_SOURCE[0]}" | sed '$d; s/^##\t\{0,1\}//'; exit 0 ;;
 	*) echo "lint-report: unknown option: $1" >&2; exit 2 ;;
 esac; done

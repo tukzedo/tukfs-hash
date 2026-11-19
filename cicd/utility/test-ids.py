@@ -24,7 +24,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import re
 import subprocess
 import sys
@@ -215,7 +214,7 @@ def fScan() -> tuple[list[Found], list[str]]:
             found.append(Found(hit.group(1), rel, m + 2, suite, fRustName(rel, lines, n, m)))
 
     tracked = subprocess.run(["git", "-C", str(repo), "ls-files", "-z"], capture_output=True, check=True).stdout.decode().split("\0")
-    for rel in sorted(t for t in tracked if fnmatch.fnmatch(t, "*.rs") and t not in placed):
+    for rel in sorted(t for t in tracked if t.endswith(".rs") and t not in placed):
         for n, line in enumerate((repo / rel).read_text(encoding="utf-8").splitlines()):
             if ANY_TEST.match(line):
                 bad.append(f"{rel}:{n + 1}: a test outside {RUST_GLOB}, where nothing here looks")

@@ -259,7 +259,7 @@ pub struct Prior {
 pub const LOOKUP: &str = "SELECT p.id, p.bytes, p.mtime_us, p.ino, p.hashed_us, p.seen_run, f.b3
 	FROM paths p JOIN files f ON f.id = p.file_id WHERE p.path = ?1";
 
-/// Only a missing row means nothing is known. A busy or broken database is not the same as no record, and taking it for one would overwrite the row unseen.
+/// Only a missing row means nothing is known. A busy or broken database isn't the same as no record, and taking it for one would overwrite the row unseen.
 pub fn lookup(stmt: &mut rusqlite::Statement<'_>, path: &[u8]) -> rusqlite::Result<Option<Prior>> {
 	stmt.query_row([PathKey(path)], |r| {
 		Ok(Prior {
@@ -573,9 +573,7 @@ fn batches(conn: &mut Connection, run_id: i64, rx: &Receiver<Msg>, halt: &impl F
 		let n = events.len() + rest.len();
 		if n > 0 && (done || n >= 20000 || last.elapsed() >= Duration::from_secs(1)) {
 			#[cfg(test)]
-			if conn.path().is_some_and(|p| PANIC_ON.lock().unwrap().iter().any(|q| q == p)) {
-				panic!("test fault");
-			}
+			assert!(!conn.path().is_some_and(|p| PANIC_ON.lock().unwrap().iter().any(|q| q == p)), "test fault");
 			kept = match (kept, commit(conn, run_id, &mut events)) {
 				(Kept::All, Err(x)) => {
 					halt();

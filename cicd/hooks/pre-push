@@ -60,7 +60,8 @@ fDocsOnly(){   ## fDocsOnly OLD_SHA NEW_SHA
 	while IFS= read -r -d '' f; do
 		any=1
 		fIsDoc "${f}" || return 1
-	done < <(git -C "${root}" diff -z --no-renames --name-only "$1" "$2" || echo -n $'\x01\0')
+	## printf, since a bash string can't have the NUL that ends the name.
+	done < <(git -C "${root}" diff -z --no-renames --name-only "$1" "$2" || printf '\001\0')
 	((any))
 }
 

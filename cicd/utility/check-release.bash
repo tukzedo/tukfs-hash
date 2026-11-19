@@ -92,7 +92,7 @@ tilde="~"
 fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
 	local dver deb="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" f got="" list="" deps=""
 	[[ -f "${deb}" ]] || fDie "no package at ${deb}"
-	dver="${4/-/${tilde}}"   ## a pre-release dash is a tilde in a package version
+	dver="${ver/-/${tilde}}"   ## a pre-release dash is a tilde in a package version
 	for f in "Package|${name}" "Version|${dver}" "Architecture|${arch}"; do
 		got="$(dpkg-deb -f "${deb}" "${f%%|*}")"
 		[[ "${got}" == "${f#*|}" ]] || fDie "${deb##*/}: ${f%%|*} is '${got}', not '${f#*|}'"
@@ -114,7 +114,7 @@ fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
 fRpmCheck(){   ## fRpmCheck RPM BIN NAME VERSION ARCH GLIBC GCC DBDIR
 	local dver rpmf="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" db="$8" got="" reqs=""
 	local -a q=(rpm --dbpath "${db}" -qp)
-	dver="${4/-/${tilde}}"
+	dver="${ver/-/${tilde}}"
 	[[ -f "${rpmf}" ]] || fDie "no package at ${rpmf}"
 	got="$("${q[@]}" --qf '%{NAME} %{VERSION} %{ARCH}' "${rpmf}")"
 	[[ "${got}" == "${name} ${dver} ${arch}" ]] || fDie "${rpmf##*/} is '${got}', not '${name} ${dver} ${arch}'"
