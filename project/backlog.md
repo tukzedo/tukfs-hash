@@ -29,6 +29,39 @@
 
 ## Issues
 
+- The walk opens each folder by its whole path from the root, so a deep tree pays a lookup per level for every folder.
+	- ID: 2026111913564333
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261119-135643
+	- Opened by: code fixup 20261119
+	- Note: `Walker::list_dir` goes through `beneath::Root` from the root each time. Opening relative to the parent folder's fd would skip that, but it changes how the walk keeps its folders.
+	- Requirements [Feature]:
+		- Time a deep tree of small folders first. The cost is per folder, not per file, so it may not matter.
+
+- A read of 64 KiB or more makes 4 fcntl calls to turn direct reads on and off.
+	- ID: 2026111913564320
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261119-135643
+	- Opened by: code fixup 20261119
+	- Note: `set_direct` in `scan.rs` runs F_GETFL then F_SETFL each way. Keeping the first flags would save 2 calls per file. The read itself probably swamps it, as it did for the `posix_fadvise` calls.
+	- Requirements [Feature]:
+		- Time it first by user and sys CPU over large files. Change it only if it moves the number.
+
+- The walk looks up each entry's path in the mount point map, which compares paths part by part.
+	- ID: 2026111913564308
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Opened: 20261119-135643
+	- Opened by: code fixup 20261119
+	- Note: `Shared.mount_points` is a `BTreeMap<PathBuf, _>`, looked up for every entry in `Walker::list_dir` and `bytes_under`. A `Path` compare parses both sides into parts, several times per lookup.
+	- Requirements [Feature]:
+		- Time it first with `profile-ab.bash` and `AB_SMALL_FILES`. Change it only if a byte-keyed hash set saves more than the noise.
+
 - There is currently no public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
