@@ -32,7 +32,9 @@
 - Files of 64 to 128 KiB may cost more sys CPU read direct than read plain.
 	- ID: 2026111914312959
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
+	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-143129
@@ -42,6 +44,26 @@
 	- Note: In a copy of the read path's calls on ext4, over 4,000 files of 64 to 128 KiB and 6 rounds at load 25 to 27, a direct read took a median of about 0.36 s user plus sys CPU, and a plain read with its drops about 0.33 s. Plain was cheaper in 5 of the 6 rounds, about 7 us per file. Not yet seen in the scan itself.
 	- Requirements [Feature]:
 		- Time scans of files from 64 KiB to 1 MiB, read direct and read plain, by user and sys CPU. Move `DIRECT_MIN` only if the crossing point is clearly elsewhere.
+	- Progress log:
+		- 2026-11-19: Timed `scan --verify` on ext4, one build with every read direct against every read plain, arms alternated, each scan starting with the files out of the page cache. Load 15 to 26 on 32 cores. Median user plus sys CPU, direct against plain, and how often plain cost less:
+			- 16 to 64 KiB, 8,000 files, 10 rounds: 1.04 s against 0.84 s, 10 of 10. About 31 us per file.
+			- 64 to 96 KiB, 4,000 files, 12 rounds: 0.545 s against 0.505 s, 10 of 12.
+			- 96 to 128 KiB, 4,000 files, 12 rounds: 0.575 s against 0.565 s, 7 of 12.
+			- 128 to 160 KiB, 4,000 files, 12 rounds: 0.625 s against 0.660 s, 5 of 12.
+			- 160 to 192 KiB, 4,000 files, 12 rounds: 0.800 s against 0.805 s, 4 of 12.
+			- 128 to 256 KiB, 2,000 files, 10 rounds: 0.400 s against 0.435 s, 3 of 10.
+			- 256 to 512 KiB, 1,000 files, and 512 KiB to 1 MiB, 500 files, 10 rounds each: direct cost 0.11 and 0.15 s less, 0 of 10. About 0.4 s per GB.
+		- 2026-11-19: Verified: on 8,000 files of 64 to 128 KiB, a floor of 128 KiB against 64 KiB took 1.19 s against 1.295 s, cheaper in 14 of 16 rounds, about 13 us per file. The control, 64 KiB in both arms over 10 rounds, came out 1.26 against 1.28 s, 6 of 10.
+		- 2026-11-19: Direct reads cost a little more user CPU than plain at every size, likely since the hash then reads data the CPU hasn't cached. Wall time came out even, within the scan's 0.2 s steps.
+	- Decisions:
+		- `DIRECT_MIN` is 128 KiB. Plain cost less in nearly every round up to 96 KiB, they came out even from 96 to 192 KiB, and direct won every round from 256 KiB up.
+		- Timed on ext4 only. btrfs and ZFS weren't timed, and the 64 KiB floor wasn't timed there either.
+	- Swept: `DIRECT_MIN` is read only in `read_sums`, and by `debte`, which takes its sizes from it. design.md's read section has the new floor. README and changelog don't mention it.
+	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) reads sizes on both sides of the floor, which follow `DIRECT_MIN`. It can't see which path was taken, so the timing above is the check. `direct-min-ab.bash` in the private tools folder reruns it.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, every area.
+	- Branch: nov19-2026111914312959
+	- Commit: b77824f
+	- Closed: 20261119-145600
 
 - On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
 	- ID: 2026111914041556
