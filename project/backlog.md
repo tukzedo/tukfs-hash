@@ -29,38 +29,36 @@
 
 ## Issues
 
-- The walk opens each folder by its whole path from the root, so a deep tree pays a lookup per level for every folder.
-	- ID: 2026111913564333
+- On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
+	- ID: 2026111914041556
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Waiting on UAT
+		- To judge: the first decision below, that a folder kept from an earlier open is used as it is, which the fix for 2026101406340922 didn't say.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261119-135643
-	- Opened by: code fixup 20261119
-	- Note: `Walker::list_dir` goes through `beneath::Root` from the root each time. Opening relative to the parent folder's fd would skip that, but it changes how the walk keeps its folders.
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-140415
+	- Opened by: 2026111913564333's timing
+	- Related IDs: 2026111913564333
+	- Note: Unverified on a real old kernel. A C rig making the same calls on kernel 6.12 took 11 us for a folder 8 deep and 45 us for one 32 deep, against 1.7 and 2.6 us with openat2. The worker pays it twice per file, for its stat open and its read open.
 	- Requirements [Feature]:
-		- Time a deep tree of small folders first. The cost is per folder, not per file, so it may not matter.
-
-- A read of 64 KiB or more makes 4 fcntl calls to turn direct reads on and off.
-	- ID: 2026111913564320
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261119-135643
-	- Opened by: code fixup 20261119
-	- Note: `set_direct` in `scan.rs` runs F_GETFL then F_SETFL each way. Keeping the first flags would save 2 calls per file. The read itself probably swamps it, as it did for the `posix_fadvise` calls.
-	- Requirements [Feature]:
-		- Time it first by user and sys CPU over large files. Change it only if it moves the number.
-
-- The walk looks up each entry's path in the mount point map, which compares paths part by part.
-	- ID: 2026111913564308
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Opened: 20261119-135643
-	- Opened by: code fixup 20261119
-	- Note: `Shared.mount_points` is a `BTreeMap<PathBuf, _>`, looked up for every entry in `Walker::list_dir` and `bytes_under`. A `Path` compare parses both sides into parts, several times per lookup.
-	- Requirements [Feature]:
-		- Time it first with `profile-ab.bash` and `AB_SMALL_FILES`. Change it only if a byte-keyed hash set saves more than the noise.
+		- Time a scan of a tree of typical depth with the fallback, on a kernel before 5.6 or with it forced, before changing anything. Debian 10's 4.19 is the oldest kernel the release builds' glibc floor reaches.
+	- Progress log:
+		- 2026-11-19: Timed with openat2 refused as ENOSYS by a seccomp filter, on ext4: 20,000 small files in 2,000 folders, files 7.4 deep on average, rescans at load 11 to 15. User plus sys CPU was about 0.47 s with openat2 and 0.80 s with the fallback, 70% more.
+		- 2026-11-19: Each thread now keeps the last folder it opened something in, per root, and starts from it when the next path runs through it. Same tree, 8 paired rescans at load 11: the fallback took 0.76 s before and 0.50 s after, with openat2 at 0.45 s both times. A first scan's openat calls fell from about 16 to 3 per file.
+	- Decisions:
+		- A kept folder is used as it is, without checking it's still where its path says. A folder moved out of the root since can still be read through, but only what's under it, which whoever moved it could have put inside the root anyway. Symlinks and other devices are still refused at each new step.
+		- Any failure through a kept folder is tried again from the root, so a folder replaced or deleted since never makes a file look gone.
+		- One folder per thread per root, held by the root, so it closes with it and can't keep a filesystem busy afterward. A whole chain per thread would save a little more on the walk, at an fd per level.
+		- The openat2 path is unchanged.
+	- Branch: nov19-2026111914041556
+	- Commit: `843c377`
+	- Test case: `dfh8m` (`beneath::tests::a_kept_folder_is_checked_again`): a kept folder replaced by a new one, then deleted and swapped for a symlink.
+	- Verified:
+		- `dfh8m` fails with the retry from the root taken out, and passes with it.
+		- `tests/integration.bash` passed under the seccomp filter on ext4, 208 checks, so every scan there took the fallback.
+		- `cicd/cicd.bash --backlog-run-quick` and its `miri` area passed.
+	- Swept: `step_by_step` is the only fallback, and both of the worker's opens, the walk's folder opens and snapdiff's opens all go through `open_at`.
+	- Note: Unverified on a real kernel before 5.6. The filter refuses the same call with the same error such a kernel gives.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -4287,6 +4285,42 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
 
+- Files of 64 to 128 KiB may cost more sys CPU read direct than read plain.
+	- ID: 2026111914312959
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Needs local test suite run?: No
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-143129
+	- Opened by: 2026111913564320's timing
+	- Related IDs: 2026102809554675
+	- Note: `DIRECT_MIN` was set at 64 KiB from a guess of where direct pays, 40 to 90 KB, since files between 4 and 64 KB weren't timed (2026102809554675).
+	- Note: In a copy of the read path's calls on ext4, over 4,000 files of 64 to 128 KiB and 6 rounds at load 25 to 27, a direct read took a median of about 0.36 s user plus sys CPU, and a plain read with its drops about 0.33 s. Plain was cheaper in 5 of the 6 rounds, about 7 us per file. Not yet seen in the scan itself.
+	- Requirements [Feature]:
+		- Time scans of files from 64 KiB to 1 MiB, read direct and read plain, by user and sys CPU. Move `DIRECT_MIN` only if the crossing point is clearly elsewhere.
+	- Progress log:
+		- 2026-11-19: Timed `scan --verify` on ext4, one build with every read direct against every read plain, arms alternated, each scan starting with the files out of the page cache. Load 15 to 26 on 32 cores. Median user plus sys CPU, direct against plain, and how often plain cost less:
+			- 16 to 64 KiB, 8,000 files, 10 rounds: 1.04 s against 0.84 s, 10 of 10. About 31 us per file.
+			- 64 to 96 KiB, 4,000 files, 12 rounds: 0.545 s against 0.505 s, 10 of 12.
+			- 96 to 128 KiB, 4,000 files, 12 rounds: 0.575 s against 0.565 s, 7 of 12.
+			- 128 to 160 KiB, 4,000 files, 12 rounds: 0.625 s against 0.660 s, 5 of 12.
+			- 160 to 192 KiB, 4,000 files, 12 rounds: 0.800 s against 0.805 s, 4 of 12.
+			- 128 to 256 KiB, 2,000 files, 10 rounds: 0.400 s against 0.435 s, 3 of 10.
+			- 256 to 512 KiB, 1,000 files, and 512 KiB to 1 MiB, 500 files, 10 rounds each: direct cost 0.11 and 0.15 s less, 0 of 10. About 0.4 s per GB.
+		- 2026-11-19: Verified: on 8,000 files of 64 to 128 KiB, a floor of 128 KiB against 64 KiB took 1.19 s against 1.295 s, cheaper in 14 of 16 rounds, about 13 us per file. The control, 64 KiB in both arms over 10 rounds, came out 1.26 against 1.28 s, 6 of 10.
+		- 2026-11-19: Direct reads cost a little more user CPU than plain at every size, likely since the hash then reads data the CPU hasn't cached. Wall time came out even, within the scan's 0.2 s steps.
+	- Decisions:
+		- `DIRECT_MIN` is 128 KiB. Plain cost less in nearly every round up to 96 KiB, they came out even from 96 to 192 KiB, and direct won every round from 256 KiB up.
+		- Timed on ext4 only. btrfs and ZFS weren't timed, and the 64 KiB floor wasn't timed there either.
+	- Swept: `DIRECT_MIN` is read only in `read_sums`, and by `debte`, which takes its sizes from it. design.md's read section has the new floor. README and changelog don't mention it.
+	- Test case: `debte` (`scan::tests::direct_reads_hash_every_byte`) reads sizes on both sides of the floor, which follow `DIRECT_MIN`. It can't see which path was taken, so the timing above is the check. `direct-min-ab.bash` in the private tools folder reruns it.
+	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, every area.
+	- Branch: nov19-2026111914312959
+	- Commit: b77824f
+	- Closed: 20261119-145600
+
 - There is currently no public code style guide or contributing.md, and README points to neither.
 	- ID: 2026102808215637
 	- Type: Task
@@ -6227,6 +6261,68 @@
 		- The directives want each Done item's regression test in CI. 8 checks in the private tools folder cover cicd and dogfood items, and none runs in a pipeline run or has a test ID.
 		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
 	- Closed: 20261025
+
+- The walk opens each folder by its whole path from the root, so a deep tree pays a lookup per level for every folder.
+	- ID: 2026111913564333
+	- Type: Enhancement
+	- Status: Canceled
+		- Not worth the change. Opening each folder from its parent's fd saved about 0.4 us per folder on a tree 50 deep, inside the noise.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-135643
+	- Opened by: code fixup 20261119
+	- Note: `Walker::list_dir` goes through `beneath::Root` from the root each time. Opening relative to the parent folder's fd would skip that, but it changes how the walk keeps its folders.
+	- Requirements [Feature]:
+		- Time a deep tree of small folders first. The cost is per folder, not per file, so it may not matter.
+	- Progress log:
+		- 2026-11-19: With openat2 on kernel 6.12, a folder opened by its whole path costs about 30 ns more per level than one name opened from the parent's fd: 0.2 us more at depth 8, 1 us at 32 and 2.2 us at 64.
+		- 2026-11-19: Tried it in the walk, keeping each folder's fd on the stack and opening its subfolders from it. On ext4, 10,200 folders in 200 chains 50 deep, one small file each, 6 paired rescans at load 10: user plus sys CPU averaged 0.612 s as it is and 0.608 s from the parent. Rounds spread over about 0.06 s. A flat tree of the same counts took about 0.57 s, so depth costs about 15% there, but not in the folder open.
+	- Decisions:
+		- Left the code as it was. The saving is under 1% at an average depth of 25, and less at the depth of real trees. Holding an fd per level also lets a very deep tree run out of fds, where a whole path fails only past 4096 bytes.
+	- Swept: the worker's stat open and read open of each file also go from the root by whole path, at the same 30 ns per level each, so they were left too. The fallback for kernels before 5.6 costs about 1.4 us per level, filed as 2026111914041556.
+	- Test case: none, no code change.
+	- Closed: 20261119-140415
+
+- A read of 64 KiB or more makes 4 fcntl calls to turn direct reads on and off.
+	- ID: 2026111913564320
+	- Type: Enhancement
+	- Status: Canceled
+		- Not worth the change. Keeping the first flags saves one F_GETFL per file, about 130 to 170 ns, against about 75 us per file for the read around it.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-135643
+	- Opened by: code fixup 20261119
+	- Note: `set_direct` in `scan.rs` runs F_GETFL then F_SETFL each way. Keeping the first flags would save 2 calls per file. The read itself probably swamps it, as it did for the `posix_fadvise` calls.
+	- Requirements [Feature]:
+		- Time it first by user and sys CPU over large files. Change it only if it moves the number.
+	- Progress log:
+		- 2026-11-19: Keeping the first flags drops only the second F_GETFL, since the F_SETFL that turns it off stays. A bare F_GETFL took 126 to 173 ns of CPU per call.
+		- 2026-11-19: Timed the read path's calls as `read_sums` makes them, on ext4, over 4,000 files of 64 to 128 KiB, the sizes where the toggle weighs most. Over 5 rounds at load 27 to 31, user plus sys CPU had a median of 0.297 s as it is, 0.292 s with the first flags kept, and 0.295 s with no restore at all. Rounds spread over about 0.1 s. The expected saving is 0.5 ms.
+	- Decisions:
+		- Left the code as it was. The saving is under 0.2% at the smallest files that go direct, and less on bigger ones.
+	- Swept: `set_direct` has its callers only in `read_sums`, the turn-on, the turn-off after the read, and the turn-off on EINVAL or EOPNOTSUPP mid-file, which is rare.
+	- Test case: none, no code change.
+	- Closed: 20261119-143109
+
+- The walk looks up each entry's path in the mount point map, which compares paths part by part.
+	- ID: 2026111913564308
+	- Type: Enhancement
+	- Status: Canceled
+		- Not worth the change. A map keyed by bytes saved about 0.4 us per lookup, about 1% of a small file's CPU, inside the noise of a whole scan.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-135643
+	- Opened by: code fixup 20261119
+	- Note: `Shared.mount_points` is a `BTreeMap<PathBuf, _>`, looked up for every entry in `Walker::list_dir` and `bytes_under`. A `Path` compare parses both sides into parts, several times per lookup.
+	- Requirements [Feature]:
+		- Time it first with `profile-ab.bash` and `AB_SMALL_FILES`. Change it only if a byte-keyed hash set saves more than the noise.
+	- Progress log:
+		- 2026-11-19: With this box's 117 mounts, a lookup of a scan-style path took 300 to 470 ns in the `BTreeMap<PathBuf>` and 25 to 35 ns in a `HashMap` keyed by the path's bytes. A folder root pays 2 lookups per entry, one in the walk and one in the count, so about 0.8 us per file.
+		- 2026-11-19: `profile-ab.bash` with `AB_SMALL_FILES=20000`, 8 paired rounds on ext4 at load 7 to 11, HEAD against the byte-keyed map in `mounts::mount_points`. User plus sys CPU averaged 1.51 s as it is and 1.54 s with the change for the first scan, and 1.57 s and 1.55 s for the rescan. Each side's standard deviation was 0.04 to 0.07 s, against an expected saving of about 0.016 s.
+	- Decisions:
+		- Left the code as it was, per the requirement. The saving is about 1% of a small file's CPU, which the run's noise hides. On a box with thousands of mounts the tree lookup grows only with their log, so the case doesn't change.
+	- Test case: none, no code change.
+	- Closed: 20261119-150041
 
 - The scan opens each file twice, once to stat it and once to read it, though the first is only needed when the file might be skipped.
 	- ID: 2026110715441807

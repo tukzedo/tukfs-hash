@@ -1447,8 +1447,8 @@ pub enum ReadFail {
 
 /// `O_DIRECT` wants the buffer, offset and length on the device's block size.
 const DIRECT_ALIGN: usize = 4096;
-// Below this a plain read and its drops cost less sys CPU than going direct (2026102809554675).
-const DIRECT_MIN: u64 = 64 << 10;
+// Below this a plain read and its drops cost less CPU than going direct. Timed even at about 128 KiB on ext4 (2026111914312959).
+const DIRECT_MIN: u64 = 128 << 10;
 
 /// Turns `O_DIRECT` on or off for an open fd. False if the filesystem won't.
 fn set_direct(fd: RawFd, on: bool) -> bool {
