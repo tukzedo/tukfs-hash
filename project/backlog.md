@@ -141,13 +141,22 @@
 - The walk looks up each entry's path in the mount point map, which compares paths part by part.
 	- ID: 2026111913564308
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Canceled
+		- Not worth the change. A map keyed by bytes saved about 0.4 us per lookup, about 1% of a small file's CPU, inside the noise of a whole scan.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-135643
 	- Opened by: code fixup 20261119
 	- Note: `Shared.mount_points` is a `BTreeMap<PathBuf, _>`, looked up for every entry in `Walker::list_dir` and `bytes_under`. A `Path` compare parses both sides into parts, several times per lookup.
 	- Requirements [Feature]:
 		- Time it first with `profile-ab.bash` and `AB_SMALL_FILES`. Change it only if a byte-keyed hash set saves more than the noise.
+	- Progress log:
+		- 2026-11-19: With this box's 117 mounts, a lookup of a scan-style path took 300 to 470 ns in the `BTreeMap<PathBuf>` and 25 to 35 ns in a `HashMap` keyed by the path's bytes. A folder root pays 2 lookups per entry, one in the walk and one in the count, so about 0.8 us per file.
+		- 2026-11-19: `profile-ab.bash` with `AB_SMALL_FILES=20000`, 8 paired rounds on ext4 at load 7 to 11, HEAD against the byte-keyed map in `mounts::mount_points`. User plus sys CPU averaged 1.51 s as it is and 1.54 s with the change for the first scan, and 1.57 s and 1.55 s for the rescan. Each side's standard deviation was 0.04 to 0.07 s, against an expected saving of about 0.016 s.
+	- Decisions:
+		- Left the code as it was, per the requirement. The saving is about 1% of a small file's CPU, which the run's noise hides. On a box with thousands of mounts the tree lookup grows only with their log, so the case doesn't change.
+	- Test case: none, no code change.
+	- Closed: 20261119-150041
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
