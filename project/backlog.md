@@ -29,16 +29,39 @@
 
 ## Issues
 
-- The walk opens each folder by its whole path from the root, so a deep tree pays a lookup per level for every folder.
-	- ID: 2026111913564333
+- On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
+	- ID: 2026111914041556
 	- Type: Enhancement
 	- Status: Queued
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-140415
+	- Opened by: 2026111913564333's timing
+	- Related IDs: 2026111913564333
+	- Note: Unverified on a real old kernel. A C rig making the same calls on kernel 6.12 took 11 us for a folder 8 deep and 45 us for one 32 deep, against 1.7 and 2.6 us with openat2. The worker pays it twice per file, for its stat open and its read open.
+	- Requirements [Feature]:
+		- Time a scan of a tree of typical depth with the fallback, on a kernel before 5.6 or with it forced, before changing anything. Debian 10's 4.19 is the oldest kernel the release builds' glibc floor reaches.
+
+- The walk opens each folder by its whole path from the root, so a deep tree pays a lookup per level for every folder.
+	- ID: 2026111913564333
+	- Type: Enhancement
+	- Status: Canceled
+		- Not worth the change. Opening each folder from its parent's fd saved about 0.4 us per folder on a tree 50 deep, inside the noise.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-135643
 	- Opened by: code fixup 20261119
 	- Note: `Walker::list_dir` goes through `beneath::Root` from the root each time. Opening relative to the parent folder's fd would skip that, but it changes how the walk keeps its folders.
 	- Requirements [Feature]:
 		- Time a deep tree of small folders first. The cost is per folder, not per file, so it may not matter.
+	- Progress log:
+		- 2026-11-19: With openat2 on kernel 6.12, a folder opened by its whole path costs about 30 ns more per level than one name opened from the parent's fd: 0.2 us more at depth 8, 1 us at 32 and 2.2 us at 64.
+		- 2026-11-19: Tried it in the walk, keeping each folder's fd on the stack and opening its subfolders from it. On ext4, 10,200 folders in 200 chains 50 deep, one small file each, 6 paired rescans at load 10: user plus sys CPU averaged 0.612 s as it is and 0.608 s from the parent. Rounds spread over about 0.06 s. A flat tree of the same counts took about 0.57 s, so depth costs about 15% there, but not in the folder open.
+	- Decisions:
+		- Left the code as it was. The saving is under 1% at an average depth of 25, and less at the depth of real trees. Holding an fd per level also lets a very deep tree run out of fds, where a whole path fails only past 4096 bytes.
+	- Swept: the worker's stat open and read open of each file also go from the root by whole path, at the same 30 ns per level each, so they were left too. The fallback for kernels before 5.6 costs about 1.4 us per level, filed as 2026111914041556.
+	- Test case: none, no code change.
+	- Closed: 20261119-140415
 
 - A read of 64 KiB or more makes 4 fcntl calls to turn direct reads on and off.
 	- ID: 2026111913564320
