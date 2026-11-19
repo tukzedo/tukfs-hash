@@ -1,10 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Opening what the walk found, from the root's own folder, without following a
-// symlink or crossing onto another filesystem anywhere on the way. The scan
-// runs as root, and a folder swapped for a symlink after it was listed would
-// otherwise send it somewhere else to read files and set attributes.
+// Opening what the walk found, from the root's own folder, without following a symlink or crossing onto another filesystem anywhere on the way. The scan runs as root, and a folder swapped for a symlink after it was listed would otherwise send it somewhere else to read files and set attributes.
 
 use crate::util::cpath;
 use std::ffi::{CStr, OsStr};
@@ -34,14 +31,9 @@ struct OpenHow {
 	resolve: u64,
 }
 
-/// Not where the walk saw it: gone, swapped for a symlink or a file, or under a
-/// mount made since. Nothing was there to check.
+/// Not where the walk saw it: gone, swapped for a symlink or a file, or under a mount made since. Nothing was there to check.
 pub fn moved(e: &io::Error) -> bool {
-	e.kind() == io::ErrorKind::NotFound
-		|| matches!(
-			e.raw_os_error(),
-			Some(libc::ELOOP | libc::ENOTDIR | libc::EXDEV)
-		)
+	e.kind() == io::ErrorKind::NotFound || matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR | libc::EXDEV))
 }
 
 fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
@@ -58,22 +50,13 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 	}
 }
 
-/// Opens a name in a folder without following a link at it. A file made by
-/// `O_CREAT` gets 0666 less the umask, as `File::create` gives.
+/// Opens a name in a folder without following a link at it. A file made by `O_CREAT` gets 0666 less the umask, as `File::create` gives.
 pub fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 	let c = cpath(Path::new(name))?;
 	let mode: libc::c_uint = 0o666;
 	retry(|| {
 		// SAFETY: c is NUL-terminated and outlives the call.
-		unsafe {
-			libc::openat(
-				at,
-				c.as_ptr(),
-				flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-				mode,
-			)
-		}
-		.into()
+		unsafe { libc::openat(at, c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC, mode) }.into()
 	})
 }
 
@@ -86,11 +69,7 @@ impl AsRawFd for Root {
 impl Root {
 	/// Opens a root folder.
 	pub fn open(path: &Path) -> io::Result<Root> {
-		let dir = openat(
-			libc::AT_FDCWD,
-			path.as_os_str(),
-			libc::O_RDONLY | libc::O_DIRECTORY,
-		)?;
+		let dir = openat(libc::AT_FDCWD, path.as_os_str(), libc::O_RDONLY | libc::O_DIRECTORY)?;
 		Ok(Root {
 			path: path.to_path_buf(),
 			dev: dir.metadata()?.dev(),
@@ -107,11 +86,7 @@ impl Root {
 
 	/// Opens a relative path without leaving the root or its filesystem.
 	pub fn open_at(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
-		let rel = if rel.as_os_str().is_empty() {
-			Path::new(".")
-		} else {
-			rel
-		};
+		let rel = if rel.as_os_str().is_empty() { Path::new(".") } else { rel };
 		if self.openat2.load(Relaxed) {
 			match self.openat2(rel, flags) {
 				Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => {
@@ -131,19 +106,10 @@ impl Root {
 			resolve: libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_XDEV,
 		};
 		// SAFETY: c and how outlive the call, and OpenHow has the kernel's open_how layout.
-		retry(|| unsafe {
-			libc::syscall(
-				libc::SYS_openat2,
-				self.dir.as_raw_fd(),
-				c.as_ptr(),
-				&raw const how,
-				std::mem::size_of::<OpenHow>(),
-			)
-		})
+		retry(|| unsafe { libc::syscall(libc::SYS_openat2, self.dir.as_raw_fd(), c.as_ptr(), &raw const how, std::mem::size_of::<OpenHow>()) })
 	}
 
-	// The same rules one folder at a time. A mount on the last part isn't
-	// caught here; the walk checks each folder's device itself.
+	// The same rules one folder at a time. A mount on the last part isn't caught here; the walk checks each folder's device itself.
 	fn step_by_step(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
 		let mut parts = Vec::new();
 		for c in rel.components() {
@@ -153,9 +119,7 @@ impl Root {
 				_ => return Err(io::Error::from_raw_os_error(libc::EXDEV)),
 			}
 		}
-		let (last, above) = parts
-			.split_last()
-			.map_or((OsStr::new("."), &[][..]), |(l, a)| (*l, a));
+		let (last, above) = parts.split_last().map_or((OsStr::new("."), &[][..]), |(l, a)| (*l, a));
 		let mut held: Option<File> = None;
 		for name in above {
 			let at = held.as_ref().unwrap_or(&self.dir).as_raw_fd();
@@ -175,8 +139,7 @@ impl Root {
 	}
 }
 
-/// Calls `open` with `O_NOATIME`, and again without it if that's refused,
-/// since it needs ownership or root.
+/// Calls `open` with `O_NOATIME`, and again without it if that's refused, since it needs ownership or root.
 pub fn with_noatime(open: impl Fn(libc::c_int) -> io::Result<File>) -> io::Result<File> {
 	match open(libc::O_NOATIME) {
 		Err(e) if e.raw_os_error() == Some(libc::EPERM) => open(0),
@@ -229,14 +192,7 @@ impl List {
 		let c = cpath(Path::new(OsStr::from_bytes(name)))?;
 		let mut st = std::mem::MaybeUninit::<libc::stat64>::uninit();
 		// SAFETY: c outlives the call, and st has room for a stat64.
-		let r = unsafe {
-			libc::fstatat64(
-				self.fd(),
-				c.as_ptr(),
-				st.as_mut_ptr(),
-				libc::AT_SYMLINK_NOFOLLOW,
-			)
-		};
+		let r = unsafe { libc::fstatat64(self.fd(), c.as_ptr(), st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
 		if r != 0 {
 			return Err(io::Error::last_os_error());
 		}
@@ -288,11 +244,7 @@ impl Iterator for List {
 				}),
 				_ => Ok(Kind::Other),
 			};
-			return Some(Ok(Entry {
-				name: OsStr::from_bytes(name).into(),
-				ino: ent.d_ino,
-				kind,
-			}));
+			return Some(Ok(Entry { name: OsStr::from_bytes(name).into(), ino: ent.d_ino, kind }));
 		}
 	}
 }
@@ -325,23 +277,13 @@ mod tests {
 		std::os::unix::fs::symlink(outside.join("f"), root.join("real/link")).unwrap();
 		for r in both(&root) {
 			let mut s = String::new();
-			r.open_read(Path::new("real/f"))
-				.unwrap()
-				.read_to_string(&mut s)
-				.unwrap();
+			r.open_read(Path::new("real/f")).unwrap().read_to_string(&mut s).unwrap();
 			assert_eq!(s, "in");
-			for p in [
-				"swapped/f",
-				"real/link",
-				"/etc/hostname",
-				"real/../swapped/f",
-			] {
+			for p in ["swapped/f", "real/link", "/etc/hostname", "real/../swapped/f"] {
 				let e = r.open_read(Path::new(p)).unwrap_err();
 				assert!(moved(&e), "{p}: {e}");
 			}
-			let e = r
-				.open_at(Path::new("swapped"), libc::O_RDONLY | libc::O_DIRECTORY)
-				.unwrap_err();
+			let e = r.open_at(Path::new("swapped"), libc::O_RDONLY | libc::O_DIRECTORY).unwrap_err();
 			assert!(moved(&e), "{e}");
 		}
 	}
@@ -360,8 +302,7 @@ mod tests {
 		for r in both(Path::new("/dev")) {
 			match r.open_at(Path::new("shm"), libc::O_RDONLY | libc::O_DIRECTORY) {
 				Err(e) => assert!(moved(&e), "{e}"),
-				// Only the step by step open gets this far; the walk then
-				// compares the device.
+				// Only the step by step open gets this far; the walk then compares the device.
 				Ok(f) => assert_ne!(f.metadata().unwrap().dev(), r.dev),
 			}
 			let e = r.open_at(Path::new("shm/x"), libc::O_PATH).unwrap_err();
@@ -383,22 +324,11 @@ mod tests {
 		let mut got: Vec<(String, u64, Kind)> = list
 			.map(|e| {
 				let e = e.unwrap();
-				(
-					e.name.to_string_lossy().into_owned(),
-					e.ino,
-					e.kind.unwrap(),
-				)
+				(e.name.to_string_lossy().into_owned(), e.ino, e.kind.unwrap())
 			})
 			.collect();
 		got.sort();
 		let ino = |n: &str| fs::symlink_metadata(d.join(n)).unwrap().ino();
-		assert_eq!(
-			got,
-			[
-				("f".into(), ino("f"), Kind::File),
-				("l".into(), ino("l"), Kind::Other),
-				("sub".into(), ino("sub"), Kind::Dir),
-			]
-		);
+		assert_eq!(got, [("f".into(), ino("f"), Kind::File), ("l".into(), ino("l"), Kind::Other), ("sub".into(), ino("sub"), Kind::Dir),]);
 	}
 }

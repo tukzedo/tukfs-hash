@@ -80,23 +80,17 @@ work="${scratch}"; src="${work}/src"; db="${work}/db"
 mkdir -p -- "${src}/tests" "${src}/.cargo" "${work}/rtarget" "${work}/tmp"
 export TMPDIR="${work}/tmp"
 cp -a -- Cargo.toml Cargo.lock build.rs src "${src}/"
-## The profiling build isn't released, and uuid's Display, which comes in with
-## pprof, reads to CodeQL as a secret that every format! in the tree could
-## log. So the copy has no profiling feature, pprof or src/profiling.rs, and
-## its lock loses their crates, which only removes lines.
+## The profiling build isn't released, and uuid's Display, which comes in with pprof, reads to CodeQL as a secret that every format! in the tree could log. So the copy has no profiling feature, pprof or src/profiling.rs, and its lock loses their crates, which only removes lines.
 sed -i -e '/^pprof = /d' -e '/^profiling = /d' "${src}/Cargo.toml"
 rm -f -- "${src}/src/profiling.rs"
 if grep -qE '^(pprof|profiling) = ' "${src}/Cargo.toml" || ! (cd "${src}" && cargo metadata --format-version 1 --offline >/dev/null 2>"${work}/relock.log"); then
 	cat "${work}/relock.log" 2>/dev/null || true; echo "codeql-scan: could not leave the profiling crates out of the copy" >&2; exit 2
 fi
 if grep -q '^name = "pprof"$' "${src}/Cargo.lock"; then echo "codeql-scan: the copy's lock still has pprof" >&2; exit 2; fi
-## A read through a null pointer, from shcl's bait. An integration test of
-## its own, so it's in the crate's targets without touching ours.
+## A read through a null pointer, from shcl's bait. An integration test of its own, so it's in the crate's targets without touching ours.
 bait="tests/codeql_bait.rs"
 printf '%s\n' '#[test]' 'fn codeql_bait() {' '	let p: *const u8 = std::ptr::null();' '	let _v = unsafe { *p };' '}' > "${src}/${bait}"
-## Versioned dirs, so a crate's dir names its version, and a reviewed line
-## goes stale when the crate moves. --ours reads the crates from the cargo
-## home instead, with only their signatures extracted.
+## Versioned dirs, so a crate's dir names its version, and a reviewed line goes stale when the crate moves. --ours reads the crates from the cargo home instead, with only their signatures extracted.
 asSource=false
 if ((! ours)); then
 	asSource=true
@@ -115,8 +109,7 @@ if ! codeql database create "${db}" --language=rust --source-root="${src}" --thr
 	tail -n 20 "${log}"; echo "codeql-scan: the database didn't build, see ${log#"${root}/"}" >&2; exit 2
 fi
 
-## Every file of ours, and each crate root the Linux build takes, against
-## what the database kept.
+## Every file of ours, and each crate root the Linux build takes, against what the database kept.
 full=1
 listed="$(unzip -Z1 "${db}/src.zip")"
 declare -A inDb=()
@@ -133,8 +126,7 @@ while IFS= read -r f; do
 	nRoots=$((nRoots + 1))
 	if [[ -z "${inDb["${f#/}"]:-}" ]]; then echo "codeql-scan: the database left out the crate root ${f#"${src}/"}"; full=0; fi
 done <<<"${roots}"
-## A file outside every module tree says "semantic analyzer unavailable" too,
-## which a crate's benches and Windows code do, so only ours count.
+## A file outside every module tree says "semantic analyzer unavailable" too, which a crate's benches and Windows code do, so only ours count.
 if grep -qF 'failed to load workspace' "${log}" || grep -qE "${src}/(src|tests)/[^ ]*: semantic analyzer unavailable" "${log}"; then
 	grep -E "failed to load workspace|${src}/(src|tests)/[^ ]*: semantic analyzer unavailable" "${log}" | head -n 3 || true
 	echo "codeql-scan: the workspace didn't load, so the extraction has no types or macros"; full=0
@@ -161,32 +153,24 @@ jq -r --arg pre "file://${src}/" '.suppressions.tuples[] | select(.[1] | test("(
 	[(.[3].url.uri | ltrimstr($pre)), (.[3].url.startLine | tostring), (.[0].url.startLine | tostring),
 	(.[2] | sub("^lgtm\\["; "") | sub("\\]$"; "")), (.[1] | sub("^[^\\]]*\\]\\s*"; ""))] | @tsv' \
 	"${work}/sup.json" > "${work}/sup.tsv"
-## Of the crates, what the release binary builds: crates the Linux build
-## takes, without dev-dependencies, so not the soak's dhat, and files in a
-## module tree, so not a crate's benches or its Windows code.
+## Of the crates, what the release binary builds: crates the Linux build takes, without dev-dependencies, so not the soak's dhat, and files in a module tree, so not a crate's benches or its Windows code.
 for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
 	(cd "${src}" && cargo tree --locked --offline -e normal,build --target "${t}" --prefix none -f '{p}') \
 		|| { echo "codeql-scan: cargo tree failed for ${t}" >&2; exit 2; }
 done | sed -E 's/^([^ ]+) v([^ ]+).*/\1-\2/' | sort -u > "${work}/shipped.txt"
 SRCPRE="${src}/" awk 'index($0, ENVIRON["SRCPRE"] "vendor/") && /:1:1: semantic analyzer unavailable \(not included as a module\)/ {
 	s = substr($0, index($0, ENVIRON["SRCPRE"]) + length(ENVIRON["SRCPRE"])); sub(/:1:1: .*/, "", s); print s }' "${log}" | sort -u > "${work}/notbuilt.txt"
-## file, line, query, its tags, and the message's first line, for every
-## finding. A crate's finding counts only when its query is tagged security
-## or correctness. Their style isn't ours to fix.
+## file, line, query, its tags, and the message's first line, for every finding. A crate's finding counts only when its query is tagged security or correctness. Their style isn't ours to fix.
 jq -r '.runs[] | (.tool.driver.rules // [] | map({(.id): ((.properties.tags // []) | join(","))}) | add // {}) as $tags
 	| .results[] | [(.locations[0].physicalLocation.artifactLocation.uri // "?"),
 	(.locations[0].physicalLocation.region.startLine // 0 | tostring), .ruleId, ($tags[.ruleId] // ""),
 	(.message.text | split("\n")[0])] | @tsv' "${art}/rust.sarif" \
 	| awk -F'\t' -v OFS='\t' '$1 !~ /^vendor\// || $4 ~ /(^|,)(security|correctness)(,|$)/ { print $1, $2, $3, $5 }' > "${work}/found.tsv"
-## The crates' code can't take a comment that would last past cargo vendor,
-## so a finding there that was looked at and isn't a bug is a line of
-## cicd/codeql/vendored-reviewed.tsv: path:line, query, why.
+## The crates' code can't take a comment that would last past cargo vendor, so a finding there that was looked at and isn't a bug is a line of cicd/codeql/vendored-reviewed.tsv: path:line, query, why.
 ## --ours has no crate findings to match them to.
 : > "${work}/reviewed.tsv"
 ((ours)) || grep -v '^#' cicd/codeql/vendored-reviewed.tsv 2>/dev/null | grep . > "${work}/reviewed.tsv" || true
-## Ours is open unless a codeql[...] line covers it by its query ID. A
-## crate's is left out when it isn't built, and otherwise open unless
-## reviewed. A suppression or review that covers nothing is stale.
+## Ours is open unless a codeql[...] line covers it by its query ID. A crate's is left out when it isn't built, and otherwise open unless reviewed. A suppression or review that covers nothing is stale.
 awk -F'\t' -v OFS='\t' '
 	FILENAME == ARGV[1] {
 		if ($5 == "") print "noreason", $1 ":" $3

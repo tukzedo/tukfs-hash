@@ -48,8 +48,7 @@ fVersionCheck(){   ## fVersionCheck BIN NAME VERSION BUILD [RELEASE]
 		c="${digits%%"${number:i:1}"*}"
 		minutes=$((minutes * 32 + ${#c}))
 	done
-	## The box's own zone first, then UTC+14 and UTC-12, which never share a
-	## date. An empty TZ would be UTC, so the first leaves it alone.
+	## The box's own zone first, then UTC+14 and UTC-12, which never share a date. An empty TZ would be UTC, so the first leaves it alone.
 	for zone in '' Pacific/Kiritimati Etc/GMT+12; do
 		tzSet=(); [[ -z "${zone}" ]] || tzSet=("TZ=${zone}")
 		want="$2 v$3 build $4"
@@ -79,8 +78,7 @@ fArchCheck(){   ## fArchCheck STAGE_DIR PREFIX OS-ARCH...
 	done
 }
 
-## The glibc floor and libgcc need off the binary, the same way package.bash
-## reads them.
+## The glibc floor and libgcc need off the binary, the same way package.bash reads them.
 fNeeds(){   ## fNeeds BIN -> "GLIBC LIBGCC(0|1)"
 	local glibc="" needed="" gcc=0
 	glibc="$(objdump -T "$1" | { grep -o 'GLIBC_[0-9.]*' || true; } | sed 's/GLIBC_//' | sort -uV | tail -1)"
@@ -94,7 +92,7 @@ tilde="~"
 fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
 	local dver deb="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" f got="" list="" deps=""
 	[[ -f "${deb}" ]] || fDie "no package at ${deb}"
-	dver="${4/-/${tilde}}"   ## a pre-release dash is a tilde in a package version
+	dver="${ver/-/${tilde}}"   ## a pre-release dash is a tilde in a package version
 	for f in "Package|${name}" "Version|${dver}" "Architecture|${arch}"; do
 		got="$(dpkg-deb -f "${deb}" "${f%%|*}")"
 		[[ "${got}" == "${f#*|}" ]] || fDie "${deb##*/}: ${f%%|*} is '${got}', not '${f#*|}'"
@@ -116,7 +114,7 @@ fDebCheck(){   ## fDebCheck DEB BIN NAME VERSION ARCH GLIBC GCC
 fRpmCheck(){   ## fRpmCheck RPM BIN NAME VERSION ARCH GLIBC GCC DBDIR
 	local dver rpmf="$1" bin="$2" name="$3" ver="$4" arch="$5" glibc="$6" gcc="$7" db="$8" got="" reqs=""
 	local -a q=(rpm --dbpath "${db}" -qp)
-	dver="${4/-/${tilde}}"
+	dver="${ver/-/${tilde}}"
 	[[ -f "${rpmf}" ]] || fDie "no package at ${rpmf}"
 	got="$("${q[@]}" --qf '%{NAME} %{VERSION} %{ARCH}' "${rpmf}")"
 	[[ "${got}" == "${name} ${dver} ${arch}" ]] || fDie "${rpmf##*/} is '${got}', not '${name} ${dver} ${arch}'"
@@ -136,8 +134,7 @@ fPackageCheck(){   ## fPackageCheck STAGE_DIR NAME VERSION WORK_DIR OS-ARCH...
 	shift 4
 	(($#)) || fDie "package: no os-arch given"
 	[[ -d "${work}" ]] || fDie "no work dir: ${work}"
-	## rpm wants a database even to read a package file, and the system's
-	## isn't ours to open.
+	## rpm wants a database even to read a package file, and the system's isn't ours to open.
 	db="${work}/rpmdb"
 	mkdir -p -- "${db}"
 	for osarch in "$@"; do

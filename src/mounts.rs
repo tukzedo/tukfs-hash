@@ -1,9 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Which disks are under which folder, so that no two workers read the same
-// disk at once. 2 readers on one hard drive make it seek between them, and
-// both go slower than one would alone.
+// Which disks are under which folder, so that no two workers read the same disk at once. 2 readers on one hard drive make it seek between them, and both go slower than one would alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -26,19 +24,13 @@ pub struct Mount {
 	pub source: String,
 }
 
-// Mount points use octal escapes for space, tab, newline and backslash. Every
-// other byte comes through raw, UTF-8 or not.
+// Mount points use octal escapes for space, tab, newline and backslash. Every other byte comes through raw, UTF-8 or not.
 fn unescape(b: &[u8]) -> PathBuf {
 	let mut out = Vec::with_capacity(b.len());
 	let mut i = 0;
 	while i < b.len() {
-		if b[i] == b'\\'
-			&& i + 3 < b.len()
-			&& b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
-		{
-			let v = u32::from(b[i + 1] - b'0') * 64
-				+ u32::from(b[i + 2] - b'0') * 8
-				+ u32::from(b[i + 3] - b'0');
+		if b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
+			let v = u32::from(b[i + 1] - b'0') * 64 + u32::from(b[i + 2] - b'0') * 8 + u32::from(b[i + 3] - b'0');
 			out.push(v as u8);
 			i += 4;
 		} else {
@@ -90,53 +82,31 @@ pub fn read_mounts() -> Result<Vec<Mount>, String> {
 	if READS_LEFT.with(|n| n.replace(n.get().map(|v| v.saturating_sub(1)))) == Some(0) {
 		return Err("/proc/self/mountinfo: test fault".into());
 	}
-	let text =
-		fs::read("/proc/self/mountinfo").map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
+	let text = fs::read("/proc/self/mountinfo").map_err(|e| format!("/proc/self/mountinfo: {e}"))?;
 	Ok(visible(parse_mountinfo(&text)))
 }
 
-/// Only the mounts a path can reach. One mounted over another, or over a folder
-/// above it, hides it and all that's mounted on it (2026102814341407). Works
-/// from the table alone, so kernels without `STATX_MNT_ID` get it too.
+/// Only the mounts a path can reach. One mounted over another, or over a folder above it, hides it and all that's mounted on it (2026102814341407). Works from the table alone, so kernels without `STATX_MNT_ID` get it too.
 pub fn visible(mounts: Vec<Mount>) -> Vec<Mount> {
 	let index: HashMap<u64, usize> = mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
 	let parent_of = |i: usize| index.get(&mounts[i].parent).copied().filter(|&p| p != i);
-	// Lookups by parent and point, so a table of thousands stays linear
-	// (2026110715441800).
+	// Lookups by parent and point, so a table of thousands stays linear (2026110715441800).
 	let mut at: HashMap<(u64, &Path), Vec<usize>> = HashMap::new();
 	for (i, m) in mounts.iter().enumerate() {
 		at.entry((m.parent, m.point.as_path())).or_default().push(i);
 	}
-	let covered: Vec<bool> = (0..mounts.len())
-		.map(|i| {
-			at.get(&(mounts[i].id, mounts[i].point.as_path()))
-				.is_some_and(|on| on.iter().any(|&k| k != i))
-		})
-		.collect();
-	// Each step up drops one part, and none above the shallowest sibling can
-	// match, so a chain of nested mounts doesn't look all the way up from each.
-	let depth: Vec<usize> = mounts
-		.iter()
-		.map(|m| m.point.components().count())
-		.collect();
+	let covered: Vec<bool> = (0..mounts.len()).map(|i| at.get(&(mounts[i].id, mounts[i].point.as_path())).is_some_and(|on| on.iter().any(|&k| k != i))).collect();
+	// Each step up drops one part, and none above the shallowest sibling can match, so a chain of nested mounts doesn't look all the way up from each.
+	let depth: Vec<usize> = mounts.iter().map(|m| m.point.components().count()).collect();
 	let mut top: HashMap<u64, usize> = HashMap::new();
 	for (m, &d) in mounts.iter().zip(&depth) {
-		top.entry(m.parent)
-			.and_modify(|t| *t = d.min(*t))
-			.or_insert(d);
+		top.entry(m.parent).and_modify(|t| *t = d.min(*t)).or_insert(d);
 	}
 	// A sibling on a folder above it was mounted later, or it'd be the parent.
 	let shadowed = |i: usize| {
 		let m = &mounts[i];
-		let steps = top
-			.get(&m.parent)
-			.map_or(0, |&t| depth[i].saturating_sub(t));
-		m.point.ancestors().skip(1).take(steps).any(|above| {
-			at.get(&(m.parent, above)).is_some_and(|on| {
-				on.iter()
-					.any(|&s| mounts[s].id != m.id && mounts[s].id != m.parent)
-			})
-		})
+		let steps = top.get(&m.parent).map_or(0, |&t| depth[i].saturating_sub(t));
+		m.point.ancestors().skip(1).take(steps).any(|above| at.get(&(m.parent, above)).is_some_and(|on| on.iter().any(|&s| mounts[s].id != m.id && mounts[s].id != m.parent)))
 	};
 	// Whether a path gets to a mount's point at all, covered or not.
 	let mut reach: Vec<Option<bool>> = vec![None; mounts.len()];
@@ -162,35 +132,22 @@ pub fn visible(mounts: Vec<Mount>) -> Vec<Mount> {
 			reach[i] = Some(through.unwrap_or(true) && !shadowed(i));
 		}
 	}
-	let keep: Vec<bool> = (0..mounts.len())
-		.map(|i| reach[i] == Some(true) && !covered[i])
-		.collect();
-	mounts
-		.into_iter()
-		.zip(keep)
-		.filter_map(|(m, k)| k.then_some(m))
-		.collect()
+	let keep: Vec<bool> = (0..mounts.len()).map(|i| reach[i] == Some(true) && !covered[i]).collect();
+	mounts.into_iter().zip(keep).filter_map(|(m, k)| k.then_some(m)).collect()
 }
 
-/// The mount a path is on, from a table already cut down by `visible`. Of 2
-/// at one point, the later line is the one on top.
+/// The mount a path is on, from a table already cut down by `visible`. Of 2 at one point, the later line is the one on top.
 pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
 	let mut best: Option<&Mount> = None;
 	for m in mounts {
-		if path.starts_with(&m.point)
-			&& best.is_none_or(|b| m.point.as_os_str().len() >= b.point.as_os_str().len())
-		{
+		if path.starts_with(&m.point) && best.is_none_or(|b| m.point.as_os_str().len() >= b.point.as_os_str().len()) {
 			best = Some(m);
 		}
 	}
 	best
 }
 
-/// The path in `outer`'s tree that's `inner`'s folder of the same filesystem,
-/// where a walk from `outer` gets to it and stops at no mount below it that a
-/// walk from `inner` doesn't (2026102814341414). A bind mount of a folder
-/// inside another root is the case. Only the table is read, so the caller
-/// still checks the device and inode.
+/// The path in `outer`'s tree that's `inner`'s folder of the same filesystem, where a walk from `outer` gets to it and stops at no mount below it that a walk from `inner` doesn't (2026102814341414). A bind mount of a folder inside another root is the case. Only the table is read, so the caller still checks the device and inode.
 pub fn seen_from(mounts: &[Mount], outer: &Path, inner: &Path) -> Option<PathBuf> {
 	let om = mount_for(mounts, outer)?;
 	let im = mount_for(mounts, inner)?;
@@ -203,24 +160,12 @@ pub fn seen_from(mounts: &[Mount], outer: &Path, inner: &Path) -> Option<PathBuf
 	if mount_for(mounts, &at)?.id != om.id {
 		return None;
 	}
-	let below = |base: &Path| {
-		mounts
-			.iter()
-			.filter_map(|m| m.point.strip_prefix(base).ok())
-			.filter(|r| !r.as_os_str().is_empty())
-			.collect::<Vec<_>>()
-	};
+	let below = |base: &Path| mounts.iter().filter_map(|m| m.point.strip_prefix(base).ok()).filter(|r| !r.as_os_str().is_empty()).collect::<Vec<_>>();
 	let stops = below(inner);
-	below(&at)
-		.iter()
-		.all(|r| stops.iter().any(|s| r.starts_with(s)))
-		.then_some(at)
+	below(&at).iter().all(|r| stops.iter().any(|s| r.starts_with(s))).then_some(at)
 }
 
-/// `path`'s folder in each mount of the same filesystem that shows a folder
-/// above the one `path`'s mount shows, with that mount's point. A bind mount
-/// of a subfolder is the case: the folders above it in its filesystem are
-/// only seen there (2026111011092307). The caller checks the device and inode.
+/// `path`'s folder in each mount of the same filesystem that shows a folder above the one `path`'s mount shows, with that mount's point. A bind mount of a subfolder is the case: the folders above it in its filesystem are only seen there (2026111011092307). The caller checks the device and inode.
 pub fn wider_views(mounts: &[Mount], path: &Path) -> Vec<(PathBuf, PathBuf)> {
 	let Some(m) = mount_for(mounts, path) else {
 		return Vec::new();
@@ -243,15 +188,9 @@ pub fn wider_views(mounts: &[Mount], path: &Path) -> Vec<(PathBuf, PathBuf)> {
 // btrfs gives every subvolume's top folder this inode.
 const BTRFS_SUBVOL_INO: u64 = 256;
 
-/// Whether `path` is the top of its filesystem, so the filesystem's used
-/// space stands for what's under it. A btrfs subvolume's top counts, since
-/// its used space is the whole filesystem's anyway. A bind mount of a folder
-/// doesn't, wherever it's mounted (2026111011092313).
+/// Whether `path` is the top of its filesystem, so the filesystem's used space stands for what's under it. A btrfs subvolume's top counts, since its used space is the whole filesystem's anyway. A bind mount of a folder doesn't, wherever it's mounted (2026111011092313).
 pub fn shows_whole(mounts: &[Mount], path: &Path, ino: u64) -> bool {
-	mount_for(mounts, path).is_some_and(|m| {
-		(path == m.point && m.root == Path::new("/"))
-			|| (m.fstype == "btrfs" && ino == BTRFS_SUBVOL_INO)
-	})
+	mount_for(mounts, path).is_some_and(|m| (path == m.point && m.root == Path::new("/")) || (m.fstype == "btrfs" && ino == BTRFS_SUBVOL_INO))
 }
 
 fn kname_of(dev: &str) -> Option<String> {
@@ -259,8 +198,7 @@ fn kname_of(dev: &str) -> Option<String> {
 	Some(real.file_name()?.to_string_lossy().into_owned())
 }
 
-// A source can name a node that isn't there, such as `/dev/root` on a box
-// booted with no initramfs. The major and minor still find it then.
+// A source can name a node that isn't there, such as `/dev/root` on a box booted with no initramfs. The major and minor still find it then.
 fn kname_for(m: &Mount) -> Option<String> {
 	if m.source.starts_with("/dev/")
 		&& let Some(k) = kname_of(&m.source)
@@ -294,10 +232,8 @@ fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 		}
 	}
 	if sys.join("partition").exists()
-		&& let Some(parent) = fs::canonicalize(&sys)
-			.ok()
-			.and_then(|p| p.parent().map(Path::to_path_buf))
-		&& let Some(name) = parent.file_name()
+		&& let Ok(real) = fs::canonicalize(&sys)
+		&& let Some(name) = real.parent().and_then(Path::file_name)
 	{
 		out.insert(name.to_string_lossy().into_owned());
 		return;
@@ -306,15 +242,9 @@ fn base_disks(kname: &str, out: &mut BTreeSet<String>) {
 }
 
 fn zpool_disks(pool: &str, out: &mut BTreeSet<String>) -> Result<(), String> {
-	let o = Command::new("zpool")
-		.args(["list", "-v", "-H", "-P", pool])
-		.output()
-		.map_err(|e| format!("zpool: {e}"))?;
+	let o = Command::new("zpool").args(["list", "-v", "-H", "-P", pool]).output().map_err(|e| format!("zpool: {e}"))?;
 	if !o.status.success() {
-		return Err(format!(
-			"zpool list {pool}: {}",
-			String::from_utf8_lossy(&o.stderr).trim()
-		));
+		return Err(format!("zpool list {pool}: {}", String::from_utf8_lossy(&o.stderr).trim()));
 	}
 	for line in String::from_utf8_lossy(&o.stdout).lines() {
 		let f = line.trim_start().split('\t').next().unwrap_or("");
@@ -345,9 +275,7 @@ fn btrfs_disks(kname: &str, out: &mut BTreeSet<String>) {
 
 // A loop device reads a file, so the disks that matter are the ones under it.
 fn loop_backing(kname: &str) -> Option<PathBuf> {
-	fs::read(format!("/sys/block/{kname}/loop/backing_file"))
-		.ok()
-		.map(backing_path)
+	fs::read(format!("/sys/block/{kname}/loop/backing_file")).ok().map(backing_path)
 }
 
 // The kernel prints the backing file's name raw, so it can be any bytes.
@@ -377,12 +305,7 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 				return Err(format!("cannot resolve {}", m.source));
 			}
 			None => {
-				return Err(format!(
-					"{} is {} from {}, not a local disk",
-					m.point.display(),
-					m.fstype,
-					m.source
-				));
+				return Err(format!("{} is {} from {}, not a local disk", m.point.display(), m.fstype, m.source));
 			}
 		},
 	}
@@ -393,8 +316,7 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 	for d in out {
 		match loop_backing(&d) {
 			Some(f) if depth < 4 => {
-				let bm = mount_for(mounts, &f)
-					.ok_or_else(|| format!("{d}: no mount found for {}", f.display()))?;
+				let bm = mount_for(mounts, &f).ok_or_else(|| format!("{d}: no mount found for {}", f.display()))?;
 				real.extend(disks_under(bm, mounts, depth + 1)?);
 			}
 			_ => {
@@ -410,8 +332,7 @@ pub fn rotational(disk: &str) -> bool {
 	fs::read_to_string(format!("/sys/block/{disk}/queue/rotational")).is_ok_and(|s| s.trim() == "1")
 }
 
-/// One worker on anything with a hard drive in it, since one is all it takes
-/// to make the whole set wait on seeks. A few on flash.
+/// One worker on anything with a hard drive in it, since one is all it takes to make the whole set wait on seeks. A few on flash.
 pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	if disks.iter().any(|d| rotational(d)) {
 		1
@@ -440,10 +361,7 @@ pub struct DiskGroup {
 pub fn group_roots(roots: Vec<RootDisks>) -> Vec<DiskGroup> {
 	let mut groups: Vec<DiskGroup> = Vec::new();
 	for RootDisks { root, disks } in roots {
-		let mut merged = DiskGroup {
-			disks,
-			roots: vec![root],
-		};
+		let mut merged = DiskGroup { disks, roots: vec![root] };
 		let mut keep = Vec::new();
 		for g in groups.drain(..) {
 			if g.disks.is_disjoint(&merged.disks) {
@@ -463,31 +381,19 @@ pub fn group_roots(roots: Vec<RootDisks>) -> Vec<DiskGroup> {
 
 /// A group's name, from its disks.
 pub fn group_name(disks: &BTreeSet<String>) -> String {
-	disks
-		.iter()
-		.map(String::as_str)
-		.collect::<Vec<_>>()
-		.join("+")
+	disks.iter().map(String::as_str).collect::<Vec<_>>().join("+")
 }
 
 /// Every mount point, for stopping a walk at the edge of its own filesystem.
 pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
-	mounts
-		.iter()
-		.map(|m| (m.point.clone(), m.fstype.clone()))
-		.collect()
+	mounts.iter().map(|m| (m.point.clone(), m.fstype.clone())).collect()
 }
 
-/// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read
-/// and nothing more, no attributes and no database. A FUSE mount of a disk or
-/// an image file with no type of its own is ntfs-3g, exfat-fuse or the like:
-/// fuseblk for a block device, plain fuse for a file mounted by a user.
-/// fuseblk with a subtype shows as `fuseblk.<name>`.
+/// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read and nothing more, no attributes and no database. A FUSE mount of a disk or an image file with no type of its own is ntfs-3g, exfat-fuse or the like: fuseblk for a block device, plain fuse for a file mounted by a user. fuseblk with a subtype shows as `fuseblk.<name>`.
 pub fn hands_off(m: &Mount) -> bool {
 	let t = m.fstype.strip_prefix("fuse.").unwrap_or(&m.fstype);
 	match t {
-		"fuseblk" | "ntfs" | "ntfs3" | "ntfs-3g" | "lowntfs-3g" | "apfs" | "apfs-fuse" | "hfs"
-		| "hfsplus" => true,
+		"fuseblk" | "ntfs" | "ntfs3" | "ntfs-3g" | "lowntfs-3g" | "apfs" | "apfs-fuse" | "hfs" | "hfsplus" => true,
 		_ if t.starts_with("fuseblk.") => true,
 		"fuse" => m.source.starts_with('/'),
 		_ => false,
@@ -496,12 +402,10 @@ pub fn hands_off(m: &Mount) -> bool {
 
 /// The filesystem type, where a path is on one that's never written to.
 pub fn hands_off_at(mounts: &[Mount], path: &Path) -> Option<String> {
-	mount_for(mounts, path)
-		.filter(|m| hands_off(m))
-		.map(|m| match m.fstype.as_str() {
-			"fuse" | "fuseblk" => format!("{} from {}", m.fstype, m.source),
-			t => t.to_string(),
-		})
+	mount_for(mounts, path).filter(|m| hands_off(m)).map(|m| match m.fstype.as_str() {
+		"fuse" | "fuseblk" => format!("{} from {}", m.fstype, m.source),
+		t => t.to_string(),
+	})
 }
 
 #[cfg(test)]
@@ -534,18 +438,9 @@ mod tests {
 	fn finds_deepest_mount() {
 		let _id = test_id("ddwzw");
 		let m = parse_mountinfo(SAMPLE.as_bytes());
-		assert_eq!(
-			mount_for(&m, Path::new("/home/u/x")).unwrap().source,
-			"zf10/secure_home/u"
-		);
-		assert_eq!(
-			mount_for(&m, Path::new("/home/u/.cache/y")).unwrap().source,
-			"zf10/secure_home/u/.cache"
-		);
-		assert_eq!(
-			mount_for(&m, Path::new("/home/user2")).unwrap().fstype,
-			"btrfs"
-		);
+		assert_eq!(mount_for(&m, Path::new("/home/u/x")).unwrap().source, "zf10/secure_home/u");
+		assert_eq!(mount_for(&m, Path::new("/home/u/.cache/y")).unwrap().source, "zf10/secure_home/u/.cache");
+		assert_eq!(mount_for(&m, Path::new("/home/user2")).unwrap().fstype, "btrfs");
 	}
 
 	#[test]
@@ -560,48 +455,18 @@ mod tests {
 			fstype: t.into(),
 			source: src.into(),
 		};
-		for t in [
-			"ntfs",
-			"ntfs3",
-			"fuseblk",
-			"fuse.ntfs-3g",
-			"fuse.lowntfs-3g",
-			"apfs",
-			"fuse.apfs-fuse",
-			"hfs",
-			"hfsplus",
-		] {
+		for t in ["ntfs", "ntfs3", "fuseblk", "fuse.ntfs-3g", "fuse.lowntfs-3g", "apfs", "fuse.apfs-fuse", "hfs", "hfsplus"] {
 			assert!(hands_off(&m(t, "/dev/sdd1")), "{t}");
 		}
 		// What ntfs-3g shows when a user mounts an image file.
 		assert!(hands_off(&m("fuse", "/x/ntfs.img")));
-		for t in [
-			"zfs",
-			"btrfs",
-			"ext4",
-			"xfs",
-			"vfat",
-			"exfat",
-			"tmpfs",
-			"fuse.sshfs",
-		] {
+		for t in ["zfs", "btrfs", "ext4", "xfs", "vfat", "exfat", "tmpfs", "fuse.sshfs"] {
 			assert!(!hands_off(&m(t, "/dev/sdd1")), "{t}");
 		}
 		assert!(!hands_off(&m("fuse", "portal")));
-		let all = parse_mountinfo(
-			format!(
-				"{SAMPLE}70 22 8:49 / /mnt/win rw - ntfs3 /dev/sdd1 rw\n71 22 8:50 / /mnt/mac ro - apfs /dev/sdd2 ro\n"
-			)
-			.as_bytes(),
-		);
-		assert_eq!(
-			hands_off_at(&all, Path::new("/mnt/win/a/b")).as_deref(),
-			Some("ntfs3")
-		);
-		assert_eq!(
-			hands_off_at(&all, Path::new("/mnt/mac")).as_deref(),
-			Some("apfs")
-		);
+		let all = parse_mountinfo(format!("{SAMPLE}70 22 8:49 / /mnt/win rw - ntfs3 /dev/sdd1 rw\n71 22 8:50 / /mnt/mac ro - apfs /dev/sdd2 ro\n").as_bytes());
+		assert_eq!(hands_off_at(&all, Path::new("/mnt/win/a/b")).as_deref(), Some("ntfs3"));
+		assert_eq!(hands_off_at(&all, Path::new("/mnt/mac")).as_deref(), Some("apfs"));
 		assert_eq!(hands_off_at(&all, Path::new("/mnt/ext/x")), None);
 	}
 
@@ -609,16 +474,8 @@ mod tests {
 	fn groups_share_disks() {
 		let _id = test_id("ddwzx");
 		let s = |v: &[&str]| v.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
-		let rd = |root: &str, disks: &[&str]| RootDisks {
-			root: PathBuf::from(root),
-			disks: s(disks),
-		};
-		let roots = vec![
-			rd("/a", &["nvme0n1", "nvme1n1"]),
-			rd("/b", &["sda"]),
-			rd("/c", &["nvme1n1"]),
-			rd("/d", &["sdb", "sda"]),
-		];
+		let rd = |root: &str, disks: &[&str]| RootDisks { root: PathBuf::from(root), disks: s(disks) };
+		let roots = vec![rd("/a", &["nvme0n1", "nvme1n1"]), rd("/b", &["sda"]), rd("/c", &["nvme1n1"]), rd("/d", &["sdb", "sda"])];
 		let g = group_roots(roots);
 		assert_eq!(g.len(), 2);
 		assert_eq!(g[0].roots, vec![PathBuf::from("/a"), PathBuf::from("/c")]);
@@ -634,19 +491,12 @@ mod tests {
 			70 22 8:49 / /mnt/win rw - fuseblk.ntfs-3g /dev/sdd1 rw\n\
 			71 22 8:50 / /mnt/stick rw - fuseblk.exfat /dev/sde1 rw\n",
 		);
-		assert_eq!(
-			hands_off_at(&all, Path::new("/mnt/win/a")).as_deref(),
-			Some("fuseblk.ntfs-3g")
-		);
-		assert_eq!(
-			hands_off_at(&all, Path::new("/mnt/stick")).as_deref(),
-			Some("fuseblk.exfat")
-		);
+		assert_eq!(hands_off_at(&all, Path::new("/mnt/win/a")).as_deref(), Some("fuseblk.ntfs-3g"));
+		assert_eq!(hands_off_at(&all, Path::new("/mnt/stick")).as_deref(), Some("fuseblk.exfat"));
 		assert_eq!(hands_off_at(&all, Path::new("/home")), None);
 	}
 
-	// A snapshot of a pool's top dataset comes from `pool@snap`
-	// (2026111011092311).
+	// A snapshot of a pool's top dataset comes from `pool@snap` (2026111011092311).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't run zpool")]
 	fn a_snapshot_finds_its_pool() {
@@ -656,62 +506,36 @@ mod tests {
 		assert_eq!(zfs_pool("zf10/a"), "zf10");
 		assert_eq!(zfs_pool("zf10"), "zf10");
 		let all = read_mounts().unwrap();
-		// Where zpool can't see the pool, as in a user namespace, there's
-		// nothing to compare with.
-		let Some(top) = all
-			.iter()
-			.find(|m| m.fstype == "zfs" && !m.source.contains('@'))
-		else {
+		// Where zpool can't see the pool, as in a user namespace, there's nothing to compare with.
+		let Some(top) = all.iter().find(|m| m.fstype == "zfs" && !m.source.contains('@')) else {
 			return;
 		};
 		let Ok(whole) = disks_for(top, &all) else {
 			return;
 		};
 		let pool = top.source.split('/').next().unwrap_or_default();
-		let m = |source: String| Mount {
-			source,
-			..top.clone()
-		};
-		assert_eq!(
-			disks_for(&m(format!("{pool}@snap")), &all),
-			Ok(whole.clone())
-		);
+		let m = |source: String| Mount { source, ..top.clone() };
+		assert_eq!(disks_for(&m(format!("{pool}@snap")), &all), Ok(whole.clone()));
 		assert_eq!(disks_for(&m(format!("{pool}/a/b@snap")), &all), Ok(whole));
 	}
 
-	// No initramfs, so `/` comes from `/dev/root`, which isn't there
-	// (2026111011092321).
+	// No initramfs, so `/` comes from `/dev/root`, which isn't there (2026111011092321).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no sysfs")]
 	fn a_missing_source_falls_back_to_the_device_number() {
 		let _id = test_id("df4jh");
 		let all = read_mounts().unwrap();
-		let Some(real) = all.iter().find(|m| {
-			m.fstype != "btrfs"
-				&& m.source.starts_with("/dev/")
-				&& kname_of(&m.source).is_some()
-				&& Path::new("/sys/dev/block").join(&m.dev).exists()
-		}) else {
+		let Some(real) = all.iter().find(|m| m.fstype != "btrfs" && m.source.starts_with("/dev/") && kname_of(&m.source).is_some() && Path::new("/sys/dev/block").join(&m.dev).exists()) else {
 			return;
 		};
 		let want = disks_for(real, &all).unwrap();
-		let moved = |source: &str, dev: &str| Mount {
-			source: source.into(),
-			dev: dev.into(),
-			..real.clone()
-		};
+		let moved = |source: &str, dev: &str| Mount { source: source.into(), dev: dev.into(), ..real.clone() };
 		let gone = "/dev/tukfs-hash-test-no-such-node";
 		assert_eq!(disks_for(&moved(gone, &real.dev), &all), Ok(want.clone()));
 		assert_eq!(disks_for(&moved("rootfs", &real.dev), &all), Ok(want));
-		assert_eq!(
-			disks_for(&moved(gone, "0:0"), &all),
-			Err(format!("cannot resolve {gone}"))
-		);
+		assert_eq!(disks_for(&moved(gone, "0:0"), &all), Err(format!("cannot resolve {gone}")));
 		assert!(disks_for(&moved(gone, "../8:1"), &all).is_err());
-		assert!(
-			disks_for(&moved("rootfs", "0:0"), &all)
-				.is_err_and(|e| e.ends_with("not a local disk"))
-		);
+		assert!(disks_for(&moved("rootfs", "0:0"), &all).is_err_and(|e| e.ends_with("not a local disk")));
 	}
 
 	// base on mnt, hid on mnt/sub, then vis over mnt.
@@ -738,10 +562,7 @@ mod tests {
 	fn type_comes_from_the_mount_on_top() {
 		let _id = test_id("des5g");
 		for (top, want) in [("tmpfs", None), ("ntfs3", Some("ntfs3"))] {
-			let text = String::from_utf8_lossy(OVER).replace(
-				"/vis /t/mnt rw - ext4 /dev/sda1",
-				&format!("/ /t/mnt rw - {top} /dev/sdd1"),
-			);
+			let text = String::from_utf8_lossy(OVER).replace("/vis /t/mnt rw - ext4 /dev/sda1", &format!("/ /t/mnt rw - {top} /dev/sdd1"));
 			let all = visible(parse_mountinfo(text.as_bytes()));
 			let under = Path::new("/t/mnt/sub/f");
 			assert_eq!(mount_for(&all, under).map(|m| m.fstype.as_str()), Some(top));
@@ -752,12 +573,7 @@ mod tests {
 	#[test]
 	fn hidden_by_a_later_mount_above() {
 		let _id = test_id("des5h");
-		let ids = |text: &[u8]| {
-			visible(parse_mountinfo(text))
-				.iter()
-				.map(|m| m.id)
-				.collect::<Vec<_>>()
-		};
+		let ids = |text: &[u8]| visible(parse_mountinfo(text)).iter().map(|m| m.id).collect::<Vec<_>>();
 		// b on a/b, then a over the folder a: both hang off the root.
 		assert_eq!(
 			ids(b"1 1 0:1 / / rw - ext4 /dev/sda1 rw\n\
@@ -767,8 +583,7 @@ mod tests {
 				5 1 0:5 / /ab rw - ext4 /dev/sde1 rw\n"),
 			[1, 4, 5]
 		);
-		// A root over the namespace's own, a parent not in the table, and a
-		// loop that can't happen but mustn't hang.
+		// A root over the namespace's own, a parent not in the table, and a loop that can't happen but mustn't hang.
 		assert_eq!(
 			ids(b"1 0 0:1 / / rw - rootfs rootfs rw\n\
 				2 1 0:2 / / rw - ext4 /dev/sda1 rw\n\
@@ -779,30 +594,21 @@ mod tests {
 		);
 	}
 
-	// The filter as 2026102814341407 wrote it, which checks every sibling of
-	// each mount. Kept as the model the faster one has to match.
+	// The filter as 2026102814341407 wrote it, which checks every sibling of each mount. Kept as the model the faster one has to match.
 	fn visible_by_siblings(mounts: Vec<Mount>) -> Vec<Mount> {
 		let mut kids: HashMap<u64, Vec<usize>> = HashMap::new();
 		for (i, m) in mounts.iter().enumerate() {
 			kids.entry(m.parent).or_default().push(i);
 		}
-		let index: HashMap<u64, usize> =
-			mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
+		let index: HashMap<u64, usize> = mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
 		let on = |id: u64| kids.get(&id).map_or(&[][..], Vec::as_slice);
 		let parent_of = |i: usize| index.get(&mounts[i].parent).copied().filter(|&p| p != i);
-		let covered = |i: usize| {
-			on(mounts[i].id)
-				.iter()
-				.any(|&k| k != i && mounts[k].point == mounts[i].point)
-		};
+		let covered = |i: usize| on(mounts[i].id).iter().any(|&k| k != i && mounts[k].point == mounts[i].point);
 		let shadowed = |i: usize| {
 			let m = &mounts[i];
 			on(m.parent).iter().any(|&s| {
 				let s = &mounts[s];
-				s.id != m.id
-					&& s.id != m.parent
-					&& s.point != m.point
-					&& m.point.starts_with(&s.point)
+				s.id != m.id && s.id != m.parent && s.point != m.point && m.point.starts_with(&s.point)
 			})
 		};
 		let mut reach: Vec<Option<bool>> = vec![None; mounts.len()];
@@ -824,14 +630,8 @@ mod tests {
 				reach[i] = Some(through.unwrap_or(true) && !shadowed(i));
 			}
 		}
-		let keep: Vec<bool> = (0..mounts.len())
-			.map(|i| reach[i] == Some(true) && !covered(i))
-			.collect();
-		mounts
-			.into_iter()
-			.zip(keep)
-			.filter_map(|(m, k)| k.then_some(m))
-			.collect()
+		let keep: Vec<bool> = (0..mounts.len()).map(|i| reach[i] == Some(true) && !covered(i)).collect();
+		mounts.into_iter().zip(keep).filter_map(|(m, k)| k.then_some(m)).collect()
 	}
 
 	fn mount(id: u64, parent: u64, point: &str) -> Mount {
@@ -856,28 +656,15 @@ mod tests {
 			let mut all = Vec::with_capacity(n);
 			let mut covered = 0;
 			for i in 1..=n as u64 {
-				// Now and then a repeated ID, a parent not in the table, or one
-				// that makes a loop.
-				let id = if r.one_in(20) {
-					1 + r.below(n) as u64
-				} else {
-					i
-				};
-				let parent = if r.one_in(10) {
-					r.below(n + 3) as u64
-				} else {
-					1 + r.below(i as usize) as u64
-				};
+				// Now and then a repeated ID, a parent not in the table, or one that makes a loop.
+				let id = if r.one_in(20) { 1 + r.below(n) as u64 } else { i };
+				let parent = if r.one_in(10) { r.below(n + 3) as u64 } else { 1 + r.below(i as usize) as u64 };
 				if id != i || parent >= i {
 					covered |= 4;
 				}
 				all.push(mount(id, parent, r.pick(&points)));
 			}
-			let ids = |v: &[Mount]| {
-				v.iter()
-					.map(|m| (m.id, m.parent, m.point.clone()))
-					.collect::<Vec<_>>()
-			};
+			let ids = |v: &[Mount]| v.iter().map(|m| (m.id, m.parent, m.point.clone())).collect::<Vec<_>>();
 			let want = visible_by_siblings(all.clone());
 			let got = visible(all.clone());
 			assert_eq!(ids(&got), ids(&want), "{:?}", ids(&all));
@@ -890,18 +677,14 @@ mod tests {
 	#[cfg_attr(miri, ignore = "times thousands of mounts")]
 	fn thousands_of_mounts_stay_fast() {
 		let _id = test_id("df1nz");
-		let flat: Vec<Mount> = std::iter::once(mount(1, 0, "/"))
-			.chain((2..=8000).map(|i| mount(i, 1, &format!("/srv/c{i}"))))
-			.collect();
+		let flat: Vec<Mount> = std::iter::once(mount(1, 0, "/")).chain((2..=8000).map(|i| mount(i, 1, &format!("/srv/c{i}")))).collect();
 		let mut deep = vec![mount(1, 0, "/")];
 		let mut point = String::new();
 		for i in 2..=1000 {
 			point.push_str("/d");
 			deep.push(mount(i, i - 1, &point));
 		}
-		// The sibling scan took 20 s or so on the flat one, in a release build.
-		// The sanitizer runs are debug builds with an unoptimized std, about
-		// 10 times slower, and deep took 1.4 s under ASan on a busy box.
+		// The sibling scan took 20 s or so on the flat one, in a release build. The sanitizer runs are debug builds with an unoptimized std, about 10 times slower, and deep took 1.4 s under ASan on a busy box.
 		let limit = Duration::from_secs(if cfg!(debug_assertions) { 10 } else { 1 });
 		for (name, table) in [("flat", flat), ("deep", deep)] {
 			let n = table.len();
@@ -933,14 +716,8 @@ mod tests {
 		let sub = Some(PathBuf::from("/t/tree/sub"));
 		assert_eq!(seen("", "/t/tree", "/t/bind"), sub);
 		assert_eq!(seen("", "/t/tree", "/t/tree/b"), sub);
-		assert_eq!(
-			seen("", "/t", "/t/bind/d"),
-			Some(PathBuf::from("/t/tree/sub/d"))
-		);
-		assert_eq!(
-			seen("", "/t/tree", "/t/tree/a"),
-			Some(PathBuf::from("/t/tree/a"))
-		);
+		assert_eq!(seen("", "/t", "/t/bind/d"), Some(PathBuf::from("/t/tree/sub/d")));
+		assert_eq!(seen("", "/t/tree", "/t/tree/a"), Some(PathBuf::from("/t/tree/a")));
 		assert_eq!(seen("", "/t/bind", "/t/tree"), None);
 		assert_eq!(seen("", "/t/tree", "/t/ux"), None);
 		assert_eq!(seen("", "/t/tree", "/t/other"), None);
@@ -971,14 +748,7 @@ mod tests {
 		assert!(views("", "/t/tree/m").is_empty());
 		// A bind of a folder inside the bind is seen through both above it.
 		let nested = "7 1 8:1 /t/tree/sub/d /t/nd rw - ext4 /dev/sda1 rw\n";
-		assert_eq!(
-			views(nested, "/t/nd"),
-			vec![
-				pair("/t/tree/sub/d", "/"),
-				pair("/t/bind/d", "/t/bind"),
-				pair("/t/tree/b/d", "/t/tree/b"),
-			]
-		);
+		assert_eq!(views(nested, "/t/nd"), vec![pair("/t/tree/sub/d", "/"), pair("/t/bind/d", "/t/bind"), pair("/t/tree/b/d", "/t/tree/b"),]);
 		// Something mounted over the folder hides it there.
 		let over = "7 1 8:4 / /t/tree/sub rw - ext4 /dev/sdd1 rw\n";
 		assert!(views(over, "/t/bind").is_empty());
@@ -1016,40 +786,18 @@ mod tests {
 		assert_eq!(m[1].fstype, "tmpfs");
 		assert_eq!(m[1].source, "n\u{fffd}ne");
 		let under = Path::new(OsStr::from_bytes(b"/mnt/caf\xe9 x/a"));
-		assert_eq!(
-			mount_for(&m, under).map(|m| m.fstype.as_str()),
-			Some("tmpfs")
-		);
+		assert_eq!(mount_for(&m, under).map(|m| m.fstype.as_str()), Some("tmpfs"));
 	}
 
 	#[test]
 	fn loop_backing_file_not_utf8() {
 		let _id = test_id("deebx");
-		for (raw, want) in [
-			(&b"/x/caf\xe9.img\n"[..], &b"/x/caf\xe9.img"[..]),
-			(b"/x/a b.img (deleted)\n", b"/x/a b.img"),
-			(b"/x/\xff\n\n", b"/x/\xff"),
-		] {
+		for (raw, want) in [(&b"/x/caf\xe9.img\n"[..], &b"/x/caf\xe9.img"[..]), (b"/x/a b.img (deleted)\n", b"/x/a b.img"), (b"/x/\xff\n\n", b"/x/\xff")] {
 			assert_eq!(backing_path(raw.to_vec()).as_os_str().as_bytes(), want);
 		}
 	}
 
-	const BITS: &[&[u8]] = &[
-		b"a",
-		b"bin",
-		"é".as_bytes(),
-		"日本".as_bytes(),
-		b"\xe9",
-		b"\xff\xfe",
-		b" ",
-		b"\t",
-		b"\n",
-		b"\\",
-		b"\\040",
-		b"-",
-		b" - ",
-		b"0",
-	];
+	const BITS: &[&[u8]] = &[b"a", b"bin", "é".as_bytes(), "日本".as_bytes(), b"\xe9", b"\xff\xfe", b" ", b"\t", b"\n", b"\\", b"\\040", b"-", b" - ", b"0"];
 
 	// The kernel's own escape, which unescape undoes.
 	fn mangle(s: &[u8]) -> Vec<u8> {
@@ -1084,8 +832,7 @@ mod tests {
 					}
 				}
 				let fstype = *r.pick(&["ext4", "zfs", "btrfs", "fuse.sshfs", "ntfs3", "tmpfs"]);
-				let source =
-					*r.pick(&["/dev/sdc1", "zf10/a/b", "none", "UUID=1-2", "//host/share"]);
+				let source = *r.pick(&["/dev/sdc1", "zf10/a/b", "none", "UUID=1-2", "//host/share"]);
 				let optional = [" shared:1", " master:3", " propagate_from:2", " unbindable"];
 				let root = [&b"/"[..], r.pick(BITS)].concat();
 				let mut left = format!("{} {} 0:{i} ", 20 + i, 1 + i).into_bytes();
@@ -1108,14 +855,7 @@ mod tests {
 					}
 					2 => (left, b" - ", fstype),
 					_ => {
-						want.push((
-							(20 + i as u64, 1 + i as u64),
-							format!("0:{i}"),
-							PathBuf::from(OsString::from_vec(root)),
-							PathBuf::from(OsString::from_vec(point.clone())),
-							fstype,
-							source,
-						));
+						want.push(((20 + i as u64, 1 + i as u64), format!("0:{i}"), PathBuf::from(OsString::from_vec(root)), PathBuf::from(OsString::from_vec(point.clone())), fstype, source));
 						(left, b" - ", &right)
 					}
 				};
@@ -1132,29 +872,14 @@ mod tests {
 				}
 			}
 			let got = parse_mountinfo(&text);
-			let got: Vec<_> = got
-				.iter()
-				.map(|m| {
-					(
-						(m.id, m.parent),
-						m.dev.clone(),
-						m.root.clone(),
-						m.point.clone(),
-						m.fstype.as_str(),
-						m.source.as_str(),
-					)
-				})
-				.collect();
+			let got: Vec<_> = got.iter().map(|m| ((m.id, m.parent), m.dev.clone(), m.root.clone(), m.point.clone(), m.fstype.as_str(), m.source.as_str())).collect();
 			assert_eq!(got, want, "{}", text.escape_ascii());
 			// Real lines gone bad: no panic, and no field runs past a space.
 			let bad = crate::testutil::mutate(r, &real);
 			let got = parse_mountinfo(&bad);
 			assert!(got.len() <= bad.split(|&c| c == b'\n').count());
 			for m in &got {
-				assert!(
-					!m.fstype.contains([' ', '\n']) && !m.source.contains([' ', '\n']),
-					"{m:?}"
-				);
+				assert!(!m.fstype.contains([' ', '\n']) && !m.source.contains([' ', '\n']), "{m:?}");
 			}
 			covered
 		})

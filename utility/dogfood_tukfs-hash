@@ -40,8 +40,7 @@ if ! command -v pwsh >/dev/null 2>&1; then
 	exit 1
 fi
 
-## Not through pwsh, which expands wildcards and ~ in a native call's
-## arguments, and turns bytes that aren't UTF-8 into U+FFFD.
+## Not through pwsh, which expands wildcards and ~ in a native call's arguments, and turns bytes that aren't UTF-8 into U+FFFD.
 noUpdate=()
 passArgs=()
 for arg in "$@"; do

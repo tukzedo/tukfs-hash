@@ -28,8 +28,7 @@ $SourceDirs = @(
 	(Join-Path -Path $HOME -ChildPath 'synced/0-0/common/exec/util/linux/bin')
 )
 
-## Local on purpose. Versions churn with every build and don't belong in the
-## sync tree.
+## Local on purpose. Versions churn with every build and don't belong in the sync tree.
 $InstallDir = Join-Path -Path $HOME -ChildPath '.local/bin'
 $PoolDir = Join-Path -Path $InstallDir -ChildPath "${ProgramName}_versions"
 $LinkPath = Join-Path -Path $InstallDir -ChildPath $ProgramName
@@ -38,8 +37,7 @@ $MaxVersions = 10
 $MinVersions = 5
 $MaxPoolBytes = 1GB
 
-## GFS roles, before the budget above trims them. A period role goes to the
-## last version of a period that has ended.
+## GFS roles, before the budget above trims them. A period role goes to the last version of a period that has ended.
 $KeepFrequent = 5
 $KeepHourly = 3
 $KeepDaily = 3
@@ -51,8 +49,7 @@ $StampFormat = 'yyyyMMdd-HHmmss'
 $VersionPattern = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
 ## The kernel keeps this much of a program's name as its comm.
 $CommLength = 15
-## Written and read in one culture, or a culture with another calendar writes
-## a year the read takes as a different one.
+## Written and read in one culture, or a culture with another calendar writes a year the read takes as a different one.
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
 function Write-Note {
@@ -339,8 +336,7 @@ function Get-RunningVersion {
 		[object[]]$Versions
 	)
 	$names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-	## A running one shows by its real path, which isn't the pool's when a
-	## link is on the way, such as a linked home.
+	## A running one shows by its real path, which isn't the pool's when a link is on the way, such as a linked home.
 	$realPool = Resolve-RealPath -Path $PoolDir
 	$byPath = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
 	$byStamp = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
@@ -356,8 +352,7 @@ function Get-RunningVersion {
 			if ($byPath.ContainsKey($image)) { $null = $names.Add($byPath[$image]) }
 			continue
 		}
-		## The comm first, since most processes are someone else's and few
-		## are this program.
+		## The comm first, since most processes are someone else's and few are this program.
 		try {
 			$comm = [IO.File]::ReadAllText("/proc/$($proc.Id)/comm").TrimEnd("`n")
 			if (-not $comm.StartsWith($fixedComm, [StringComparison]::Ordinal)) { continue }
@@ -474,8 +469,7 @@ function Get-RunTarget {
 	.SYNOPSIS
 	The newest version by its own path, never the fixed name.
 	.DESCRIPTION
-	A run that repoints the name while this one starts can't swap the build,
-	and the process shows which version it is. The fixed name is there for PATH.
+	A run that repoints the name while this one starts can't swap the build, and the process shows which version it is. The fixed name is there for PATH.
 	#>
 	[CmdletBinding()]
 	[OutputType([string])]

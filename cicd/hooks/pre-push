@@ -37,8 +37,7 @@ set -Eeuo pipefail
 
 [[ -n "${TUKFS_SKIP_HOOK:-}" ]] && exit 0
 
-## A push from a linked worktree hands the hook GIT_DIR and friends, which
-## would point every git call the gate makes at the wrong place.
+## A push from a linked worktree hands the hook GIT_DIR and friends, which would point every git call the gate makes at the wrong place.
 for gitVar in $(git rev-parse --local-env-vars 2>/dev/null || true); do unset "${gitVar}"; done
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,9 +52,7 @@ if [[ -f "${root}/cicd/docs-paths" ]]; then
 fi
 fIsDoc(){ local g; for g in "${docGlobs[@]}"; do [[ "$1" == ${g} ]] && return 0; done; return 1; }
 
-## True when every file that differs between the 2 commits is a doc. A
-## missing commit, or none at all, reads as code, and so does a failed diff,
-## which hands back a name that isn't a doc.
+## True when every file that differs between the 2 commits is a doc. A missing commit, or none at all, reads as code, and so does a failed diff, which hands back a name that isn't a doc.
 fDocsOnly(){   ## fDocsOnly OLD_SHA NEW_SHA
 	local f="" any=0
 	[[ "$1" =~ ^0+$ ]] && return 1
@@ -63,13 +60,12 @@ fDocsOnly(){   ## fDocsOnly OLD_SHA NEW_SHA
 	while IFS= read -r -d '' f; do
 		any=1
 		fIsDoc "${f}" || return 1
-	done < <(git -C "${root}" diff -z --no-renames --name-only "$1" "$2" || echo -n $'\x01\0')
+	## printf, since a bash string can't have the NUL that ends the name.
+	done < <(git -C "${root}" diff -z --no-renames --name-only "$1" "$2" || printf '\001\0')
 	((any))
 }
 
-## stdin gives "<local ref> <local sha> <remote ref> <remote sha>" per ref. All
-## zeros is a delete, with nothing to test. Collected inside the loop, since the
-## read that ends it clears the vars.
+## stdin gives "<local ref> <local sha> <remote ref> <remote sha>" per ref. All zeros is a delete, with nothing to test. Collected inside the loop, since the read that ends it clears the vars.
 gatedShas=(); gatedRefs=()
 while read -r _localRef localSha remoteRef remoteSha; do
 	case "${remoteRef}" in

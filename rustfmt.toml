@@ -1,1 +1,3 @@
 hard_tabs = true
+# Lines have no limit. This is near the most rustfmt still lays out well.
+max_width = 320

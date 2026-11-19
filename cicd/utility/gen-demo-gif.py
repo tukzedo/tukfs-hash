@@ -494,16 +494,7 @@ def remove_home(home: Path, token: str) -> None:
     base = Path(tempfile.gettempdir()).resolve()
     try:
         got = (home / HOME_MARK).read_text().strip()
-        ok = (
-            home.is_absolute()
-            and home.parent == base
-            and re.fullmatch(r"gen-demo-gif\.[A-Za-z0-9_]{6,}", home.name) is not None
-            and not home.is_symlink()
-            and home.resolve() == home
-            and home.stat().st_uid == os.getuid()
-            and str(home) not in ("/", "/tmp", os.environ.get("HOME", "/"))
-            and got == token
-        )
+        ok = home.is_absolute() and home.parent == base and re.fullmatch(r"gen-demo-gif\.[A-Za-z0-9_]{6,}", home.name) is not None and not home.is_symlink() and home.resolve() == home and home.stat().st_uid == os.getuid() and str(home) not in ("/", "/tmp", os.environ.get("HOME", "/")) and got == token
     except OSError:
         ok = False
     if not ok:
@@ -601,6 +592,7 @@ class Screen:
         self.typed_key = "fg"  # dim while a note is typed
         self.scroll = 0.0  # px
         self._live: tuple[str, str, list[list[Span]]] | None = None
+        self.chrome = self.draw_chrome()
 
     def put(self, spans: list[Span]) -> None:
         self.lines.append(spans)
@@ -648,7 +640,8 @@ class Screen:
         x = self.font.getlength("".join(t for t, _ in live[-1]))
         return x, (len(self.lines) + len(live) - 1) * self.lh - self.scroll
 
-    def render(self, cursor: tuple[float, float] | None, colors: dict[str, Rgb]) -> Image.Image:
+    def draw_chrome(self) -> Image.Image:
+        ##	The window around the view, the same in every frame.
         img = Image.new("RGB", (CANVAS_W, CANVAS_H), THEME["outer"])
         d = ImageDraw.Draw(img)
         x0 = y0 = MARGIN
@@ -664,6 +657,10 @@ class Screen:
             font=self.font,
             fill=THEME["titletxt"],
         )
+        return img
+
+    def render(self, cursor: tuple[float, float] | None, colors: dict[str, Rgb]) -> Image.Image:
+        img = self.chrome.copy()
 
         ##	A layer the size of the view, so lines part way out clip at its edges.
         layer = Image.new("RGB", (self.view_w, self.view_h), THEME["bg"])
@@ -776,9 +773,7 @@ class Movie:
             frames = [self._lead, *frames]
             durs = [self.durs[self._done - 1], *durs]
         buf = io.BytesIO()
-        frames[0].save(
-            buf, format="GIF", save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=False
-        )
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=False)
         gif = buf.getvalue()
         cut = after_first_image(gif) if self._lead is not None else 0
         self._gif.append(gif[cut:-1])  # one trailer, at the end
@@ -1021,11 +1016,7 @@ def main() -> None:
     if not args.quiet:
         secs = sum(delays) / 1000.0
         kb = out_path.stat().st_size // 1024
-        print(
-            f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB"
-            f"{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, "
-            f"{scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}"
-        )
+        print(f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, {scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}")
 
 
 if __name__ == "__main__":

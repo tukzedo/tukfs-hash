@@ -1,8 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Output that can't be written is dropped. A long scan shouldn't die because
-// the terminal or the tee in front of it went away.
+// Output that can't be written is dropped. A long scan shouldn't die because the terminal or the tee in front of it went away.
 macro_rules! out {
 	($($t:tt)*) => {{
 		use std::io::Write;
@@ -38,11 +37,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 // The build number is empty unless the pipeline passed one in; see build.rs.
-const VERSION: &str = concat!(
-	"tukfs-hash v",
-	env!("CARGO_PKG_VERSION"),
-	env!("TUKFS_HASH_BUILD_SUFFIX")
-);
+const VERSION: &str = concat!("tukfs-hash v", env!("CARGO_PKG_VERSION"), env!("TUKFS_HASH_BUILD_SUFFIX"));
 // Empty for a release, or with no build number.
 const BUILD_MINUTES: &str = env!("TUKFS_HASH_BUILD_MINUTES");
 
@@ -151,47 +146,35 @@ exits 1 if any file wasn't taken. 130 is a scan ended by a second signal.
 
 fn version_line(minutes: &str) -> String {
 	match minutes.parse::<i64>() {
-		Ok(m) => format!(
-			"{VERSION} ({})",
-			&util::fmt_local((946_684_800 + m * 60) * 1_000_000)[..10]
-		),
+		Ok(m) => format!("{VERSION} ({})", &util::fmt_local((946_684_800 + m * 60) * 1_000_000)[..10]),
 		Err(_) => VERSION.to_string(),
 	}
 }
 
-fn take_value<'a>(
-	args: &mut std::slice::Iter<'a, OsString>,
-	flag: &str,
-) -> Result<&'a OsStr, String> {
-	args.next()
-		.map(OsString::as_os_str)
-		.ok_or_else(|| format!("{flag} needs a value"))
+fn usage() {
+	let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+}
+
+fn take_value<'a>(args: &mut std::slice::Iter<'a, OsString>, flag: &str) -> Result<&'a OsStr, String> {
+	args.next().map(OsString::as_os_str).ok_or_else(|| format!("{flag} needs a value"))
 }
 
 fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<String, String> {
 	let v = take_value(args, flag)?;
-	v.to_str()
-		.map(str::to_string)
-		.ok_or_else(|| format!("{flag}: {} isn't text", util::escape_name(v.as_bytes())))
+	v.to_str().map(str::to_string).ok_or_else(|| format!("{flag}: {} isn't text", util::escape_name(v.as_bytes())))
 }
 
-const COMMANDS: [&str; 8] = [
-	"scan", "plan", "runs", "report", "gone", "accept", "prune", "snapdiff",
-];
+const COMMANDS: [&str; 8] = ["scan", "plan", "runs", "report", "gone", "accept", "prune", "snapdiff"];
 
-// The commands that take each option. One that isn't listed for the command
-// is refused by name, so a filter asked for is never quietly left out.
+// The commands that take each option. One that isn't listed for the command is refused by name, so a filter asked for is never quietly left out.
 fn takers(flag: &str) -> Option<&'static [&'static str]> {
 	Some(match flag {
 		"--db" => &["scan", "runs", "report", "gone", "accept", "prune"],
 		"--root" | "--threads" => &["scan", "plan"],
-		"--exclude" | "--no-xattr" | "--no-xattrs" | "--rmlint" | "--since" | "--resume"
-		| "--verify" | "--progress" | "--log" => &["scan"],
+		"--exclude" | "--no-xattr" | "--no-xattrs" | "--rmlint" | "--since" | "--resume" | "--verify" | "--progress" | "--log" => &["scan"],
 		"--run" | "--limit" => &["report", "gone"],
 		"--kind" => &["report"],
-		"--old" | "--new" | "--zfs-diff" | "--mount" | "--find-new" | "--list" | "--all" => {
-			&["snapdiff"]
-		}
+		"--old" | "--new" | "--zfs-diff" | "--mount" | "--find-new" | "--list" | "--all" => &["snapdiff"],
 		_ => return None,
 	})
 }
@@ -214,11 +197,11 @@ fn main() {
 fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let shown = |a: &OsStr| util::escape_name(a.as_bytes());
 	let Some(cmd) = argv.first().map(|c| c.to_str().unwrap_or_default()) else {
-		let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+		usage();
 		return Ok(1);
 	};
 	if cmd == "-h" || cmd == "--help" || cmd == "help" {
-		let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+		usage();
 		return Ok(0);
 	}
 	if cmd == "--version" {
@@ -244,15 +227,14 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 	let mut run_id = None;
 	let mut kind = None;
 	let mut limit = 200;
-	let (mut old, mut new, mut zfs_diff, mut mount, mut find_new, mut list) =
-		(None, None, None, None, None, None);
+	let (mut old, mut new, mut zfs_diff, mut mount, mut find_new, mut list) = (None, None, None, None, None, None);
 	let mut show_all = false;
 	let mut files = Vec::new();
 	let mut only_files = false;
 
+	let p = |v: &OsStr| PathBuf::from(v);
 	let mut it = argv[1..].iter();
 	while let Some(arg) = it.next() {
-		let p = |v: &OsStr| PathBuf::from(v);
 		if cmd == "accept" {
 			if only_files || !arg.as_bytes().starts_with(b"-") {
 				files.push(p(arg));
@@ -273,7 +255,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 		}
 		let a = arg.to_str().unwrap_or_default();
 		if a == "-h" || a == "--help" {
-			let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+			usage();
 			return Ok(0);
 		}
 		match takers(a) {
@@ -292,37 +274,22 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			"--rmlint" => rmlint = true,
 			"--threads" => {
 				let v = take_value(&mut it, a)?.as_bytes();
-				let eq = v
-					.iter()
-					.rposition(|&c| c == b'=')
-					.ok_or("--threads takes DIR=N")?;
-				let n: usize = std::str::from_utf8(&v[eq + 1..])
-					.ok()
-					.and_then(|n| n.parse().ok())
-					.ok_or_else(|| format!("--threads: bad count in {}", util::escape_name(v)))?;
+				let eq = v.iter().rposition(|&c| c == b'=').ok_or("--threads takes DIR=N")?;
+				let n: usize = std::str::from_utf8(&v[eq + 1..]).ok().and_then(|n| n.parse().ok()).ok_or_else(|| format!("--threads: bad count in {}", util::escape_name(v)))?;
 				threads.push((p(OsStr::from_bytes(&v[..eq])), n));
 			}
 			"--since" => {
 				let v = take_text(&mut it, a)?;
-				since = Some(
-					util::parse_date(&v)
-						.ok_or_else(|| format!("--since: {v} is not YYYY-MM-DD"))?,
-				);
+				since = Some(util::parse_date(&v).ok_or_else(|| format!("--since: {v} is not YYYY-MM-DD"))?);
 			}
 			"--resume" => resume = true,
 			"--verify" => mode = scan::Mode::Verify,
 			"--log" => log = Some(p(take_value(&mut it, a)?)),
 			"--progress" => {
-				progress = take_text(&mut it, a)?
-					.parse()
-					.map_err(|_| "--progress takes seconds")?;
+				progress = take_text(&mut it, a)?.parse().map_err(|_| "--progress takes seconds")?;
 			}
 			"--run" => {
-				run_id = Some(
-					take_text(&mut it, a)?
-						.parse::<i64>()
-						.map_err(|_| "--run takes a number")?,
-				);
+				run_id = Some(take_text(&mut it, a)?.parse::<i64>().map_err(|_| "--run takes a number")?);
 			}
 			"--kind" => {
 				let name = take_text(&mut it, a)?;
@@ -332,9 +299,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				})?);
 			}
 			"--limit" => {
-				limit = take_text(&mut it, a)?
-					.parse()
-					.map_err(|_| "--limit takes a count")?;
+				limit = take_text(&mut it, a)?.parse().map_err(|_| "--limit takes a count")?;
 			}
 			"--old" => old = Some(p(take_value(&mut it, a)?)),
 			"--new" => new = Some(p(take_value(&mut it, a)?)),
@@ -361,14 +326,9 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				return Err("--verify reads every known file again; drop --since".into());
 			}
 			let stop = Arc::new(AtomicBool::new(false));
-			for sig in [
-				signal_hook::consts::SIGINT,
-				signal_hook::consts::SIGTERM,
-				signal_hook::consts::SIGHUP,
-			] {
+			for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM, signal_hook::consts::SIGHUP] {
 				// A second signal ends it at once.
-				signal_hook::flag::register_conditional_shutdown(sig, 130, stop.clone())
-					.map_err(|e| e.to_string())?;
+				signal_hook::flag::register_conditional_shutdown(sig, 130, stop.clone()).map_err(|e| e.to_string())?;
 				signal_hook::flag::register(sig, stop.clone()).map_err(|e| e.to_string())?;
 			}
 			scan::run(
@@ -396,10 +356,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				out!("skip {d}");
 			}
 			for (r, e) in &plan.unresolved {
-				out!(
-					"can't resolve {}: {e}, so a scan won't start",
-					util::show_path(r)
-				);
+				out!("can't resolve {}: {e}, so a scan won't start", util::show_path(r));
 			}
 			for g in &plan.groups {
 				out!("group {}, {} worker(s)", g.name, g.threads);
@@ -423,10 +380,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 				(None, None, Some(f), None) => snapdiff::Source::FindNew(f),
 				(None, None, None, Some(f)) => snapdiff::Source::List(f),
 				_ => {
-					return Err(
-						"snapdiff takes one of --zfs-diff with --mount, --find-new, or --list"
-							.into(),
-					);
+					return Err("snapdiff takes one of --zfs-diff with --mount, --find-new, or --list".into());
 				}
 			};
 			snapdiff::run(&old, &new, &src, show_all)
@@ -439,14 +393,8 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 	let conn = db::open_ro(db)?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Until a newer version has opened it for writing.
-	let verify = if db::has_column(&conn, "runs", "verify").map_err(e)? {
-		"verify"
-	} else {
-		"0"
-	};
-	let mut st = conn
-		.prepare(&format!("SELECT id, started_us, finished_us, cutoff_us, status, host, summary, {verify} FROM runs ORDER BY id"))
-		.map_err(e)?;
+	let verify = if db::has_column(&conn, "runs", "verify").map_err(e)? { "verify" } else { "0" };
+	let mut st = conn.prepare(&format!("SELECT id, started_us, finished_us, cutoff_us, status, host, summary, {verify} FROM runs ORDER BY id")).map_err(e)?;
 	let rows = st
 		.query_map([], |r| {
 			Ok((
@@ -470,25 +418,14 @@ fn runs(db: &std::path::Path) -> Result<i32, String> {
 		} else {
 			format!(", skipping since {}", util::fmt_local(cutoff))
 		};
-		out!(
-			"run {id} on {} {status}: started {}, finished {}{skipping}",
-			host.unwrap_or_default(),
-			util::fmt_local(start),
-			fin.map_or_else(|| "-".into(), util::fmt_local),
-		);
+		out!("run {id} on {} {status}: started {}, finished {}{skipping}", host.unwrap_or_default(), util::fmt_local(start), fin.map_or_else(|| "-".into(), util::fmt_local));
 		if let Some(s) = summary {
 			for l in s.lines() {
 				out!("\t{l}");
 			}
 		}
 	}
-	let (files, paths): (i64, i64) = conn
-		.query_row(
-			"SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM paths)",
-			[],
-			|r| Ok((r.get(0)?, r.get(1)?)),
-		)
-		.map_err(e)?;
+	let (files, paths): (i64, i64) = conn.query_row("SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM paths)", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(e)?;
 	out!("{paths} paths, {files} distinct contents");
 	Ok(0)
 }
@@ -511,48 +448,21 @@ fn damage_first(k: db::Kind) -> u8 {
 	match k {
 		K::XattrMismatch | K::RmlintMismatch | K::DbMismatch | K::CacheMismatch => 0,
 		K::ReadError => 1,
-		K::Unsupported
-		| K::Unstable
-		| K::DirError
-		| K::StatError
-		| K::OpenError
-		| K::DbError
-		| K::XattrError
-		| K::Accepted => 2,
+		K::Unsupported | K::Unstable | K::DirError | K::StatError | K::OpenError | K::DbError | K::XattrError | K::Accepted => 2,
 	}
 }
 
-fn report(
-	db: &std::path::Path,
-	run: Option<i64>,
-	kind: Option<db::Kind>,
-	limit: u64,
-) -> Result<i32, String> {
+fn report(db: &std::path::Path, run: Option<i64>, kind: Option<db::Kind>, limit: u64) -> Result<i32, String> {
 	let limit = i64::try_from(limit).unwrap_or(i64::MAX);
 	let conn = db::open_ro(db)?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	let run: i64 = match run {
-		Some(r) => conn
-			.query_row("SELECT id FROM runs WHERE id = ?1", [r], |r| r.get(0))
-			.optional()
-			.map_err(e)?
-			.ok_or_else(|| format!("no run {r}"))?,
-		None => conn
-			.query_row("SELECT max(id) FROM runs", [], |r| {
-				r.get::<_, Option<i64>>(0)
-			})
-			.map_err(e)?
-			.ok_or("no runs yet")?,
+		Some(r) => conn.query_row("SELECT id FROM runs WHERE id = ?1", [r], |r| r.get(0)).optional().map_err(e)?.ok_or_else(|| format!("no run {r}"))?,
+		None => conn.query_row("SELECT max(id) FROM runs", [], |r| r.get::<_, Option<i64>>(0)).map_err(e)?.ok_or("no runs yet")?,
 	};
 	out!("run {run}");
-	let mut st = conn
-		.prepare("SELECT kind, count(*) FROM events WHERE run_id = ?1 GROUP BY kind ORDER BY kind")
-		.map_err(e)?;
-	let counts: Vec<(String, i64)> = st
-		.query_map([run], |r| Ok((r.get(0)?, r.get(1)?)))
-		.map_err(e)?
-		.collect::<Result<_, _>>()
-		.map_err(e)?;
+	let mut st = conn.prepare("SELECT kind, count(*) FROM events WHERE run_id = ?1 GROUP BY kind ORDER BY kind").map_err(e)?;
+	let counts: Vec<(String, i64)> = st.query_map([run], |r| Ok((r.get(0)?, r.get(1)?))).map_err(e)?.collect::<Result<_, _>>().map_err(e)?;
 	if counts.is_empty() {
 		out!("\tno events");
 		return Ok(0);
@@ -571,26 +481,14 @@ fn report(
 			LIMIT ?3"
 		))
 		.map_err(e)?;
-	let rows = st
-		.query_map(rusqlite::params![run, kind, limit], |r| {
-			Ok((
-				r.get::<_, String>(0)?,
-				db::path_text(r, 1)?,
-				r.get::<_, Option<String>>(2)?,
-			))
-		})
-		.map_err(e)?;
+	let rows = st.query_map(rusqlite::params![run, kind, limit], |r| Ok((r.get::<_, String>(0)?, db::path_text(r, 1)?, r.get::<_, Option<String>>(2)?))).map_err(e)?;
 	let mut shown = 0i64;
 	for row in rows {
 		let (k, p, d) = row.map_err(e)?;
 		out!("{k}\t{p}\t{}", d.unwrap_or_default());
 		shown += 1;
 	}
-	let total: i64 = counts
-		.iter()
-		.filter(|(k, _)| kind.is_none_or(|w| w.name() == k.as_str()))
-		.map(|(_, n)| n)
-		.sum();
+	let total: i64 = counts.iter().filter(|(k, _)| kind.is_none_or(|w| w.name() == k.as_str())).map(|(_, n)| n).sum();
 	cut_note(total - shown);
 	Ok(0)
 }
@@ -602,8 +500,7 @@ fn cut_note(more: i64) {
 	}
 }
 
-// Down here so the lines above keep their numbers, which the release build's
-// panic messages have in them.
+// Down here so the lines above keep their numbers, which the release build's panic messages have in them.
 #[cfg(feature = "profiling")]
 mod profiling;
 #[cfg(feature = "profiling")]
@@ -627,11 +524,7 @@ mod tests {
 		let _id = test_id("deavz");
 		for k in db::Kind::ALL {
 			let n = k.name();
-			let was = if n.ends_with("mismatch") {
-				0
-			} else {
-				u8::from(n != "read-error") + 1
-			};
+			let was = if n.ends_with("mismatch") { 0 } else { u8::from(n != "read-error") + 1 };
 			assert_eq!(damage_first(k), was, "{n}");
 		}
 	}
@@ -643,33 +536,14 @@ mod tests {
 	#[test]
 	fn a_flag_for_another_command_is_refused() {
 		let _id = test_id("df1q2");
-		for (cmd, flag) in [
-			("gone", "--root"),
-			("report", "--since"),
-			("accept", "--rmlint"),
-			("runs", "--limit"),
-			("plan", "--exclude"),
-			("prune", "--run"),
-			("scan", "--all"),
-			("snapdiff", "--db"),
-		] {
-			assert_eq!(
-				real_main(&argv(&[cmd, flag, "x"])),
-				Err(format!("{cmd} doesn't take {flag}; see --help"))
-			);
+		for (cmd, flag) in [("gone", "--root"), ("report", "--since"), ("accept", "--rmlint"), ("runs", "--limit"), ("plan", "--exclude"), ("prune", "--run"), ("scan", "--all"), ("snapdiff", "--db")] {
+			assert_eq!(real_main(&argv(&[cmd, flag, "x"])), Err(format!("{cmd} doesn't take {flag}; see --help")));
 		}
-		assert_eq!(
-			real_main(&argv(&["scan", "--bogus"])),
-			Err("unknown option --bogus; see --help".into())
-		);
-		assert_eq!(
-			real_main(&argv(&["bogus", "--db", "x"])),
-			Err("unknown command bogus; see --help".into())
-		);
+		assert_eq!(real_main(&argv(&["scan", "--bogus"])), Err("unknown option --bogus; see --help".into()));
+		assert_eq!(real_main(&argv(&["bogus", "--db", "x"])), Err("unknown command bogus; see --help".into()));
 	}
 
-	// Each command's own options get past the check and into the parser. With
-	// nothing else given, every one stops at an error before touching a file.
+	// Each command's own options get past the check and into the parser. With nothing else given, every one stops at an error before touching a file.
 	#[test]
 	fn each_command_takes_its_own_flags() {
 		let _id = test_id("df1q3");
@@ -708,10 +582,7 @@ mod tests {
 				}
 				taken += 1;
 				let got = real_main(&argv(&[cmd, flag])).unwrap_err();
-				assert!(
-					!got.contains("unknown") && !got.contains("doesn't take"),
-					"{cmd} {flag}: {got}"
-				);
+				assert!(!got.contains("unknown") && !got.contains("doesn't take"), "{cmd} {flag}: {got}");
 			}
 		}
 		assert_eq!(taken, 31);
@@ -726,9 +597,6 @@ mod tests {
 		let noon = version_line("14101200");
 		let day = noon.strip_prefix(VERSION).unwrap();
 		assert!([" (2026-10-23)", " (2026-10-24)"].contains(&day), "{noon}");
-		assert_eq!(
-			day,
-			format!(" ({})", &util::fmt_local(1_792_756_800_000_000)[..10])
-		);
+		assert_eq!(day, format!(" ({})", &util::fmt_local(1_792_756_800_000_000)[..10]));
 	}
 }

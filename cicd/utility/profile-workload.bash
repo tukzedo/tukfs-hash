@@ -41,8 +41,7 @@ fCpuCap
 seed=20261023
 fRand(){ seed=$(( (seed * 1103515245 + 12345) % 2147483648 )); }   ## into seed
 
-## Random bytes once, and each file a slice of them behind a header with its
-## own name, so no 2 files have the same content and the database keeps each.
+## Random bytes once, and each file a slice of them behind a header with its own name, so no 2 files have the same content and the database keeps each.
 fBlock(){
 	head -c $((24 * 1048576)) /dev/urandom > "${dir}/block" || fDie "no random block"
 }
@@ -64,8 +63,7 @@ fGen(){
 	mkdir -p -- "${tree}" "${dir}/db"
 	cd -- "${tree}"
 	fBlock
-	## Photos and music are most of the bytes, as on a real disk: about 55%
-	## in 2 to 24 MB, 40% in 1 to 8 MB.
+	## Photos and music are most of the bytes, as on a real disk: about 55% in 2 to 24 MB, 40% in 1 to 8 MB.
 	for ((i = 0; i < mb * 55 / 1300; i++)); do
 		fRand; printf -v mm '%02d' $((seed % 12 + 1)); d="photos/$((2014 + seed % 11))/${mm}"
 		[[ -d "${d}" ]] || mkdir -p -- "${d}"
@@ -84,9 +82,7 @@ fGen(){
 		fRand; specs+=("${d}/${names[i % ${#names[@]}]} ${i}.txt:$(( 1024 + seed % 261120 ))")
 	done
 	printf '%s\n' "${specs[@]}" | fFiles || fDie "could not write the big files"
-	## Many small files, which is where the walk, the database and the
-	## attributes cost the most per byte. Written here, since a process each
-	## would take longer than the scan.
+	## Many small files, which is where the walk, the database and the attributes cost the most per byte. Written here, since a process each would take longer than the scan.
 	for ((i = 0; i < 2000; i++)); do
 		d="mail/$((i % 12))/cur"
 		[[ -d "${d}" ]] || mkdir -p -- "${d}"
@@ -116,8 +112,7 @@ fGen(){
 		touch -d "@$(( 1388534400 + seed % 370000000 )).$(( seed % 1000000000 ))" -- "${batch[@]}"
 	done
 	rm -f -- "${dir}/block"
-	## Clean pages, so the scan's POSIX_FADV_DONTNEED drops them and it reads
-	## the disk, as a real scan does.
+	## Clean pages, so the scan's POSIX_FADV_DONTNEED drops them and it reads the disk, as a real scan does.
 	sync -f -- "${tree}"
 	echo "profile workload: ${#names[@]} files, $(du -sm -- "${tree}" | cut -f1) MB in ${tree}"
 }

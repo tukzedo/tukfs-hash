@@ -186,10 +186,7 @@ def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
 
     selfOf = {fr: fr.w - sum(c.w for c in kids(fr)) for fr in frames}
     if abs(sum(selfOf.values()) - total) > 1 or min(selfOf.values()) < -1e-6:
-        fSkip(
-            f"self time sums to {sum(selfOf.values()):.0f} of {total} samples; "
-            "frames are missing or misplaced; not a whole flamegraph"
-        )
+        fSkip(f"self time sums to {sum(selfOf.values()):.0f} of {total} samples; frames are missing or misplaced; not a whole flamegraph")
 
     selfBy: dict[str, float] = {}
     inclBy: dict[str, float] = {}
@@ -268,9 +265,7 @@ def main() -> None:
     ap.add_argument("--dir", default=default_dir, type=Path, help="profiling directory (default: %(default)s)")
     ap.add_argument("--file", help="analyze this SVG instead of the newest in --dir")
     ap.add_argument("--top", type=int, default=SELF_TOP, help="self-time leaders to list")
-    ap.add_argument(
-        "--check", action="store_true", help="startup gate: print only if newer than the local marker, then record it"
-    )
+    ap.add_argument("--check", action="store_true", help="startup gate: print only if newer than the local marker, then record it")
     ap.add_argument("--force", action="store_true", help="with --check, report even if already seen")
     ap.add_argument("--no-mark", action="store_true", help="with --check, don't update the marker")
     a = ap.parse_args()

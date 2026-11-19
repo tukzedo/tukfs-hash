@@ -11,24 +11,14 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 fn split_roots(b: &[u8]) -> Vec<&Path> {
-	b.split(|&c| c == 0)
-		.filter(|r| !r.is_empty())
-		.map(|r| Path::new(OsStr::from_bytes(r)))
-		.collect()
+	b.split(|&c| c == 0).filter(|r| !r.is_empty()).map(|r| Path::new(OsStr::from_bytes(r))).collect()
 }
 
 fn deepest<'a>(roots: &[&'a Path], p: &Path) -> Option<&'a Path> {
-	roots
-		.iter()
-		.copied()
-		.filter(|r| p.starts_with(r))
-		.max_by_key(|r| r.as_os_str().len())
+	roots.iter().copied().filter(|r| p.starts_with(r)).max_by_key(|r| r.as_os_str().len())
 }
 
-// A scan stops at every mount, so a name that another run reached from a
-// deeper root may sit on a filesystem this run never walked. Only a run at
-// or below the root that last saw it would have reached it again. A run with
-// no root list, such as accept's, can't say, so any root counts.
+// A scan stops at every mount, so a name that another run reached from a deeper root may sit on a filesystem this run never walked. Only a run at or below the root that last saw it would have reached it again. A run with no root list, such as accept's, can't say, so any root counts.
 fn reachable(now: &[&Path], last: Option<&[&Path]>, p: &Path) -> bool {
 	let Some(here) = deepest(now, p) else {
 		return false;
@@ -48,21 +38,9 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 	if !db::has_column(&conn, "runs", "roots").map_err(e)? {
 		return Err(none_yet.into());
 	}
-	let row = |r: &rusqlite::Row<'_>| {
-		Ok((
-			r.get::<_, i64>(0)?,
-			r.get::<_, String>(1)?,
-			r.get::<_, Option<Vec<u8>>>(2)?,
-		))
-	};
+	let row = |r: &rusqlite::Row<'_>| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<Vec<u8>>>(2)?));
 	let found = match run {
-		Some(id) => conn
-			.query_row(
-				"SELECT id, status, roots FROM runs WHERE id = ?1",
-				[id],
-				row,
-			)
-			.optional(),
+		Some(id) => conn.query_row("SELECT id, status, roots FROM runs WHERE id = ?1", [id], row).optional(),
 		None => conn
 			.query_row(
 				"SELECT id, status, roots FROM runs WHERE status = ?1 AND roots IS NOT NULL
@@ -77,36 +55,20 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 		return Err(run.map_or_else(|| none_yet.into(), |id| format!("no run {id}")));
 	};
 	if RunStatus::parse(&status) != Some(RunStatus::Done) {
-		return Err(format!(
-			"run {id} is {status}; only a finished scan says what's gone"
-		));
+		return Err(format!("run {id} is {status}; only a finished scan says what's gone"));
 	}
 	let Some(roots) = roots else {
-		return Err(format!(
-			"run {id} is from an older version, which kept no root list"
-		));
+		return Err(format!("run {id} is from an older version, which kept no root list"));
 	};
 	let now = split_roots(&roots);
 
-	let earlier: HashMap<i64, Option<Vec<u8>>> = conn
-		.prepare("SELECT id, roots FROM runs WHERE id < ?1")
-		.map_err(e)?
-		.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))
-		.map_err(e)?
-		.collect::<Result<_, _>>()
-		.map_err(e)?;
-	let earlier: HashMap<i64, Vec<&Path>> = earlier
-		.iter()
-		.filter_map(|(k, v)| v.as_deref().map(|b| (*k, split_roots(b))))
-		.collect();
+	let earlier: HashMap<i64, Option<Vec<u8>>> = conn.prepare("SELECT id, roots FROM runs WHERE id < ?1").map_err(e)?.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(e)?.collect::<Result<_, _>>().map_err(e)?;
+	let earlier: HashMap<i64, Vec<&Path>> = earlier.iter().filter_map(|(k, v)| v.as_deref().map(|b| (*k, split_roots(b)))).collect();
 
-	// A name with an event was reached, and the names under a folder that
-	// couldn't be listed weren't looked for.
+	// A name with an event was reached, and the names under a folder that couldn't be listed weren't looked for.
 	let mut events = Vec::new();
 	{
-		let mut st = conn
-			.prepare("SELECT kind, path FROM events WHERE run_id = ?1")
-			.map_err(e)?;
+		let mut st = conn.prepare("SELECT kind, path FROM events WHERE run_id = ?1").map_err(e)?;
 		let mut rows = st.query([id]).map_err(e)?;
 		while let Some(r) = rows.next().map_err(e)? {
 			let unlisted = r.get_ref(0).map_err(e)?.as_str().ok() == Some(Kind::DirError.name());
@@ -114,42 +76,27 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 		}
 	}
 	let reached: HashSet<&[u8]> = events.iter().map(|(_, b)| b.as_slice()).collect();
-	let unlisted: Vec<&Path> = events
-		.iter()
-		.filter(|(u, _)| *u)
-		.map(|(_, b)| Path::new(OsStr::from_bytes(b)))
-		.collect();
+	let unlisted: Vec<&Path> = events.iter().filter(|(u, _)| *u).map(|(_, b)| Path::new(OsStr::from_bytes(b))).collect();
 
-	let mut st = conn
-		.prepare("SELECT path, seen_run FROM paths WHERE seen_run < ?1 ORDER BY path")
-		.map_err(e)?;
+	let mut st = conn.prepare("SELECT path, seen_run FROM paths WHERE seen_run < ?1 ORDER BY path").map_err(e)?;
 	let mut rows = st.query([id]).map_err(e)?;
 	let mut count = 0u64;
 	let mut shown = Vec::new();
 	while let Some(r) = rows.next().map_err(e)? {
 		let p = Path::new(OsStr::from_bytes(db::path_at(r, 0).map_err(e)?));
 		let last: i64 = r.get(1).map_err(e)?;
-		if !reachable(&now, earlier.get(&last).map(Vec::as_slice), p)
-			|| reached.contains(p.as_os_str().as_bytes())
-			|| unlisted.iter().any(|d| p.starts_with(d))
-		{
+		if !reachable(&now, earlier.get(&last).map(Vec::as_slice), p) || reached.contains(p.as_os_str().as_bytes()) || unlisted.iter().any(|d| p.starts_with(d)) {
 			continue;
 		}
 		count += 1;
 		if (shown.len() as u64) < limit {
-			shown.push(format!(
-				"gone\t{}\tlast seen by run {last}",
-				crate::util::escape_name(p.as_os_str().as_bytes())
-			));
+			shown.push(format!("gone\t{}\tlast seen by run {last}", crate::util::escape_name(p.as_os_str().as_bytes())));
 		}
 	}
 	out!("run {id}");
 	out!("\tgone: {count}");
 	if !unlisted.is_empty() {
-		out!(
-			"\tnot counted: names under {} folder(s) it couldn't list",
-			unlisted.len()
-		);
+		out!("\tnot counted: names under {} folder(s) it couldn't list", unlisted.len());
 	}
 	let more = count - shown.len() as u64;
 	for l in shown {
@@ -174,8 +121,7 @@ mod tests {
 		assert!(reachable(&now, Some(&[p("/")]), p("/a/f")));
 		// Seen from a deeper root, which may be its own mount.
 		assert!(!reachable(&now, Some(&[p("/a/m")]), p("/a/m/f")));
-		// Not under this run's roots at all, and a name that only shares a
-		// prefix.
+		// Not under this run's roots at all, and a name that only shares a prefix.
 		assert!(!reachable(&now, Some(&[p("/b")]), p("/b/f")));
 		assert!(!reachable(&now, None, p("/ab/f")));
 		// No root list to go by.

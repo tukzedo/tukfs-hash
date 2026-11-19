@@ -37,8 +37,7 @@ fEcho(){ printf '[ %s ]\n' "$*"; }
 fEcho_Clean(){ printf '%s\n' "$*"; }
 fDie(){ printf '[ ERROR: %s ]\n' "$*" >&2; echo >&2; exit 1; }
 
-## Spelled out rather than read from the header. Run as `bash <(curl ...)`, the
-## script is a pipe the shell has already read, so there's nothing to read back.
+## Spelled out rather than read from the header. Run as `bash <(curl ...)`, the script is a pipe the shell has already read, so there's nothing to read back.
 fUsage(){ cat <<'EOF'
 Installs the newest tukfs-hash release from GitHub, after checking its sha256.
 
@@ -91,8 +90,7 @@ case "${cpu}" in
 	*) fDie "there's no build for a ${cpu} CPU, only x86_64 and arm64" ;;
 esac
 
-## The builds link against glibc 2.28. Without getconf there's nothing to ask,
-## and the trial run of the download below still catches a box that's too old.
+## The builds link against glibc 2.28. Without getconf there's nothing to ask, and the trial run of the download below still catches a box that's too old.
 glibc=""
 if command -v getconf >/dev/null 2>&1; then
 	glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
@@ -124,24 +122,19 @@ command -v curl      >/dev/null 2>&1 || fDie "curl is needed"
 command -v sha256sum >/dev/null 2>&1 || fDie "sha256sum is needed"
 
 fEcho "Looking up the newest ${release} release"
-## The list rather than releases/latest, which skips pre-releases and has
-## nothing while every release is one. Commas and braces to newlines, so
-## compact JSON reads like the pretty kind, one field per line.
+## The list rather than releases/latest, which skips pre-releases and has nothing while every release is one.
 releaseJson="$(curl -fsSL "${API}")" || fDie "couldn't list the releases on GitHub (offline, or rate-limited?)"
 
-## Each release's tag, then 1 for a pre-release. Drafts aren't public, but are
-## skipped all the same.
+## Each release's tag, then 1 for a pre-release. Drafts aren't public, but are skipped all the same. Commas and braces to newlines, so compact JSON reads like the pretty kind, one field per line.
 fListReleases(){
-	tr ',' '\n' <<<"${releaseJson}" | tr '{' '\n' | awk '
+	tr ',{' '\n' <<<"${releaseJson}" | awk '
 		/^[[:space:]]*"tag_name":[[:space:]]*"/ { tag = $0; sub(/^[[:space:]]*"tag_name":[[:space:]]*"/, "", tag); sub(/".*/, "", tag) }
 		/^[[:space:]]*"draft":[[:space:]]*true/ { tag = "" }
 		/^[[:space:]]*"prerelease":[[:space:]]*(true|false)/ { if (tag != "") print tag " " ($0 ~ /true/ ? 1 : 0); tag = "" }
 	'
 }
 
-## Newest by version, never by the list's order. A pre-release sorts below its
-## release (1.0.0-beta.2 < 1.0.0), and runs of digits compare as numbers
-## (beta.2 < beta.10).
+## Newest by version, never by the list's order. A pre-release sorts below its release (1.0.0-beta.2 < 1.0.0), and runs of digits compare as numbers (beta.2 < beta.10).
 fNewest(){
 	awk '{
 		ver = $1; sub(/^v/, "", ver); pre = ""
@@ -177,8 +170,7 @@ asset="${PROG}-${version}-linux-${arch}"
 sums="${PROG}-${version}-sha256sums.txt"
 url="${DOWNLOADS}/${tag}/${asset}"
 
-## The sums file is small, so it's read before asking, and the check for an
-## install that's already this build goes by bytes rather than by --version.
+## The sums file is small, so it's read before asking, and the check for an install that's already this build goes by bytes rather than by --version.
 sumsText="$(curl -fsSL "${DOWNLOADS}/${tag}/${sums}")" || fDie "couldn't download ${sums} from release ${tag}"
 want="$(awk -v a="${asset}" '$2 == a || $2 == "*" a { print $1; exit }' <<<"${sumsText}")"
 [[ "${want}" =~ ^[0-9a-f]{64}$ ]] || fDie "${sums} has no sha256 for ${asset}"
@@ -246,8 +238,7 @@ newVer="$("${work}/${asset}" --version 2>&1)" || fDie "the download doesn't run 
 newVer="${newVer%%$'\n'*}"
 
 fEcho "Installing to ${destPath}"
-## Through a new name in the same folder, then a rename over the old one, so a
-## running copy keeps going and a stop partway leaves the old one whole.
+## Through a new name in the same folder, then a rename over the old one, so a running copy keeps going and a stop partway leaves the old one whole.
 staged="${destDir}/.${PROG}.new.$$"
 fAsTarget(){ if ((useSudo)); then sudo "$@"; else "$@"; fi; }
 fAsTarget mkdir -p -- "${destDir}"                               || fDie "couldn't make ${destDir}"
