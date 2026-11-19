@@ -1,12 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The cicd profiler stage's sampler, only with --features profiling. It
-// samples on SIGPROF in this process, since perf can't record on b23. A run
-// with TUKFS_PROFILE_DIR set adds its stacks there under TUKFS_PROFILE_LABEL,
-// then draws everything in the dir as one flamegraph, so a first scan and a
-// rescan end up side by side. TUKFS_PROFILE_CHECK runs the attribution check
-// instead of the command. See design.md, Profiling.
+// The cicd profiler stage's sampler, only with --features profiling. It samples on SIGPROF in this process, since perf can't record on b23. A run with TUKFS_PROFILE_DIR set adds its stacks there under TUKFS_PROFILE_LABEL, then draws everything in the dir as one flamegraph, so a first scan and a rescan end up side by side. TUKFS_PROFILE_CHECK runs the attribution check instead of the command. See design.md, Profiling.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -18,17 +13,10 @@ use std::time::{Duration, Instant};
 
 // Under the kernel's 250 Hz tick, so each busy thread's samples keep up.
 const FREQ: i32 = 199;
-// Not libc. A scan's reads and attribute calls end there, and dropping those
-// samples would leave the I/O out of the graph. The unwinder itself, the vdso
-// and the loader stay out, since unwinding from inside them isn't safe.
+// Not libc. A scan's reads and attribute calls end there, and dropping those samples would leave the I/O out of the graph. The unwinder itself, the vdso and the loader stay out, since unwinding from inside them isn't safe.
 const BLOCKLIST: [&str; 3] = ["libgcc", "vdso", "ld-linux"];
 
-/// pprof files a sample under the start address of each function on its stack,
-/// then names the whole bucket from the inline frames of whichever sample
-/// opened it. LTO folds most of a scan into a few functions, so one name took
-/// all of each. It asks libgcc for that start address through this symbol, and
-/// one defined in the binary wins over the shared library's, so answering with
-/// the address itself files each instruction on its own. From shcl's.
+/// pprof files a sample under the start address of each function on its stack, then names the whole bucket from the inline frames of whichever sample opened it. LTO folds most of a scan into a few functions, so one name took all of each. It asks libgcc for that start address through this symbol, and one defined in the binary wins over the shared library's, so answering with the address itself files each instruction on its own. From shcl's.
 #[unsafe(no_mangle)]
 pub extern "C" fn _Unwind_FindEnclosingFunction(pc: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
 	pc
@@ -38,8 +26,7 @@ fn sampler() -> Result<pprof::ProfilerGuard<'static>, String> {
 	pprof::ProfilerGuardBuilder::default().frequency(FREQ).blocklist(&BLOCKLIST).build().map_err(|e| format!("profiler: {e}"))
 }
 
-// User and system time, apart. SIGPROF counts both, but a thread in the
-// kernel gets fewer of them, so the graph alone undercounts system time.
+// User and system time, apart. SIGPROF counts both, but a thread in the kernel gets fewer of them, so the graph alone undercounts system time.
 fn cpu_us() -> (i64, i64) {
 	// SAFETY: getrusage only writes the struct it's given.
 	let ru = unsafe {
@@ -97,9 +84,7 @@ pub fn sampled(f: impl FnOnce() -> Result<i32, String>) -> Result<i32, String> {
 	code
 }
 
-// blake3's assembly has no unwind info and no symbol sizes, so a sample in it
-// comes back as one frame with no name and no callers. It's named here by
-// where its functions start, which the linker gives us.
+// blake3's assembly has no unwind info and no symbol sizes, so a sample in it comes back as one frame with no name and no callers. It's named here by where its functions start, which the linker gives us.
 #[cfg(target_arch = "x86_64")]
 fn asm_name(ip: usize) -> Option<&'static str> {
 	macro_rules! starts {
@@ -133,9 +118,7 @@ fn asm_name(_: usize) -> Option<&'static str> {
 	None
 }
 
-// Everything in the dir, into flame.svg beside it. The subtitle has each run's
-// user and system CPU against its wall time, which is where waiting on the
-// disk shows, and how many samples were kept. flame-report.py reads it.
+// Everything in the dir, into flame.svg beside it. The subtitle has each run's user and system CPU against its wall time, which is where waiting on the disk shows, and how many samples were kept. flame-report.py reads it.
 fn draw(dir: &Path) -> Result<(), String> {
 	let read = |name: &str| {
 		let p = dir.join(name);
@@ -164,8 +147,7 @@ fn draw(dir: &Path) -> Result<(), String> {
 	fs::rename(&tmp, dir.join("flame.svg")).map_err(|e| format!("{}: {e}", tmp.display()))
 }
 
-/// Checks the sampler's attribution against a workload whose answer is
-/// known. See design.md, Profiling.
+/// Checks the sampler's attribution against a workload whose answer is known. See design.md, Profiling.
 fn check() -> i32 {
 	let exe = std::env::current_exe().and_then(File::open);
 	let Ok(exe) = exe else {

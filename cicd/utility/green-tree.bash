@@ -28,23 +28,18 @@ if [[ "${cmd}" != tree ]]; then
 	[[ "$3" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || fUsage
 fi
 
-## In the common dir, so every worktree of a clone shares one list, and nothing
-## commits it or cleans it away.
+## In the common dir, so every worktree of a clone shares one list, and nothing commits it or cleans it away.
 fList(){
 	local common
 	common="$(git -C "${dir}" rev-parse --path-format=absolute --git-common-dir)" || exit 2
 	echo "${common}/tukfs-hash-green-trees"
 }
 
-## A scratch index seeded from HEAD rather than copied from the real one, so
-## every file is hashed from disk: a copied index would keep assume-unchanged
-## and skip-worktree bits, and a file with one would be tested as it sits on
-## disk and committed as the index has it.
+## A scratch index seeded from HEAD rather than copied from the real one, so every file is hashed from disk: a copied index would keep assume-unchanged and skip-worktree bits, and a file with one would be tested as it sits on disk and committed as the index has it.
 fTree(){
 	local tree
 	scratchIdx="$(mktemp -u)"
-	## Global, since the trap runs after the function returns. A stopped run left
-	## the index, and its lock, behind.
+	## Global, since the trap runs after the function returns. A stopped run left the index, and its lock, behind.
 	trap 'rm -f -- "${scratchIdx}" "${scratchIdx}.lock"' EXIT
 	if { ! git -C "${dir}" rev-parse -q --verify HEAD >/dev/null || GIT_INDEX_FILE="${scratchIdx}" git -C "${dir}" read-tree HEAD; } \
 		&& GIT_INDEX_FILE="${scratchIdx}" git -C "${dir}" add --all \

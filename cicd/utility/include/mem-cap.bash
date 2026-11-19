@@ -76,9 +76,7 @@ fMemCtrArgs(){
 	return 0
 }
 
-## The containers are dockerd's children, outside the scope, so fMemCtrArgs
-## caps them apart. OOMPolicy continue, so a step the kernel kills fails,
-## and the run's cleanup still runs. systemd wants the suffix upper case.
+## The containers are dockerd's children, outside the scope, so fMemCtrArgs caps them apart. OOMPolicy continue, so a step the kernel kills fails, and the run's cleanup still runs. systemd wants the suffix upper case.
 fMemScope(){   ## fMemScope SCRIPT [ARG...]
 	local -a props=()
 	[[ -z "${TUKFS_MEM_SCOPE:-}" ]] || return 0

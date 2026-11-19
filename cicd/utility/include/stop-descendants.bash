@@ -57,8 +57,7 @@ fStopCidfile(){
 	[[ ! -e "${stop_cidfile}" ]]
 }
 
-## docker kill, then docker rm in case --rm didn't get to it. A 64-hex ID
-## only, read from a file of this run's.
+## docker kill, then docker rm in case --rm didn't get to it. A 64-hex ID only, read from a file of this run's.
 fStopContainers(){
 	local engine="${TUKFS_DOCKER:-docker}" f cid=""
 	local -a files=("${stop_cidfiles[@]}")
@@ -89,8 +88,7 @@ fStopDescendants(){
 	local -a todo=() found=()
 	## A subshell running a trap it took with it isn't the script.
 	[[ "${BASHPID}" == "$$" && -d /proc/self ]] || return 0
-	## A second signal, or a write to a reader that's gone, would end the trap
-	## part way. timeout signals the script, then its group.
+	## A second signal, or a write to a reader that's gone, would end the trap part way. timeout signals the script, then its group.
 	trap '' INT TERM HUP PIPE
 	[[ "${wait}" =~ ^[0-9]{1,4}$ ]] || wait=30
 	## First, so a client that won't go doesn't keep the rest waiting.

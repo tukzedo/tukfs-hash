@@ -79,8 +79,7 @@ for t in "$@"; do
 			| sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' || exit 1
 		continue
 	fi
-	## The pass lines were shown by the tests stage, so only what failed and
-	## the counts.
+	## The pass lines were shown by the tests stage, so only what failed and the counts.
 	fScratchMake test || exit 2
 	log="${scratch}/test.log"; rc=0
 	TMPDIR="${scratch}" cargo test --release --locked -j "${CPU_CAP}" --target "${t}" --target-dir "${targetDir}" \

@@ -1,10 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// What the unit tests share: a status line with each test's ID, and scratch
-// folders under <TMPDIR>/tukfs-hash/ that go even when a test fails. A run
-// that was killed leaves its folders, and the next one sweeps them once
-// they're a day old.
+// What the unit tests share: a status line with each test's ID, and scratch folders under <TMPDIR>/tukfs-hash/ that go even when a test fails. A run that was killed leaves its folders, and the next one sweeps them once they're a day old.
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -13,13 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::Duration;
 
-/// Held for the length of a test. Its line goes out when it drops, as a
-/// failure when that's by a panic.
+/// Held for the length of a test. Its line goes out when it drops, as a failure when that's by a panic.
 #[derive(Debug)]
 pub struct TestId(&'static str);
 
-/// Every test calls this first. A new test's ID comes from
-/// `cicd/utility/test-ids.py new`.
+/// Every test calls this first. A new test's ID comes from `cicd/utility/test-ids.py new`.
 pub fn test_id(id: &'static str) -> TestId {
 	TestId(id)
 }
@@ -27,9 +22,7 @@ pub fn test_id(id: &'static str) -> TestId {
 impl Drop for TestId {
 	fn drop(&mut self) {
 		let status = if std::thread::panicking() { "FAIL" } else { "PASS" };
-		// libtest names each test's thread after the test, and captures only
-		// the print macros, so this goes past it. One write, so another
-		// test's line can't end up in the middle of it.
+		// libtest names each test's thread after the test, and captures only the print macros, so this goes past it. One write, so another test's line can't end up in the middle of it.
 		let thread = std::thread::current();
 		let line = format!("{status} {} {}\n", self.0, thread.name().unwrap_or("?"));
 		let _ = io::stderr().write_all(line.as_bytes());
@@ -73,8 +66,7 @@ fn tag_ok(tag: &str) -> bool {
 	!tag.is_empty() && tag.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
-/// An empty <TMPDIR>/tukfs-hash/test_tukfs-hash_unit_<TAG>_<pid>. TAG is
-/// a-z, 0-9 and _, and no 2 tests share one.
+/// An empty <TMPDIR>/tukfs-hash/test_tukfs-hash_unit_<TAG>_<pid>. TAG is a-z, 0-9 and _, and no 2 tests share one.
 pub fn scratch(tag: &str) -> Scratch {
 	assert!(tag_ok(tag), "bad scratch tag: {tag}");
 	let base = base().unwrap_or_else(|e| panic!("no scratch base under {}: {e}", std::env::temp_dir().display()));
@@ -110,8 +102,7 @@ fn pid_of(name: &str) -> Option<u32> {
 	pid.parse().ok()
 }
 
-/// What killed runs left in BASE: a day old, and their pid gone. Without
-/// /proc there's no telling, so nothing goes.
+/// What killed runs left in BASE: a day old, and their pid gone. Without /proc there's no telling, so nothing goes.
 fn sweep(base: &Path) {
 	let Ok(list) = fs::read_dir(base) else {
 		return;
@@ -134,9 +125,7 @@ fn sweep(base: &Path) {
 	}
 }
 
-/// `remove_dir_all`, but only on what can only be a scratch folder: a name
-/// `scratch()` gives, right under BASE, no link, where its path says, ours,
-/// and nothing past the filesystem it's on.
+/// `remove_dir_all`, but only on what can only be a scratch folder: a name `scratch()` gives, right under BASE, no link, where its path says, ours, and nothing past the filesystem it's on.
 fn safe_rm(dir: &Path, base: &Path) -> io::Result<()> {
 	let refuse = |why: &str| Err(io::Error::other(format!("not removed, {why}")));
 	let named = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| pid_of(n).is_some());
@@ -218,27 +207,20 @@ pub struct Fuzzed {
 }
 
 impl Fuzzed {
-	/// The guard that the generator still makes what it's meant to: each bit
-	/// of `want` is something some case must have hit. A replayed seed can't
-	/// hit them all.
+	/// The guard that the generator still makes what it's meant to: each bit of `want` is something some case must have hit. A replayed seed can't hit them all.
 	pub fn covers(&self) {
 		assert!(self.replay || self.covered & self.want == self.want, "{} cases never hit {:#b}", self.cases, self.want & !self.covered);
 	}
 }
 
-/// How long a run may go past its time to hit the last of `want`. A slow box,
-/// like an arm64 one under emulation, got too few cases in 1 s for a rare bit.
+/// How long a run may go past its time to hit the last of `want`. A slow box, like an arm64 one under emulation, got too few cases in 1 s for a rare bit.
 const FUZZ_EXTRA: Duration = Duration::from_secs(30);
 
 fn fuzz_env(name: &str) -> Option<String> {
 	std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// Runs `case` over one seed after another until `TUKFS_FUZZ_SECS` of wall
-/// time is gone, 1 s when unset. Each run starts from a new seed, and a
-/// failure names its own, which `TUKFS_FUZZ_SEED` runs again alone. A case
-/// returns the coverage bits it hit, and the run goes on past its time until
-/// it has all of `want`, for up to `FUZZ_EXTRA` more.
+/// Runs `case` over one seed after another until `TUKFS_FUZZ_SECS` of wall time is gone, 1 s when unset. Each run starts from a new seed, and a failure names its own, which `TUKFS_FUZZ_SEED` runs again alone. A case returns the coverage bits it hit, and the run goes on past its time until it has all of `want`, for up to `FUZZ_EXTRA` more.
 pub fn fuzz(name: &str, want: u32, case: impl Fn(&mut Rng) -> u32) -> Fuzzed {
 	let secs: f64 = fuzz_env("TUKFS_FUZZ_SECS").map_or(1.0, |s| s.parse().ok().filter(|s: &f64| s.is_finite() && *s >= 0.0).expect("TUKFS_FUZZ_SECS is seconds"));
 	fuzz_for(name, want, Duration::from_secs_f64(secs), FUZZ_EXTRA, case)
@@ -267,8 +249,7 @@ fn fuzz_for(name: &str, want: u32, time: Duration, extra: Duration, case: impl F
 	done
 }
 
-/// Real input gone bad: bits flipped, cut short, bytes dropped, doubled or
-/// changed, and the bytes the parsers split on put in.
+/// Real input gone bad: bits flipped, cut short, bytes dropped, doubled or changed, and the bytes the parsers split on put in.
 pub fn mutate(rng: &mut Rng, input: &[u8]) -> Vec<u8> {
 	const SPLICE: &[&[u8]] = &[b"\n", b"\t", b" ", b"\\", b" - ", b" -> ", b":", b"-", b"\\0040", b"\\040", b"\\777", b"\r", b"\0", b"(+1)", b"\xff", b"/", b"..", b"9999999999999999999999"];
 	let mut out = input.to_vec();
@@ -341,8 +322,7 @@ mod tests {
 		f.covers();
 	}
 
-	// Out of time with a bit still missing: keep going until it's hit, and
-	// no further. One that never comes still fails, once the extra is gone.
+	// Out of time with a bit still missing: keep going until it's hit, and no further. One that never comes still fails, once the extra is gone.
 	#[test]
 	fn a_rare_bit_is_waited_for() {
 		let _id = test_id("df3h9");

@@ -1,10 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Walks each root, checksums every regular file, and compares the result with
-// whatever was known before: the blake3 on the file, rmlint's blake2b on the
-// file, and the database. A file whose size and time didn't change but whose
-// contents did is the thing this is looking for.
+// Walks each root, checksums every regular file, and compares the result with whatever was known before: the blake3 on the file, rmlint's blake2b on the file, and the database. A file whose size and time didn't change but whose contents did is the thing this is looking for.
 
 use crate::beneath::{self, Root};
 use crate::db::{self, Hashed, Kind, Msg, Prior, RunStatus};
@@ -27,8 +24,7 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-/// A full scan, or `--verify`, which rereads only files with a known
-/// checksum. See design.md, Runs and exit codes.
+/// A full scan, or `--verify`, which rereads only files with a known checksum. See design.md, Runs and exit codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
 	Full,
@@ -61,8 +57,7 @@ pub struct Opts {
 	pub args: String,
 }
 
-// Every part of a resumed run counts, and a file reported again by a later
-// part counts once.
+// Every part of a resumed run counts, and a file reported again by a later part counts once.
 fn run_events(conn: &rusqlite::Connection, run_id: i64) -> rusqlite::Result<Vec<(String, i64)>> {
 	conn.prepare("SELECT kind, count(DISTINCT path) FROM events WHERE run_id = ?1 GROUP BY kind ORDER BY kind")?.query_map([run_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
 }
@@ -193,8 +188,7 @@ struct Stats {
 	skip_unknown: AtomicU64,
 	links: AtomicU64,
 	bytes: AtomicU64,
-	// Sizes of files skipped unread, so a resumed run's percent picks up
-	// where the stopped part left off.
+	// Sizes of files skipped unread, so a resumed run's percent picks up where the stopped part left off.
 	skipped_bytes: AtomicU64,
 	b3_ok: AtomicU64,
 	b2b_ok: AtomicU64,
@@ -256,9 +250,7 @@ impl Faults {
 	}
 }
 
-// A worker's panic is caught and fails the run, so a lock it poisoned has to
-// stay usable. Otherwise a ClaimGuard dropped in the unwind aborts, or the
-// reason is lost and the run isn't marked failed.
+// A worker's panic is caught and fails the run, so a lock it poisoned has to stay usable. Otherwise a ClaimGuard dropped in the unwind aborts, or the reason is lost and the run isn't marked failed.
 fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 	m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -269,8 +261,7 @@ struct Shared {
 	run_id: i64,
 	cutoff_us: i64,
 	db: PathBuf,
-	// The database's folder by device and inode, since a bind mount can show
-	// it to a root's walk under another name.
+	// The database's folder by device and inode, since a bind mount can show it to a root's walk under another name.
 	db_dir: (u64, u64),
 	excludes: Vec<PathBuf>,
 	no_xattr: Vec<PathBuf>,
@@ -353,15 +344,12 @@ pub struct Planned {
 pub struct Plan {
 	pub groups: Vec<Planned>,
 	pub dropped: Vec<String>,
-	/// Roots that couldn't be resolved, made absolute, with the error. A scan
-	/// with any refuses to start.
+	/// Roots that couldn't be resolved, made absolute, with the error. A scan with any refuses to start.
 	pub unresolved: Vec<(PathBuf, String)>,
 	pub mounts: Vec<mounts::Mount>,
 }
 
-/// Roots that resolve to the same place, or whose folder another root's walk
-/// reaches, are dropped, so nothing is read twice. Bind mounts are the usual
-/// cause here.
+/// Roots that resolve to the same place, or whose folder another root's walk reaches, are dropped, so nothing is read twice. Bind mounts are the usual cause here.
 pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, String> {
 	let mounts = mounts::read_mounts()?;
 	let mut dropped = Vec::new();
@@ -394,9 +382,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		seen_ids.insert((md.dev(), md.ino()), c.clone());
 		found.push((c, (md.dev(), md.ino()), m));
 	}
-	// Against every other root, since a bind mount can sort before the root
-	// it's from. The device test keeps an unmounted btrfs subvolume, which
-	// the outer walk stops at.
+	// Against every other root, since a bind mount can sort before the root it's from. The device test keeps an unmounted btrfs subvolume, which the outer walk stops at.
 	let inside: Vec<Option<String>> = found
 		.iter()
 		.map(|(c, id, _)| {
@@ -448,8 +434,7 @@ fn lock(dir: &File, db: &Path, mounts: &[mounts::Mount]) -> Result<File, String>
 		return Err(format!("{} is on {t}, which isn't written to from Linux; put the database elsewhere", db.display()));
 	}
 	let p = lock_path(db);
-	// Under sudo a link here would make and later chown a file of the user's
-	// choosing.
+	// Under sudo a link here would make and later chown a file of the user's choosing.
 	let f = beneath::openat(dir.as_raw_fd(), p.file_name().unwrap_or_default(), libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK).map_err(|e| match e.raw_os_error() {
 		Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
 		_ => format!("{}: {e}", p.display()),
@@ -468,8 +453,7 @@ fn lock(dir: &File, db: &Path, mounts: &[mounts::Mount]) -> Result<File, String>
 	Ok(f)
 }
 
-/// The user who ran this through sudo, when it runs as root. Anyone else can't
-/// give files away, nor make them where that user couldn't.
+/// The user who ran this through sudo, when it runs as root. Anyone else can't give files away, nor make them where that user couldn't.
 fn sudo_ids() -> Option<(u32, u32)> {
 	// SAFETY: geteuid only reads.
 	if unsafe { libc::geteuid() } != 0 {
@@ -479,9 +463,7 @@ fn sudo_ids() -> Option<(u32, u32)> {
 	Some((id("SUDO_UID")?, id("SUDO_GID")?))
 }
 
-/// The folder of the database, or of what `what` names. Under sudo it has to
-/// be that user's or root's, or a link planted at it would have root make the
-/// files wherever it points and hand them over (2026111011092301).
+/// The folder of the database, or of what `what` names. Under sudo it has to be that user's or root's, or a link planted at it would have root make the files wherever it points and hand them over (2026111011092301).
 pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
 	let dir = file.parent().unwrap_or(Path::new("/"));
 	let failed = |e: io::Error| format!("{what} folder {}: {e}", dir.display());
@@ -503,14 +485,11 @@ pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Res
 	Ok(f)
 }
 
-/// The database's lock, for a command that writes. However the command ends,
-/// once this goes the file is back in rollback mode and, under sudo, its
-/// user's again. See design.md, Database.
+/// The database's lock, for a command that writes. However the command ends, once this goes the file is back in rollback mode and, under sudo, its user's again. See design.md, Database.
 #[derive(Debug)]
 pub struct Held {
 	db: PathBuf,
-	// The folder that was checked. The lock is made and the files are handed
-	// back through it.
+	// The folder that was checked. The lock is made and the files are handed back through it.
 	dir: File,
 	sudo: Option<(u32, u32)>,
 	conn: Option<rusqlite::Connection>,
@@ -548,9 +527,7 @@ impl Held {
 		self.conn = Some(conn);
 	}
 
-	// Hand the files back to whoever ran this through sudo, so reports and
-	// queries need no root. The WAL files are only there when leaving WAL
-	// mode failed.
+	// Hand the files back to whoever ran this through sudo, so reports and queries need no root. The WAL files are only there when leaving WAL mode failed.
 	fn give_back(&self) {
 		let Some((uid, gid)) = self.sudo else {
 			return;
@@ -578,8 +555,7 @@ pub fn host() -> String {
 	fs::read_to_string("/proc/sys/kernel/hostname").map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
-// The files in `dir` that couldn't be handed over. The WAL files are usually
-// gone, so a missing one doesn't count.
+// The files in `dir` that couldn't be handed over. The WAL files are usually gone, so a missing one doesn't count.
 fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Error)> {
 	let with = |sfx: &str| {
 		let mut s = db.as_os_str().to_owned();
@@ -622,9 +598,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	for d in &dropped {
 		say::err(&format!("skipping root {d}"));
 	}
-	// A mistyped root would leave a whole tree unread under a run that looks
-	// fine, and a mistyped --exclude or --no-xattr reads or writes where it was
-	// told not to, so nothing starts (2026102814341406, 2026111011092303).
+	// A mistyped root would leave a whole tree unread under a run that looks fine, and a mistyped --exclude or --no-xattr reads or writes where it was told not to, so nothing starts (2026102814341406, 2026111011092303).
 	let mut bad: Vec<String> = unresolved.iter().map(|(r, e)| format!("root {}: {e}", crate::util::show_path(r))).collect();
 	let mut excludes = resolve_each("--exclude", &o.excludes, &mut bad);
 	// It changes as the scan reads it.
@@ -640,8 +614,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	if planned.is_empty() {
 		return Err("nothing to scan".into());
 	}
-	// Anything that can fail goes before begin(), or the run stays marked
-	// running (backlog ...852).
+	// Anything that can fail goes before begin(), or the run stays marked running (backlog ...852).
 	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
 	let mut held = Held::take(&db_path, &mounts)?;
@@ -670,8 +643,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		stop: stop.clone(),
 		faults: faults.clone(),
 		run_id,
-		// Anything this run already read counts as fresh, even when --since
-		// is later than when the run began.
+		// Anything this run already read counts as fresh, even when --since is later than when the run began.
 		cutoff_us: cutoff_us.min(run_started),
 		db: db_path.clone(),
 		db_dir,
@@ -711,8 +683,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	finish(conn, &part, why, stop.load(Relaxed), held)
 }
 
-// Each group's walk and workers, and the counts of folder roots, which are
-// joined with them so the summary has the count's total.
+// Each group's walk and workers, and the counts of folder roots, which are joined with them so the summary has the count's total.
 fn start(groups: &[Arc<Group>], shared: &Arc<Shared>) -> Vec<std::thread::JoinHandle<()>> {
 	let mut handles = Vec::new();
 	for g in groups {
@@ -728,8 +699,7 @@ fn start(groups: &[Arc<Group>], shared: &Arc<Shared>) -> Vec<std::thread::JoinHa
 	handles
 }
 
-// Picks up the run to resume, or starts a new one, and marks it running. A new
-// run is its own first part.
+// Picks up the run to resume, or starts a new one, and marks it running. A new run is its own first part.
 fn begin(conn: &rusqlite::Connection, o: &Opts, roots: &[u8], started: i64) -> Result<Resumed, String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	let r = if o.resume {
@@ -816,11 +786,7 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>, mounts
 	groups
 }
 
-// Used space on the filesystems of the roots that are whole ones, which stands
-// in for the bytes under them, since counting a whole filesystem would mean a
-// second walk of it. The other roots are folders, whose bytes are counted.
-// None when a filesystem's used space can't be read. See design.md, Runs and
-// exit codes.
+// Used space on the filesystems of the roots that are whole ones, which stands in for the bytes under them, since counting a whole filesystem would mean a second walk of it. The other roots are folders, whose bytes are counted. None when a filesystem's used space can't be read. See design.md, Runs and exit codes.
 fn size_parts(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<(u64, Vec<PathBuf>)> {
 	let mut devs = BTreeSet::new();
 	let mut used = 0u64;
@@ -838,8 +804,7 @@ fn size_parts(mounts: &[mounts::Mount], roots: &[PathBuf]) -> Option<(u64, Vec<P
 	Some((used, folders))
 }
 
-// Runs beside the scan, so the percent shows once the count is in. A stop
-// ends it, and the summary then has a percent only if it got that far.
+// Runs beside the scan, so the percent shows once the count is in. A stop ends it, and the summary then has a percent only if it got that far.
 fn count_group(g: &Group, sh: &Shared) {
 	let Some(c) = &g.to_count else {
 		return;
@@ -854,9 +819,7 @@ fn count_group(g: &Group, sh: &Shared) {
 	g.size.store(total, Relaxed);
 }
 
-// The bytes a walk of root would read, by the walk's rules: its own device,
-// no mounts under it, no --exclude and not the database. Each name of a hard
-// link counts its share, as a skipped one does. None after a stop.
+// The bytes a walk of root would read, by the walk's rules: its own device, no mounts under it, no --exclude and not the database. Each name of a hard link counts its share, as a skipped one does. None after a stop.
 fn bytes_under(root: &Path, sh: &Shared) -> Option<u64> {
 	if inside_any(&names_above(&sh.mounts, root), &sh.exclude_ids) {
 		return Some(0);
@@ -934,8 +897,7 @@ struct Part<'a> {
 
 fn finish(conn: rusqlite::Connection, p: &Part, mut why: Vec<String>, stopped: bool, mut held: Held) -> Result<i32, String> {
 	let run_id = p.run_id;
-	// The stored summary keeps every part's lines; the output shows this
-	// part's. The events line is the whole run's either way.
+	// The stored summary keeps every part's lines; the output shows this part's. The events line is the whole run's either way.
 	let mut part = String::new();
 	for g in p.groups {
 		let _ = writeln!(part, "{}: {}", g.name, g.line());
@@ -996,8 +958,7 @@ fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
 fn run_group(g: &Group, sh: &Shared) {
 	let _done = DoneOnDrop(&g.done);
 	let (jtx, jrx) = sync_channel::<Job>(1024);
-	// Only the workers have the receiver, so once the last one is gone the
-	// walk's send fails, rather than waiting on a full queue forever.
+	// Only the workers have the receiver, so once the last one is gone the walk's send fails, rather than waiting on a full queue forever.
 	let jrx = Arc::new(Mutex::new(jrx));
 	let links = Links::default();
 	std::thread::scope(|s| {
@@ -1052,9 +1013,7 @@ fn ids_of(paths: &[PathBuf]) -> HashSet<(u64, u64)> {
 	paths.iter().filter_map(|p| fs::metadata(p).ok()).map(|m| (m.dev(), m.ino())).collect()
 }
 
-// A root in an --exclude folder would read nothing and leave every name under
-// it to show in gone, so it's dropped and named before the run, as plan's
-// drops are (2026111011092318).
+// A root in an --exclude folder would read nothing and leave every name under it to show in gone, so it's dropped and named before the run, as plan's drops are (2026111011092318).
 fn drop_excluded(planned: Vec<Planned>, excludes: &[PathBuf], mounts: &[mounts::Mount]) -> Vec<Planned> {
 	let ids: HashMap<(u64, u64), &Path> = excludes.iter().filter_map(|x| fs::metadata(x).ok().map(|m| ((m.dev(), m.ino()), x.as_path()))).collect();
 	if ids.is_empty() {
@@ -1082,15 +1041,12 @@ fn drop_excluded(planned: Vec<Planned>, excludes: &[PathBuf], mounts: &[mounts::
 		.collect()
 }
 
-// The folders above a root, up to `top`. The root's own folder is the walk's
-// to check.
+// The folders above a root, up to `top`. The root's own folder is the walk's to check.
 fn above_to<'a>(root: &'a Path, top: &'a Path) -> impl Iterator<Item = &'a Path> {
 	root.ancestors().skip(1).take_while(move |a| a.starts_with(top))
 }
 
-// The root's own name, and its name in each mount that shows more of its
-// filesystem, as for a bind mount of a subfolder (2026111011092307). Each
-// comes with the mount point the folders above it stop at.
+// The root's own name, and its name in each mount that shows more of its filesystem, as for a bind mount of a subfolder (2026111011092307). Each comes with the mount point the folders above it stop at.
 fn names_above(mounts: &[mounts::Mount], root: &Path) -> Vec<(PathBuf, PathBuf)> {
 	let mut names = vec![(root.to_path_buf(), PathBuf::from("/"))];
 	let Ok(md) = fs::metadata(root) else {
@@ -1111,21 +1067,18 @@ fn inside_any(names: &[(PathBuf, PathBuf)], ids: &HashSet<(u64, u64)>) -> bool {
 	!ids.is_empty() && found_above(names, |id| ids.contains(&id).then_some(())).is_some()
 }
 
-// The database, its journal files and its lock, in its folder under any name.
-// Anything else that only starts with its name is read like any other file.
+// The database, its journal files and its lock, in its folder under any name. Anything else that only starts with its name is read like any other file.
 fn excluded(sh: &Shared, p: &Path, in_db_dir: bool) -> bool {
 	let own = in_db_dir && p.file_name().zip(sh.db.file_name()).is_some_and(|(n, d)| n.as_bytes().strip_prefix(d.as_bytes()).is_some_and(|sfx| matches!(sfx, b"" | b"-wal" | b"-shm" | b"-journal" | b".lock")));
 	own || sh.excludes.iter().any(|x| p.starts_with(x))
 }
 
-// git looks for `.git` up from the work folder until the filesystem changes,
-// so this does too.
+// git looks for `.git` up from the work folder until the filesystem changes, so this does too.
 fn git_tree_above(names: &[(PathBuf, PathBuf)], dev: u64) -> bool {
 	names.iter().any(|(p, top)| above_to(p, top).take_while(|a| fs::symlink_metadata(a).is_ok_and(|m| m.dev() == dev)).any(|a| fs::symlink_metadata(a.join(".git")).is_ok()))
 }
 
-// A dead writer means nothing more can be recorded, so stop rather than read
-// files for nothing.
+// A dead writer means nothing more can be recorded, so stop rather than read files for nothing.
 fn send(sh: &Shared, m: Msg) -> bool {
 	if sh.tx.send(m).is_err() {
 		sh.faults.halt(&sh.stop);
@@ -1145,8 +1098,7 @@ pub fn canonical_db(db: &Path) -> Result<PathBuf, String> {
 	crate::util::canonical_name(db)
 }
 
-// A folder with more files than this is queued in parts, each in inode order,
-// so its list doesn't grow without end.
+// A folder with more files than this is queued in parts, each in inode order, so its list doesn't grow without end.
 const FILES_BATCH: usize = 1 << 20;
 
 // What a folder hands down to everything under it.
@@ -1166,8 +1118,7 @@ struct Frame {
 // The workers are gone.
 struct Closed;
 
-// Depth first, files before folders. Folders go in name order; files go in
-// inode order, which on most filesystems is close to the order on disk.
+// Depth first, files before folders. Folders go in name order; files go in inode order, which on most filesystems is close to the order on disk.
 fn walk(root: &Path, sh: &Shared, stats: &Stats, look: &rusqlite::Connection, jobs: &SyncSender<Job>) {
 	let names = names_above(&sh.mounts, root);
 	if inside_any(&names, &sh.exclude_ids) {
@@ -1207,8 +1158,7 @@ fn walk(root: &Path, sh: &Shared, stats: &Stats, look: &rusqlite::Connection, jo
 	}
 }
 
-// Looked up a batch at a time, each in its own read transaction, which ends
-// before the batch waits on the queue so the writer can checkpoint.
+// Looked up a batch at a time, each in its own read transaction, which ends before the batch waits on the queue so the writer can checkpoint.
 const LOOKUP_BATCH: usize = 256;
 
 // One root's walk, the way Worker is one hashing thread.
@@ -1228,8 +1178,7 @@ impl Walker<'_> {
 			Ok(((m.dev(), m.ino()), f))
 		});
 		let (id, list) = match opened.and_then(|(id, f)| Ok((id, beneath::List::new(f)?))) {
-			// A btrfs subvolume, or something mounted since the scan began. The
-			// mount table only knows what was there at the start.
+			// A btrfs subvolume, or something mounted since the scan began. The mount table only knows what was there at the start.
 			Ok(((dev, _), _)) if dev != root.dev => return Ok(None),
 			// --exclude under another name, as through a bind mount.
 			Ok((id, _)) if sh.exclude_ids.contains(&id) => return Ok(None),
@@ -1241,8 +1190,7 @@ impl Walker<'_> {
 				return Ok(None);
 			}
 		};
-		// Asked first, since a big folder's files are queued before the listing
-		// ends.
+		// Asked first, since a big folder's files are queued before the listing ends.
 		let mut marks = Marks {
 			in_git: above.in_git || list.has(".git"),
 			no_xattr: above.no_xattr || sh.no_xattr_ids.contains(&id),
@@ -1250,8 +1198,7 @@ impl Walker<'_> {
 		let mut files: Vec<(u64, PathBuf)> = Vec::new();
 		let mut subdirs = Vec::new();
 		for (seen, ent) in list.enumerate() {
-			// The rest of the folder goes unread after an error. An EIO in a
-			// damaged folder block is the case.
+			// The rest of the folder goes unread after an error. An EIO in a damaged folder block is the case.
 			let ent = match ent {
 				Ok(ent) => ent,
 				Err(e) => {
@@ -1338,16 +1285,13 @@ struct LinkVal {
 	sums: Sums,
 }
 
-// Each entry counts down the names still to come and goes when it hits zero,
-// so a backup tree full of hard links doesn't keep every inode in memory.
+// Each entry counts down the names still to come and goes when it hits zero, so a backup tree full of hard links doesn't keep every inode in memory.
 type LinkEntry = Option<(LinkVal, u64)>;
 
-// A name outside the roots or excluded never comes to count down, so only the
-// newest results are kept. A later name of an older one is read again.
+// A name outside the roots or excluded never comes to count down, so only the newest results are kept. A later name of an older one is read again.
 const LINKS_KEPT: usize = 1 << 18;
 
-// One read per hard-linked inode, or one name's xattr write moves the ctime
-// under another's read. See design.md, Reading files.
+// One read per hard-linked inode, or one name's xattr write moves the ctime under another's read. See design.md, Reading files.
 #[derive(Default)]
 struct Links {
 	map: Mutex<LinkMap>,
@@ -1357,8 +1301,7 @@ struct Links {
 #[derive(Default)]
 struct LinkMap {
 	entries: HashMap<(u64, u64), LinkEntry>,
-	// Filled keys, oldest first. A key can be here twice, or after its
-	// entry went; dropping a newer entry early only costs a read.
+	// Filled keys, oldest first. A key can be here twice, or after its entry went; dropping a newer entry early only costs a read.
 	filled: VecDeque<(u64, u64)>,
 }
 
@@ -1503,8 +1446,7 @@ pub enum ReadFail {
 
 /// `O_DIRECT` wants the buffer, offset and length on the device's block size.
 const DIRECT_ALIGN: usize = 4096;
-// Below this a plain read and its drops cost less sys CPU than going direct
-// (2026102809554675).
+// Below this a plain read and its drops cost less sys CPU than going direct (2026102809554675).
 const DIRECT_MIN: u64 = 64 << 10;
 
 /// Turns `O_DIRECT` on or off for an open fd. False if the filesystem won't.
@@ -1520,10 +1462,7 @@ fn set_direct(fd: RawFd, on: bool) -> bool {
 	}
 }
 
-/// Reads the whole file from the start, past the page cache where the
-/// filesystem allows it. Its cached pages are dropped first either way, so a
-/// scribble in the page cache isn't taken for what's on disk. ZFS ignores the
-/// advice; see design.md, Reading files.
+/// Reads the whole file from the start, past the page cache where the filesystem allows it. Its cached pages are dropped first either way, so a scribble in the page cache isn't taken for what's on disk. ZFS ignores the advice; see design.md, Reading files.
 pub fn read_sums(file: &File, before: &fs::Metadata, want_b2b: bool, buf: &mut [u8], stop: &AtomicBool, read_bytes: &AtomicU64) -> Result<Sums, ReadFail> {
 	let fd = file.as_raw_fd();
 	// SAFETY: fd is open, and fadvise only changes cache hints.
@@ -1531,10 +1470,7 @@ pub fn read_sums(file: &File, before: &fs::Metadata, want_b2b: bool, buf: &mut [
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
 	}
-	// Reading around the page cache costs a fraction of filling it and then
-	// dropping it again (2026102316421705). Where the filesystem won't, or
-	// balks mid-file, or the file is small, it's a plain read and the drops
-	// above and below do it.
+	// Reading around the page cache costs a fraction of filling it and then dropping it again (2026102316421705). Where the filesystem won't, or balks mid-file, or the file is small, it's a plain read and the drops above and below do it.
 	let lead = buf.as_ptr().align_offset(DIRECT_ALIGN).min(buf.len());
 	let aligned_len = (buf.len() - lead) & !(DIRECT_ALIGN - 1);
 	let mut direct = !cfg!(miri) && aligned_len > 0 && before.len() >= DIRECT_MIN && set_direct(fd, true);
@@ -1584,14 +1520,12 @@ pub fn read_sums(file: &File, before: &fs::Metadata, want_b2b: bool, buf: &mut [
 fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 	match fail {
 		ReadFail::Stopped => {}
-		// The driver can't decode it, like ntfs3 with a Windows-compressed
-		// or EFS file. Nothing was read, so nothing's known.
+		// The driver can't decode it, like ntfs3 with a Windows-compressed or EFS file. Nothing was read, so nothing's known.
 		ReadFail::Io { err, at } if err.raw_os_error() == Some(libc::EOPNOTSUPP) => {
 			st.other_err.fetch_add(1, Relaxed);
 			event(sh, Kind::Unsupported, path, format!("{err} at byte {at}"));
 		}
-		// On ZFS an EIO here is a block that failed its checksum with no
-		// good copy left. That is the same news as a mismatch.
+		// On ZFS an EIO here is a block that failed its checksum with no good copy left. That is the same news as a mismatch.
 		ReadFail::Io { err, at } => {
 			st.read_err.fetch_add(1, Relaxed);
 			event(sh, Kind::ReadError, path, format!("{err} at byte {at}"));
@@ -1603,15 +1537,13 @@ fn report_fail(sh: &Shared, st: &Stats, path: &Path, fail: ReadFail) {
 	}
 }
 
-// What a file read as before, from each place that remembers. Only records
-// taken at the file's current size and time count.
+// What a file read as before, from each place that remembers. Only records taken at the file's current size and time count.
 struct Refs<'a> {
 	xattr: Option<[u8; 32]>,
 	xattr_date: Option<i64>,
 	b2b: Option<[u8; 64]>,
 	db: Option<&'a Prior>,
-	// On a hands-off device nothing can update a set, so where the row has a
-	// say, it's the only one. design.md, "Attributes".
+	// On a hands-off device nothing can update a set, so where the row has a say, it's the only one. design.md, "Attributes".
 	row_decides: bool,
 }
 
@@ -1648,8 +1580,7 @@ impl<'a> Refs<'a> {
 		out
 	}
 
-	// Only for a read that agreed with all of them, or with the row where it
-	// decides.
+	// Only for a read that agreed with all of them, or with the row where it decides.
 	fn tally(&self, s: &Sums, st: &Stats) {
 		if self.xattr == Some(s.b3) {
 			st.b3_ok.fetch_add(1, Relaxed);
@@ -1671,8 +1602,7 @@ enum Verdict {
 	Changed { sums: Sums, misses: Vec<Miss>, note: String },
 }
 
-// A read that disagrees with what's stored is read once more before it's
-// believed, to tell a fault in memory from one on disk.
+// A read that disagrees with what's stored is read once more before it's believed, to tell a fault in memory from one on disk.
 fn judge(refs: &Refs, first: Sums, reread: impl FnOnce() -> Result<Sums, ReadFail>) -> Result<Verdict, ReadFail> {
 	if refs.misses(&first).is_empty() {
 		return Ok(Verdict::Clean(first));
@@ -1686,8 +1616,7 @@ fn judge(refs: &Refs, first: Sums, reread: impl FnOnce() -> Result<Sums, ReadFai
 	Ok(Verdict::Changed { sums: second, misses, note })
 }
 
-// A mismatch leaves every stored checksum as it was, so each later run reports
-// the file again until it's fixed or accepted.
+// A mismatch leaves every stored checksum as it was, so each later run reports the file again until it's fixed or accepted.
 fn keep(sh: &Shared, st: &Stats, path: &Path, prior: Option<&Prior>, misses: Vec<Miss>, note: &str) {
 	for (kind, detail) in misses {
 		st.mismatch.fetch_add(1, Relaxed);
@@ -1731,13 +1660,10 @@ impl<'a> Worker<'a> {
 			return;
 		};
 		let (bytes, mt) = (before.len() as i64, mtime_us(&before));
-		// Claimed before the attributes are read, and filled only once its set
-		// is written, so no name reads half of one. Row `link-writing`.
+		// Claimed before the attributes are read, and filled only once its set is written, so no name reads half of one. Row `link-writing`.
 		let claim = (before.nlink() > 1).then(|| self.links.claim((before.dev(), before.ino()), before.nlink(), bytes, mt));
 		let fd = file.as_raw_fd();
-		// Unlike a write's, a read's error is the file's own, such as an EIO,
-		// so each one is an event. Taking it for no set would write over the
-		// set unseen.
+		// Unlike a write's, a read's error is the file's own, such as an EIO, so each one is an event. Taking it for no set would write over the set unseen.
 		let (onfile, set_unread) = match OnFile::read(fd) {
 			Ok(of) => (of, false),
 			Err(e) => {
@@ -1758,8 +1684,7 @@ impl<'a> Worker<'a> {
 
 		let sh = self.sh;
 		let hashed_us = now_us();
-		// Once nothing more can be recorded, an attribute would vouch for a read
-		// the database never got.
+		// Once nothing more can be recorded, an attribute would vouch for a read the database never got.
 		let pbytes = job.path.as_os_str().as_bytes();
 		if send(sh, hashed_msg(pbytes, &sums, &before, hashed_us)) && !sh.faults.any.load(Relaxed) && !set_unread {
 			self.write_attrs(job, &refs, &sums, fd, &before, hashed_us);
@@ -1784,16 +1709,13 @@ impl<'a> Worker<'a> {
 		Some(md)
 	}
 
-	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch`,
-	// `db-read-error` and `resume-seen`.
+	// design.md, "Skipping", rows `db-fresh`, `db-future`, `db-mismatch`, `db-read-error` and `resume-seen`.
 	fn judged_already(&self, job: &Job, md: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
 		let path = job.path.as_os_str().as_bytes();
-		// Row `resume-seen` for a mismatch with no row at this size and time. A
-		// ctime from before the run means nothing touched the file since.
+		// Row `resume-seen` for a mismatch with no row at this size and time. A ctime from before the run means nothing touched the file since.
 		let reported = !sh.reported.is_empty() && micros(md.ctime(), md.ctime_nsec()) < sh.run_started_us && sh.reported.contains(path);
-		// An earlier part of this run already judged it, mismatch or not, so
-		// a resumed run doesn't read and report it twice.
+		// An earlier part of this run already judged it, mismatch or not, so a resumed run doesn't read and report it twice.
 		let vouched = || {
 			job.prior
 				.as_ref()
@@ -1833,8 +1755,7 @@ impl<'a> Worker<'a> {
 
 	fn skip_unread(&self, job: &Job, prior: Option<&Prior>, refs: &Refs, onfile: &OnFile, before: &fs::Metadata) -> bool {
 		let (sh, st) = (self.sh, &self.g.stats);
-		// Nothing stored at this size and time to check against: new or edited.
-		// The next full scan reads it.
+		// Nothing stored at this size and time to check against: new or edited. The next full scan reads it.
 		if sh.mode == Mode::Verify && refs.xattr.is_none() && refs.db.is_none() {
 			st.skip_unknown.fetch_add(1, Relaxed);
 			st.skipped(before);
@@ -1843,8 +1764,7 @@ impl<'a> Worker<'a> {
 			return true;
 		}
 
-		// Another name for this inode may have left a fresh set without ever
-		// seeing this name's row, so the row gets a say.
+		// Another name for this inode may have left a fresh set without ever seeing this name's row, so the row gets a say.
 		let Some((d, date)) = onfile.b3_fresh(before.len() as i64, mtime_us(before), before.dev(), before.ino(), sh.cutoff_us, now_us()).filter(|(d, _)| refs.db.is_none_or(|p| p.b3 == d)) else {
 			return false;
 		};
@@ -1860,9 +1780,7 @@ impl<'a> Worker<'a> {
 		true
 	}
 
-	// Sums to record, with this name's claim on the inode still to fill.
-	// None once the file is dealt with: a failed read, a mismatch, or another
-	// name's read.
+	// Sums to record, with this name's claim on the inode still to fill. None once the file is dealt with: a failed read, a mismatch, or another name's read.
 	fn read_judged(&mut self, job: &Job, prior: Option<&Prior>, refs: &Refs, file: &File, before: &fs::Metadata, link: Option<Claim<'a>>) -> Option<(Sums, Option<ClaimGuard<'a>>)> {
 		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
 		let (bytes, mt) = (before.len() as i64, mtime_us(before));
@@ -1926,8 +1844,7 @@ impl<'a> Worker<'a> {
 		let id = (before.dev(), before.ino());
 		let (bytes, mt) = (before.len() as i64, mtime_us(before));
 		let mut wrote = xattr::write_b3(fd, &sums.b3, bytes, mt, hashed_us, id, what);
-		// A current rmlint set got this far only by matching, so this is a
-		// missing or stale one.
+		// A current rmlint set got this far only by matching, so this is a missing or stale one.
 		if let (Ok(()), Some(b2b), None) = (&wrote, sums.b2b, refs.b2b) {
 			wrote = xattr::write_rmlint(fd, &b2b, mtime_s(before));
 			if wrote.is_ok() {
@@ -1940,8 +1857,7 @@ impl<'a> Worker<'a> {
 			}
 			Err(e) => {
 				st.xattr_fail.fetch_add(1, Relaxed);
-				// A read-only or xattr-less filesystem fails for every
-				// file. A few events are enough to say so.
+				// A read-only or xattr-less filesystem fails for every file. A few events are enough to say so.
 				if self.xattr_fail_logged < 20 {
 					self.xattr_fail_logged += 1;
 					event(sh, Kind::XattrError, path, e.to_string());
@@ -2073,9 +1989,7 @@ mod tests {
 		(sh, rx)
 	}
 
-	// More files than the job queue has room for, and no worker to take them. Workers
-	// stopped opening the database in 2026102810135573, so a missing one now
-	// stops the walk alone, and no workers is asked for outright.
+	// More files than the job queue has room for, and no worker to take them. Workers stopped opening the database in 2026102810135573, so a missing one now stops the walk alone, and no workers is asked for outright.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_group_with_no_workers_ends() {
@@ -2155,9 +2069,7 @@ mod tests {
 		assert!(r.is_err() && done.load(Relaxed));
 	}
 
-	// A worker that panics holding a lock poisons it. The claim it drops in
-	// the unwind, the name waiting on that claim and the reason must all get
-	// through, or the run aborts, hangs, or isn't marked failed.
+	// A worker that panics holding a lock poisons it. The claim it drops in the unwind, the name waiting on that claim and the reason must all get through, or the run aborts, hangs, or isn't marked failed.
 	#[test]
 	fn a_poisoned_lock_is_still_a_fault() {
 		let _id = test_id("deawa");
@@ -2241,8 +2153,7 @@ mod tests {
 		Job { prior: Some(prior.clone()), ..job(root, rel) }
 	}
 
-	// The mount table is empty here, as it would be for a filesystem mounted
-	// after the scan started. /dev/shm is its own mount on most boxes.
+	// The mount table is empty here, as it would be for a filesystem mounted after the scan started. /dev/shm is its own mount on most boxes.
 	#[test]
 	fn the_walk_stays_on_the_root_device() {
 		let _id = test_id("ddy94");
@@ -2268,8 +2179,7 @@ mod tests {
 		assert!(!jobs.iter().any(|p| p.starts_with("/dev/shm")), "{jobs:?}");
 	}
 
-	// The walk looks each file up, a batch to a transaction, and a row it
-	// can't read skips that file alone (2026102810135573).
+	// The walk looks each file up, a batch to a transaction, and a row it can't read skips that file alone (2026102810135573).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn the_walk_hands_each_job_its_row() {
@@ -2333,9 +2243,7 @@ mod tests {
 		assert!(!excluded(&sh, Path::new("/x/tree/sub/tuk"), false), "another folder");
 	}
 
-	// The database's folder is known by device and inode, so a walk that
-	// reaches it under another name, as through a bind mount, leaves its
-	// names out there too, and a same name elsewhere is read.
+	// The database's folder is known by device and inode, so a walk that reaches it under another name, as through a bind mount, leaves its names out there too, and a same name elsewhere is read.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn the_database_folder_under_another_name() {
@@ -2396,8 +2304,7 @@ mod tests {
 		assert_eq!(walked(&tree.join("plain")), want(&[("plain/f", false)]));
 	}
 
-	// A file given to --no-xattr gets none under another name either, a hard
-	// link included, since the attributes are the inode's.
+	// A file given to --no-xattr gets none under another name either, a hard link included, since the attributes are the inode's.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn no_xattr_file_under_another_name() {
@@ -2425,8 +2332,7 @@ mod tests {
 		assert_eq!(b3("given"), None);
 	}
 
-	// A root in or at an --exclude folder is dropped before the run, and a
-	// group left with no roots goes with it (2026111011092318).
+	// A root in or at an --exclude folder is dropped before the run, and a group left with no roots goes with it (2026111011092318).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't stat real folders")]
 	fn roots_in_an_excluded_folder_are_dropped() {
@@ -2480,9 +2386,7 @@ mod tests {
 		}
 	}
 
-	// A root that's a bind mount of a subfolder: the folders above its source
-	// count too (2026111011092307). The table says `wide` shows the whole
-	// filesystem, and links there stand in for the binds' sources.
+	// A root that's a bind mount of a subfolder: the folders above its source count too (2026111011092307). The table says `wide` shows the whole filesystem, and links there stand in for the binds' sources.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_bind_mounts_source_folders_count() {
@@ -2540,8 +2444,7 @@ mod tests {
 		assert!(rx.try_recv().is_err());
 	}
 
-	// Names skipped by the database or the attributes count down too, so the
-	// entry goes once all are seen.
+	// Names skipped by the database or the attributes count down too, so the entry goes once all are seen.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn skipped_links_count_down() {
@@ -2582,8 +2485,7 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// A skipped name counts its share of the size, so a resumed run's percent
-	// goes on from the stopped one's (2026110407135700).
+	// A skipped name counts its share of the size, so a resumed run's percent goes on from the stopped one's (2026110407135700).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn skips_count_toward_the_percent() {
@@ -2653,8 +2555,7 @@ mod tests {
 		assert!(twice < once + once / 2, "{once} then {twice}");
 	}
 
-	// A bind mount of a folder from another filesystem is a folder too, though
-	// its parent is on another device (2026111011092313).
+	// A bind mount of a folder from another filesystem is a folder too, though its parent is on another device (2026111011092313).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
 	fn a_bind_mount_of_a_folder_has_no_size() {
@@ -2665,8 +2566,7 @@ mod tests {
 		assert!(size_parts(&table("/"), &top).is_some_and(|(n, f)| n > 0 && f.is_empty()));
 	}
 
-	// The count follows the walk's rules, so a folder scan ends near 100
-	// (2026111019145393).
+	// The count follows the walk's rules, so a folder scan ends near 100 (2026111019145393).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't list folders")]
 	fn a_folder_is_counted_as_the_walk_reads_it() {
@@ -2748,9 +2648,7 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// Row `link-writing`. The claimant is part way through its set after an
-	// edit: the old checksum and inode value, the new size and time. A read
-	// across those writes sees that.
+	// Row `link-writing`. The claimant is part way through its set after an edit: the old checksum and inode value, the new size and time. A read across those writes sees that.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
 	fn a_half_written_set_is_not_read() {
@@ -2798,8 +2696,7 @@ mod tests {
 		assert_eq!(got, [new]);
 	}
 
-	// Whichever read of the mount table fails, no run is left running, and a
-	// run reads it once (backlog ...852).
+	// Whichever read of the mount table fails, no run is left running, and a run reads it once (backlog ...852).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_lost_mount_table_leaves_no_run_running() {
@@ -2881,8 +2778,7 @@ mod tests {
 		assert_eq!(status, RunStatus::Failed.text());
 	}
 
-	// A scan that fails after taking the lock still ends in rollback mode,
-	// on a database it found and on one it made (backlog 2026111011092306).
+	// A scan that fails after taking the lock still ends in rollback mode, on a database it found and on one it made (backlog 2026111011092306).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_refused_resume_ends_in_rollback_mode() {
@@ -2969,8 +2865,7 @@ mod tests {
 		lock(&dir, &db, &mounts).unwrap();
 	}
 
-	// A database left owned by root is named; a missing WAL file isn't
-	// (backlog ...819).
+	// A database left owned by root is named; a missing WAL file isn't (backlog ...819).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no chown")]
 	fn a_failed_hand_over_is_named() {
@@ -3009,8 +2904,7 @@ mod tests {
 		assert!(!d.join("target").exists());
 	}
 
-	// Under sudo a folder that's neither the user's nor root's is refused
-	// before anything is made (2026111011092301).
+	// Under sudo a folder that's neither the user's nor root's is refused before anything is made (2026111011092301).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
 	fn a_folder_not_the_users_is_refused() {
@@ -3028,8 +2922,7 @@ mod tests {
 		assert!(lock_path(&db).exists());
 	}
 
-	// A link at the folder itself, as one swapped in after it was resolved,
-	// is refused.
+	// A link at the folder itself, as one swapped in after it was resolved, is refused.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
 	fn a_linked_folder_is_refused() {
@@ -3045,8 +2938,7 @@ mod tests {
 		);
 	}
 
-	// The hand-back goes to the folder that was checked, even after another
-	// folder is moved in at its name.
+	// The hand-back goes to the folder that was checked, even after another folder is moved in at its name.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no chown")]
 	fn the_hand_back_stays_in_the_checked_folder() {
@@ -3097,8 +2989,7 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// accept can't update a set on a hands-off device, so the row it took has
-	// the say there (2026102814341432). Without a row the set still counts.
+	// accept can't update a set on a hands-off device, so the row it took has the say there (2026102814341432). Without a row the set still counts.
 	#[test]
 	fn the_row_decides_on_a_hands_off_device() {
 		let _id = test_id("df1r9");
@@ -3235,8 +3126,7 @@ mod tests {
 		assert_eq!(g.stats.rmlint_set.load(Relaxed), 2);
 	}
 
-	// rmlint takes plain unkeyed blake2b-512. The first 2 are RFC 7693's,
-	// the last is 300000 bytes of i % 251, read in pieces that split blocks.
+	// rmlint takes plain unkeyed blake2b-512. The first 2 are RFC 7693's, the last is 300000 bytes of i % 251, read in pieces that split blocks.
 	#[test]
 	fn b2b_matches_known_digests() {
 		let _id = test_id("deav7");
@@ -3249,8 +3139,7 @@ mod tests {
 		];
 		let stop = AtomicBool::new(false);
 		let counted = AtomicU64::new(0);
-		// The long one takes Miri over 15 minutes. The short ones still go
-		// through the hashers' unsafe code there.
+		// The long one takes Miri over 15 minutes. The short ones still go through the hashers' unsafe code there.
 		let n = if cfg!(miri) { 2 } else { cases.len() };
 		for (i, (bytes, want)) in cases.iter().take(n).enumerate() {
 			let p = d.join(format!("v{i}"));

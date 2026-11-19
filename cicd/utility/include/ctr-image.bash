@@ -55,8 +55,7 @@ ctr_kind="leak"
 ctr_step="${ctr_step:-ctr}"
 ctr_run=""; ctr_labels=()
 
-## At first use, since cicd.bash names its run after this is sourced. A
-## script run on its own, outside a cicd run, gets a name of its own.
+## At first use, since cicd.bash names its run after this is sourced. A script run on its own, outside a cicd run, gets a name of its own.
 fCtrLabels(){
 	[[ -z "${ctr_run}" ]] || return 0
 	ctr_run="${TUKFS_RUN_NAME:-}"
@@ -70,8 +69,7 @@ fCtrUseRelease(){
 	CTR_CONTEXT_EXTRA=("${REL_CTR_CONTEXT_EXTRA[@]}"); CTR_CARGO_HOME="${REL_CTR_CARGO_HOME}"
 }
 
-## An installed docker with no daemon behind it is no docker at all. The
-## timeout is for a DOCKER_HOST that never replies.
+## An installed docker with no daemon behind it is no docker at all. The timeout is for a DOCKER_HOST that never replies.
 fCtrWhyNot(){
 	local engine="${TUKFS_DOCKER:-docker}"
 	local -a limit=()
@@ -162,8 +160,7 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 			echo "ctr-image: ${tag} has no ${RUST_PIN}" >&2; return 1
 		fi
 	fi
-	## The newest other tag stays too, to go back to. Not -f, so an image a
-	## container still has stays.
+	## The newest other tag stays too, to go back to. Not -f, so an image a container still has stays.
 	while IFS=$'\t' read -r _ old; do
 		[[ -n "${old}" && "${old}" != "${tag}" ]] || continue
 		if [[ -z "${prev}" ]]; then prev="${old}"; continue; fi

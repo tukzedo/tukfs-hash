@@ -44,15 +44,13 @@ source "${here}/utility/include/scratch.bash"
 # shellcheck source=../../config.bash
 source "${here}/config.bash"
 
-## A check that can't run on the host, with no image to run it in. A missing
-## docker doesn't fail a gate, but the run it's in doesn't record its tree.
+## A check that can't run on the host, with no image to run it in. A missing docker doesn't fail a gate, but the run it's in doesn't record its tree.
 fLeakHostSkip(){   ## fLeakHostSkip NAME
 	if [[ -n "${TUKFS_GATE_STRICT:-}" && "${TUKFS_GATE_SKIPS:-}" == /* ]]; then echo "$1" >> "${TUKFS_GATE_SKIPS}"; fi
 	return 0
 }
 
-## Why it's on the host, for a caller that sets leak_host_note=0 and says
-## so itself.
+## Why it's on the host, for a caller that sets leak_host_note=0 and says so itself.
 leak_why=""
 fLeakInImage(){
 	local name="$1" script="$2" rw="$3" rc=0
@@ -80,9 +78,7 @@ fLeakInImage(){
 	return 0
 }
 
-## On the host, the script runs again in the test sandbox, which can write
-## only to the build dirs, the artifacts and TMPDIR. Miri's sysroot is kept in
-## the leak dir, since home is thrown away.
+## On the host, the script runs again in the test sandbox, which can write only to the build dirs, the artifacts and TMPDIR. Miri's sysroot is kept in the leak dir, since home is thrown away.
 fLeakSandbox(){   ## fLeakSandbox SCRIPT [ARG...]
 	local tgt="" art="" tmp=""
 	((in_image)) && return 0

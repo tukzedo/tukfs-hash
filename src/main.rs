@@ -1,8 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Output that can't be written is dropped. A long scan shouldn't die because
-// the terminal or the tee in front of it went away.
+// Output that can't be written is dropped. A long scan shouldn't die because the terminal or the tee in front of it went away.
 macro_rules! out {
 	($($t:tt)*) => {{
 		use std::io::Write;
@@ -163,8 +162,7 @@ fn take_text(args: &mut std::slice::Iter<'_, OsString>, flag: &str) -> Result<St
 
 const COMMANDS: [&str; 8] = ["scan", "plan", "runs", "report", "gone", "accept", "prune", "snapdiff"];
 
-// The commands that take each option. One that isn't listed for the command
-// is refused by name, so a filter asked for is never quietly left out.
+// The commands that take each option. One that isn't listed for the command is refused by name, so a filter asked for is never quietly left out.
 fn takers(flag: &str) -> Option<&'static [&'static str]> {
 	Some(match flag {
 		"--db" => &["scan", "runs", "report", "gone", "accept", "prune"],
@@ -498,8 +496,7 @@ fn cut_note(more: i64) {
 	}
 }
 
-// Down here so the lines above keep their numbers, which the release build's
-// panic messages have in them.
+// Down here so the lines above keep their numbers, which the release build's panic messages have in them.
 #[cfg(feature = "profiling")]
 mod profiling;
 #[cfg(feature = "profiling")]
@@ -542,8 +539,7 @@ mod tests {
 		assert_eq!(real_main(&argv(&["bogus", "--db", "x"])), Err("unknown command bogus; see --help".into()));
 	}
 
-	// Each command's own options get past the check and into the parser. With
-	// nothing else given, every one stops at an error before touching a file.
+	// Each command's own options get past the check and into the parser. With nothing else given, every one stops at an error before touching a file.
 	#[test]
 	fn each_command_takes_its_own_flags() {
 		let _id = test_id("df1q3");

@@ -33,9 +33,7 @@ sshTo=(ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o Se
 ## To TUKFS_SKIP_WHY where the caller gives one, which says it itself.
 fSkip(){ if [[ -n "${TUKFS_SKIP_WHY:-}" ]]; then printf '%s\n' "$*" > "${TUKFS_SKIP_WHY}"; else echo "SKIP: $*"; fi; exit 3; }
 
-## Under the wrap, which locks HOST and has it up. Leaves "reached" once ssh
-## answers, "skip" with the reason when the box can't take the tests, and
-## "rc" with how the tests went.
+## Under the wrap, which locks HOST and has it up. Leaves "reached" once ssh answers, "skip" with the reason when the box can't take the tests, and "rc" with how the tests went.
 fHeld(){   ## fHeld HOST STAGE_PARENT
 	local host="$1" st="$2" out="" dir="" rc=0
 	if ! "${sshTo[@]}" "${host}" true < /dev/null; then
@@ -85,8 +83,7 @@ mapfile -t exes < <("${me}/release-build.bash" bins "${target}" | grep -E '^/.+/
 ((${#exes[@]})) || { echo "remote-tests: no ${target} test binaries from release-build.bash bins" >&2; exit 1; }
 cp -- "${exes[@]}" "${stage}/unit/"
 cp -- "${bin}" "${stage}/${EXE_NAME}"
-## What integration.bash reads from the tree beside it: the stop include, and
-## the copyright line it checks --version against.
+## What integration.bash reads from the tree beside it: the stop include, and the copyright line it checks --version against.
 cp -- "${root}/tests/integration.bash" "${stage}/tests/"
 cp -- "${root}/src/main.rs" "${stage}/src/"
 cp -- "${here}/utility/include/stop-descendants.bash" "${stage}/cicd/utility/include/"
@@ -104,8 +101,7 @@ if [[ ! -e "${scratch}/reached" ]]; then
 	fSkip "${host} wasn't reached (exit ${rc}): held elsewhere past ${REMOTE_LOCK_WAIT:-900} s, a guest that doesn't start here, or no ssh"
 fi
 got=1; { read -r got < "${scratch}/rc"; } 2> /dev/null || true
-## The wrap's own 1 on a pass means the box wasn't put back, which isn't the
-## tests' fault.
+## The wrap's own 1 on a pass means the box wasn't put back, which isn't the tests' fault.
 if [[ "${got}" == 0 && "${rc}" != 0 ]]; then echo "WARNING: ${host} wasn't put back as it was found (exit ${rc}); see the lines above"; fi
 [[ "${got}" == 0 ]] || exit 1
 exit 0

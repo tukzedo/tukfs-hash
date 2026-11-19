@@ -57,8 +57,7 @@ esac
 us=$(( ${EPOCHREALTIME/[.,]/} - ${t0/[.,]/} ))
 printf 'demo gif drawn in %d.%d s\n' $((us / 1000000)) $((us % 1000000 / 100000))
 
-## The private dir is a link to somewhere else entirely, so it's resolved, and
-## the rest of the way has to be plain dirs. Made only once there's a gif.
+## The private dir is a link to somewhere else entirely, so it's resolved, and the rest of the way has to be plain dirs. Made only once there's a gif.
 rotReal=""
 if [[ "${rotateDir}" != */demo/gif ]]; then
 	echo "demo-gif: ${rotateDir} doesn't end in /demo/gif" >&2; exit 1

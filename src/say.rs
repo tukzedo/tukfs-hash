@@ -23,14 +23,11 @@ const TAB: usize = 8;
 pub enum Fit {
 	/// Cut at the width, with `~` as the last column.
 	Cut,
-	/// Broken at each ` | ` that's needed, the rest indented by a tab, so
-	/// nothing in it is lost. A part still too long is cut.
+	/// Broken at each ` | ` that's needed, the rest indented by a tab, so nothing in it is lost. A part still too long is cut.
 	Break,
 }
 
-/// Appends every line from here on to `path`. Under sudo a log the scan
-/// makes is handed to that user, as the database is, so their own scan can
-/// add to it. One that was already there keeps its owner (2026111019430926).
+/// Appends every line from here on to `path`. Under sudo a log the scan makes is handed to that user, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926).
 pub fn open_log(path: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(), String> {
 	let failed = |e: String| format!("--log {e}");
 	let path = crate::util::canonical_name(path).map_err(failed)?;
@@ -52,8 +49,7 @@ pub fn open_log(path: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::
 	Ok(())
 }
 
-// The file, and whether this made it. Under sudo, a link planted at the name
-// would have root append to whatever it points at, so it's never followed.
+// The file, and whether this made it. Under sudo, a link planted at the name would have root append to whatever it points at, so it's never followed.
 fn open_append(dir: &File, name: &OsStr) -> io::Result<(File, bool)> {
 	let flags = libc::O_WRONLY | libc::O_APPEND | libc::O_NOCTTY;
 	match beneath::openat(dir.as_raw_fd(), name, flags | libc::O_CREAT | libc::O_EXCL) {
@@ -75,8 +71,7 @@ pub fn out(text: &str, fit: Fit) {
 	}
 }
 
-/// A line on stderr, and in the log. It's never cut, since it says what went
-/// wrong.
+/// A line on stderr, and in the log. It's never cut, since it says what went wrong.
 pub fn err(text: &str) {
 	to_log(text);
 	let _ = writeln!(io::stderr().lock(), "{text}");
@@ -208,8 +203,7 @@ mod tests {
 		assert!(!d.join("scan.log").exists());
 	}
 
-	// Only a log this made is handed over under sudo, so root's own file
-	// stays root's (2026111019430926).
+	// Only a log this made is handed over under sudo, so root's own file stays root's (2026111019430926).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat")]
 	fn a_log_is_made_only_once() {
@@ -221,8 +215,7 @@ mod tests {
 		assert!(!open_append(&dir, name).unwrap().1);
 	}
 
-	// Under sudo a log folder that's neither the user's nor root's is
-	// refused before the log is made, as the database's is.
+	// Under sudo a log folder that's neither the user's nor root's is refused before the log is made, as the database's is.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
 	fn a_log_folder_not_the_users_is_refused() {

@@ -1,9 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Takes what the named files read as now as good. A mismatch keeps the old
-// checksums, so without this a file changed on purpose, with its time put
-// back, is reported on every run.
+// Takes what the named files read as now as good. A mismatch keeps the old checksums, so without this a file changed on purpose, with its time put back, is reported on every run.
 
 use crate::db::{self, Hashed, Kind, Msg, RunStatus};
 use crate::mounts::Mount;
@@ -98,8 +96,7 @@ fn one(conn: &mut Connection, run_id: i64, given: &Path, mounts: &[Mount], buf: 
 	let onfile = OnFile::read(fd);
 	let rmlint = onfile.as_ref().ok().and_then(|of| of.b2b_current(scan::mtime_s(&before)));
 
-	// Read twice, so a fault in memory during this read isn't what gets
-	// taken as good.
+	// Read twice, so a fault in memory during this read isn't what gets taken as good.
 	let (stop, counted) = (AtomicBool::new(false), AtomicU64::new(0));
 	let read = |buf: &mut [u8]| -> Result<Sums, String> { read_sums(&file, &before, rmlint.is_some(), buf, &stop, &counted).map_err(fail_text) };
 	let sums = read(buf)?;
@@ -155,8 +152,7 @@ fn one(conn: &mut Connection, run_id: i64, given: &Path, mounts: &[Mount], buf: 
 			return xattr_failed(conn, run_id, pbytes, &x, "couldn't be read, so they were left alone");
 		}
 	};
-	// Only a set that's already there is replaced. Where a scan left none,
-	// such as in a git work tree, accept doesn't add one.
+	// Only a set that's already there is replaced. Where a scan left none, such as in a git work tree, accept doesn't add one.
 	let mut written = Ok(());
 	if onfile.b3.is_some() && hands_off.is_none() {
 		let id = (before.dev(), before.ino());

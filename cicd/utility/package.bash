@@ -38,8 +38,7 @@ command -v "${nfpm}" >/dev/null 2>&1 || fDie "nfpm isn't installed (or set NFPM)
 [[ "${SOURCE_DATE_EPOCH:-}" =~ ^[0-9]{1,15}$ ]] || fDie "SOURCE_DATE_EPOCH isn't set to the commit time"
 mtime="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
 
-## rpm names the soname rather than a package, since distros name the package
-## differently.
+## rpm names the soname rather than a package, since distros name the package differently.
 debGccDep='libgcc-s1'
 rpmGccDep='libgcc_s.so.1()(64bit)'
 
@@ -52,8 +51,7 @@ for pair in "x86_64|amd64" "arm64|arm64"; do
 	glibc="$(objdump -T "${bin}" | { grep -o 'GLIBC_[0-9.]*' || true; } | sed 's/GLIBC_//' | sort -uV | tail -1)"
 	[[ -n "${glibc}" ]] || fDie "no GLIBC_ symbol version in ${bin}"
 	debGcc=""; rpmGcc=""
-	## Into a variable first: a grep -q that quits early kills readelf with
-	## SIGPIPE under pipefail.
+	## Into a variable first: a grep -q that quits early kills readelf with SIGPIPE under pipefail.
 	needed="$(readelf -d "${bin}" || true)"
 	if grep -q 'NEEDED.*libgcc_s' <<<"${needed}"; then debGcc=$'\n      - '"${debGccDep}"; rpmGcc=$'\n      - '"${rpmGccDep}"; fi
 	yaml="${workDir}/nfpm-linux-${osarch}.yaml"

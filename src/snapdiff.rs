@@ -1,11 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Compares the files a snapshot diff says changed. A real edit moves the
-// modified time. A file whose bytes changed under the same size and time was
-// changed by something that didn't go through the filesystem's write path,
-// such as bad RAM under the page cache. `cp -p`, `rsync -t`, tar and `touch -r`
-// also do it, so each hit still needs a look.
+// Compares the files a snapshot diff says changed. A real edit moves the modified time. A file whose bytes changed under the same size and time was changed by something that didn't go through the filesystem's write path, such as bad RAM under the page cache. `cp -p`, `rsync -t`, tar and `touch -r` also do it, so each hit still needs a look.
 
 use std::collections::{BTreeSet, HashMap, btree_set};
 use std::ffi::OsStr;
@@ -32,8 +28,7 @@ pub enum Source {
 	List(PathBuf),
 }
 
-/// A file to compare, by its name in each snapshot. find-new gives the inode
-/// too, which finds the old copy after a rename.
+/// A file to compare, by its name in each snapshot. find-new gives the inode too, which finds the old copy after a rename.
 #[derive(Debug, PartialEq)]
 pub struct Pair {
 	pub old: PathBuf,
@@ -70,8 +65,7 @@ enum Entry {
 	Outside(usize, Vec<u8>),
 }
 
-// zfs diff writes odd bytes as a backslash and 4 octal digits, \0040 for a
-// space.
+// zfs diff writes odd bytes as a backslash and 4 octal digits, \0040 for a space.
 fn zfs_unescape(s: &[u8]) -> Vec<u8> {
 	let mut out = Vec::with_capacity(s.len());
 	let mut i = 0;
@@ -113,9 +107,7 @@ enum ZfsLine {
 	Outside,
 }
 
-/// Takes -H or not, -t and -F. M and R lines are compared, and so is a path
-/// with both a - and a + line, which is a file replaced by a new one, as rsync,
-/// tar and atomic saves do.
+/// Takes -H or not, -t and -F. M and R lines are compared, and so is a path with both a - and a + line, which is a file replaced by a new one, as rsync, tar and atomic saves do.
 fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 	let mut f: Vec<&[u8]> = line.split(|&c| c == b'\t').collect();
 	if f.len() > 2 && is_time(f[0]) {
@@ -125,8 +117,7 @@ fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 	if !matches!(kind, b"M" | b"R" | b"-" | b"+") {
 		return ZfsLine::Unusable;
 	}
-	// Without -H a rename is "old -> new" in one field. Spaces in names are
-	// escaped, so the arrow can't be part of one.
+	// Without -H a rename is "old -> new" in one field. Spaces in names are escaped, so the arrow can't be part of one.
 	if kind == b"R"
 		&& let Some(last) = f.pop()
 	{
@@ -175,9 +166,7 @@ fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
-/// Reads a change list a line at a time, so a long one takes no more memory
-/// than a short one. Only zfs diff's - and + names are held to the end, since
-/// the 2 lines of a replaced file can be far apart.
+/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names are held to the end, since the 2 lines of a replaced file can be far apart.
 struct ChangeList<'a, R> {
 	input: R,
 	format: Format<'a>,
@@ -275,8 +264,7 @@ impl<R: BufRead> Iterator for ChangeList<'_, R> {
 	}
 }
 
-// An absolute name makes join() drop --old and --new, so a file would be
-// compared with itself.
+// An absolute name makes join() drop --old and --new, so a file would be compared with itself.
 fn stays_inside(p: &Path) -> bool {
 	p.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
@@ -284,9 +272,7 @@ fn stays_inside(p: &Path) -> bool {
 /// How many runs `describe` names.
 const RUNS_SHOWN: usize = 8;
 
-/// Bytes that differ, and where, as runs of start and length. Only the runs
-/// `describe` names are kept, and counts for the rest, so a file that differs
-/// all through takes no more memory than one scribble.
+/// Bytes that differ, and where, as runs of start and length. Only the runs `describe` names are kept, and counts for the rest, so a file that differs all through takes no more memory than one scribble.
 #[derive(Debug, Default)]
 pub struct Diff {
 	pub differing: u64,
@@ -338,8 +324,7 @@ impl Default for CompareBufs {
 	}
 }
 
-/// Byte runs that differ. Runs a few bytes apart are merged, since a scribble
-/// rarely changes every byte it touches.
+/// Byte runs that differ. Runs a few bytes apart are merged, since a scribble rarely changes every byte it touches.
 pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result<Diff> {
 	let CompareBufs { a: ba, b: bb } = bufs;
 	let mut off: u64 = 0;
@@ -389,9 +374,7 @@ fn describe(d: &Diff) -> String {
 	format!("{} bytes differ in {} run(s), {} starting on a 16-byte boundary: {}{}", d.differing, d.runs, d.aligned, shown.join(" "), if d.runs > d.shown.len() as u64 { " ..." } else { "" })
 }
 
-// A file whose old copy is looked for by inode once the list is read, with
-// the one under its own name to fall back on. Both sides are stat'd again
-// then, so a file held costs little more than its name.
+// A file whose old copy is looked for by inode once the list is read, with the one under its own name to fall back on. Both sides are stat'd again then, so a file held costs little more than its name.
 struct Held {
 	rel: PathBuf,
 	born: Option<SystemTime>,
@@ -409,8 +392,7 @@ struct Tally {
 }
 
 impl Tally {
-	// A file zfs diff or find-new says is there and isn't means the snapshots
-	// aren't the ones diffed, or one went away.
+	// A file zfs diff or find-new says is there and isn't means the snapshots aren't the ones diffed, or one went away.
 	fn missing(&mut self, expected: bool, name: &str, side: &str) {
 		self.missing += 1;
 		if expected {
@@ -420,8 +402,7 @@ impl Tally {
 	}
 }
 
-// What a name beneath a root is, with no symlink followed and no mount
-// crossed on the way. None when nothing is there by that path.
+// What a name beneath a root is, with no symlink followed and no mount crossed on the way. None when nothing is there by that path.
 fn stat_beneath(root: &Root, rel: &Path) -> io::Result<Option<Metadata>> {
 	// A symlink at the name itself comes back as the link, which isn't a file.
 	match root.open_at(rel, libc::O_PATH).and_then(|f| f.metadata()) {
@@ -458,13 +439,10 @@ struct SubvolInfo {
 }
 
 const _: () = assert!(mem::size_of::<SubvolInfo>() == 504);
-// The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for
-// making snapshots.
+// The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for making snapshots.
 const BTRFS_ROOT_SUBVOL_RDONLY: u64 = 1;
 
-// When a read-only btrfs snapshot was taken, from its subvolume info, which
-// needs no root. Nothing born after that is in it. A received one is left
-// out, since its files are born after it.
+// When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root. Nothing born after that is in it. A received one is left out, since its files are born after it.
 fn frozen_at(root: &Root) -> Option<SystemTime> {
 	let mut info = mem::MaybeUninit::<SubvolInfo>::zeroed();
 	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by
@@ -486,9 +464,7 @@ fn frozen_at(root: &Root) -> Option<SystemTime> {
 	UNIX_EPOCH.checked_add(Duration::new(otime.sec, otime.nsec))
 }
 
-// Old copies of renamed files, found by inode. Snapshots of one btrfs
-// subvolume keep inode numbers, and the birth time rules out a number used
-// again after a delete. One walk serves every file the pair needs.
+// Old copies of renamed files, found by inode. Snapshots of one btrfs subvolume keep inode numbers, and the birth time rules out a number used again after a delete. One walk serves every file the pair needs.
 fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held], tally: &mut Tally) {
 	let dev = old.dev;
 	let mut dirs = vec![old.path.clone()];
@@ -540,8 +516,7 @@ fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held]
 	}
 }
 
-// Compares each file as it's read off the list, holding back only the ones
-// whose old copy has to be found by inode.
+// Compares each file as it's read off the list, holding back only the ones whose old copy has to be found by inode.
 struct Checker<'a> {
 	old: &'a Root,
 	new: &'a Root,
@@ -549,8 +524,7 @@ struct Checker<'a> {
 	show_all: bool,
 	// When --old was frozen, where that's known.
 	frozen: Option<SystemTime>,
-	// When the run started. A birth time past it came from a clock that was
-	// ahead and has since been set back.
+	// When the run started. A birth time past it came from a clock that was ahead and has since been set back.
 	now: SystemTime,
 	tally: Tally,
 	bufs: CompareBufs,
@@ -574,8 +548,7 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	// Which side each listed file has to be on. zfs diff names files in both
-	// snapshots, find-new files in the new one, and a list can name anything.
+	// Which side each listed file has to be on. zfs diff names files in both snapshots, find-new files in the new one, and a list can name anything.
 	fn need_old(&self) -> bool {
 		matches!(self.src, Source::ZfsDiff(..))
 	}
@@ -620,8 +593,7 @@ impl<'a> Checker<'a> {
 		let Some((new_md, by_name)) = self.stat_pair(&name, &pair.old, &pair.new) else {
 			return;
 		};
-		// The old name can be some other file, as after `mv c a`. A file born
-		// since --old was taken has no old copy to look for.
+		// The old name can be some other file, as after `mv c a`. A file born since --old was taken has no old copy to look for.
 		if let Some(ino) = pair.ino
 			&& by_name.as_ref().is_none_or(|m| m.ino() != ino)
 			&& !self.born_since_old(&new_md)
@@ -638,8 +610,7 @@ impl<'a> Checker<'a> {
 		self.settle(&name, old, (&pair.new, &new_md));
 	}
 
-	// A birth time later than now isn't trusted, as scan doesn't trust a date
-	// in the future, so that file waits for the walk.
+	// A birth time later than now isn't trusted, as scan doesn't trust a date in the future, so that file waits for the walk.
 	fn born_since_old(&self, md: &Metadata) -> bool {
 		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f && b <= self.now)
 	}
@@ -652,8 +623,7 @@ impl<'a> Checker<'a> {
 		self.check(name, old, new);
 	}
 
-	// zfs diff names files in both snapshots, so one missing from --old is
-	// missing. find-new and lists can name new files.
+	// zfs diff names files in both snapshots, so one missing from --old is missing. find-new and lists can name new files.
 	fn not_in_old(&mut self, name: &str) {
 		if self.need_old() {
 			self.tally.missing(true, name, "--old");
@@ -665,10 +635,7 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	// zfs diff names attributes kept as a folder, by xattr=dir or a set too
-	// big for sa, as "<xattrdir>" beneath their file. No path reaches them, and
-	// they aren't the file's bytes. A real folder by that name is found by stat
-	// before this is asked, and an owner that isn't there is still missing.
+	// zfs diff names attributes kept as a folder, by xattr=dir or a set too big for sa, as "<xattrdir>" beneath their file. No path reaches them, and they aren't the file's bytes. A real folder by that name is found by stat before this is asked, and an owner that isn't there is still missing.
 	fn is_attribute(&self, rel: &Path) -> bool {
 		let Some(owner) = rel.ancestors().find(|a| a.file_name() == Some(OsStr::new("<xattrdir>"))).and_then(Path::parent) else {
 			return false;
@@ -743,8 +710,7 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 }
 
 fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: impl Fn(&Root) -> Option<SystemTime>) -> Result<i32, String> {
-	// The folders themselves were named by a person and may be symlinks. Only
-	// what's beneath them is held to no symlinks and no mounts, as scan does.
+	// The folders themselves were named by a person and may be symlinks. Only what's beneath them is held to no symlinks and no mounts, as scan does.
 	let open_root = |dir: &Path| -> Result<Root, String> {
 		let fail = |e: io::Error| format!("{}: {e}", show_path(dir));
 		if !fs::metadata(dir).map_err(fail)?.is_dir() {
@@ -1015,8 +981,7 @@ transid marker was 12\n";
 			fs::write(dir.join("b"), b).unwrap();
 			compare(File::open(dir.join("a")).unwrap(), File::open(dir.join("b")).unwrap(), &mut bufs).unwrap()
 		};
-		// Every 8th byte differs, too far apart to merge, and the longer
-		// file's tail is a run of its own.
+		// Every 8th byte differs, too far apart to merge, and the longer file's tail is a run of its own.
 		let a: Vec<u8> = (0..8192u32).map(|i| (i * 7) as u8).collect();
 		let mut b = a.clone();
 		for x in b.iter_mut().step_by(8) {
@@ -1121,8 +1086,7 @@ transid marker was 12\n";
 			fs::write(p, bytes).unwrap();
 			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
 		};
-		// `mv c a`, with a link keeping c's inode. Old a has the same size and
-		// time but other bytes, so a pairing by name flags it.
+		// `mv c a`, with a link keeping c's inode. Old a has the same size and time but other bytes, so a pairing by name flags it.
 		put(&old.join("a"), b"aaaa");
 		put(&old.join("c"), b"cccc");
 		fs::hard_link(old.join("c"), new.join("a")).unwrap();
@@ -1153,8 +1117,7 @@ transid marker was 12\n";
 			fs::write(p, bytes).unwrap();
 			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
 		};
-		// Same size and time as the listed file, other bytes, so reaching it
-		// flags the file.
+		// Same size and time as the listed file, other bytes, so reaching it flags the file.
 		put(&elsewhere.join("f"), b"ffff");
 		put(&new.join("in/f"), b"FFFF");
 		put(&old.join("out/f"), b"FFFF");
@@ -1344,8 +1307,7 @@ transid marker was 12\n";
 			let bad = crate::testutil::mutate(r, real);
 			let p = parse_zfs_diff(&bad, &[Path::new("/home/u")]);
 			bad_lines_are_named(&bad, &p);
-			// Mount points are stripped, so no name comes out absolute. The
-			// other sources are checked for that in run.
+			// Mount points are stripped, so no name comes out absolute. The other sources are checked for that in run.
 			assert!(p.pairs.iter().all(|x| !x.old.has_root() && !x.new.has_root()));
 			if !p.unusable.is_empty() {
 				covered |= 256;
@@ -1372,8 +1334,7 @@ transid marker was 12\n";
 			let (mut text, mut pairs, mut unusable, mut names) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 			let mut last: Option<Vec<u8>> = None;
 			for i in 0..r.below(16) {
-				// find-new prints names raw, so one with a newline can't be told apart.
-				// A file in several extents gets a line for each, one after another.
+				// find-new prints names raw, so one with a newline can't be told apart. A file in several extents gets a line for each, one after another.
 				let name = match &last {
 					Some(prev) if r.one_in(3) => prev.clone(),
 					_ => fuzz_name(r, false),

@@ -1,9 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The checksum left on a file. The first 3 names and their formats are
-// the ones nemo-anywhere reads and writes, so either program can trust what
-// the other left. The date and inode are ours; nemo-anywhere ignores them.
+// The checksum left on a file. The first 3 names and their formats are the ones nemo-anywhere reads and writes, so either program can trust what the other left. The date and inode are ours; nemo-anywhere ignores them.
 
 use crate::util::{b64u_decode, b64u_encode, hex, trim_value, unhex};
 use std::ffi::CStr;
@@ -15,12 +13,10 @@ pub const B3_DIGEST: &CStr = c"user.blake3.b64u";
 pub const B3_BYTES: &CStr = c"user.blake3.bytes";
 pub const B3_MTIME: &CStr = c"user.blake3.mtime";
 pub const B3_DATE: &CStr = c"user.blake3.date";
-/// "dev:ino:digest". The digest ties it to what was read, so a digest written
-/// later by something else doesn't inherit our date. See design.md, Skipping.
+/// "dev:ino:digest". The digest ties it to what was read, so a digest written later by something else doesn't inherit our date. See design.md, Skipping.
 pub const B3_INODE: &CStr = c"user.blake3.inode";
 
-/// Left by `rmlint --xattr`. The checksum is hex, and the time is seconds as a
-/// float, so it only matches to within float rounding.
+/// Left by `rmlint --xattr`. The checksum is hex, and the time is seconds as a float, so it only matches to within float rounding.
 pub const RM_B2B_CKSUM: &CStr = c"user.rmlint.blake2b.cksum";
 pub const RM_B2B_MTIME: &CStr = c"user.rmlint.blake2b.mtime";
 
@@ -70,8 +66,7 @@ pub fn fremove(fd: RawFd, name: &CStr) -> io::Result<()> {
 	}
 }
 
-// C's "%.17g", which is what rmlint's time goes through (glib's
-// g_ascii_dtostr).
+// C's "%.17g", which is what rmlint's time goes through (glib's g_ascii_dtostr).
 fn g17(v: f64) -> String {
 	let sci = format!("{v:.16e}");
 	let (mant, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
@@ -87,8 +82,7 @@ fn g17(v: f64) -> String {
 	}
 }
 
-/// Byte for byte what `rmlint --xattr` writes: hex ending in a NUL, then the
-/// time. The time goes second so a write that stops part way isn't trusted.
+/// Byte for byte what `rmlint --xattr` writes: hex ending in a NUL, then the time. The time goes second so a write that stops part way isn't trusted.
 pub fn write_rmlint(fd: RawFd, b2b: &[u8; 64], mtime_s: f64) -> io::Result<()> {
 	let mut sum = hex(b2b).into_bytes();
 	sum.push(0);
@@ -96,8 +90,7 @@ pub fn write_rmlint(fd: RawFd, b2b: &[u8; 64], mtime_s: f64) -> io::Result<()> {
 	fset(fd, RM_B2B_MTIME, g17(mtime_s).as_bytes())
 }
 
-/// For a file taken as good with a different blake2b. rmlint reads it again
-/// once these are gone. The checksum goes first, since it's useless alone.
+/// For a file taken as good with a different blake2b. rmlint reads it again once these are gone. The checksum goes first, since it's useless alone.
 pub fn remove_rmlint(fd: RawFd) -> io::Result<()> {
 	fremove(fd, RM_B2B_CKSUM)?;
 	fremove(fd, RM_B2B_MTIME)
@@ -137,10 +130,7 @@ fn inode_text(dev: u64, ino: u64, digest: &[u8; 32]) -> String {
 }
 
 impl OnFile {
-	/// A missing or unsupported attribute reads as absent. Any other error is
-	/// returned, since taking it for no set would get the set written over
-	/// unseen. Nothing here is trusted until its size and time are checked
-	/// against the file.
+	/// A missing or unsupported attribute reads as absent. Any other error is returned, since taking it for no set would get the set written over unseen. Nothing here is trusted until its size and time are checked against the file.
 	pub fn read(fd: RawFd) -> io::Result<OnFile> {
 		let get = |n: &CStr| fget(fd, n).map_err(|e| io::Error::new(e.kind(), format!("can't read {}: {e}", n.to_string_lossy())));
 		let b3 = text_of(get(B3_DIGEST)?).and_then(|t| b64u_decode(&t)).and_then(|d| d.try_into().ok());
@@ -163,10 +153,7 @@ impl OnFile {
 		(self.b3_bytes == Some(bytes) && self.b3_mtime_us == Some(mtime_us)).then_some(self.b3).flatten()
 	}
 
-	/// Good enough to skip reading: current, read by us from this very inode,
-	/// and dated between the cutoff and now. A copy made with `cp -a` or
-	/// `rsync -aX` brings the set along but is on another inode. Returns
-	/// the digest and its date.
+	/// Good enough to skip reading: current, read by us from this very inode, and dated between the cutoff and now. A copy made with `cp -a` or `rsync -aX` brings the set along but is on another inode. Returns the digest and its date.
 	pub fn b3_fresh(&self, bytes: i64, mtime_us: i64, dev: u64, ino: u64, cutoff_us: i64, now_us: i64) -> Option<([u8; 32], i64)> {
 		let digest = self.b3_current(bytes, mtime_us)?;
 		let date = self.b3_date_us?;
@@ -180,18 +167,14 @@ impl OnFile {
 	}
 }
 
-/// What `write_b3` writes: the whole set, or only the date on a set that
-/// still matches.
+/// What `write_b3` writes: the whole set, or only the date on a set that still matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum B3Write {
 	All,
 	DateOnly,
 }
 
-/// The time goes after the checksum, since a reader needs the time to match,
-/// and the inode goes last, since a skip needs its digest to match. A write
-/// that stops part way leaves an old value next to the new checksum and gets
-/// thrown away.
+/// The time goes after the checksum, since a reader needs the time to match, and the inode goes last, since a skip needs its digest to match. A write that stops part way leaves an old value next to the new checksum and gets thrown away.
 pub fn write_b3(fd: RawFd, digest: &[u8; 32], bytes: i64, mtime_us: i64, date_us: i64, (dev, ino): (u64, u64), what: B3Write) -> io::Result<()> {
 	match what {
 		B3Write::All => {

@@ -47,8 +47,7 @@ esac; done
 
 fSkip() { echo "lint-report: $1" >&2; exit 2; }
 
-## Newest run_<ts>[_role].log by timestamp. The role suffix GFS rotation adds
-## is ignored, since the timestamp doesn't change.
+## Newest run_<ts>[_role].log by timestamp. The role suffix GFS rotation adds is ignored, since the timestamp doesn't change.
 fNewest() {
 	local d="$1" best="" newest="" f b t
 	for f in "${d}"/run_*.log; do
@@ -69,8 +68,7 @@ else
 	ts="${nb%%$'\t'*}"; log="${nb#*$'\t'}"
 fi
 
-## How old the log is, so a SEEN or a clean report standing on a run from a
-## fortnight ago reads as one.
+## How old the log is, so a SEEN or a clean report standing on a run from a fortnight ago reads as one.
 fAge() {
 	local secs=$(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) ))
 	if ((secs < 0)); then secs=0; fi
@@ -80,8 +78,7 @@ fAge() {
 }
 age="$(fAge "${log}")"
 
-## SEEN only when the marker names the newest log exactly. --file isn't the
-## newest log, so it never moves the marker.
+## SEEN only when the marker names the newest log exactly. --file isn't the newest log, so it never moves the marker.
 marker="${dir}/.lint-seen"
 if ((check)) && ((! force)) && [[ -z "${file}" ]]; then
 	seen=""; [[ -f "${marker}" ]] && seen="$(tr -d '[:space:]' < "${marker}" 2>/dev/null || true)"
@@ -90,8 +87,7 @@ if ((check)) && ((! force)) && [[ -z "${file}" ]]; then
 	fi
 fi
 
-## Finished means the last line is the done line, or the run printed one of the
-## 2 abort lines.
+## Finished means the last line is the done line, or the run printed one of the 2 abort lines.
 lastLine="$(grep -v '^[[:space:]]*$' "${log}" 2>/dev/null | tail -n 1 || true)"
 finished=0
 if [[ "${lastLine}" == *"CI/CD: done."* ]] || grep -qE '^\[ FAILED: |CICD ABORTED' "${log}" 2>/dev/null; then finished=1; fi
@@ -101,23 +97,18 @@ if ((check)) && ((! noMark)) && ((finished)) && [[ -z "${file}" && "${ts}" =~ ^[
 	printf '%s\n' "${ts}" > "${marker}" 2>/dev/null || echo "lint-report: could not write marker: ${marker}" >&2
 fi
 
-## The backup's rar file list. A crate's absence_of_deprecated_warning.rs isn't
-## a finding.
+## The backup's rar file list. A crate's absence_of_deprecated_warning.rs isn't a finding.
 archived='^[0-9]+:(Adding|Updating)  '
 
-## A passed or skipped test line may have "error:" in its name, such as
-## "PASS df4ep read error: ...".
+## A passed or skipped test line may have "error:" in its name, such as "PASS df4ep read error: ...".
 passed='^[0-9]+:(PASS|SKIP)\b'
 
-## Warnings. Drop the "0 warnings" noise, and the echoed command lines that have
-## the word, such as clippy's `-D warnings`.
+## Warnings. Drop the "0 warnings" noise, and the echoed command lines that have the word, such as clippy's `-D warnings`.
 warns="$(grep -inE 'warning|rustsec-|vulnerab|unmaintained|yanked' "${log}" 2>/dev/null | grep -vE "${archived}" \
 	| grep -viE 'generated 0 warnings|: 0 warnings|no warnings|0 warnings emitted|-D warnings' || true)"
 if [[ -n "${warns}" ]]; then n=$(printf '%s\n' "${warns}" | grep -c .); else n=0; fi
 
-## A failed run is never clean. Case-sensitive, since each tool says it one way
-## and the lower-case words turn up in passing output. markdownlint says
-## "error MD033/...", with no colon.
+## A failed run is never clean. Case-sensitive, since each tool says it one way and the lower-case words turn up in passing output. markdownlint says "error MD033/...", with no colon.
 errs="$(grep -nE '(^|[^[:alnum:]_-])error(\[|:)| error MD[0-9]{3}/|\bSC[0-9]{4}\b|test result: FAILED|^FAIL\b|^\[ [0-9.-]+: Step [0-9]+ of [0-9]+; FAIL |panicked at|CICD ABORTED|^\[ FAILED: ' "${log}" 2>/dev/null | grep -vE "${archived}" | grep -vE "${passed}" || true)"
 if [[ -n "${errs}" ]]; then e=$(printf '%s\n' "${errs}" | grep -c .); else e=0; fi
 

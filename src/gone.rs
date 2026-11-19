@@ -18,10 +18,7 @@ fn deepest<'a>(roots: &[&'a Path], p: &Path) -> Option<&'a Path> {
 	roots.iter().copied().filter(|r| p.starts_with(r)).max_by_key(|r| r.as_os_str().len())
 }
 
-// A scan stops at every mount, so a name that another run reached from a
-// deeper root may sit on a filesystem this run never walked. Only a run at
-// or below the root that last saw it would have reached it again. A run with
-// no root list, such as accept's, can't say, so any root counts.
+// A scan stops at every mount, so a name that another run reached from a deeper root may sit on a filesystem this run never walked. Only a run at or below the root that last saw it would have reached it again. A run with no root list, such as accept's, can't say, so any root counts.
 fn reachable(now: &[&Path], last: Option<&[&Path]>, p: &Path) -> bool {
 	let Some(here) = deepest(now, p) else {
 		return false;
@@ -68,8 +65,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 	let earlier: HashMap<i64, Option<Vec<u8>>> = conn.prepare("SELECT id, roots FROM runs WHERE id < ?1").map_err(e)?.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(e)?.collect::<Result<_, _>>().map_err(e)?;
 	let earlier: HashMap<i64, Vec<&Path>> = earlier.iter().filter_map(|(k, v)| v.as_deref().map(|b| (*k, split_roots(b)))).collect();
 
-	// A name with an event was reached, and the names under a folder that
-	// couldn't be listed weren't looked for.
+	// A name with an event was reached, and the names under a folder that couldn't be listed weren't looked for.
 	let mut events = Vec::new();
 	{
 		let mut st = conn.prepare("SELECT kind, path FROM events WHERE run_id = ?1").map_err(e)?;
@@ -125,8 +121,7 @@ mod tests {
 		assert!(reachable(&now, Some(&[p("/")]), p("/a/f")));
 		// Seen from a deeper root, which may be its own mount.
 		assert!(!reachable(&now, Some(&[p("/a/m")]), p("/a/m/f")));
-		// Not under this run's roots at all, and a name that only shares a
-		// prefix.
+		// Not under this run's roots at all, and a name that only shares a prefix.
 		assert!(!reachable(&now, Some(&[p("/b")]), p("/b/f")));
 		assert!(!reachable(&now, None, p("/ab/f")));
 		// No root list to go by.

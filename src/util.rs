@@ -12,8 +12,7 @@ pub fn now_us() -> i64 {
 	SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64)
 }
 
-/// The folder resolved and the name left alone, so a symlink stays a symlink.
-/// A scan stores names that way, walking down from a resolved root.
+/// The folder resolved and the name left alone, so a symlink stays a symlink. A scan stores names that way, walking down from a resolved root.
 pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
 	let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
 	let dir = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -156,10 +155,7 @@ pub fn human_bytes(n: u64) -> String {
 	if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
 }
 
-/// A name as text that maps back to its bytes, so 2 names never print the same:
-/// a backslash doubled, and control characters and bytes that aren't UTF-8 as
-/// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
-/// in its columns.
+/// A name as text that maps back to its bytes, so 2 names never print the same: a backslash doubled, and control characters and bytes that aren't UTF-8 as \xHH. Tabs and newlines get escaped too, which keeps tab-separated output in its columns.
 pub fn escape_name(b: &[u8]) -> String {
 	let mut out = String::with_capacity(b.len());
 	let hex_byte = |out: &mut String, byte: u8| {
@@ -322,8 +318,7 @@ mod tests {
 			if real && month == 2 && day == 29 {
 				covered |= 4;
 			}
-			// A zone that skips midnight would start the day at 01:00, so
-			// midnight is whatever local_midnight_us says it is.
+			// A zone that skips midnight would start the day at 01:00, so midnight is whatever local_midnight_us says it is.
 			if let Some(t) = got {
 				assert_eq!(local_midnight_us(t), t, "{text}");
 				assert_eq!(fmt_local(t)[..10], day_text(&text)[..10], "{text}");

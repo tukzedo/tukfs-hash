@@ -1,10 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Opening what the walk found, from the root's own folder, without following a
-// symlink or crossing onto another filesystem anywhere on the way. The scan
-// runs as root, and a folder swapped for a symlink after it was listed would
-// otherwise send it somewhere else to read files and set attributes.
+// Opening what the walk found, from the root's own folder, without following a symlink or crossing onto another filesystem anywhere on the way. The scan runs as root, and a folder swapped for a symlink after it was listed would otherwise send it somewhere else to read files and set attributes.
 
 use crate::util::cpath;
 use std::ffi::{CStr, OsStr};
@@ -34,8 +31,7 @@ struct OpenHow {
 	resolve: u64,
 }
 
-/// Not where the walk saw it: gone, swapped for a symlink or a file, or under a
-/// mount made since. Nothing was there to check.
+/// Not where the walk saw it: gone, swapped for a symlink or a file, or under a mount made since. Nothing was there to check.
 pub fn moved(e: &io::Error) -> bool {
 	e.kind() == io::ErrorKind::NotFound || matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR | libc::EXDEV))
 }
@@ -54,8 +50,7 @@ fn retry(mut f: impl FnMut() -> libc::c_long) -> io::Result<File> {
 	}
 }
 
-/// Opens a name in a folder without following a link at it. A file made by
-/// `O_CREAT` gets 0666 less the umask, as `File::create` gives.
+/// Opens a name in a folder without following a link at it. A file made by `O_CREAT` gets 0666 less the umask, as `File::create` gives.
 pub fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 	let c = cpath(Path::new(name))?;
 	let mode: libc::c_uint = 0o666;
@@ -114,8 +109,7 @@ impl Root {
 		retry(|| unsafe { libc::syscall(libc::SYS_openat2, self.dir.as_raw_fd(), c.as_ptr(), &raw const how, std::mem::size_of::<OpenHow>()) })
 	}
 
-	// The same rules one folder at a time. A mount on the last part isn't
-	// caught here; the walk checks each folder's device itself.
+	// The same rules one folder at a time. A mount on the last part isn't caught here; the walk checks each folder's device itself.
 	fn step_by_step(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
 		let mut parts = Vec::new();
 		for c in rel.components() {
@@ -145,8 +139,7 @@ impl Root {
 	}
 }
 
-/// Calls `open` with `O_NOATIME`, and again without it if that's refused,
-/// since it needs ownership or root.
+/// Calls `open` with `O_NOATIME`, and again without it if that's refused, since it needs ownership or root.
 pub fn with_noatime(open: impl Fn(libc::c_int) -> io::Result<File>) -> io::Result<File> {
 	match open(libc::O_NOATIME) {
 		Err(e) if e.raw_os_error() == Some(libc::EPERM) => open(0),
@@ -309,8 +302,7 @@ mod tests {
 		for r in both(Path::new("/dev")) {
 			match r.open_at(Path::new("shm"), libc::O_RDONLY | libc::O_DIRECTORY) {
 				Err(e) => assert!(moved(&e), "{e}"),
-				// Only the step by step open gets this far; the walk then
-				// compares the device.
+				// Only the step by step open gets this far; the walk then compares the device.
 				Ok(f) => assert_ne!(f.metadata().unwrap().dev(), r.dev),
 			}
 			let e = r.open_at(Path::new("shm/x"), libc::O_PATH).unwrap_err();
