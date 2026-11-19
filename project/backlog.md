@@ -29,6 +29,20 @@
 
 ## Issues
 
+- Files of 64 to 128 KiB may cost more sys CPU read direct than read plain.
+	- ID: 2026111914312959
+	- Type: Enhancement
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-143129
+	- Opened by: 2026111913564320's timing
+	- Related IDs: 2026102809554675
+	- Note: `DIRECT_MIN` was set at 64 KiB from a guess of where direct pays, 40 to 90 KB, since files between 4 and 64 KB weren't timed (2026102809554675).
+	- Note: In a copy of the read path's calls on ext4, over 4,000 files of 64 to 128 KiB and 6 rounds at load 25 to 27, a direct read took a median of about 0.36 s user plus sys CPU, and a plain read with its drops about 0.33 s. Plain was cheaper in 5 of the 6 rounds, about 7 us per file. Not yet seen in the scan itself.
+	- Requirements [Feature]:
+		- Time scans of files from 64 KiB to 1 MiB, read direct and read plain, by user and sys CPU. Move `DIRECT_MIN` only if the crossing point is clearly elsewhere.
+
 - On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
 	- ID: 2026111914041556
 	- Type: Enhancement
@@ -84,13 +98,23 @@
 - A read of 64 KiB or more makes 4 fcntl calls to turn direct reads on and off.
 	- ID: 2026111913564320
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Canceled
+		- Not worth the change. Keeping the first flags saves one F_GETFL per file, about 130 to 170 ns, against about 75 us per file for the read around it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-135643
 	- Opened by: code fixup 20261119
 	- Note: `set_direct` in `scan.rs` runs F_GETFL then F_SETFL each way. Keeping the first flags would save 2 calls per file. The read itself probably swamps it, as it did for the `posix_fadvise` calls.
 	- Requirements [Feature]:
 		- Time it first by user and sys CPU over large files. Change it only if it moves the number.
+	- Progress log:
+		- 2026-11-19: Keeping the first flags drops only the second F_GETFL, since the F_SETFL that turns it off stays. A bare F_GETFL took 126 to 173 ns of CPU per call.
+		- 2026-11-19: Timed the read path's calls as `read_sums` makes them, on ext4, over 4,000 files of 64 to 128 KiB, the sizes where the toggle weighs most. Over 5 rounds at load 27 to 31, user plus sys CPU had a median of 0.297 s as it is, 0.292 s with the first flags kept, and 0.295 s with no restore at all. Rounds spread over about 0.1 s. The expected saving is 0.5 ms.
+	- Decisions:
+		- Left the code as it was. The saving is under 0.2% at the smallest files that go direct, and less on bigger ones.
+	- Swept: `set_direct` has its callers only in `read_sums`, the turn-on, the turn-off after the read, and the turn-off on EINVAL or EOPNOTSUPP mid-file, which is rare.
+	- Test case: none, no code change.
+	- Closed: 20261119-143109
 
 - The walk looks up each entry's path in the mount point map, which compares paths part by part.
 	- ID: 2026111913564308
