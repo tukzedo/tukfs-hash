@@ -22,7 +22,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.0.0"
+INSTALLER_VERSION="1.0.1"
 PROG="tukfs-hash"
 REPO="tukzedo/tukfs-hash"
 API="https://api.github.com/repos/${REPO}/releases?per_page=100"
@@ -61,6 +61,7 @@ Notes:
 EOF
 }
 
+echo
 while (($#)); do
 	case "$1" in
 		--release|--target) [[ $# -ge 2 ]] || fDie "$1 needs a value (try --help)" ;;
@@ -71,15 +72,13 @@ while (($#)); do
 		--target)    target="$2"; shift 2 ;;
 		--target=*)  target="${1#*=}"; shift ;;
 		-y|--yes)    assumeYes=1; shift ;;
-		--version)   echo "${PROG} installer v${INSTALLER_VERSION}"; exit 0 ;;
-		-h|--help)   fUsage; exit 0 ;;
+		--version)   echo "${PROG} installer v${INSTALLER_VERSION}"; echo; exit 0 ;;
+		-h|--help)   fUsage; echo; exit 0 ;;
 		*)           fDie "unknown option: $1 (try --help)" ;;
 	esac
 done
 [[ "${release}" == "stable" || "${release}" == "dev"    ]] || fDie "--release takes stable or dev, not '${release}'"
 [[ "${target}"  == "user"   || "${target}"  == "system" ]] || fDie "--target takes user or system, not '${target}'"
-
-echo
 
 
 ##	What to fetch, and where it goes.
@@ -267,3 +266,4 @@ echo
 
 ##	History:
 ##		- 2026-11-17: Created from convert-base-v2's install.bash.
+##		- 2026-11-19: Blank line around --help, --version and option errors too.
