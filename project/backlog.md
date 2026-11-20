@@ -29,37 +29,6 @@
 
 ## Issues
 
-- On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
-	- ID: 2026111914041556
-	- Type: Enhancement
-	- Status: Waiting on UAT
-		- To judge: the first decision below, that a folder kept from an earlier open is used as it is, which the fix for 2026101406340922 didn't say.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-140415
-	- Opened by: 2026111913564333's timing
-	- Related IDs: 2026111913564333
-	- Note: Unverified on a real old kernel. A C rig making the same calls on kernel 6.12 took 11 us for a folder 8 deep and 45 us for one 32 deep, against 1.7 and 2.6 us with openat2. The worker pays it twice per file, for its stat open and its read open.
-	- Requirements [Feature]:
-		- Time a scan of a tree of typical depth with the fallback, on a kernel before 5.6 or with it forced, before changing anything. Debian 10's 4.19 is the oldest kernel the release builds' glibc floor reaches.
-	- Progress log:
-		- 2026-11-19: Timed with openat2 refused as ENOSYS by a seccomp filter, on ext4: 20,000 small files in 2,000 folders, files 7.4 deep on average, rescans at load 11 to 15. User plus sys CPU was about 0.47 s with openat2 and 0.80 s with the fallback, 70% more.
-		- 2026-11-19: Each thread now keeps the last folder it opened something in, per root, and starts from it when the next path runs through it. Same tree, 8 paired rescans at load 11: the fallback took 0.76 s before and 0.50 s after, with openat2 at 0.45 s both times. A first scan's openat calls fell from about 16 to 3 per file.
-	- Decisions:
-		- A kept folder is used as it is, without checking it's still where its path says. A folder moved out of the root since can still be read through, but only what's under it, which whoever moved it could have put inside the root anyway. Symlinks and other devices are still refused at each new step.
-		- Any failure through a kept folder is tried again from the root, so a folder replaced or deleted since never makes a file look gone.
-		- One folder per thread per root, held by the root, so it closes with it and can't keep a filesystem busy afterward. A whole chain per thread would save a little more on the walk, at an fd per level.
-		- The openat2 path is unchanged.
-	- Branch: nov19-2026111914041556
-	- Commit: `843c377`
-	- Test case: `dfh8m` (`beneath::tests::a_kept_folder_is_checked_again`): a kept folder replaced by a new one, then deleted and swapped for a symlink.
-	- Verified:
-		- `dfh8m` fails with the retry from the root taken out, and passes with it.
-		- `tests/integration.bash` passed under the seccomp filter on ext4, 208 checks, so every scan there took the fallback.
-		- `cicd/cicd.bash --backlog-run-quick` and its `miri` area passed.
-	- Swept: `step_by_step` is the only fallback, and both of the worker's opens, the walk's folder opens and snapdiff's opens all go through `open_at`.
-	- Note: Unverified on a real kernel before 5.6. The filter refuses the same call with the same error such a kernel gives.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -4284,6 +4253,40 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
+	- ID: 2026111914041556
+	- Type: Enhancement
+	- Status: Closed
+		- To judge: the first decision below, that a folder kept from an earlier open is used as it is, which the fix for 2026101406340922 didn't say.
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-140415
+	- Opened by: 2026111913564333's timing
+	- Related IDs: 2026111913564333
+	- Note: Unverified on a real old kernel. A C rig making the same calls on kernel 6.12 took 11 us for a folder 8 deep and 45 us for one 32 deep, against 1.7 and 2.6 us with openat2. The worker pays it twice per file, for its stat open and its read open.
+	- Requirements [Feature]:
+		- Time a scan of a tree of typical depth with the fallback, on a kernel before 5.6 or with it forced, before changing anything. Debian 10's 4.19 is the oldest kernel the release builds' glibc floor reaches.
+	- Progress log:
+		- 2026-11-19: Timed with openat2 refused as ENOSYS by a seccomp filter, on ext4: 20,000 small files in 2,000 folders, files 7.4 deep on average, rescans at load 11 to 15. User plus sys CPU was about 0.47 s with openat2 and 0.80 s with the fallback, 70% more.
+		- 2026-11-19: Each thread now keeps the last folder it opened something in, per root, and starts from it when the next path runs through it. Same tree, 8 paired rescans at load 11: the fallback took 0.76 s before and 0.50 s after, with openat2 at 0.45 s both times. A first scan's openat calls fell from about 16 to 3 per file.
+	- Decisions:
+		- A kept folder is used as it is, without checking it's still where its path says. A folder moved out of the root since can still be read through, but only what's under it, which whoever moved it could have put inside the root anyway. Symlinks and other devices are still refused at each new step.
+		- Any failure through a kept folder is tried again from the root, so a folder replaced or deleted since never makes a file look gone.
+		- One folder per thread per root, held by the root, so it closes with it and can't keep a filesystem busy afterward. A whole chain per thread would save a little more on the walk, at an fd per level.
+		- The openat2 path is unchanged.
+	- Branch: nov19-2026111914041556
+	- Commit: `843c377`
+	- Test case: `dfh8m` (`beneath::tests::a_kept_folder_is_checked_again`): a kept folder replaced by a new one, then deleted and swapped for a symlink.
+	- Verified:
+		- `dfh8m` fails with the retry from the root taken out, and passes with it.
+		- `tests/integration.bash` passed under the seccomp filter on ext4, 208 checks, so every scan there took the fallback.
+		- `cicd/cicd.bash --backlog-run-quick` and its `miri` area passed.
+	- Swept: `step_by_step` is the only fallback, and both of the worker's opens, the walk's folder opens and snapdiff's opens all go through `open_at`.
+	- Note: Unverified on a real kernel before 5.6. The filter refuses the same call with the same error such a kernel gives.
+	- Closed reason: Done
+	- Acceptance signoff: 20261119, accepted as is: a kept folder moved out of the root stays readable on the pre-5.6 path.
+	- Closed: 20261119-183328
 
 - Files of 64 to 128 KiB may cost more sys CPU read direct than read plain.
 	- ID: 2026111914312959
