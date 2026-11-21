@@ -6,8 +6,9 @@
 ##		  ROTATE_DIR, unless it's the same as the newest one there, and copied
 ##		  to OUT when it's different than what's there.
 ##		- No python3, Pillow or monospace font is a warning and exit 0, so the
-##		  run goes on, or a failure with TUKFS_GATE_STRICT set. A step that exits wrong, or output with anything
-##		  personal in it, fails.
+##		  run goes on without recording its tree or uploading, or a failure
+##		  with TUKFS_GATE_STRICT set. A step that exits wrong, or output with
+##		  anything personal in it, fails.
 ##		- ROTATE_DIR is resolved before anything goes in it, and has to end
 ##		  in /demo/gif with no link inside the private dir. Nothing is written
 ##		  anywhere else but OUT and TMPDIR, and nothing is removed here but by
@@ -30,7 +31,9 @@ bin="${1:?${usage}}"; scenario="${2:?${usage}}"; out="${3:?${usage}}"; rotateDir
 meDir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${meDir}/include/gfs-rotate.bash"
 
+## A skip goes on the run's skip list, which cicd.bash exports (2026111918562700).
 fWarn(){
+	if [[ "${TUKFS_GATE_SKIPS:-}" == /* ]]; then echo demo-gif >> "${TUKFS_GATE_SKIPS}"; fi
 	if [[ -n "${TUKFS_GATE_STRICT:-}" ]]; then echo "demo-gif: $*, and the gate needs it" >&2; exit 1; fi
 	echo "[ WARNING: demo gif skipped: $* ]"; exit 0
 }
@@ -123,3 +126,4 @@ fi
 ##		- 2026-10-23: Created, from shcl's gif stage.
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
 ##		- 2026-11-02: The scenario runs in the test sandbox.
+##		- 2026-11-20: A skip goes on the run's skip list.

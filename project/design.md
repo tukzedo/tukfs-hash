@@ -256,7 +256,7 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 	- The 3 modes don't sync, dogfood, publish, install, rewrite a tracked file, or prompt. The demo gif they draw stays in the run's temp dir.
 	- A run records the tree it tested only when it's at least as thorough as the merge gate, and the hook lets that tree through without running it again. It records the tree only once the demo gif has passed too, in the run that was started rather than the one on the frozen copy. `--no-gif` makes a run partial (2026102814341404). A run with no options records the tree with the gif it copied into the checkout, since the merge gate draws the same bytes from that tree and publish commits it. When anything else changed during the run, it doesn't record anything (2026102819580272).
 	- A run with no options publishes last. It refuses when the checkout no longer has the tree the run tested, other than the demo gif it drew, or when the upstream has commits the run didn't take. On a box without rar it publishes without a backup (2026102814341411, 2026102814341426).
-	- In the 3 check-only modes a missing tool fails the run. The check scripts get this setting as `TUKFS_GATE_STRICT`. A check that needs the leak check image, on a box without docker or the tool, is a skip instead, and the run doesn't record its tree (2026102814341405).
+	- In the 3 check-only modes a missing tool fails the run. The check scripts get this setting as `TUKFS_GATE_STRICT`. A check that needs the leak check image, on a box without docker or the tool, is a skip instead, and the run doesn't record its tree (2026102814341405). In the other modes a check script that skips, for a missing tool, no image or no network, keeps the run from recording its tree or uploading, as a missing lint tool does. That covers the advisory scan, the sanitizers, Miri, CodeQL and the demo gif (2026111918562700).
 
 - `rust-toolchain.toml` pins the stable toolchain, so lint results don't move with the box. The dated nightly for sanitizer and Miri runs is in `cicd/tool-pins.env`.
 
@@ -359,7 +359,7 @@ The project was started in October 2026, after bad RAM was found on a workstatio
 
 - The demo files are the same bytes every run, and dates, times, the disk name, the worker count, and the scan's own run time in the output are pinned, so a render only changes when the output or the script does. `assets/demo.gif` is replaced only when it differs.
 
-- A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. A missing Pillow or font is a warning, and the run goes on.
+- A step that exits with anything but what the scenario says fails the stage, since the gif would show an error as if it were the tool working. A missing Pillow or font is a warning, and the run goes on, but doesn't record its tree or upload.
 
 - An unknown key in the scenario, such as a misspelled `pause`, fails the stage, and so does a value of the wrong type. Otherwise the step would fall back to the default without a word.
 

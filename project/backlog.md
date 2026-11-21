@@ -32,7 +32,7 @@
 - A run with no options records its tree, and on `main` goes on to the release upload, after advisories, a sanitizer, CodeQL or the demo gif skipped for a missing tool.
 	- ID: 2026111918562700
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -47,6 +47,19 @@
 	- Sweep: every `exit 0` skip path in `cicd/utility/*.bash`.
 	- Related IDs: 2026102814341405, 2026102814341404
 	- Note: Repro is `private/claude_simple/tools/review-20261119/cicd/record-after-skip.bash`. On b23 every tool is installed, so a box missing one is what it takes.
+	- Closed reason: Done
+	- Reproduced [Bug]: 2026-11-20, in a scratch clone with a stub config: a run with no options with cargo-deny hidden, and one with Pillow hidden, each recorded the tree.
+	- Actual cause [Bug]: 2026102814341405's fix wrote the skip list only under strict, in `fLeakHostSkip`. advisories and demo-gif failed under strict and otherwise left nothing on the list, which is all the record and the upload read.
+	- Actual fix [Bug]: `fLeakHostSkip` writes the skip list whenever `TUKFS_GATE_SKIPS` is set. advisories' `fSkip` calls it, and demo-gif's `fWarn` puts `demo-gif` on the list. Under strict both still fail. design.md, "Build and release" and "Demo gif", say so.
+	- Decisions: An advisory database that can't be fetched counts as a skip too, so an offline run with no options doesn't record or upload. The "Skipped:" summary still lists only remote hosts, as with a missing ruff, and the "tree not recorded" line names the rest. The profiler's hot spot report without python3 and the dogfood skips stay off the list, since neither is a check.
+	- Branch: nov20-2026111918562700
+	- Commit: `a9ccdb3`
+	- Test case: none with an ID. The private `gate-record-check.bash REPO`, cases "no options, no cargo-deny" and "no options, no Pillow", and the script cases, which now check the skip list in both modes.
+		- 2026-11-20: "image checks, strict=no" wanted exit codes `0 0` and an empty skip list, and now wants `0 0 sanitize-rust-miri codeql`, as this item asks.
+	- Verified: `gate-record-check.bash REPO` passes 28 of 28, and 8 fail on the code before. `cicd/cicd.bash --backlog-run-quick` and `--backlog-run-quick advisories` pass.
+	- Swept: every `exit 0` in `cicd/utility/*.bash`: advisories, demo-gif, and sanitize-rust and codeql-scan through `fLeakHostSkip`. remote-tests' skip exits 3, which cicd.bash already lists. The rest, in release-upload, git-auto-msg, lint-report, ctr-fetch and remote-tests' pass, aren't skips. In cicd.bash, `fLintTool`, ruff, mypy, `fRunIt`, a missing test root, the release image and remote hosts already add to the list.
+	- Acceptance signoff: Self-closed: the check fails on the code before and passes after.
+	- Closed: 20261120-165455
 
 - snapdiff `--find-new` calls a renamed, damaged file "only in --new" and exits 0 when `--old` was made writable, written to, and made read-only again.
 	- ID: 2026111918562701

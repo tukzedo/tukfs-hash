@@ -371,7 +371,7 @@ else
 	gif_to_tmp=0
 	FMT_CHECK_CMD=()
 fi
-## The check scripts read it too, since they only report an exit code: under it a missing tool fails, and a check the box can't run at all, with no image, goes on the skip list (2026102814341405).
+## The check scripts read it too, since they only report an exit code: under it a missing tool fails, and a check the box can't run at all, with no image, goes on the skip list (2026102814341405). Outside it, every skip of theirs goes on the skip list, through TUKFS_GATE_SKIPS (2026111918562700).
 if ((gate_strict)); then export TUKFS_GATE_STRICT=1; else unset TUKFS_GATE_STRICT; fi
 ## The run that froze the tree formatted the checkout first.
 if [[ "${run_part}" == build ]]; then FMT_CMD=(); fi

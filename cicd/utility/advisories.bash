@@ -7,7 +7,8 @@
 ##		is the point. On the host, since it fetches the database, and the leak
 ##		check image has no network.
 ##		The fetch and the check are apart, so a database that can't be had is
-##		told from a finding. That's a noted skip, or a failure with
+##		told from a finding. That's a noted skip, which goes on the run's
+##		skip list so it doesn't record its tree, or a failure with
 ##		TUKFS_GATE_STRICT set, as the check-only modes do.
 ##	Syntax:
 ##		advisories.bash
@@ -30,6 +31,7 @@ start="${SECONDS}"
 strict="${TUKFS_GATE_STRICT:-}"
 
 fSkip(){
+	fLeakHostSkip advisories
 	if [[ -n "${strict}" ]]; then echo "advisories: $1, and the gate needs it" >&2; exit 1; fi
 	echo "note: advisories: skipped, since $1"
 	exit 0
@@ -49,3 +51,4 @@ echo "advisories: OK: none known for the $(grep -c "^name = " Cargo.lock) packag
 
 ##	History:
 ##		- 2026-10-23: Created.
+##		- 2026-11-20: A skip goes on the run's skip list.
