@@ -7,6 +7,7 @@
 // is to remember what a file read as last time, so a damaged database, or one
 // with newer tables, is refused and left alone.
 
+use crate::util::show_path;
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, ToSql, params};
 use std::collections::HashSet;
@@ -77,7 +78,7 @@ const KNOWN: [(&str, &str, &str); 9] = [
 
 /// Turns off schema trust and refuses anything CREATE didn't make, such as a trigger, a view or a virtual table, before anything else reads the file.
 fn vet(conn: &Connection, path: &Path) -> Result<(), String> {
-	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
+	let e = |e: rusqlite::Error| format!("{}: {e}", show_path(path));
 	conn.pragma_update(None, "trusted_schema", false).map_err(e)?;
 	let mut st = conn.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema").map_err(e)?;
 	let mut rows = st.query([]).map_err(e)?;
@@ -95,7 +96,7 @@ fn vet(conn: &Connection, path: &Path) -> Result<(), String> {
 				_ => false,
 			};
 		if !made_here {
-			return Err(format!("{}: has {kind} {name:?}, which this program doesn't make. Left as is.", path.display()));
+			return Err(format!("{}: has {kind} {name:?}, which this program doesn't make. Left as is.", show_path(path)));
 		}
 	}
 	Ok(())
@@ -148,7 +149,7 @@ fn refuse_links(path: &Path, suffixes: &[&str]) -> Result<(), String> {
 		s.push(sfx);
 		let p = Path::new(&s);
 		if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
-			return Err(format!("{}: is a symbolic link; refused", p.display()));
+			return Err(format!("{}: is a symbolic link; refused", show_path(p)));
 		}
 	}
 	Ok(())
@@ -163,8 +164,8 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	init();
 	refuse_links(path, &["", "-wal", "-shm"])?;
 	// A link at the name is refused. SQLite opens `-wal` and `-shm` with O_NOFOLLOW already, so under sudo nothing is made through a link.
-	let mut conn = Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW).map_err(|e| format!("{}: {e}", path.display()))?;
-	let e = |e: rusqlite::Error| format!("{}: {e}", path.display());
+	let mut conn = Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW).map_err(|e| format!("{}: {e}", show_path(path)))?;
+	let e = |e: rusqlite::Error| format!("{}: {e}", show_path(path));
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
 	vet(&conn, path)?;
 	// Empty, such as the 0-byte file a full disk left on a first run, is new. One transaction, so a failed first run leaves it empty again rather than half made.
@@ -177,7 +178,7 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	}
 	let check: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0)).map_err(e)?;
 	if check != "ok" {
-		return Err(format!("{}: damaged ({check}). Left as is; restore it from a snapshot.", path.display()));
+		return Err(format!("{}: damaged ({check}). Left as is; restore it from a snapshot.", show_path(path)));
 	}
 	let schema: Option<i64> = conn.query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| r.get(0)).optional().map_err(e)?;
 	// 2 added runs.roots, for --resume. Older runs have none, and can't be resumed. 3 added runs.verify, so a resume keeps the run's mode. 4 renamed b2 to b2b, so it reads as blake2b.
@@ -198,7 +199,7 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	}
 	if schema != Some(SCHEMA) {
 		let had = schema.map_or_else(|| "none".into(), |v| v.to_string());
-		return Err(format!("{}: tables are version {had}, this program knows {SCHEMA}", path.display()));
+		return Err(format!("{}: tables are version {had}, this program knows {SCHEMA}", show_path(path)));
 	}
 	conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(())).map_err(e)?;
 	// A power cut can lose the last second of rows, and the next run hashes those files again. Not worth an fsync per batch.
@@ -222,11 +223,11 @@ pub fn open_ro(path: &Path) -> Result<Connection, String> {
 	init();
 	// A read only open makes neither WAL file, so links there aren't its business.
 	refuse_links(path, &[""])?;
-	let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW).map_err(|e| format!("{}: {e}", path.display()))?;
+	let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW).map_err(|e| format!("{}: {e}", show_path(path)))?;
 	conn.busy_timeout(Duration::from_secs(30)).ok();
 	vet(&conn, path)?;
-	if no_tables(&conn).map_err(|e| format!("{}: {e}", path.display()))? {
-		return Err(format!("{}: empty; no scan has written to it", path.display()));
+	if no_tables(&conn).map_err(|e| format!("{}: {e}", show_path(path)))? {
+		return Err(format!("{}: empty; no scan has written to it", show_path(path)));
 	}
 	Ok(conn)
 }

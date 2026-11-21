@@ -510,6 +510,15 @@ fFlipByte "${rt}/${tab}" 100 1
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || true
 "${bin}" report --db "${work}/db/rt.sqlite" > "${work}/report2.txt" || true
 check ddy6f "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"${rt}/t\\\\x09ab"$'\t' "${work}/report2.txt")" 1
+# A newline split a root over 2 lines, and a byte that isn't UTF-8 printed as U+FFFD (2026111918562710).
+nl="${work}/$(printf 'r\nl')"; mkdir -p "${nl}/in"; printf 'x' > "${nl}/f"
+roots=(--root "${nl}" --root "${nl}/in"); shown=("${work}/r\\x0al")
+if [[ "${odd}" == 1 ]]; then
+	mkdir -p "${work}/$(printf 'caf\xe9')"; roots+=(--root "${work}/$(printf 'caf\xe9')"); shown+=("${work}/caf\\xe9")
+fi
+"${bin}" scan --db "${work}/db/nl.sqlite" "${roots[@]}" --no-xattrs --progress 3600 > "${work}/nl-out.txt" 2> "${work}/nl-err.txt" || true
+check dfjyy "a scan escapes its roots' names" "$(grep $'^\t' "${work}/nl-out.txt" | LC_ALL=C sort)" "$(printf '\t%s\n' "${shown[@]}" | LC_ALL=C sort)"
+check dfjyz "a scan escapes a dropped root's name" "$(grep -c '^skipping root ' "${work}/nl-err.txt") $(grep -cxF "skipping root ${shown[0]}/in: inside ${shown[0]}" "${work}/nl-err.txt")" "1 1"
 
 # 11. Each name of a hard-linked file is held to its own row, with no
 # attributes to fall back on.
@@ -1359,3 +1368,4 @@ fi
 ##		  before the second INT.
 ##		- 20261119: A stale folder the sweep can't remove no longer ends the
 ##		  run, and a report or setup scan that fails gets its FAIL line.
+##		- 20261120: A scan escapes the names of its roots, and of a root it drops.

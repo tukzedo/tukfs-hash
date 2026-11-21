@@ -7,7 +7,7 @@ use crate::beneath::{self, Root};
 use crate::db::{self, Hashed, Kind, Msg, Prior, RunStatus};
 use crate::mounts;
 use crate::say::{self, Fit};
-use crate::util::{b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us};
+use crate::util::{b64u_encode, escape_name, fmt_local, hex, human_bytes, local_midnight_us, now_us, show_path};
 use crate::xattr::{self, OnFile};
 use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -376,15 +376,15 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)], mounts: &[mounts::M
 	canon.sort();
 	canon.dedup();
 	for c in canon {
-		let md = fs::metadata(&c).map_err(|e| format!("{}: {e}", c.display()))?;
+		let md = fs::metadata(&c).map_err(|e| format!("{}: {e}", show_path(&c)))?;
 		if !md.is_dir() {
-			return Err(format!("{}: not a folder", c.display()));
+			return Err(format!("{}: not a folder", show_path(&c)));
 		}
 		if let Some(first) = seen_ids.get(&(md.dev(), md.ino())) {
-			dropped.push(format!("{}: same folder as {}", c.display(), first.display()));
+			dropped.push(format!("{}: same folder as {}", show_path(&c), show_path(first)));
 			continue;
 		}
-		let m = mounts::mount_for(mounts, &c).ok_or_else(|| format!("{}: no mount found", c.display()))?;
+		let m = mounts::mount_for(mounts, &c).ok_or_else(|| format!("{}: no mount found", show_path(&c)))?;
 		seen_ids.insert((md.dev(), md.ino()), c.clone());
 		found.push((c, (md.dev(), md.ino()), m));
 	}
@@ -402,8 +402,8 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)], mounts: &[mounts::M
 				if (md.dev(), md.ino()) != *id {
 					return None;
 				}
-				let as_at = if at == *c { String::new() } else { format!(", as {}", at.display()) };
-				Some(format!("{}: inside {}{as_at}", c.display(), k.display()))
+				let as_at = if at == *c { String::new() } else { format!(", as {}", show_path(&at)) };
+				Some(format!("{}: inside {}{as_at}", show_path(c), show_path(k)))
 			})
 		})
 		.collect();
@@ -437,24 +437,24 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)], mounts: &[mounts::M
 /// Takes the database's lock file, so 2 scans can't share it.
 fn lock(dir: &File, db: &Path, mounts: &[mounts::Mount]) -> Result<File, String> {
 	if let Some(t) = mounts::hands_off_at(mounts, db) {
-		return Err(format!("{} is on {t}, which isn't written to from Linux; put the database elsewhere", db.display()));
+		return Err(format!("{} is on {t}, which isn't written to from Linux; put the database elsewhere", show_path(db)));
 	}
 	let p = lock_path(db);
 	// Under sudo a link here would make and later chown a file of the user's choosing.
 	let f = beneath::openat(dir.as_raw_fd(), p.file_name().unwrap_or_default(), libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK).map_err(|e| match e.raw_os_error() {
-		Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", p.display()),
-		_ => format!("{}: {e}", p.display()),
+		Some(libc::ELOOP) => format!("{}: is a symbolic link; refused", show_path(&p)),
+		_ => format!("{}: {e}", show_path(&p)),
 	})?;
 	if !f.metadata().is_ok_and(|m| m.file_type().is_file()) {
-		return Err(format!("{}: not a regular file; refused", p.display()));
+		return Err(format!("{}: not a regular file; refused", show_path(&p)));
 	}
 	// SAFETY: f is open for the length of the call.
 	if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
 		let e = io::Error::last_os_error();
 		if e.kind() == io::ErrorKind::WouldBlock {
-			return Err(format!("{} is locked; another scan is using this database", p.display()));
+			return Err(format!("{} is locked; another scan is using this database", show_path(&p)));
 		}
-		return Err(format!("{}: can't lock: {e}", p.display()));
+		return Err(format!("{}: can't lock: {e}", show_path(&p)));
 	}
 	Ok(f)
 }
@@ -472,12 +472,12 @@ fn sudo_ids() -> Option<(u32, u32)> {
 /// The folder of the database, or of what `what` names. Under sudo it has to be that user's or root's, or a link planted at it would have root make the files wherever it points and hand them over (2026111011092301).
 pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Result<File, String> {
 	let dir = file.parent().unwrap_or(Path::new("/"));
-	let failed = |e: io::Error| format!("{what} folder {}: {e}", dir.display());
+	let failed = |e: io::Error| format!("{what} folder {}: {e}", show_path(dir));
 	// With O_PATH a link is opened rather than refused, so its type says so.
 	let f = beneath::openat(libc::AT_FDCWD, dir.as_os_str(), libc::O_PATH).map_err(failed)?;
 	let m = f.metadata().map_err(failed)?;
 	if m.file_type().is_symlink() {
-		return Err(format!("{}: is a symbolic link; refused", dir.display()));
+		return Err(format!("{}: is a symbolic link; refused", show_path(dir)));
 	}
 	if !m.is_dir() {
 		return Err(failed(io::Error::from_raw_os_error(libc::ENOTDIR)));
@@ -486,7 +486,7 @@ pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Res
 		&& m.uid() != uid
 		&& m.uid() != 0
 	{
-		return Err(format!("{what} folder {} is owned by uid {}, not by uid {uid} or root; refused", dir.display(), m.uid()));
+		return Err(format!("{what} folder {} is owned by uid {}, not by uid {uid} or root; refused", show_path(dir), m.uid()));
 	}
 	Ok(f)
 }
@@ -539,7 +539,7 @@ impl Held {
 			return;
 		};
 		for (p, e) in hand_over(&self.dir, &self.db, uid, gid) {
-			say::err(&format!("warning: can't give {} back to uid {uid}: {e}", crate::util::show_path(&p)));
+			say::err(&format!("warning: can't give {} back to uid {uid}: {e}", show_path(&p)));
 		}
 	}
 }
@@ -550,7 +550,7 @@ impl Drop for Held {
 		if let Some(conn) = self.conn.take()
 			&& let Err(x) = db::close_rw(conn)
 		{
-			say::err(&format!("warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.", crate::util::show_path(&self.db)));
+			say::err(&format!("warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.", show_path(&self.db)));
 		}
 		self.give_back();
 	}
@@ -558,7 +558,7 @@ impl Drop for Held {
 
 // SQLite takes only a path, so it gets the checked folder's path as it is now, which the kernel knows from the fd. Another folder put at the old name since isn't used (2026111918562711).
 fn through(dir: &File, db: &Path) -> Result<PathBuf, String> {
-	let at = fs::read_link(format!("/proc/self/fd/{}", dir.as_raw_fd())).map_err(|e| format!("database folder of {}: {e}", db.display()))?;
+	let at = fs::read_link(format!("/proc/self/fd/{}", dir.as_raw_fd())).map_err(|e| format!("database folder of {}: {e}", show_path(db)))?;
 	Ok(at.join(db.file_name().unwrap_or_default()))
 }
 
@@ -611,7 +611,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		say::err(&format!("skipping root {d}"));
 	}
 	// A mistyped root would leave a whole tree unread under a run that looks fine, and a mistyped --exclude or --no-xattr reads or writes where it was told not to, so nothing starts (2026102814341406, 2026111011092303).
-	let mut bad: Vec<String> = unresolved.iter().map(|(r, e)| format!("root {}: {e}", crate::util::show_path(r))).collect();
+	let mut bad: Vec<String> = unresolved.iter().map(|(r, e)| format!("root {}: {e}", show_path(r))).collect();
 	let mut excludes = resolve_each("--exclude", &o.excludes, &mut bad);
 	// It changes as the scan reads it.
 	excludes.extend(o.log.as_deref().and_then(|l| fs::canonicalize(l).ok()));
@@ -630,7 +630,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
 	let mut held = Held::take(&db_path, &mounts)?;
-	let failed = |e: io::Error| format!("database folder of {}: {e}", db_path.display());
+	let failed = |e: io::Error| format!("database folder of {}: {e}", show_path(&db_path));
 	let db_dir = held.dir.metadata().map(|m| (m.dev(), m.ino())).map_err(failed)?;
 	let db_folder = Some(held.dir.try_clone().map_err(failed)?);
 	let conn = held.open()?;
@@ -763,7 +763,7 @@ fn hands_off(mounts: &[mounts::Mount], groups: &[Planned]) -> Result<BTreeMap<Pa
 	let mut out = BTreeMap::new();
 	for r in groups.iter().flat_map(|g| &g.roots) {
 		if let Some(fstype) = mounts::hands_off_at(mounts, r) {
-			let dev = fs::metadata(r).map_err(|e| format!("{}: {e}", r.display()))?.dev();
+			let dev = fs::metadata(r).map_err(|e| format!("{}: {e}", show_path(r)))?.dev();
 			out.insert(r.clone(), HandsOff { dev, fstype });
 		}
 	}
@@ -794,9 +794,9 @@ fn groups(planned: Vec<Planned>, hands_off: &BTreeMap<PathBuf, HandsOff>, mounts
 		say::out(&format!("group {} with {} worker(s):", g.name, g.threads), Fit::Cut);
 		for r in &g.roots {
 			if let Some(h) = hands_off.get(r) {
-				say::out(&format!("\t{} ({}, no attributes written)", r.display(), h.fstype), Fit::Cut);
+				say::out(&format!("\t{} ({}, no attributes written)", show_path(r), h.fstype), Fit::Cut);
 			} else {
-				say::out(&format!("\t{}", r.display()), Fit::Cut);
+				say::out(&format!("\t{}", show_path(r)), Fit::Cut);
 			}
 		}
 	}
@@ -1014,7 +1014,7 @@ fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
 
 fn db_dir(db: &Path) -> Result<(u64, u64), String> {
 	let dir = db.parent().unwrap_or(Path::new("/"));
-	fs::metadata(dir).map(|m| (m.dev(), m.ino())).map_err(|e| format!("database folder {}: {e}", dir.display()))
+	fs::metadata(dir).map(|m| (m.dev(), m.ino())).map_err(|e| format!("database folder {}: {e}", show_path(dir)))
 }
 
 // Each path resolved. One that can't be goes in `bad`, made absolute, with why.
@@ -1025,7 +1025,7 @@ fn resolve_each(flag: &str, paths: &[PathBuf], bad: &mut Vec<String>) -> Vec<Pat
 			Ok(c) => resolved.push(c),
 			Err(e) => {
 				let abs = std::path::absolute(p).unwrap_or_else(|_| p.clone());
-				bad.push(format!("{flag} {}: {e}", crate::util::show_path(&abs)));
+				bad.push(format!("{flag} {}: {e}", show_path(&abs)));
 			}
 		}
 	}
@@ -1046,9 +1046,9 @@ fn drop_excluded(planned: Vec<Planned>, excludes: &[PathBuf], mounts: &[mounts::
 	let why = |root: &Path| {
 		let md = fs::metadata(root).ok()?;
 		if let Some(x) = ids.get(&(md.dev(), md.ino())) {
-			return Some(format!("same folder as --exclude {}", crate::util::show_path(x)));
+			return Some(format!("same folder as --exclude {}", show_path(x)));
 		}
-		found_above(&names_above(mounts, root), |id| ids.get(&id).copied()).map(|x| format!("inside --exclude {}", crate::util::show_path(x)))
+		found_above(&names_above(mounts, root), |id| ids.get(&id).copied()).map(|x| format!("inside --exclude {}", show_path(x)))
 	};
 	planned
 		.into_iter()
@@ -1057,7 +1057,7 @@ fn drop_excluded(planned: Vec<Planned>, excludes: &[PathBuf], mounts: &[mounts::
 				let Some(why) = why(r) else {
 					return true;
 				};
-				say::err(&format!("skipping root {}: {why}", crate::util::show_path(r)));
+				say::err(&format!("skipping root {}: {why}", show_path(r)));
 				false
 			});
 			(!g.roots.is_empty()).then_some(g)

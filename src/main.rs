@@ -75,7 +75,8 @@ scan options:
 	--progress SECS     Seconds between progress lines. Default 30.
 	--log FILE          Append every line the scan prints to FILE, in full. On a
 	                    terminal, a line too long for it is cut with a ~ at the
-	                    end, and a summary line is broken at its | marks.
+	                    end, and a summary line is broken at its | marks, and a
+	                    long list in it at its commas.
 
 plan takes --threads as scan does, and shows the groups a scan would use.
 

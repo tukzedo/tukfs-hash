@@ -10,6 +10,8 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::util::show_path;
+
 /// One line of the mount table.
 #[derive(Debug, Clone)]
 pub struct Mount {
@@ -305,18 +307,18 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 				return Err(format!("cannot resolve {}", m.source));
 			}
 			None => {
-				return Err(format!("{} is {} from {}, not a local disk", m.point.display(), m.fstype, m.source));
+				return Err(format!("{} is {} from {}, not a local disk", show_path(&m.point), m.fstype, m.source));
 			}
 		},
 	}
 	if out.is_empty() {
-		return Err(format!("no disks found under {}", m.point.display()));
+		return Err(format!("no disks found under {}", show_path(&m.point)));
 	}
 	let mut real = BTreeSet::new();
 	for d in out {
 		match loop_backing(&d) {
 			Some(f) if depth < 4 => {
-				let bm = mount_for(mounts, &f).ok_or_else(|| format!("{d}: no mount found for {}", f.display()))?;
+				let bm = mount_for(mounts, &f).ok_or_else(|| format!("{d}: no mount found for {}", show_path(&f)))?;
 				real.extend(disks_under(bm, mounts, depth + 1)?);
 			}
 			_ => {

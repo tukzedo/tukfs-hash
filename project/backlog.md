@@ -369,7 +369,7 @@
 - On a terminal, the scan's summary cuts the events line, so the event kinds late in the list don't show.
 	- ID: 2026111918562709
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -381,11 +381,23 @@
 	- Expected behavior [Bug]: design.md says every count in the summary matters.
 	- Probable fix [Bug]: Let `Break` break at ", " too, or join the kinds with " | ".
 	- Related IDs: 2026111019145405
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as unit test dfjyx with the old fitting: at 80 columns the events line came out as one row ending `b2b-rmlint-mism~`.
+	- Actual cause [Bug]: `say::fitted` broke a line only at " | ", and the events line has none, so the whole list was one part, cut at the width.
+	- Actual fix [Bug]: A part too long for a row of its own is broken at its ", " marks too, each row but the last ending with its comma, and the rest indented. A part that fits a row still moves whole. design.md, "Runs and exit codes", and `--help` say so.
+	- Decisions: Break at ", " rather than join the kinds with " | ", so the stored summary, the log and piped output don't change.
+	- Branch: nov20-2026111918562709
+	- Commit: `dce4351`
+	- Test case: `dfjyx` (`every_kind_in_a_long_events_line_shows`), with `df4xk` (`a_line_fits_its_terminal`) unchanged.
+	- Verified: `dfjyx` fails with the old fitting and passes after, every kind whole from 42 to 119 columns. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
+	- Swept: `Fit::Break` is used only for the summary in `scan::run`. The other ", " lists the scan prints are on stderr, which isn't cut.
+	- Acceptance signoff: Self-closed: the probable fix, the test fails before and passes after.
+	- Closed: 20261120-192308
 
 - The scan's root lines print names as they are: bytes that aren't UTF-8 become U+FFFD, and a newline splits a root over 2 lines, on the terminal and in the log.
 	- ID: 2026111918562710
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -396,6 +408,18 @@
 	- Probable fix [Bug]: Use `show_path` for the root lines and the `dropped` and "inside" strings.
 	- Sweep: every `display()` that reaches stdout or the log.
 	- Related IDs: 2026101406340924
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as integration checks dfjyy and dfjyz, with the build from before the fix: a root named `caf\xe9` printed as `caf` and U+FFFD, and a newline split the root and "skipping root" lines.
+	- Actual cause [Bug]: The root lines and `plan`'s dropped and "inside" strings used `display()`, which 2026101406340924 left in `scan.rs`.
+	- Actual fix [Bug]: They use `show_path`, and so does every error text with a path in `scan.rs`, `db.rs`, `mounts.rs` and `util::canonical_name`, since a scan's errors reach the log too. The `plan` command's "skip" lines are escaped with them. design.md, "Runs and exit codes", says so.
+	- Decisions: Error text with a path is escaped too, which the sweep of 2026101406340924 had left alone, since `--log` now records it.
+	- Branch: nov20-2026111918562709
+	- Commit: `dce4351`
+	- Test case: integration `dfjyy` (a root named with a newline, and one that isn't UTF-8, on their lines) and `dfjyz` (the "skipping root ... inside" line). The non-UTF-8 root is skipped on ZFS.
+	- Verified: `dfjyy` and `dfjyz` fail against the build from before the fix on ext4, and pass after on ext4 and ZFS, in `--backlog-run-quick`.
+	- Swept: every `display()` in `src/`. Left: `profiling.rs`, built only with the `profiling` feature, and test code in `snapdiff.rs`, `soak.rs`, `testutil.rs` and the test modules.
+	- Acceptance signoff: Self-closed: the probable fix, the tests fail before and pass after.
+	- Closed: 20261120-192308
 
 - Under sudo, the database is opened by path after its folder was checked, so a swap in between could have root's SQLite make files elsewhere.
 	- ID: 2026111918562711

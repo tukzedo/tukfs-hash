@@ -30,7 +30,7 @@ const TAB: usize = 8;
 pub enum Fit {
 	/// Cut at the width, with `~` as the last column.
 	Cut,
-	/// Broken at each ` | ` that's needed, the rest indented by a tab, so nothing in it is lost. A part still too long is cut.
+	/// Broken at each ` | ` that's needed, the rest indented by a tab, so nothing in it is lost. A part too long for a row of its own is broken at its `, ` marks too, and only an item still too long is cut.
 	Break,
 }
 
@@ -185,16 +185,43 @@ fn fitted(line: &str, width: Option<usize>, fit: Fit) -> Vec<String> {
 	}
 	let mut rows: Vec<String> = Vec::new();
 	for part in line.split(" | ") {
-		match rows.last_mut() {
-			Some(row) if cols(row) + 3 + cols(part) <= width => {
-				row.push_str(" | ");
-				row.push_str(part);
-			}
-			Some(_) => rows.push(format!("\t{part}")),
-			None => rows.push(part.to_string()),
+		if let Some(row) = rows.last_mut()
+			&& cols(row) + 3 + cols(part) <= width
+		{
+			row.push_str(" | ");
+			row.push_str(part);
+			continue;
+		}
+		let lead = if rows.is_empty() { "" } else { "\t" };
+		let whole = format!("{lead}{part}");
+		if cols(&whole) <= width {
+			rows.push(whole);
+		} else {
+			broken_at_commas(part, lead, width, &mut rows);
 		}
 	}
 	rows.iter().map(|r| cut(r, width)).collect()
+}
+
+// A list such as the events line's kinds, too long for a row of its own, so the kinds late in it aren't cut off (2026111918562709). Each row but the last ends with its comma.
+fn broken_at_commas(part: &str, lead: &str, width: usize, rows: &mut Vec<String>) {
+	let mut items = part.split(", ").peekable();
+	let mut row = lead.to_string();
+	let mut empty = true;
+	while let Some(item) = items.next() {
+		let comma = if items.peek().is_some() { "," } else { "" };
+		if !empty && cols(&row) + 1 + cols(item) + comma.len() > width {
+			rows.push(std::mem::replace(&mut row, "\t".to_string()));
+			empty = true;
+		}
+		if !empty {
+			row.push(' ');
+		}
+		row.push_str(item);
+		row.push_str(comma);
+		empty = false;
+	}
+	rows.push(row);
 }
 
 #[cfg(test)]
@@ -221,6 +248,30 @@ mod tests {
 				assert!(cols(&r) <= w, "{w}: {r}");
 			}
 		}
+	}
+
+	// The events line has no ` | `, so at 80 columns it was cut after its second kind, and read-error, which sets exit 4, sorts early among the rest (2026111918562709).
+	#[test]
+	fn every_kind_in_a_long_events_line_shows() {
+		let _id = test_id("dfjyx");
+		let kinds = ["b3-db-mismatch 3", "b3-xattr-mismatch 3", "b2b-rmlint-mismatch 3", "dir-error 1", "open-error 1", "read-error 2", "unstable 1"];
+		let line = format!("events in the whole run: {}", kinds.join(", "));
+		let rows = fitted(&line, Some(80), Fit::Break);
+		assert_eq!(rows, ["events in the whole run: b3-db-mismatch 3, b3-xattr-mismatch 3,", "\tb2b-rmlint-mismatch 3, dir-error 1, open-error 1, read-error 2,", "\tunstable 1"]);
+		for w in 10..120 {
+			let rows = fitted(&line, Some(w), Fit::Break);
+			for r in &rows {
+				assert!(cols(r) <= w, "{w}: {r}");
+			}
+			// Each kind is whole once a row has room for it.
+			if w >= "events in the whole run: b3-db-mismatch 3,".len() {
+				let joined = rows.join(" ").replace('\t', "");
+				assert_eq!(joined, line, "{w}: {rows:?}");
+			}
+		}
+		// A part that fits a row of its own still moves whole, as before.
+		let summary = "sda: files 3 hashed 3 | events in the whole run: dir-error 1, read-error 2";
+		assert_eq!(fitted(summary, Some(60), Fit::Break), ["sda: files 3 hashed 3", "\tevents in the whole run: dir-error 1, read-error 2"]);
 	}
 
 	// Under sudo the scan is root's, and the name the user's (2026111019145405).
