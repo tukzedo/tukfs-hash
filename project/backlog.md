@@ -163,6 +163,9 @@
 	- Opened by: code review 20261119, item 7
 	- Origin: `9120949` and `25144d2`. Code review 20261110 saw a folder above a root swapped and decided against it. Confirmed, with an NTFS image mounted over a later root's parent while the first root was scanned.
 	- Against: code review 20261110's "Decided against: a folder above a root swapped after it was resolved." That call weighed whose choice the root is. It didn't weigh the rule that nothing is written to NTFS, since the walk's device isn't in `no_write_devs`.
+	- Decisions: `walk` refuses a root whose opened folder isn't the device and inode the plan resolved. It's a `dir-error` with exit 8, the same as a root that's gone after the plan. This narrows code review 20261110's call (answered 2026-11-20).
+		- The root is still the user's choice when the scan starts, and what's inside it can still change.
+		- A refusal was picked over only keeping attributes off NTFS. The plan's groups, threads, skips and percent were all worked out for the folder it resolved, so a scan of some other folder is wrong in more ways than the attributes.
 	- Incorrect behavior [Bug]: Exit 0, and `user.blake3.*` on a file inside the NTFS image.
 	- Expected behavior [Bug]: The root is refused as a `dir-error`, or at least nothing is written to NTFS.
 	- Probable fix [Bug]: Keep each root's device and inode from the plan, and have `walk` refuse a root whose opened folder differs.
@@ -259,6 +262,9 @@
 	- Opened by: code review 20261119, item 13
 	- Origin: `1282504`. Not seen before as a stop. Confirmed with a stand-in publisher in a scratch clone.
 	- Against: code review 20261110's "Decided against: publish stays in the foreground, per 2026102814341436." That call weighed the wait, and didn't weigh a commit and push after a stop.
+	- Decisions: The publisher runs through `fBg` when the run already has its commit message, and stays in the foreground only when git's editor is needed. This narrows 2026102814341436's foreground list (answered 2026-11-20).
+		- A stop takes the local tag off only when nothing was pushed.
+		- A run with no message still waits for the publisher on a stop, since the editor needs the terminal. `--help` should say so.
 	- Incorrect behavior [Bug]: Bash runs the trap only once the foreground child exits. On `main` the run then takes the local tag off after `main` was pushed.
 	- Expected behavior [Bug]: A stop before the commit commits nothing, as 2026111011092310 gives the publisher's own PID.
 	- Probable fix [Bug]: Run the publisher through `fBg` when it has a message, and keep the foreground only for the editor case.
@@ -288,6 +294,8 @@
 	- Opened by: code review 20261119, item 15
 	- Origin: `831dbfd`, 2026111011092313. Confirmed under `/tmp`: a subvolume with 1 MB ends `~0% of 552.2 GiB`, and a folder with the same file `~100% of 976.6 KiB`.
 	- Against: 2026111011092313's call that a subvolume top counts as whole. That call had `/home` from `/@home` in mind, a mounted subvolume. It didn't weigh nested ones such as snapper snapshots.
+	- Decisions: A btrfs subvolume's top counts as whole only when it's also its mount's point. A nested one is a folder root, and gets its percent from the counting walk. This narrows 2026111011092313's call (answered 2026-11-20).
+		- A mounted subvolume such as `/home` from `/@home` keeps its percent against the whole volume's use, as 2026110407135700 answered.
 	- Expected behavior [Bug]: design.md counts folder roots because used space would read near 0.
 	- Probable fix [Bug]: Take the inode-256 branch only when the root is also its mount's point, which keeps `/home` from `/@home`.
 	- Related IDs: 2026111011092313
@@ -370,6 +378,10 @@
 	- Opened by: code review 20261119, item 23
 	- Origin: `f6f4e7a`, 2026110715441806, which measured only `M` lines. Confirmed: about 110 bytes per `-` line, 111 MB for 1M and 222 MB for 2M, against 2.5 MB for 1M `M` lines.
 	- Against: 2026110715441806 keeps the `-` and `+` names to the end. Its goal was memory that doesn't grow with the list, which a mass delete breaks.
+	- Decisions: A `-` name is kept only when `--new` has something by that name. This narrows 2026110715441806's call to the names that can pair (answered 2026-11-20).
+		- A `+` name gets the same rule against `--old`, since a mass create fills the `added` set the same way. That's from reading the code, and wasn't measured.
+		- Which files get compared stays the same. A name with both a `-` and a `+` line is in both snapshots, so neither check drops it.
+		- The memory check gets a case with many `-` and `+` lines.
 	- Requirements  [Feature]:
 		- Keep a `-` name only when `--new` has something by that name, so memory grows with replaced files only.
 	- Related IDs: 2026110715441806
@@ -4732,7 +4744,7 @@
 	- ID: 2026102808215637
 	- Type: Task
 	- Status: Closed
-		- Read `project/style-guide_code.md`, `contributing.md`, and README's new Contributing section, for wording and for what they ask of contributors.
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0
 	- Opened: 20261028-082156
@@ -4753,6 +4765,7 @@
 	- Branch: nov17b-2026102808215637
 	- Commit: `1cabf24`
 	- Test case: none, since it's docs only.
+	- Closed: 20261119-122844
 
 - There is currently no one-line install script.
 	- ID: 2026110218175402
