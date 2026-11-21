@@ -976,10 +976,13 @@ if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/p/
 	printf 'b\n' > "${bt}/p/sv/f2"; printf 'c\n' > "${bt}/p/sv/f3"
 	rc=0; "${bin}" scan --db "${bt}/t.sqlite" --root "${bt}/p" --root "${bt}/p/sv" --progress 3600 > "${bt}/out.txt" 2>&1 || rc=$?
 	check des5x "btrfs subvolume inside another root" "${rc} $(grep -o 'hashed [0-9]*' "${bt}/out.txt" | head -1 || true)" "0 hashed 3"
+	# A subvolume that isn't a mount point is counted as a folder, rather than measured against the whole filesystem (2026111918562714).
+	check dfjzd "unmounted btrfs subvolume's percent done" "$(grep -oE '[|] ~[0-9]+% of [^|]+$' "${bt}/out.txt" | tail -1 || true)" "| ~100% of 6 B"
 	# rm --one-file-system leaves a subvolume behind, so it goes first.
 	rm -f -- "${bt}/p/sv/f2" "${bt}/p/sv/f3"; rmdir -- "${bt}/p/sv" || true
 else
 	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
+	skip dfjzd "unmounted btrfs subvolume's percent done (not on btrfs, or no btrfs tool)"
 fi
 # A file born after a read-only --old was taken can't be in it, so snapdiff counts it new as it's read, rather than holding it for the inode walk. The renamed one still waits, so it comes last (2026111011092305).
 if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/live" > /dev/null 2>&1; then
@@ -1369,3 +1372,5 @@ fi
 ##		- 20261119: A stale folder the sweep can't remove no longer ends the
 ##		  run, and a report or setup scan that fails gets its FAIL line.
 ##		- 20261120: A scan escapes the names of its roots, and of a root it drops.
+##		- 20261120: An unmounted btrfs subvolume root is counted as a folder for
+##		  its percent done.

@@ -515,7 +515,8 @@
 - A btrfs subvolume that isn't a mount point gets its percent from the whole filesystem, so a finished scan ends at "~0%".
 	- ID: 2026111918562714
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -527,6 +528,17 @@
 	- Expected behavior [Bug]: design.md counts folder roots because used space would read near 0.
 	- Probable fix [Bug]: Take the inode-256 branch only when the root is also its mount's point, which keeps `/home` from `/@home`.
 	- Related IDs: 2026111011092313
+	- Reproduced [Bug]: Yes, under `/tmp` with the build from before: a subvolume with 1 MB ended `~0% of 555.1 GiB`, and a folder with the same file `~100% of 976.6 KiB`.
+	- Actual cause [Bug]: `mounts::shows_whole` took any folder with inode 256 on btrfs as whole, whether or not it was its mount's point.
+	- Actual fix [Bug]: `shows_whole` takes the inode-256 case only at a mount's point, so an unmounted subvolume is counted as a folder. design.md, "Runs and exit codes", says so.
+	- Branch: nov20-2026111918562714
+	- Commit: `86955aa`
+	- Test case: `df4j6` (unit, the mount table), and `dfjzd` in `tests/integration.bash`: the subvolume root of step 27 ends `~100% of 6 B`. Both fail before the fix, `df4j6` at its unmounted subvolume case and `dfjzd` with `~0% of 555.1 GiB`, and pass after.
+		- 2026-11-20: `df4j6` asserted `/home/u` with inode 256 counts as whole. It now asserts it doesn't, per the Decisions row, and a nested subvolume mounted at its own point still does. The other cases are unchanged.
+	- Swept: `size_parts` is the only caller of `shows_whole`, and nothing else reads inode 256 for the percent.
+	- Verified: The repro gives `~100%` for the subvolume, alone and inside another root. `cicd/cicd.bash --backlog-run-quick` passed, with `dfjzd` on ext4 and ZFS, and so did `--backlog-run-quick miri`.
+	- Acceptance signoff: Self-closed: the Decisions row as answered, pinned by tests that fail before and pass after.
+	- Closed: 20261120-193359
 
 - Each `--log` line is written in 2 writes, so 2 scans sharing one log can mix their lines.
 	- ID: 2026111918562715
@@ -627,7 +639,8 @@
 - README's "Details" says the percent shows only when every root is a whole filesystem.
 	- ID: 2026111918562720
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on UAT
+		- Read README's "Details" percent bullet against design.md's.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -635,6 +648,12 @@
 	- Origin: `9175cd9`. Left as it was by `4bc2de4`, which gave folder roots a percent (2026111019145393). Confirmed: a folder root ends `~100% of 2 B`.
 	- Probable fix [Bug]: Say what design.md's percent paragraph says.
 	- Related IDs: 2026111019145393
+	- Actual fix [Bug]: README's "Details" says a whole filesystem or a mounted btrfs subvolume is measured against its used space, and a folder is counted by a walk beside the scan, with the share shown once that count is in.
+	- Decisions: Only the wrong sentence was replaced, and the first sentence lost its "as a share of the space used" clause. The rest of the bullet is as it was.
+	- Branch: nov20-2026111918562714
+	- Commit: `86955aa`
+	- Test case: None, since it's README wording. `dfjzd`, `df4x7` and `df4x8` pin the behavior it describes.
+	- Stand-in: none (20261120). Only the wording is left to judge.
 
 - Keep snapdiff `--zfs-diff` memory bounded when the list has many deleted files.
 	- ID: 2026111918562722
