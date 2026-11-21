@@ -22,7 +22,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.0.1"
+INSTALLER_VERSION="1.0.2"
 PROG="tukfs-hash"
 REPO="tukzedo/tukfs-hash"
 API="https://api.github.com/repos/${REPO}/releases?per_page=100"
@@ -104,16 +104,24 @@ if command -v getconf >/dev/null 2>&1; then
 	fi
 fi
 
+uid="$(id -u)"
 if [[ "${target}" == "user" ]]; then
 	[[ -n "${HOME:-}" ]] || fDie "HOME isn't set, so there's no ~/.local/bin"
+	## A sudo that keeps HOME, or su -m, would leave a root-owned copy in someone else's folder.
+	if [[ "${uid}" == "0" && -e "${HOME}" && ! -O "${HOME}" ]]; then
+		fDie "this is running as root, but HOME is ${HOME}, which isn't root's. Run it without sudo to install for that user, or use --target system for /usr/local/bin"
+	fi
 	destDir="${HOME}/.local/bin"
 else
 	destDir="/usr/local/bin"
 fi
 destPath="${destDir}/${PROG}"
-[[ -L "${destPath}" || ! -d "${destPath}" ]] || fDie "there's a folder at ${destPath}, so nothing was changed"
+if [[ -d "${destPath}" ]]; then
+	[[ ! -L "${destPath}" ]] || fDie "${destPath} is a link to a folder, so nothing was changed"
+	fDie "there's a folder at ${destPath}, so nothing was changed"
+fi
 useSudo=0
-if [[ "${target}" == "system" && "$(id -u)" != "0" ]]; then
+if [[ "${target}" == "system" && "${uid}" != "0" ]]; then
 	command -v sudo >/dev/null 2>&1 || fDie "--target system needs root, or sudo"
 	useSudo=1
 fi
@@ -179,11 +187,13 @@ haveVer=""
 if [[ -f "${destPath}" ]]; then
 	have="$(sha256sum "${destPath}" 2>/dev/null || true)"
 	if [[ "${have%% *}" == "${want}" ]]; then
-		fEcho "${destPath} is already ${PROG} ${tag}, so there's nothing to do"
-		echo
-		exit 0
-	fi
-	if [[ -x "${destPath}" ]]; then
+		if [[ -x "${destPath}" ]]; then
+			fEcho "${destPath} is already ${PROG} ${tag}, so there's nothing to do"
+			echo
+			exit 0
+		fi
+		haveVer="the same build, but it isn't executable"
+	elif [[ -x "${destPath}" ]]; then
 		haveVer="$("${destPath}" --version 2>/dev/null || true)"; haveVer="${haveVer%%$'\n'*}"
 	fi
 fi
@@ -239,11 +249,12 @@ newVer="${newVer%%$'\n'*}"
 
 fEcho "Installing to ${destPath}"
 ## Through a new name in the same folder, then a rename over the old one, so a running copy keeps going and a stop partway leaves the old one whole.
+## -T so a link to a folder that turned up since the check gets replaced, not moved into.
 staged="${destDir}/.${PROG}.new.$$"
 fAsTarget(){ if ((useSudo)); then sudo "$@"; else "$@"; fi; }
 fAsTarget mkdir -p -- "${destDir}"                               || fDie "couldn't make ${destDir}"
 fAsTarget install -m 0755 -- "${work}/${asset}" "${staged}"      || { fAsTarget rm -f -- "${staged}" || true; fDie "couldn't write to ${destDir}"; }
-fAsTarget mv -f -- "${staged}" "${destPath}"                     || { fAsTarget rm -f -- "${staged}" || true; fDie "couldn't put ${PROG} in place at ${destPath}"; }
+fAsTarget mv -fT -- "${staged}" "${destPath}"                    || { fAsTarget rm -f -- "${staged}" || true; fDie "couldn't put ${PROG} in place at ${destPath}"; }
 
 echo
 fEcho "Installed ${newVer}"
@@ -258,3 +269,5 @@ echo
 ##	History:
 ##		- 2026-11-17: Created from convert-base-v2's install.bash.
 ##		- 2026-11-19: Blank line around --help, --version and option errors too.
+##		- 2026-11-20: Refuses a link to a folder at the name, and root with
+##		  someone else's HOME. Same bytes without the execute bit get put in again.

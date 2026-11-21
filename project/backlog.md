@@ -29,6 +29,18 @@
 
 ## Issues
 
+- The dogfood copy moves the binary into a folder when its name in the synced `linux/bin` is a link to one.
+	- ID: 2026112017341780
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261120-173417
+	- Opened by: sweep for 2026111918562703
+	- Related IDs: 2026111918562703
+	- Origin: Plausible, read only. The same rename onto a name that 2026111918562703 fixed in `install.bash`.
+	- Probable fix [Bug]: `mv -fT` in `fInstallAtomic` in `cicd/cicd.bash`, or skip a name that leads to a folder.
+
 - A run with no options records its tree, and on `main` goes on to the release upload, after advisories, a sanitizer, CodeQL or the demo gif skipped for a missing tool.
 	- ID: 2026111918562700
 	- Type: Bug
@@ -130,7 +142,8 @@
 - `install.bash` prints "Installed" at exit 0 when the install path is a link to a folder, and replaces nothing.
 	- ID: 2026111918562703
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -142,6 +155,19 @@
 	- Expected behavior [Bug]: The plan says it replaces a link with the file itself.
 	- Probable fix [Bug]: `mv -fT`, or refuse a link that leads to a folder, as a real folder is refused.
 	- Note: Repro is case A of `private/claude_simple/tools/review-20261119/install/install/repro-findings.bash`.
+	- Reproduced [Bug]: Yes, with install-check's new cases: exit 0, "Installed", the link unchanged, and the staged file inside the folder.
+	- Actual cause [Bug]: The folder check let any link through, and `mv -f` onto a link to a folder moves the file into the folder.
+	- Actual fix [Bug]: A link to a folder at the name is refused before anything is fetched, as a real folder is. The rename is `mv -fT`, so a link to a folder made after the check is replaced, not moved into.
+	- Decisions:
+		- Refused rather than replaced. From outside it looks like a folder, and a real folder is already refused. A link to a file is still replaced, as the plan says.
+		- `-T` as well, for a link made between the check and the rename. BusyBox `mv -T` follows the link and fails there, so that gives exit 1 and "couldn't put tukfs-hash in place", never a false "Installed".
+	- Branch: nov20-2026111918562703
+	- Commit: `ef2ed39`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `install-check.bash` cases "link to folder" (6) and "late link" (5). 8 of them fail on the code before and all pass after.
+	- Swept: the other uses of the name. The same-bytes check uses `-f`, which follows a link to a file, as before. The `install` writes a new name in the target folder. `fInstallAtomic` in `cicd/cicd.bash` renames onto a name the same way, filed as 2026112017341780.
+	- Verified: `install-check.bash` passes 114 of 114, up from 91. The 2 refusals give the same messages under Bash 3.2.57. shellcheck is clean, and `--backlog-run-quick` passed.
+	- Acceptance signoff: Self-closed: a link to a folder gets the same refusal as a folder, pinned by checks that fail before and pass after.
+	- Closed: 20261120-173417
 
 - Make `install.bash` work with a noexec temp folder, or say that's the cause, in place of "doesn't run on this system".
 	- ID: 2026111918562721
@@ -354,13 +380,27 @@
 - `install.bash` says "nothing to do" when the installed file has the right bytes but isn't executable.
 	- ID: 2026111918562716
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 17
 	- Origin: `f249afd`. Confirmed: a copy at mode 644 stays at 644, and the run exits 0.
 	- Probable fix [Bug]: Take the early exit only when the file is also executable.
+	- Reproduced [Bug]: Yes, with install-check's new cases: "nothing to do" at exit 0, and the file left at 644.
+	- Actual cause [Bug]: The early exit looked at the bytes only.
+	- Actual fix [Bug]: It exits early only when the file can also be run. Otherwise the plan says "Replaces: the same build, but it isn't executable", and the file is put in again at 0755.
+	- Decisions:
+		- Put in again in full, rather than a `chmod` in place. Every replace takes one path, through the same download check and rename, and it's only a download more.
+		- `-x` asks whether the one running it can run the file. Under `--target system` through sudo, a root file the user can't run counts as not executable too, and is put in again at 0755.
+	- Branch: nov20-2026111918562703
+	- Commit: `ef2ed39`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "not executable" (5). 3 of them fail on the code before and all pass after.
+	- Swept: that early exit is the only one after the plan is worked out.
+	- Verified: `install-check.bash` passes 114 of 114, and `--backlog-run-quick` passed.
+	- Acceptance signoff: Self-closed: the item's probable fix, pinned by checks that fail before and pass after.
+	- Closed: 20261120-173417
 
 - A stop between the install and the rename leaves `.tukfs-hash.new.<pid>` in the target folder, owned by root under `--target system`.
 	- ID: 2026111918562717
@@ -388,13 +428,28 @@
 - `sudo bash install.bash` without `--target system` can install into the user's `~/.local/bin` as root and leave it owned by root.
 	- ID: 2026111918562719
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 20
 	- Origin: `f249afd`. Plausible, from reading: it needs a sudo that keeps HOME, as older Ubuntu did.
 	- Probable fix [Bug]: As root with `SUDO_USER` set and a HOME that isn't root's, refuse the user target and point to `--target system`.
+	- Reproduced [Bug]: With a stand-in. As root in a user namespace with HOME at a folder owned by someone else, the old code went on to fetch the release list. A real sudo that keeps HOME wasn't run.
+	- Actual cause [Bug]: The user target took HOME as given, whoever was running it.
+	- Actual fix [Bug]: As root, the user target is refused when HOME is there and isn't root's, before anything is fetched. The message says to run it without sudo, or with `--target system`.
+	- Decisions:
+		- It goes by who owns HOME, not by `SUDO_USER`. That covers `sudo -E` and `su -m` too, and a root whose HOME is its own still installs.
+		- A HOME that isn't there isn't refused, since nothing of anyone else's is in it.
+	- Branch: nov20-2026111918562703
+	- Commit: `ef2ed39`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "root, ..." (7), as root in a user namespace, where the real root's `/usr` belongs to nobody. 3 of them fail on the code before and all pass after.
+	- Stand-in: root in a user namespace in place of sudo. It refused HOME at `/usr`, installed with HOME at a folder of its own, and didn't refuse `--target system`. The refusal gives the same message as root under Bash 3.2.57.
+	- Swept: `id -u` is now read once, for this check and the sudo one.
+	- Note: Not run: a real sudo that keeps HOME. One that fails reopens this.
+	- Acceptance signoff: Self-closed per memory.md's close policy, on the root stand-in.
+	- Closed: 20261120-173417
 
 - README's "Details" says the percent shows only when every root is a whole filesystem.
 	- ID: 2026111918562720
