@@ -460,8 +460,7 @@ const BTRFS_ROOT_SUBVOL_RDONLY: u64 = 1;
 // When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root.
 fn frozen_at(root: &Root) -> Option<SystemTime> {
 	let mut info = mem::MaybeUninit::<SubvolInfo>::zeroed();
-	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by
-	// size, and outlives the call.
+	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by size, and outlives the call.
 	let r = unsafe { libc::ioctl(root.as_raw_fd(), libc::_IOR::<SubvolInfo>(0x94, 60), info.as_mut_ptr()) };
 	// Some kernels return 1 from a search left over, with the info filled in.
 	if r < 0 {
@@ -1144,8 +1143,7 @@ transid marker was 12\n";
 		let src = Source::FindNew(dir.join("unread"));
 		let ino = fs::metadata(new.join("now")).unwrap().ino();
 		let found_at = |now| {
-			// The clock was ahead when the file was made, and set back before
-			// --old was taken.
+			// The clock was ahead when the file was made, and set back before --old was taken.
 			let frozen = born - Duration::from_secs(60);
 			let mut c = Checker::new(&old_root, &new_root, &src, false, Some(frozen));
 			c.now = now;

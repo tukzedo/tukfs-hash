@@ -85,6 +85,8 @@ The pipeline's format and lint steps check most code style, so the formatter and
 
 ## Bash
 
+These rules are for new scripts. Some tracked scripts differ and stay as they are: `tests/integration.bash` and `git-auto-msg.bash` use `set -euo pipefail`, `box-side.bash` uses `set -Euo pipefail`, the launcher uses `set -eu`, and `tests/integration.bash` has `name() {` functions and a `Usage:` header.
+
 - Name scripts `*.bash`, and start them with `#!/usr/bin/env bash` and `set -Eeuo pipefail`.
 
 - The header is `##` comments with `Purpose`, `Syntax`, and `Exit`, then the copyright lines. A `History: At bottom of script.` line points to the dated list at the end of the file.

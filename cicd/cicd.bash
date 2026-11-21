@@ -198,12 +198,8 @@ QUIET_FLAG=""
 # shellcheck source=config.bash
 source "${here}/config.bash"
 
-## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs
-## stages 2-7 only. It records no tree, since the gif comes after it, in the
-## run that started it. The pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then
-## what gets copied, with nothing uncommitted.
-## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count
-## on from its.
+## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs stages 2-7 only. It records no tree, since the gif comes after it, in the run that started it. The pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then what gets copied, with nothing uncommitted.
+## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count on from its.
 ## TUKFS_CHECKOUT is the checkout the copy came from, for what's beside it.
 run_part="${TUKFS_RUN_PART:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
 checkout="${TUKFS_CHECKOUT:-${root}}"
@@ -774,16 +770,9 @@ fBuildNumber(){   ## fBuildNumber EPOCH_SECONDS
 	printf '%s\n' "${out}"
 }
 
-## From the commit rather than the clock, so a rebuild of one commit gives the same
-## bytes. Every cargo call in the run sees the same value, so none rebuilds
-## over it.
-## A release is a commit tagged v<version>, so tag before building one. Any
-## other build prints its date too.
-## A tree that isn't the commit's, such as uncommitted work in the frozen copy,
-## gets -dirty after the number and is never a release, since the number names
-## a commit that isn't what was built. The run on the frozen copy works
-## it out again from the copy, and a run with no copy does after its format
-## stage, which can rewrite the tree.
+## From the commit rather than the clock, so a rebuild of one commit gives the same bytes. Every cargo call in the run sees the same value, so none rebuilds over it.
+## A release is a commit tagged v<version>, so tag before building one. Any other build prints its date too.
+## A tree that isn't the commit's, such as uncommitted work in the frozen copy, gets -dirty after the number and is never a release, since the number names a commit that isn't what was built. The run on the frozen copy works it out again from the copy, and a run with no copy does after its format stage, which can rewrite the tree.
 build_number=""; build_release=""; build_date=""; build_mark=""
 fBuildStamp(){
 	local commit_time="" commit_tags="" head_tree="" tree=""
@@ -1029,8 +1018,7 @@ if ((! assume_yes && ! inner_run)) && ((${#GIT_PUBLISH[@]})) && [[ -z "${publish
 fi
 
 ## The whole run into a rotated log, for lint-report.bash. Not under
-## --backlog-run-quick, which writes nothing, and not in the run on the
-## frozen copy, whose output already goes through this one.
+## --backlog-run-quick, which writes nothing, and not in the run on the frozen copy, whose output already goes through this one.
 if [[ "${mode}" != bq ]] && ((! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
 	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C reaches the whole process group, so it ignores that too, and ends when the run closes its end. -p keeps it writing the log after a reader such as grep is gone, since the same stop takes that down too.
@@ -1412,13 +1400,8 @@ fStageProfile(){
 ## The release set's file names, which download links depend on: <exe>-<version>-<os-arch>, the same plus .deb or .rpm, and <exe>-<version>-sha256sums.txt. Anything else in the dir is left alone.
 fReleaseName(){ [[ "$1" =~ ^${EXE_NAME}-[0-9][0-9A-Za-z.+~-]*-(linux-[a-z0-9_]+(\.deb|\.rpm)?|sha256sums\.txt)$ ]]; }
 
-## Stage 6: the native release build and the cross targets, copied under their
-## release names into a stage dir in the run's temp dir. Then the packages and
-## the release checks over that, and only when all of them pass does the set
-## replace the one in release_dir, with its sums file.
-## For the eval'd config strings: release_stage, release_work, ver,
-## staged_osarchs, the os-arch of each build, native first, and
-## release_glibc, the floor check's mode.
+## Stage 6: the native release build and the cross targets, copied under their release names into a stage dir in the run's temp dir. Then the packages and the release checks over that, and only when all of them pass does the set replace the one in release_dir, with its sums file.
+## For the eval'd config strings: release_stage, release_work, ver, staged_osarchs, the os-arch of each build, native first, and release_glibc, the floor check's mode.
 release_stage=""; release_work=""; ver=""; release_glibc="glibc"
 declare -a staged_osarchs=()
 fStageRelease(){
@@ -1895,8 +1878,7 @@ fCleanup(){
 ## Run
 
 fmt_done=0
-## Here as well as at the end, so a run that's stopped still
-## takes down what the last one left.
+## Here as well as at the end, so a run that's stopped still takes down what the last one left.
 if ((! inner_run)); then
 	fSweepKilled
 	if ((${#swept[@]})); then fEcho_Clean "cleanup: removed $(printf '%s, ' "${swept[@]}" | sed 's/, $//'), about $(fSize "${swept_kb}")"; fi
@@ -1950,95 +1932,42 @@ exit 0
 
 
 ##	History:
-##		- 2026-10-23: Created from shcl's engine, trimmed to one crate on Linux: no
-##		  crosscheck, large-document gate, drop-ins tarball, installer drift
-##		  check, bindings or container. Stages print start and PASS lines with
-##		  times. The integration test runs once per test root in config.bash. Run
-##		  dirs, the frozen copy in them, and stale build cache entries are
-##		  removed only behind guards. --slow, and a build number for --version.
-##		- 2026-10-23: --gate always leaves the leak checks out, and each one's
-##		  time is shown.
-##		- 2026-10-23: The profiler stage, from shcl's: its attribution check, a
-##		  generated workload in a run dir of its own, a timed line per step, a
-##		  rotated flamegraph and flame-report.py's summary. ruff in the lint
-##		  stage, and the profiling build in the cache prune.
+##		- 2026-10-23: Created from shcl's engine, trimmed to one crate on Linux: no crosscheck, large-document gate, drop-ins tarball, installer drift check, bindings or container. Stages print start and PASS lines with times. The integration test runs once per test root in config.bash. Run dirs, the frozen copy in them, and stale build cache entries are removed only behind guards. --slow, and a build number for --version.
+##		- 2026-10-23: --gate always leaves the leak checks out, and each one's time is shown.
+##		- 2026-10-23: The profiler stage, from shcl's: its attribution check, a generated workload in a run dir of its own, a timed line per step, a rotated flamegraph and flame-report.py's summary. ruff in the lint stage, and the profiling build in the cache prune.
 ##		- 2026-10-23: The demo gif's settings in the plan.
-##		- 2026-10-23: LINT_EXTRA, for the test ID check. A cid dir in the run's
-##		  temp dir, so a stop kills every container the run started.
+##		- 2026-10-23: LINT_EXTRA, for the test ID check. A cid dir in the run's temp dir, so a stop kills every container the run started.
 ##		- 2026-10-23: A build that isn't a tagged release shows its date.
 ##		- 2026-10-24: --no-debug, and --no-codeql for CodeQL on its own.
-##		- 2026-10-24: A stop's cleanup ignores further signals and a gone
-##		  reader, and the run log outlives the reader.
-##		- 2026-10-24: INT, TERM and HUP trapped, and the long steps waited on
-##		  in the background, so a second TERM can't skip the cleanup. A killed
-##		  run's dirs and frozen copy go at the next run's start and end, as
-##		  soon as its PID is gone, rather than a day later.
+##		- 2026-10-24: A stop's cleanup ignores further signals and a gone reader, and the run log outlives the reader.
+##		- 2026-10-24: INT, TERM and HUP trapped, and the long steps waited on in the background, so a second TERM can't skip the cleanup. A killed run's dirs and frozen copy go at the next run's start and end, as soon as its PID is gone, rather than a day later.
 ##		- 2026-10-24: With no TMPDIR, a run works under RUN_TMP_ROOT, not /tmp.
-##		- 2026-10-25: A quarter of the cores when busy or for a leak check,
-##		  rechecked at each step, and nice 19 with idle I/O.
-##		- 2026-10-25: The shared flags: --long, --backlog-run-quick with its
-##		  areas, --backlog-run-full, --merge-gate, --no-container, --no-remote,
-##		  --keep-temp and --list. --gate and --ci are other names. The tree is
-##		  recorded after the release checks.
-##		- 2026-10-25: Step lines in the shared form, timed to the hundredth and
-##		  closed by PASS or FAIL. Only the steps that run are counted, the
-##		  frozen copy's included, and the plan lists the rest with the reason.
-##		  A 79 character rule.
+##		- 2026-10-25: A quarter of the cores when busy or for a leak check, rechecked at each step, and nice 19 with idle I/O.
+##		- 2026-10-25: The shared flags: --long, --backlog-run-quick with its areas, --backlog-run-full, --merge-gate, --no-container, --no-remote, --keep-temp and --list. --gate and --ci are other names. The tree is recorded after the release checks.
+##		- 2026-10-25: Step lines in the shared form, timed to the hundredth and closed by PASS or FAIL. Only the steps that run are counted, the frozen copy's included, and the plan lists the rest with the reason. A 79 character rule.
 ##		- 2026-10-25: --list prints the test IDs too, from TEST_ID_LIST_CMD.
-##		- 2026-10-25: The debug build, clippy, unit tests and the integration
-##		  test's release build in the release image, or on the host with a note.
-##		- 2026-10-25: Without the image, the x86_64 release build on the host,
-##		  with a note, and no arm64.
-##		- 2026-10-25: Stage 7, other hosts: the arm64 unit and integration
-##		  tests on vmDebARM64. A box that isn't there is a SKIP, listed again
-##		  at the end. --no-remote skips it.
-##		- 2026-10-25: Run dirs named <stamp>_<NNN> under HOST_TEMP, with
-##		  run.pid, and swept after 2 days. TEMP and TMP too. The integration
-##		  test makes its own dir. The run's containers are removed by label
-##		  at the end.
-##		- 2026-10-25: Leak checks in 3 lengths. The fast ones run in --quick
-##		  too, and long ones only in --long, which the frozen copy now gets.
-##		- 2026-10-25: A killed run's dir and frozen copy go at the next run
-##		  again. Only a kept dir waits 2 days.
-##		- 2026-10-28: mypy in the lint stage. shellcheck follows sources, per
-##		  .shellcheckrc, so the disables that only covered for that are gone.
-##		- 2026-10-29: Publish refuses a checkout that changed since the run took
-##		  its tree, other than the gif, and an upstream with commits to take.
-##		- 2026-10-28: The backlog runs and the merge gate build the release set
-##		  in the run's temp dir, and leave the checkout's alone.
-##		- 2026-10-29: An area named with the --no- option that takes it out is
-##		  refused, and so is a plan with no steps.
-##		- 2026-10-29: The profiler, lint, cross builds, packages and release
-##		  checks in the background too, so a stop doesn't wait for them.
-##		- 2026-10-29: Sync and publish refuse while an earlier run's stash is
-##		  left. The cache prune dates entries by rust-toolchain.toml, and leaves
-##		  a cache dir alone while another run builds in it.
-##		- 2026-10-29: A build of a tree that differs from the commit's gets
-##		  -dirty after its build number, and is never a release.
-##		- 2026-11-02: A run with no options records the tree with the gif it
-##		  copied in. --keep-temp's cleanup line no longer takes a cache dir's
-##		  freed size off for the kept temp dir.
-##		- 2026-11-02: The test steps on the host run in the sandbox, and
-##		  --no-sandbox.
-##		- 2026-11-02: The content scrub in the lint stage, when the private
-##		  folder has one.
+##		- 2026-10-25: The debug build, clippy, unit tests and the integration test's release build in the release image, or on the host with a note.
+##		- 2026-10-25: Without the image, the x86_64 release build on the host, with a note, and no arm64.
+##		- 2026-10-25: Stage 7, other hosts: the arm64 unit and integration tests on vmDebARM64. A box that isn't there is a SKIP, listed again at the end. --no-remote skips it.
+##		- 2026-10-25: Run dirs named <stamp>_<NNN> under HOST_TEMP, with run.pid, and swept after 2 days. TEMP and TMP too. The integration test makes its own dir. The run's containers are removed by label at the end.
+##		- 2026-10-25: Leak checks in 3 lengths. The fast ones run in --quick too, and long ones only in --long, which the frozen copy now gets.
+##		- 2026-10-25: A killed run's dir and frozen copy go at the next run again. Only a kept dir waits 2 days.
+##		- 2026-10-28: mypy in the lint stage. shellcheck follows sources, per .shellcheckrc, so the disables that only covered for that are gone.
+##		- 2026-10-29: Publish refuses a checkout that changed since the run took its tree, other than the gif, and an upstream with commits to take.
+##		- 2026-10-28: The backlog runs and the merge gate build the release set in the run's temp dir, and leave the checkout's alone.
+##		- 2026-10-29: An area named with the --no- option that takes it out is refused, and so is a plan with no steps.
+##		- 2026-10-29: The profiler, lint, cross builds, packages and release checks in the background too, so a stop doesn't wait for them.
+##		- 2026-10-29: Sync and publish refuse while an earlier run's stash is left. The cache prune dates entries by rust-toolchain.toml, and leaves a cache dir alone while another run builds in it.
+##		- 2026-10-29: A build of a tree that differs from the commit's gets -dirty after its build number, and is never a release.
+##		- 2026-11-02: A run with no options records the tree with the gif it copied in. --keep-temp's cleanup line no longer takes a cache dir's freed size off for the kept temp dir.
+##		- 2026-11-02: The test steps on the host run in the sandbox, and --no-sandbox.
+##		- 2026-11-02: The content scrub in the lint stage, when the private folder has one.
 ##		- 2026-11-08: A scrub hit fails the lint stage.
-##		- 2026-11-07: A run dir's marks are removed last, so a removal that
-##		  fails partway leaves it for the next run's sweep.
-##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it
-##		  puts on before the build. --no-upload.
-##		- 2026-11-08: A step closes with a timed, numbered PASS, FAIL or SKIP line,
-##		  in the same form as its Starting line.
-##		- 2026-11-08: IT_BTRFS, a btrfs folder for the integration test's
-##		  subvolume check, given to each run as TUKFS_IT_BTRFS.
-##		- 2026-11-09: A memory cap with no swap, CICD_MEM_CAP, on every
-##		  container, and the whole run in a user scope under it.
-##		- 2026-11-10: The release upload's refusals run before publish, and
-##		  no release image leaves it out of the plan.
-##		- 2026-11-10: The run folder sweeps check the owner, and that the marks
-##		  are plain files, before they read them.
-##		- 2026-11-20: The publisher runs in the background when the run has its
-##		  message, so a stop ends it, and a stop after the push leaves the tag
-##		  on. The dogfood copy refuses a folder, or a link to one, at the name.
-##		  Containers get the run's PID too, so 2 temp roots can't share a run.
-##		  A stop during the dogfood copy removes its temp copy.
+##		- 2026-11-07: A run dir's marks are removed last, so a removal that fails partway leaves it for the next run's sweep.
+##		- 2026-11-08: Stage 11, the release upload, from main, and the tag it puts on before the build. --no-upload.
+##		- 2026-11-08: A step closes with a timed, numbered PASS, FAIL or SKIP line, in the same form as its Starting line.
+##		- 2026-11-08: IT_BTRFS, a btrfs folder for the integration test's subvolume check, given to each run as TUKFS_IT_BTRFS.
+##		- 2026-11-09: A memory cap with no swap, CICD_MEM_CAP, on every container, and the whole run in a user scope under it.
+##		- 2026-11-10: The release upload's refusals run before publish, and no release image leaves it out of the plan.
+##		- 2026-11-10: The run folder sweeps check the owner, and that the marks are plain files, before they read them.
+##		- 2026-11-20: The publisher runs in the background when the run has its message, so a stop ends it, and a stop after the push leaves the tag on. The dogfood copy refuses a folder, or a link to one, at the name. Containers get the run's PID too, so 2 temp roots can't share a run. A stop during the dogfood copy removes its temp copy.

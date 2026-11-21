@@ -845,7 +845,8 @@
 - Make the style guide's Bash rules say they're for new scripts, since several tracked scripts differ.
 	- ID: 2026111918562726
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -853,17 +854,32 @@
 	- Origin: `project/style-guide_code.md`, 2026102808215637, closed 2026-11-19. Confirmed by reading.
 	- Note: `tests/integration.bash` and `git-auto-msg.bash` use `set -euo pipefail`, `box-side.bash` uses `-Euo`, the launcher uses `-eu`, and integration.bash has `name() {` functions and a `Usage:` header. Renaming them was decided against before.
 	- Related IDs: 2026102808215637
+	- Fixed: The style guide's Bash section opens by saying its rules are for new scripts, and names the scripts that differ.
+	- Branch: nov20-2026111918562726
+	- Test case: none, since it's docs only.
+	- Verified: the markdown check and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: docs only, and the change is the one the title asks for.
+	- Closed: 20261120-203500
 
 - Join the comment blocks that are still wrapped mid-sentence, per the line length directive of 2026-11-19.
 	- ID: 2026111918562727
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 28
 	- Origin: `2a5f505` "comment wraps" missed them. Directive of 2026-11-19. Confirmed by reading.
 	- Note: `snapdiff.rs`'s SAFETY comment near `frozen_at` and the one near line 1054, `cicd.bash` near lines 196, 745 and 1972, `config.bash` near line 214, and the comments in `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` and `deny.toml`.
+	- Fixed: The wrapped comment blocks in `snapdiff.rs`, `cicd.bash` (the History list included), `config.bash`, `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` and `deny.toml` are joined, one sentence or bullet per line. The words are the same.
+	- Decisions:
+		- `cicd.bash`'s usage header, which `--help` prints, and the History lists of the other scripts keep their wraps, since they weren't named.
+	- Branch: nov20-2026111918562726
+	- Test case: none, since it's comments only. The words before and after match.
+	- Verified: rustfmt check and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261120-203500
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
