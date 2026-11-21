@@ -4,7 +4,7 @@
 // Opening what the walk found, from the root's own folder, without following a symlink or crossing onto another filesystem anywhere on the way. The scan runs as root, and a folder swapped for a symlink after it was listed would otherwise send it somewhere else to read files and set attributes.
 
 use crate::util::cpath;
-use std::ffi::{CStr, OsStr, OsString};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
@@ -33,6 +33,9 @@ struct Near {
 	thread: ThreadId,
 	above: Vec<OsString>,
 	dir: File,
+	// Where it was and what it was, to tell whether its path still leads to it.
+	at: CString,
+	id: (u64, u64),
 }
 
 #[repr(C)]
@@ -69,6 +72,17 @@ pub fn openat(at: RawFd, name: &OsStr, flags: libc::c_int) -> io::Result<File> {
 		// SAFETY: c is NUL-terminated and outlives the call.
 		unsafe { libc::openat(at, c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC, mode) }.into()
 	})
+}
+
+fn lstat_at(at: RawFd, c: &CStr) -> io::Result<libc::stat64> {
+	let mut st = std::mem::MaybeUninit::<libc::stat64>::uninit();
+	// SAFETY: c outlives the call, and st has room for a stat64.
+	let r = unsafe { libc::fstatat64(at, c.as_ptr(), st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
+	if r != 0 {
+		return Err(io::Error::last_os_error());
+	}
+	// SAFETY: fstatat64 returned 0, so st is filled in.
+	Ok(unsafe { st.assume_init() })
 }
 
 impl AsRawFd for Root {
@@ -121,7 +135,7 @@ impl Root {
 		retry(|| unsafe { libc::syscall(libc::SYS_openat2, self.dir.as_raw_fd(), c.as_ptr(), &raw const how, std::mem::size_of::<OpenHow>()) })
 	}
 
-	// The same rules one folder at a time. A mount on the last part isn't caught here; the walk checks each folder's device itself.
+	// The same rules one folder at a time.
 	fn step_by_step(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
 		let mut parts = Vec::new();
 		for c in rel.components() {
@@ -132,8 +146,9 @@ impl Root {
 			}
 		}
 		let (last, above) = parts.split_last().map_or((OsStr::new("."), &[][..]), |(l, a)| (*l, a));
-		if let Some(near) = self.recall(above) {
-			// The folder may have been moved or replaced since, so a failure from it is tried again from the root.
+		// A kept folder moved out of the root, or replaced, would open what used to be there. One stat of its whole path is much cheaper than a walk.
+		if let Some(near) = self.recall(above).filter(|n| lstat_at(self.dir.as_raw_fd(), &n.at).is_ok_and(|st| (st.st_dev, st.st_ino) == n.id)) {
+			// It can still move between the check and the open, so a failure from it is tried again from the root.
 			if let Ok(f) = self.descend(Some(near), above, last, flags) {
 				return Ok(f);
 			}
@@ -143,20 +158,28 @@ impl Root {
 
 	// Opens the folders in above past the ones near already has open, then last in the deepest.
 	fn descend(&self, near: Option<Near>, above: &[&OsStr], last: &OsStr, flags: libc::c_int) -> io::Result<File> {
-		let (mut names, mut held) = near.map_or((Vec::new(), None), |n| (n.above, Some(n.dir)));
+		let (mut names, mut held, mut at) = near.map_or((Vec::new(), None, None), |n| (n.above, Some((n.dir, n.id)), Some(n.at)));
 		for name in &above[names.len()..] {
-			let at = held.as_ref().unwrap_or(&self.dir).as_raw_fd();
-			let f = openat(at, name, libc::O_PATH | libc::O_DIRECTORY)?;
-			if f.metadata()?.dev() != self.dev {
+			let from = held.as_ref().map_or(&self.dir, |(d, _)| d).as_raw_fd();
+			let f = openat(from, name, libc::O_PATH | libc::O_DIRECTORY)?;
+			let md = f.metadata()?;
+			if md.dev() != self.dev {
 				return Err(io::Error::from_raw_os_error(libc::EXDEV));
 			}
 			names.push(name.to_os_string());
-			held = Some(f);
+			held = Some((f, (md.dev(), md.ino())));
+			at = None;
 		}
-		let f = openat(held.as_ref().unwrap_or(&self.dir).as_raw_fd(), last, flags)?;
-		if let Some(dir) = held {
+		let f = openat(held.as_ref().map_or(&self.dir, |(d, _)| d).as_raw_fd(), last, flags)?;
+		// openat2's RESOLVE_NO_XDEV, for a mount on the last part, such as a file bind-mounted over one the the walk listed.
+		if f.metadata()?.dev() != self.dev {
+			return Err(io::Error::from_raw_os_error(libc::EXDEV));
+		}
+		if let Some((dir, id)) = held
+			&& let Some(at) = at.or_else(|| cpath(&names.iter().collect::<PathBuf>()).ok())
+		{
 			let mut near = self.near.lock().unwrap_or_else(PoisonError::into_inner);
-			near.push(Near { thread: thread::current().id(), above: names, dir });
+			near.push(Near { thread: thread::current().id(), above: names, dir, at, id });
 		}
 		Ok(f)
 	}
@@ -227,15 +250,7 @@ impl List {
 	}
 
 	fn lstat(&self, name: &[u8]) -> io::Result<libc::stat64> {
-		let c = cpath(Path::new(OsStr::from_bytes(name)))?;
-		let mut st = std::mem::MaybeUninit::<libc::stat64>::uninit();
-		// SAFETY: c outlives the call, and st has room for a stat64.
-		let r = unsafe { libc::fstatat64(self.fd(), c.as_ptr(), st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
-		if r != 0 {
-			return Err(io::Error::last_os_error());
-		}
-		// SAFETY: fstatat64 returned 0, so st is filled in.
-		Ok(unsafe { st.assume_init() })
+		lstat_at(self.fd(), &cpath(Path::new(OsStr::from_bytes(name)))?)
 	}
 
 	/// Whether the folder has an entry by that name.
@@ -338,11 +353,9 @@ mod tests {
 			return;
 		}
 		for r in both(Path::new("/dev")) {
-			match r.open_at(Path::new("shm"), libc::O_RDONLY | libc::O_DIRECTORY) {
-				Err(e) => assert!(moved(&e), "{e}"),
-				// Only the step by step open gets this far; the walk then compares the device.
-				Ok(f) => assert_ne!(f.metadata().unwrap().dev(), r.dev),
-			}
+			// The mount on the last part too, as for a file mounted over after the walk listed it.
+			let e = r.open_at(Path::new("shm"), libc::O_RDONLY | libc::O_DIRECTORY).unwrap_err();
+			assert!(moved(&e), "{e}");
 			let e = r.open_at(Path::new("shm/x"), libc::O_PATH).unwrap_err();
 			assert!(moved(&e), "{e}");
 		}
@@ -382,6 +395,36 @@ mod tests {
 		let e = read("a/b/c/f").unwrap_err();
 		assert!(moved(&e), "{e}");
 		assert!(kept().is_empty());
+	}
+
+	// Without openat2, a kept folder moved out of the root and another put in its place, as openat2 sees it.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn a_kept_folder_moved_out_isnt_read_through() {
+		let _id = test_id("dfjx2");
+		let d = scratch("beneath_moved_out");
+		let (root, outside) = (d.join("root"), d.join("outside"));
+		fs::create_dir_all(root.join("d/sub")).unwrap();
+		fs::create_dir_all(&outside).unwrap();
+		fs::write(root.join("d/slow"), "x").unwrap();
+		fs::write(root.join("d/f1"), "old only").unwrap();
+		fs::write(root.join("d/sub/g"), "old").unwrap();
+		for r in both(&root) {
+			let read = |p: &str| -> io::Result<String> {
+				let mut s = String::new();
+				r.open_read(Path::new(p))?.read_to_string(&mut s)?;
+				Ok(s)
+			};
+			assert_eq!(read("d/slow").unwrap(), "x");
+			fs::rename(root.join("d"), outside.join("d_old")).unwrap();
+			fs::create_dir_all(root.join("d/sub")).unwrap();
+			fs::write(root.join("d/sub/g"), "new").unwrap();
+			let e = read("d/f1").unwrap_err();
+			assert!(moved(&e), "{e}");
+			assert_eq!(read("d/sub/g").unwrap(), "new");
+			fs::remove_dir_all(root.join("d")).unwrap();
+			fs::rename(outside.join("d_old"), root.join("d")).unwrap();
+		}
 	}
 
 	#[test]

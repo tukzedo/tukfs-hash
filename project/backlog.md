@@ -198,7 +198,8 @@
 - On a kernel before 5.6, a scan reads the old folder's files under the new path when a kept folder is replaced mid-scan, and exits 0 where openat2 exits 4.
 	- ID: 2026111918562704
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -211,13 +212,32 @@
 	- Expected behavior [Bug]: Both open paths give the same answer. 2026111914041556 accepted only that a moved-out folder stays readable.
 	- Probable fix [Bug]: Keep the listed inode in `Job`, and when an open through a kept folder gives another inode, open again from the root.
 	- Sweep: `list_dir` and snapdiff's opens through kept folders.
-	- Related IDs: 2026111914041556
+	- Related IDs: 2026111914041556, 2026111918562705
 	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r1/run.bash DIR fallback|openat2`.
+	- Reproduced [Bug]: Yes, with the build from `e9ee596` and openat2 refused: exit 0, files 1102, and the row got the old inode. openat2 gave exit 4, files 2.
+	- Actual cause [Bug]: `step_by_step` used a kept folder without checking its path still led to it, so a folder moved out of the root was read through for every file listed in it, and for a deeper file under the new path.
+	- Actual fix [Bug]: Before a kept folder is used, a stat of its path from the root has to give the same device and inode it had. Otherwise the open starts from the root. A failure through it is still tried again from the root, since it can move after the check.
+	- Decisions:
+		- The kept folder is checked by its path. The filed fix, a check of the file's listed inode, still reads the old file when the walk listed it before the swap, and reads every moved-out file listed before the move. The path check gives the same answer as openat2 either way, and covers `list_dir` and snapdiff with no change to their calls.
+		- This ends 2026111914041556's first decision, that a kept folder is used as it is. The newer item asks for both ways to agree, and a moved-out folder that stays readable was only tolerated there. A `Check:` entry has the cost.
+		- The stat follows a symlink above the kept folder, so a folder moved out and linked back in from above is still read through. Whoever can do that could put the files inside the root, as 2026111914041556 said.
+	- Branch: nov20-2026111918562704
+	- Commit: `074f99a`
+	- Test case: `dfjx2` (`beneath::tests::a_kept_folder_moved_out_isnt_read_through`): a kept folder moved out and another put in its place, with a file only the old one has and one in both.
+	- Verified:
+		- `dfjx2` fails with the path check taken out, and passes with it.
+		- The repro with openat2 refused: exit 4, files 2, `b3-db-mismatch 1`, the same as openat2 on both builds.
+		- `tests/integration.bash` passed under the seccomp filter on ext4, 208 checks, so every scan there took the fallback.
+	- Note: Rescans of 20,000 files in 2,000 folders with openat2 refused took 0.48 s of user plus sys CPU before and 0.53 s after, 6 paired rounds at load 10. With openat2 it was 0.39 s. Unverified on a real kernel before 5.6.
+	- Swept: `Worker::stat`, `Worker::open`, `Walker::list_dir`, and snapdiff's `stat_beneath` and `open_read` all open through `Root::open_at`, so the one check covers them. The other `beneath::openat` calls are the database's and the log's folders, opened by a path a person gave.
+	- Acceptance signoff: Self-closed: the repro fails before and passes after, and the test fails without the check.
+	- Closed: 20261120-181607
 
 - On a kernel before 5.6, a file that's mounted over after the walk queued it is read and gets attributes, on NTFS too.
 	- ID: 2026111918562705
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -231,6 +251,25 @@
 	- Probable fix [Bug]: Treat `md.dev() != job.root.dev` as moved in `stat` and `open`, which matches `RESOLVE_NO_XDEV`.
 	- Sweep: snapdiff's opens through `open_at`.
 	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r5/inner.bash DIR fallback|openat2`, under `unshare -rm --map-auto`.
+	- Related IDs: 2026111918562704
+	- Reproduced [Bug]: Yes, with the build from `e9ee596` and openat2 refused: files 2, xattr set 2, and the NTFS file got `user.blake3.b64u`.
+	- Actual cause [Bug]: `step_by_step` checked the device of each folder on the way, but not of what it opened last. openat2's `RESOLVE_NO_XDEV` refuses a mount there too.
+	- Actual fix [Bug]: `step_by_step` refuses what it opened last when it's on another device than the root, as openat2 does, so the file counts as moved and is skipped.
+	- Decisions:
+		- The check is in `beneath::Root`, not in `Worker::stat` and `Worker::open` as filed, so the walk's folder opens and snapdiff get it too, and no caller can miss it. It's one more fstat per open, on the pre-5.6 path only.
+		- A btrfs subvolume that isn't mounted is refused too when it's the last part, where openat2 opens it. The walk skips a folder on another device either way, and snapdiff only compares files.
+		- A bind mount from the same filesystem keeps its device, so it's still missed, as code review 20261028 decided against. This item is about another filesystem, where attributes could be written.
+	- Branch: nov20-2026111918562704
+	- Commit: `074f99a`
+	- Test case: `ddy92` (`beneath::tests::another_filesystem_is_not_entered`), which now also wants a mount on the last part refused without openat2.
+		- 2026-11-20: `ddy92` asserted the step by step open of `/dev/shm` could succeed with another device. It now asserts it's refused as moved, as with openat2. The `shm/x` case is unchanged.
+	- Verified:
+		- `ddy92` fails with the check taken out, and passes with it.
+		- The repro with openat2 refused: files 1, xattr set 1, and no attribute on the NTFS file, the same as openat2.
+	- Note: Unverified on a real kernel before 5.6.
+	- Swept: as 2026111918562704. `list_dir`'s own device check stays, since openat2 doesn't see a btrfs subvolume that isn't a mount.
+	- Acceptance signoff: Self-closed: the repro fails before and passes after, and the test fails without the check.
+	- Closed: 20261120-181607
 
 - A root is opened again by path when its walk starts, so if a mount or a symlink now sits in its path, that other filesystem is scanned, and NTFS gets attributes.
 	- ID: 2026111918562706
