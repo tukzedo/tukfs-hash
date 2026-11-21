@@ -29,6 +29,18 @@
 
 ## Issues
 
+- A stop between the dogfood stage's copy and its rename leaves `.tukfs-hash.<pid>.tmp` in the synced `linux/bin`.
+	- ID: 2026112019472699
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261120-194726
+	- Opened by: sweep for 2026111918562717
+	- Related IDs: 2026111918562717
+	- Origin: Plausible, read only. `fInstallAtomic` in `cicd/cicd.bash` removes its temp copy only when the copy or rename fails, not on a stop, the same as `install.bash` before 2026111918562717.
+	- Probable fix [Bug]: Remove the temp copy from the run's EXIT trap once it's named, or sweep `.*.tmp` names with a dead PID at the next run.
+
 - The dogfood copy moves the binary into a folder when its name in the synced `linux/bin` is a link to one.
 	- ID: 2026112017341780
 	- Type: Bug
@@ -185,7 +197,8 @@
 - Make `install.bash` work with a noexec temp folder, or say that's the cause, in place of "doesn't run on this system".
 	- ID: 2026111918562721
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -194,6 +207,16 @@
 	- Requirements  [Feature]:
 		- Try the staged copy in the target folder, which is written anyway, before the rename.
 		- Or name the noexec temp folder as a likely cause and suggest TMPDIR.
+	- Decisions:
+		- The first way. The trial run is now only from the new copy in the install folder, so the temp folder never needs to run anything. One trial, not one in each place.
+		- An install folder that won't run programs is refused as "won't run programs, as on a noexec mount", from the execute check on the new copy, before the trial.
+		- Under `--target system` the sudo prompt now comes before the trial run, since the copy is written first. The trial still runs as the user, not through sudo.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "noexec TMPDIR" (3) and "noexec install folder" (4), on noexec tmpfs mounts in a user namespace. 6 of them fail on the code before, and all pass after.
+	- Swept: the work folder is only written and read now, never run from. The dogfood stage copies within the synced folder and runs nothing.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the stand-in mounts cover both folders, and the requirement named this way.
+	- Closed: 20261120-194733
 
 - On a kernel before 5.6, a scan reads the old folder's files under the new path when a kept folder is replaced mid-scan, and exits 0 where openat2 exits 4.
 	- ID: 2026111918562704
@@ -590,7 +613,8 @@
 - A stop between the install and the rename leaves `.tukfs-hash.new.<pid>` in the target folder, owned by root under `--target system`.
 	- ID: 2026111918562717
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -598,17 +622,41 @@
 	- Origin: `f249afd`. Confirmed with a stand-in `mv` that sends TERM to the script.
 	- Incorrect behavior [Bug]: The EXIT trap cleans only the work folder. A Ctrl+C at a sudo password prompt for the rename leaves the file.
 	- Probable fix [Bug]: Have the trap remove the staged file once it's set, through `fAsTarget`.
+	- Reproduced [Bug]: Yes, with the stand-in `mv`, for both targets. The new copy was left in each.
+	- Actual cause [Bug]: Only the failure paths of the copy and the rename removed the new copy. A signal skipped them, and the EXIT trap didn't know the name.
+	- Actual fix [Bug]: The EXIT trap removes the new copy once it's named, through sudo for the system target. When that fails too, it prints the name and the `rm` to run. The 2 failure paths now leave it to the trap.
+	- Decisions:
+		- The trap's sudo can ask for the password again. Asking beats leaving a root-owned file, and a second Ctrl+C there gets the note with the command.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "system, stopped ..." (5), "user, stopped ..." (3) and "rename fails ..." (3). The 2 "no new copy left" cases, "removed through sudo" and "says so" fail on the code before, and all pass after.
+	- Swept: the copy, trial and rename steps all exit through the trap. The twin in the dogfood stage's `fInstallAtomic` is filed as 2026112019472699.
+	- Stand-in: the system target runs in a user and mount namespace, with the fake root bound over `/usr/local/bin` and the sudo stand-in. A real sudo prompt wasn't run. One that leaves the file reopens this.
+	- Acceptance signoff: Self-closed per memory.md's close policy, on the stand-ins.
+	- Closed: 20261120-194733
 
 - `install.bash` says a folder isn't on PATH when HOME ends in a slash, and fails when `CDPATH` is set and TMPDIR is relative.
 	- ID: 2026111918562718
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 19
 	- Origin: `f249afd`. Confirmed: `HOME=/home/u/` gives "/home/u//.local/bin isn't on PATH". With `CDPATH` the `cd` prints the path, so mktemp gets 2 lines.
 	- Probable fix [Bug]: Drop trailing slashes from HOME, and use `CDPATH= cd --`.
+	- Reproduced [Bug]: Yes, both, on the code before.
+	- Actual cause [Bug]: The PATH note compared folder names as text, and the install path was built from HOME as given. `cd` with `CDPATH` set prints the folder it went to.
+	- Actual fix [Bug]: Trailing slashes come off HOME. The PATH note goes by `-ef` on each PATH entry, so a trailing slash, a double slash or a link to the folder all count, and so does the "comes first on PATH" note. The `cd` is `CDPATH='' cd --`.
+	- Decisions:
+		- `-ef` rather than only trimming HOME, since a profile that builds PATH from a HOME with a slash gives `/home/u//.local/bin`, which a trimmed name doesn't match.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "HOME/ ..." (3), "PATH entry ..." (3) and "CDPATH ..." (3). 6 of them fail on the code before, and all pass after.
+	- Swept: the one `cd` in `install.bash`, and every use of HOME, which is only the install path and the root check.
+	- Acceptance signoff: Self-closed: both cases reproduced, and their checks fail before and pass after.
+	- Closed: 20261120-194733
 
 - `sudo bash install.bash` without `--target system` can install into the user's `~/.local/bin` as root and leave it owned by root.
 	- ID: 2026111918562719
@@ -723,13 +771,23 @@
 - Wrap `install.bash` in a function called on its last line, so a cut-off one-liner download runs nothing.
 	- ID: 2026111918562725
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 26
 	- Origin: `f249afd`. Confirmed: of 3,869 cut points, 876 exit 0 with nothing installed, 31 leave the temp folder, and 3 leave `.tukfs-hash.new.*` in `~/.local/bin`. No cut skipped the checksum.
 	- Note: Repro is `private/claude_simple/tools/review-20261119/install/install/cut-sweep.bash INST STEP`.
+	- Decisions:
+		- Everything that runs is in `fMain`, called by `fMain "$@"`. Above it are only settings and function definitions. The History comment stays below the call, per the house layout, so the call is the last line of code rather than of the file.
+		- A cut inside the call line that drops only `"$@"` runs with no options. That asks first, or stops when there's no terminal, so nothing changes without a yes.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` "cut-off ..." (3): 568 cuts, at each line end, every 64 bytes and each byte around the call. None leaves anything, none before the call fetches, and the whole file installs. The code before fails it, having no call line.
+	- Verified: the installer passes a plain run, a second run, HOME with a slash, a stop before the rename, `CDPATH`, and a cut file under Bash 3.2.57.
+	- Acceptance signoff: Self-closed: the sweep passes, and the change is the one the title asks for.
+	- Closed: 20261120-194733
 
 - Make the style guide's Bash rules say they're for new scripts, since several tracked scripts differ.
 	- ID: 2026111918562726

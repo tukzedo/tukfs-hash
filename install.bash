@@ -22,7 +22,7 @@
 
 set -Eeuo pipefail
 
-INSTALLER_VERSION="1.0.2"
+INSTALLER_VERSION="1.0.3"
 PROG="tukfs-hash"
 REPO="tukzedo/tukfs-hash"
 API="https://api.github.com/repos/${REPO}/releases?per_page=100"
@@ -32,6 +32,10 @@ GLIBC_MAJOR=2; GLIBC_MINOR=28
 release="stable"
 target="user"
 assumeYes=0
+useSudo=0
+work=""
+asset=""
+staged=""
 
 fEcho(){ printf '[ %s ]\n' "$*"; }
 fEcho_Clean(){ printf '%s\n' "$*"; }
@@ -60,79 +64,6 @@ Notes:
 EOF
 }
 
-echo
-while (($#)); do
-	case "$1" in
-		--release|--target) [[ $# -ge 2 ]] || fDie "$1 needs a value (try --help)" ;;
-	esac
-	case "$1" in
-		--release)   release="$2"; shift 2 ;;
-		--release=*) release="${1#*=}"; shift ;;
-		--target)    target="$2"; shift 2 ;;
-		--target=*)  target="${1#*=}"; shift ;;
-		-y|--yes)    assumeYes=1; shift ;;
-		--version)   echo "${PROG} installer v${INSTALLER_VERSION}"; echo; exit 0 ;;
-		-h|--help)   fUsage; echo; exit 0 ;;
-		*)           fDie "unknown option: $1 (try --help)" ;;
-	esac
-done
-[[ "${release}" == "stable" || "${release}" == "dev"    ]] || fDie "--release takes stable or dev, not '${release}'"
-[[ "${target}"  == "user"   || "${target}"  == "system" ]] || fDie "--target takes user or system, not '${target}'"
-
-
-##	What to fetch, and where it goes.
-
-[[ "$(uname -s)" == "Linux" ]] || fDie "${PROG} runs only on Linux, and this is $(uname -s)"
-cpu="$(uname -m)"
-case "${cpu}" in
-	x86_64|amd64)  arch="x86_64" ;;
-	aarch64|arm64) arch="arm64" ;;
-	*) fDie "there's no build for a ${cpu} CPU, only x86_64 and arm64" ;;
-esac
-
-## The builds link against glibc 2.28. Without getconf there's nothing to ask, and the trial run of the download below still catches a box that's too old.
-glibc=""
-if command -v getconf >/dev/null 2>&1; then
-	glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
-	[[ "${glibc}" == "glibc "* ]] || fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, and this system doesn't use glibc"
-	glibc="${glibc#glibc }"
-	## Checked as text before any arithmetic sees it.
-	[[ "${glibc}" =~ ^([0-9]+)\.([0-9]+) ]] || fDie "can't read the glibc version '${glibc}'"
-	major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
-	if ((10#${major} < GLIBC_MAJOR || (10#${major} == GLIBC_MAJOR && 10#${minor} < GLIBC_MINOR))); then
-		fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, and this system has ${glibc}"
-	fi
-fi
-
-uid="$(id -u)"
-if [[ "${target}" == "user" ]]; then
-	[[ -n "${HOME:-}" ]] || fDie "HOME isn't set, so there's no ~/.local/bin"
-	## A sudo that keeps HOME, or su -m, would leave a root-owned copy in someone else's folder.
-	if [[ "${uid}" == "0" && -e "${HOME}" && ! -O "${HOME}" ]]; then
-		fDie "this is running as root, but HOME is ${HOME}, which isn't root's. Run it without sudo to install for that user, or use --target system for /usr/local/bin"
-	fi
-	destDir="${HOME}/.local/bin"
-else
-	destDir="/usr/local/bin"
-fi
-destPath="${destDir}/${PROG}"
-if [[ -d "${destPath}" ]]; then
-	[[ ! -L "${destPath}" ]] || fDie "${destPath} is a link to a folder, so nothing was changed"
-	fDie "there's a folder at ${destPath}, so nothing was changed"
-fi
-useSudo=0
-if [[ "${target}" == "system" && "${uid}" != "0" ]]; then
-	command -v sudo >/dev/null 2>&1 || fDie "--target system needs root, or sudo"
-	useSudo=1
-fi
-
-command -v curl      >/dev/null 2>&1 || fDie "curl is needed"
-command -v sha256sum >/dev/null 2>&1 || fDie "sha256sum is needed"
-
-fEcho "Looking up the newest ${release} release"
-## The list rather than releases/latest, which skips pre-releases and has nothing while every release is one.
-releaseJson="$(curl -fsSL "${API}")" || fDie "couldn't list the releases on GitHub (offline, or rate-limited?)"
-
 ## Each release's tag, then 1 for a pre-release. Drafts aren't public, but are skipped all the same. Commas and braces to newlines, so compact JSON reads like the pretty kind, one field per line.
 fListReleases(){
 	tr ',{' '\n' <<<"${releaseJson}" | awk '
@@ -158,112 +89,214 @@ fNewest(){
 	}' | LC_ALL=C sort -r | awk 'NR == 1 { print $2 }'
 }
 
-releases="$(fListReleases || true)"
-kind="stable release"
-if [[ "${release}" == "stable" ]]; then
-	tag="$(awk '$2 == 0' <<<"${releases}" | fNewest || true)"
-	if [[ -z "${tag}" ]]; then
-		tag="$(fNewest <<<"${releases}" || true)"
-		[[ -z "${tag}" ]] || fEcho "There's no stable release yet, so this takes the newest pre-release"
-	fi
-else
-	tag="$(fNewest <<<"${releases}" || true)"
-fi
-[[ -n "${tag}" ]] || fDie "GitHub lists no releases of ${REPO}"
-[[ "${tag}" =~ ^v[0-9A-Za-z.+-]+$ ]] || fDie "the newest release has a tag this installer doesn't expect: ${tag}"
-awk -v t="${tag}" '$1 == t && $2 == 1 { found = 1 } END { exit !found }' <<<"${releases}" && kind="pre-release"
-
-version="${tag#v}"
-asset="${PROG}-${version}-linux-${arch}"
-sums="${PROG}-${version}-sha256sums.txt"
-url="${DOWNLOADS}/${tag}/${asset}"
-
-## The sums file is small, so it's read before asking, and the check for an install that's already this build goes by bytes rather than by --version.
-sumsText="$(curl -fsSL "${DOWNLOADS}/${tag}/${sums}")" || fDie "couldn't download ${sums} from release ${tag}"
-want="$(awk -v a="${asset}" '$2 == a || $2 == "*" a { print $1; exit }' <<<"${sumsText}")"
-[[ "${want}" =~ ^[0-9a-f]{64}$ ]] || fDie "${sums} has no sha256 for ${asset}"
-
-haveVer=""
-if [[ -f "${destPath}" ]]; then
-	have="$(sha256sum "${destPath}" 2>/dev/null || true)"
-	if [[ "${have%% *}" == "${want}" ]]; then
-		if [[ -x "${destPath}" ]]; then
-			fEcho "${destPath} is already ${PROG} ${tag}, so there's nothing to do"
-			echo
-			exit 0
-		fi
-		haveVer="the same build, but it isn't executable"
-	elif [[ -x "${destPath}" ]]; then
-		haveVer="$("${destPath}" --version 2>/dev/null || true)"; haveVer="${haveVer%%$'\n'*}"
-	fi
-fi
-
-
-##	Say the plan, get a yes, then do it.
-
-echo
-fEcho "Plan"
-fEcho_Clean "    Release:   ${tag}, a ${kind}"
-fEcho_Clean "    System:    Linux ${cpu}${glibc:+, glibc ${glibc}}"
-fEcho_Clean "    Download:  ${url}"
-fEcho_Clean "    Check:     sha256 from ${sums}"
-fEcho_Clean "    Install:   ${destPath}"
-if [[ -L "${destPath}" ]]; then
-	fEcho_Clean "    Replaces:  a link to $(readlink -- "${destPath}" || true), with the file itself"
-elif [[ -e "${destPath}" ]]; then
-	[[ -n "${haveVer}" ]] || haveVer="a file that doesn't give its version"
-	fEcho_Clean "    Replaces:  ${haveVer}"
-fi
-((useSudo)) && fEcho_Clean "    Uses sudo to write to ${destDir}."
-echo
-
-if ((! assumeYes)); then
-	## From the terminal, not stdin, which is the script itself under curl | bash.
-	{ : </dev/tty; } 2>/dev/null || fDie "there's no terminal to ask on, so nothing was changed. Run it again with --yes to go ahead."
-	answer=""; read -r -p "Go ahead? [y/N] " answer </dev/tty || true
-	case "${answer}" in
-		y|Y|yes|Yes|YES) : ;;
-		*) echo; fEcho "Stopped, and nothing was changed"; echo; exit 1 ;;
-	esac
-	echo
-fi
-
-tmpRoot="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || fDie "there's no temp folder at ${TMPDIR:-/tmp}"
-work="$(mktemp -d "${tmpRoot}/${PROG}-install.XXXXXX")" || fDie "couldn't make a work folder in ${tmpRoot}"
-## Only the one download is ever in the folder, so it goes by name, then rmdir.
-fWorkGone(){ rm -f -- "${work}/${asset}"; rmdir -- "${work}" 2>/dev/null || true; }
-trap fWorkGone EXIT
-
-fEcho "Downloading ${asset}"
-progress="-sS"; [[ -t 2 ]] && progress="--progress-bar"
-curl -fL "${progress}" -o "${work}/${asset}" "${url}" || fDie "the download failed: ${url}"
-
-fEcho "Checking its sha256"
-got="$(sha256sum "${work}/${asset}")"; got="${got%% *}"
-[[ "${got}" == "${want}" ]] || fDie "the download doesn't match ${sums}, so nothing was installed. Wanted ${want}, got ${got}."
-
-## A trial run, so a build that can't start here never replaces one that can.
-chmod 0755 "${work}/${asset}"
-newVer="$("${work}/${asset}" --version 2>&1)" || fDie "the download doesn't run on this system, so nothing was installed: ${newVer%%$'\n'*}"
-newVer="${newVer%%$'\n'*}"
-
-fEcho "Installing to ${destPath}"
-## Through a new name in the same folder, then a rename over the old one, so a running copy keeps going and a stop partway leaves the old one whole.
-## -T so a link to a folder that turned up since the check gets replaced, not moved into.
-staged="${destDir}/.${PROG}.new.$$"
 fAsTarget(){ if ((useSudo)); then sudo "$@"; else "$@"; fi; }
-fAsTarget mkdir -p -- "${destDir}"                               || fDie "couldn't make ${destDir}"
-fAsTarget install -m 0755 -- "${work}/${asset}" "${staged}"      || { fAsTarget rm -f -- "${staged}" || true; fDie "couldn't write to ${destDir}"; }
-fAsTarget mv -fT -- "${staged}" "${destPath}"                    || { fAsTarget rm -f -- "${staged}" || true; fDie "couldn't put ${PROG} in place at ${destPath}"; }
 
-echo
-fEcho "Installed ${newVer}"
-found="$(command -v "${PROG}" 2>/dev/null || true)"
-case ":${PATH}:" in
-	*":${destDir}:"*) [[ -z "${found}" || "${found}" == "${destPath}" ]] || fEcho "Note: ${found} comes first on PATH, so it's the one that runs" ;;
-	*)                fEcho "Note: ${destDir} isn't on PATH" ;;
-esac
-echo
+## Only the one download is ever in the work folder, so it goes by name, then rmdir. The new copy goes too if a stop came before its rename, such as a Ctrl+C at a sudo prompt.
+fWorkGone(){
+	rm -f -- "${work}/${asset}"; rmdir -- "${work}" 2>/dev/null || true
+	if [[ -n "${staged}" ]] && [[ -e "${staged}" || -L "${staged}" ]]; then
+		fAsTarget rm -f -- "${staged}" || true
+		if [[ -e "${staged}" || -L "${staged}" ]]; then
+			local how="rm"; ((useSudo)) && how="sudo rm"
+			printf '[ Note: %s is left over from this install. Remove it with: %s %s ]\n' "${staged}" "${how}" "${staged}" >&2
+		fi
+	fi
+}
+
+## Some folder on PATH is the install folder, by what it points to rather than its text, so a trailing slash or a link to it still counts.
+fOnPath(){
+	local rest="${PATH:-}:" dir=""
+	while [[ -n "${rest}" ]]; do
+		dir="${rest%%:*}"; rest="${rest#*:}"
+		if [[ -n "${dir}" && "${dir}" -ef "${destDir}" ]]; then return 0; fi
+	done
+	return 1
+}
+
+fMain(){
+	echo
+	while (($#)); do
+		case "$1" in
+			--release|--target) [[ $# -ge 2 ]] || fDie "$1 needs a value (try --help)" ;;
+		esac
+		case "$1" in
+			--release)   release="$2"; shift 2 ;;
+			--release=*) release="${1#*=}"; shift ;;
+			--target)    target="$2"; shift 2 ;;
+			--target=*)  target="${1#*=}"; shift ;;
+			-y|--yes)    assumeYes=1; shift ;;
+			--version)   echo "${PROG} installer v${INSTALLER_VERSION}"; echo; exit 0 ;;
+			-h|--help)   fUsage; echo; exit 0 ;;
+			*)           fDie "unknown option: $1 (try --help)" ;;
+		esac
+	done
+	[[ "${release}" == "stable" || "${release}" == "dev"    ]] || fDie "--release takes stable or dev, not '${release}'"
+	[[ "${target}"  == "user"   || "${target}"  == "system" ]] || fDie "--target takes user or system, not '${target}'"
+
+
+	##	What to fetch, and where it goes.
+
+	[[ "$(uname -s)" == "Linux" ]] || fDie "${PROG} runs only on Linux, and this is $(uname -s)"
+	cpu="$(uname -m)"
+	case "${cpu}" in
+		x86_64|amd64)  arch="x86_64" ;;
+		aarch64|arm64) arch="arm64" ;;
+		*) fDie "there's no build for a ${cpu} CPU, only x86_64 and arm64" ;;
+	esac
+
+	## The builds link against glibc 2.28. Without getconf there's nothing to ask, and the trial run of the download below still catches a box that's too old.
+	glibc=""
+	if command -v getconf >/dev/null 2>&1; then
+		glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+		[[ "${glibc}" == "glibc "* ]] || fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, and this system doesn't use glibc"
+		glibc="${glibc#glibc }"
+		## Checked as text before any arithmetic sees it.
+		[[ "${glibc}" =~ ^([0-9]+)\.([0-9]+) ]] || fDie "can't read the glibc version '${glibc}'"
+		major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
+		if ((10#${major} < GLIBC_MAJOR || (10#${major} == GLIBC_MAJOR && 10#${minor} < GLIBC_MINOR))); then
+			fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, and this system has ${glibc}"
+		fi
+	fi
+
+	uid="$(id -u)"
+	if [[ "${target}" == "user" ]]; then
+		[[ -n "${HOME:-}" ]] || fDie "HOME isn't set, so there's no ~/.local/bin"
+		home="${HOME}"; while [[ "${home}" == */ && "${home}" != "/" ]]; do home="${home%/}"; done
+		## A sudo that keeps HOME, or su -m, would leave a root-owned copy in someone else's folder.
+		if [[ "${uid}" == "0" && -e "${home}" && ! -O "${home}" ]]; then
+			fDie "this is running as root, but HOME is ${home}, which isn't root's. Run it without sudo to install for that user, or use --target system for /usr/local/bin"
+		fi
+		destDir="${home%/}/.local/bin"
+	else
+		destDir="/usr/local/bin"
+	fi
+	destPath="${destDir}/${PROG}"
+	if [[ -d "${destPath}" ]]; then
+		[[ ! -L "${destPath}" ]] || fDie "${destPath} is a link to a folder, so nothing was changed"
+		fDie "there's a folder at ${destPath}, so nothing was changed"
+	fi
+	if [[ "${target}" == "system" && "${uid}" != "0" ]]; then
+		command -v sudo >/dev/null 2>&1 || fDie "--target system needs root, or sudo"
+		useSudo=1
+	fi
+
+	command -v curl      >/dev/null 2>&1 || fDie "curl is needed"
+	command -v sha256sum >/dev/null 2>&1 || fDie "sha256sum is needed"
+
+	fEcho "Looking up the newest ${release} release"
+	## The list rather than releases/latest, which skips pre-releases and has nothing while every release is one.
+	releaseJson="$(curl -fsSL "${API}")" || fDie "couldn't list the releases on GitHub (offline, or rate-limited?)"
+
+	releases="$(fListReleases || true)"
+	kind="stable release"
+	if [[ "${release}" == "stable" ]]; then
+		tag="$(awk '$2 == 0' <<<"${releases}" | fNewest || true)"
+		if [[ -z "${tag}" ]]; then
+			tag="$(fNewest <<<"${releases}" || true)"
+			[[ -z "${tag}" ]] || fEcho "There's no stable release yet, so this takes the newest pre-release"
+		fi
+	else
+		tag="$(fNewest <<<"${releases}" || true)"
+	fi
+	[[ -n "${tag}" ]] || fDie "GitHub lists no releases of ${REPO}"
+	[[ "${tag}" =~ ^v[0-9A-Za-z.+-]+$ ]] || fDie "the newest release has a tag this installer doesn't expect: ${tag}"
+	awk -v t="${tag}" '$1 == t && $2 == 1 { found = 1 } END { exit !found }' <<<"${releases}" && kind="pre-release"
+
+	version="${tag#v}"
+	asset="${PROG}-${version}-linux-${arch}"
+	sums="${PROG}-${version}-sha256sums.txt"
+	url="${DOWNLOADS}/${tag}/${asset}"
+
+	## The sums file is small, so it's read before asking, and the check for an install that's already this build goes by bytes rather than by --version.
+	sumsText="$(curl -fsSL "${DOWNLOADS}/${tag}/${sums}")" || fDie "couldn't download ${sums} from release ${tag}"
+	want="$(awk -v a="${asset}" '$2 == a || $2 == "*" a { print $1; exit }' <<<"${sumsText}")"
+	[[ "${want}" =~ ^[0-9a-f]{64}$ ]] || fDie "${sums} has no sha256 for ${asset}"
+
+	haveVer=""
+	if [[ -f "${destPath}" ]]; then
+		have="$(sha256sum "${destPath}" 2>/dev/null || true)"
+		if [[ "${have%% *}" == "${want}" ]]; then
+			if [[ -x "${destPath}" ]]; then
+				fEcho "${destPath} is already ${PROG} ${tag}, so there's nothing to do"
+				echo
+				exit 0
+			fi
+			haveVer="the same build, but it isn't executable"
+		elif [[ -x "${destPath}" ]]; then
+			haveVer="$("${destPath}" --version 2>/dev/null || true)"; haveVer="${haveVer%%$'\n'*}"
+		fi
+	fi
+
+
+	##	Say the plan, get a yes, then do it.
+
+	echo
+	fEcho "Plan"
+	fEcho_Clean "    Release:   ${tag}, a ${kind}"
+	fEcho_Clean "    System:    Linux ${cpu}${glibc:+, glibc ${glibc}}"
+	fEcho_Clean "    Download:  ${url}"
+	fEcho_Clean "    Check:     sha256 from ${sums}"
+	fEcho_Clean "    Install:   ${destPath}"
+	if [[ -L "${destPath}" ]]; then
+		fEcho_Clean "    Replaces:  a link to $(readlink -- "${destPath}" || true), with the file itself"
+	elif [[ -e "${destPath}" ]]; then
+		[[ -n "${haveVer}" ]] || haveVer="a file that doesn't give its version"
+		fEcho_Clean "    Replaces:  ${haveVer}"
+	fi
+	((useSudo)) && fEcho_Clean "    Uses sudo to write to ${destDir}."
+	echo
+
+	if ((! assumeYes)); then
+		## From the terminal, not stdin, which is the script itself under curl | bash.
+		{ : </dev/tty; } 2>/dev/null || fDie "there's no terminal to ask on, so nothing was changed. Run it again with --yes to go ahead."
+		answer=""; read -r -p "Go ahead? [y/N] " answer </dev/tty || true
+		case "${answer}" in
+			y|Y|yes|Yes|YES) : ;;
+			*) echo; fEcho "Stopped, and nothing was changed"; echo; exit 1 ;;
+		esac
+		echo
+	fi
+
+	## No CDPATH, which would make cd print the folder, and a relative TMPDIR could match it.
+	tmpRoot="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)" || fDie "there's no temp folder at ${TMPDIR:-/tmp}"
+	work="$(mktemp -d "${tmpRoot}/${PROG}-install.XXXXXX")" || fDie "couldn't make a work folder in ${tmpRoot}"
+	trap fWorkGone EXIT
+
+	fEcho "Downloading ${asset}"
+	progress="-sS"; [[ -t 2 ]] && progress="--progress-bar"
+	curl -fL "${progress}" -o "${work}/${asset}" "${url}" || fDie "the download failed: ${url}"
+
+	fEcho "Checking its sha256"
+	got="$(sha256sum "${work}/${asset}")"; got="${got%% *}"
+	[[ "${got}" == "${want}" ]] || fDie "the download doesn't match ${sums}, so nothing was installed. Wanted ${want}, got ${got}."
+
+	fEcho "Installing to ${destPath}"
+	## Through a new name in the same folder, then a rename over the old one, so a running copy keeps going and a stop partway leaves the old one whole.
+	staged="${destDir}/.${PROG}.new.$$"
+	fAsTarget mkdir -p -- "${destDir}"                          || fDie "couldn't make ${destDir}"
+	fAsTarget install -m 0755 -- "${work}/${asset}" "${staged}" || fDie "couldn't write to ${destDir}"
+
+	## A trial run, so a build that can't start here never replaces one that can. It runs from the install folder, since a temp folder is often mounted noexec.
+	[[ -x "${staged}" ]] || fDie "${destDir} won't run programs, as on a noexec mount, so nothing was installed"
+	newVer="$("${staged}" --version 2>&1)" || fDie "the download doesn't run on this system, so nothing was installed: ${newVer%%$'\n'*}"
+	newVer="${newVer%%$'\n'*}"
+
+	## -T so a link to a folder that turned up since the check gets replaced, not moved into.
+	fAsTarget mv -fT -- "${staged}" "${destPath}"               || fDie "couldn't put ${PROG} in place at ${destPath}"
+
+	echo
+	fEcho "Installed ${newVer}"
+	found="$(command -v "${PROG}" 2>/dev/null || true)"
+	if ! fOnPath; then
+		fEcho "Note: ${destDir} isn't on PATH"
+	elif [[ -n "${found}" && ! "${found}" -ef "${destPath}" ]]; then
+		fEcho "Note: ${found} comes first on PATH, so it's the one that runs"
+	fi
+	echo
+}
+
+## Nothing runs until the last line is read, so a download cut off partway does nothing.
+fMain "$@"
 
 
 ##	History:
@@ -271,3 +304,6 @@ echo
 ##		- 2026-11-19: Blank line around --help, --version and option errors too.
 ##		- 2026-11-20: Refuses a link to a folder at the name, and root with
 ##		  someone else's HOME. Same bytes without the execute bit get put in again.
+##		- 2026-11-20: All in one function, called at the end. The trial run is
+##		  from the install folder, and a stop before the rename removes the new
+##		  copy. HOME with a trailing slash, and CDPATH.
