@@ -29,25 +29,6 @@
 
 ## Issues
 
-- README's "Details" says the percent shows only when every root is a whole filesystem.
-	- ID: 2026111918562720
-	- Type: Bug
-	- Status: Waiting on UAT
-		- Read README's "Details" percent bullet against design.md's.
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 21
-	- Origin: `9175cd9`. Left as it was by `4bc2de4`, which gave folder roots a percent (2026111019145393). Confirmed: a folder root ends `~100% of 2 B`.
-	- Probable fix [Bug]: Say what design.md's percent paragraph says.
-	- Related IDs: 2026111019145393
-	- Actual fix [Bug]: README's "Details" says a whole filesystem or a mounted btrfs subvolume is measured against its used space, and a folder is counted by a walk beside the scan, with the share shown once that count is in.
-	- Decisions: Only the wrong sentence was replaced, and the first sentence lost its "as a share of the space used" clause. The rest of the bullet is as it was.
-	- Branch: nov20-2026111918562714
-	- Commit: `86955aa`
-	- Test case: None, since it's README wording. `dfjzd`, `df4x7` and `df4x8` pin the behavior it describes.
-	- Stand-in: none (20261120). Only the wording is left to judge.
-
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
@@ -2802,6 +2783,29 @@
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
 
+- README's "Details" says the percent shows only when every root is a whole filesystem.
+	- ID: 2026111918562720
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 21
+	- Origin: `9175cd9`. Left as it was by `4bc2de4`, which gave folder roots a percent (2026111019145393). Confirmed: a folder root ends `~100% of 2 B`.
+	- Probable fix [Bug]: Say what design.md's percent paragraph says.
+	- Related IDs: 2026111019145393
+	- Actual fix [Bug]: README's "Details" says a whole filesystem or a mounted btrfs subvolume is measured against the space used on its filesystem, and a folder is counted by a walk beside the scan, with the percent shown once that count is in.
+	- Decisions:
+		- Only the wrong sentence was replaced, and the first sentence lost its "as a share of the space used" clause. The rest of the bullet is as it was.
+		- 2026-11-21: Read against design.md and `mounts::shows_whole`. 3 wording fixes: the figure is called a percent, since "the share" had lost the clause it pointed at. A subvolume is measured against its filesystem's used space, which is what `statvfs` gives. Other subvolumes are named with snapshots as a reason the figure runs low.
+	- Branch: nov20-2026111918562714
+	- Commit: `86955aa`
+	- Test case: None, since it's README wording. `dfjzd`, `df4x7` and `df4x8` pin the behavior it describes.
+	- Stand-in: none (20261120). Only the wording is left to judge.
+	- Acceptance signoff: Self-closed: each sentence of the bullet matches design.md's percent paragraph and `mounts::shows_whole`.
+	- Closed: 20261121-100335
+
 - A stop between the demo gif's copy and its rename leaves `<gif>.tmp.<pid>` beside the tracked gif in the repo.
 	- ID: 2026112019541396
 	- Type: Bug
@@ -2906,6 +2910,7 @@
 		- The kept folder is checked by its path. The filed fix, a check of the file's listed inode, still reads the old file when the walk listed it before the swap, and reads every moved-out file listed before the move. The path check gives the same answer as openat2 either way, and covers `list_dir` and snapdiff with no change to their calls.
 		- This ends 2026111914041556's first decision, that a kept folder is used as it is. The newer item asks for both ways to agree, and a moved-out folder that stays readable was only tolerated there. A `Check:` entry has the cost.
 		- The stat follows a symlink above the kept folder, so a folder moved out and linked back in from above is still read through. Whoever can do that could put the files inside the root, as 2026111914041556 said.
+		- 2026-11-21: The `Check:` entry is answered (a), as done. A folder restored from a backup during a scan has the same sizes and times with other bytes, which is what this tool is for, and the old way passed it at exit 0. That counts for more than a tenth of a rescan's CPU on kernels before 5.6. The filed fix still read the old file in one order of events, and no kept folder at all was 70% over openat2, where this is 35%. The linked-back case stays, since it reads only the files the walk listed, on the same filesystem, and closing it would need the full walk. design.md, "Reading files", names it.
 	- Branch: nov20-2026111918562704
 	- Commit: `074f99a`
 	- Test case: `dfjx2` (`beneath::tests::a_kept_folder_moved_out_isnt_read_through`): a kept folder moved out and another put in its place, with a file only the old one has and one in both.
@@ -5110,12 +5115,11 @@
 	- ID: 2026111914041556
 	- Type: Enhancement
 	- Status: Closed
-		- To judge: the first decision below, that a folder kept from an earlier open is used as it is, which the fix for 2026101406340922 didn't say.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-140415
 	- Opened by: 2026111913564333's timing
-	- Related IDs: 2026111913564333
+	- Related IDs: 2026111913564333, 2026111918562704
 	- Note: Unverified on a real old kernel. A C rig making the same calls on kernel 6.12 took 11 us for a folder 8 deep and 45 us for one 32 deep, against 1.7 and 2.6 us with openat2. The worker pays it twice per file, for its stat open and its read open.
 	- Requirements [Feature]:
 		- Time a scan of a tree of typical depth with the fallback, on a kernel before 5.6 or with it forced, before changing anything. Debian 10's 4.19 is the oldest kernel the release builds' glibc floor reaches.
@@ -5124,6 +5128,7 @@
 		- 2026-11-19: Each thread now keeps the last folder it opened something in, per root, and starts from it when the next path runs through it. Same tree, 8 paired rescans at load 11: the fallback took 0.76 s before and 0.50 s after, with openat2 at 0.45 s both times. A first scan's openat calls fell from about 16 to 3 per file.
 	- Decisions:
 		- A kept folder is used as it is, without checking it's still where its path says. A folder moved out of the root since can still be read through, but only what's under it, which whoever moved it could have put inside the root anyway. Symlinks and other devices are still refused at each new step.
+			- 2026-11-20: Ended by 2026111918562704. A folder swapped for another was read through too, which missed a changed file at exit 0, so a kept folder's path is now checked first.
 		- Any failure through a kept folder is tried again from the root, so a folder replaced or deleted since never makes a file look gone.
 		- One folder per thread per root, held by the root, so it closes with it and can't keep a filesystem busy afterward. A whole chain per thread would save a little more on the walk, at an fd per level.
 		- The openat2 path is unchanged.

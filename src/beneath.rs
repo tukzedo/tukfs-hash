@@ -174,7 +174,7 @@ impl Root {
 			at = None;
 		}
 		let f = openat(held.as_ref().map_or(&self.dir, |(d, _)| d).as_raw_fd(), last, flags)?;
-		// openat2's RESOLVE_NO_XDEV, for a mount on the last part, such as a file bind-mounted over one the the walk listed.
+		// openat2's RESOLVE_NO_XDEV, for a mount on the last part, such as a file bind-mounted over one the walk listed.
 		if f.metadata()?.dev() != self.dev {
 			return Err(io::Error::from_raw_os_error(libc::EXDEV));
 		}
