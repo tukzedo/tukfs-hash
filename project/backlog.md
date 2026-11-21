@@ -747,7 +747,8 @@
 - Keep snapdiff `--zfs-diff` memory bounded when the list has many deleted files.
 	- ID: 2026111918562722
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -758,10 +759,21 @@
 		- A `+` name gets the same rule against `--old`, since a mass create fills the `added` set the same way. That's from reading the code, and wasn't measured.
 		- Which files get compared stays the same. A name with both a `-` and a `+` line is in both snapshots, so neither check drops it.
 		- The memory check gets a case with many `-` and `+` lines.
+		- 2026-11-20: Only a name that isn't there at all is dropped. A symlink or mount on the way, or another error, keeps it, so the compare still counts it as missing or not checked, as before.
+		- 2026-11-20: The check is an `O_PATH` open beneath the other side, the same open snapdiff's stat uses, once per `-` or `+` line.
 	- Requirements  [Feature]:
 		- Keep a `-` name only when `--new` has something by that name, so memory grows with replaced files only.
 	- Related IDs: 2026110715441806
 	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/zfs-minus-mem.bash BIN DIR N`.
+	- Actual effort: Low
+	- Branch: nov20-2026111918562722
+	- Test case: `dfk0k` (`snapdiff::tests::zfs_diff_keeps_only_names_that_can_pair`): only names the other side has are held, a name through a symlink is held, and only the replaced file is compared. It failed with the check taken out, holding `gone`, and passes after. `dfk0m` in `tests/integration.bash`: 100,000 `-` and 100,000 `+` lines naming nothing on the other side take under 1 MB more peak RSS than 1 line. It failed 2 of 2 on the beta.2 build, at about 20 MB against 2.3 MB, and passes 3 of 3 after.
+	- Verified:
+		- 1M `-` lines went from 111 MB peak RSS to 2.5 MB, and from about 3.97 s to 0.88 s of user plus system CPU, at load 5 to 10.
+		- `cicd/cicd.bash --backlog-run-quick` passed, `dfk0m` on ext4 and ZFS, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Swept: `ChangeList` has the only `removed` and `added` sets. find-new and lists keep no names, and the files waiting on the inode walk are bounded by 2026111011092305. `df0pq-run.bash` runs `dfk0m` too, since it's in the same block.
+	- Acceptance signoff: Self-closed: the call was answered 2026-11-20, and the tests fail before and pass after.
+	- Closed: 20261120-201928
 
 - Warn once on stderr when the `--log` can't be written, such as on a full disk.
 	- ID: 2026111918562723

@@ -452,13 +452,26 @@ with open(d + "/long", "w") as f:
 		f.write(name + "\n")
 ' "${mem}"
 # Exit status and peak KB. GNU time puts a line before them on a non-zero exit.
-peak() { /usr/bin/time -o "${mem}/peak" -f '%x %M' "${bin}" snapdiff --old "${mem}/old" --new "${mem}/new" --list "${1}" > /dev/null 2>&1 || true; tail -n 1 "${mem}/peak" 2> /dev/null; }
+peak() { /usr/bin/time -o "${mem}/peak" -f '%x %M' "${bin}" snapdiff --old "${mem}/old" --new "${mem}/new" "${@}" > /dev/null 2>&1 || true; tail -n 1 "${mem}/peak" 2> /dev/null; }
 if [[ -x /usr/bin/time ]] && /usr/bin/time -o "${mem}/peak" -f '%M' true 2> /dev/null && [[ "$(cat "${mem}/peak")" =~ ^[0-9]+$ ]]; then
 	rcShort='' kbShort='' rcLong='' kbLong=''
-	read -r rcShort kbShort < <(peak "${mem}/short") || true
-	read -r rcLong kbLong < <(peak "${mem}/long") || true
+	read -r rcShort kbShort < <(peak --list "${mem}/short") || true
+	read -r rcLong kbLong < <(peak --list "${mem}/long") || true
 	st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 1024 )) && st=0
 	expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 1 MB more" "${st}"
+	# A mass delete or create in zfs diff: - and + names wait for their other half only when the other side has that name, so these 200,000 are dropped as read. Each one kept took about 110 bytes.
+	printf 'M\t/zfsmem/kept\n' > "${mem}/zshort"
+	python3 -I -c '
+import sys
+with open(sys.argv[1], "wb") as f:
+	for i in range(100000):
+		f.write(b"-\t/zfsmem/deleted/build/object-%09d.o\n+\t/zfsmem/made/build/object-%09d.o\n" % (i, i))
+' "${mem}/zlong"
+	rcZShort='' kbZShort='' rcZLong='' kbZLong=''
+	read -r rcZShort kbZShort < <(peak --mount /zfsmem --zfs-diff "${mem}/zshort") || true
+	read -r rcZLong kbZLong < <(peak --mount /zfsmem --zfs-diff "${mem}/zlong") || true
+	st=1; [[ "${rcZShort} ${rcZLong}" == "0 0" && "${kbZShort}" =~ ^[0-9]+$ && "${kbZLong}" =~ ^[0-9]+$ ]] && (( kbZLong - kbZShort < 1024 )) && st=0
+	expect dfk0m "a mass delete in zfs diff costs no more memory" "100,000 - and 100,000 + lines: exit ${rcZLong}, ${kbZLong} KB, against ${kbZShort} KB for 1, want under 1 MB more" "${st}"
 	# Only the runs a line names are kept, so a file that differs all through costs no more than one with a byte changed. 4 MiB with 1 byte in 8 changed is 524,288 runs, which took 8 MB more when all were kept.
 	python3 -I -c '
 import os, sys
@@ -479,12 +492,13 @@ for name, data in (("whole", whole), ("one", one)):
 ' "${mem}"
 	printf 'one\n' > "${mem}/one"; printf 'whole\n' > "${mem}/whole"
 	rcOne='' kbOne='' rcWhole='' kbWhole=''
-	read -r rcOne kbOne < <(peak "${mem}/one") || true
-	read -r rcWhole kbWhole < <(peak "${mem}/whole") || true
+	read -r rcOne kbOne < <(peak --list "${mem}/one") || true
+	read -r rcWhole kbWhole < <(peak --list "${mem}/whole") || true
 	st=1; [[ "${rcOne} ${rcWhole}" == "4 4" && "${kbOne}" =~ ^[0-9]+$ && "${kbWhole}" =~ ^[0-9]+$ ]] && (( kbWhole - kbOne < 1024 )) && st=0
 	expect df4rj "a file that differs all through costs no more memory" "524,288 runs: exit ${rcWhole}, ${kbWhole} KB, against ${kbOne} KB for 1, want under 1 MB more" "${st}"
 else
 	skip df0pq "a long list costs no more memory (no GNU time at /usr/bin/time)"
+	skip dfk0m "a mass delete in zfs diff costs no more memory (no GNU time at /usr/bin/time)"
 	skip df4rj "a file that differs all through costs no more memory (no GNU time at /usr/bin/time)"
 fi
 

@@ -166,10 +166,12 @@ fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
-/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names are kept to the end, since the 2 lines of a replaced file can be far apart.
+/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names that can pair are kept to the end, since the 2 lines of a replaced file can be far apart.
 struct ChangeList<'a, R> {
 	input: R,
 	format: Format<'a>,
+	// --old and --new, to drop a - or + name that can't pair. None keeps them all.
+	sides: Option<(&'a Root, &'a Root)>,
 	line: Vec<u8>,
 	line_no: usize,
 	// find-new prints a line per extent, a file's all together.
@@ -180,10 +182,11 @@ struct ChangeList<'a, R> {
 }
 
 impl<'a, R: BufRead> ChangeList<'a, R> {
-	fn new(input: R, format: Format<'a>) -> Self {
+	fn new(input: R, format: Format<'a>, sides: Option<(&'a Root, &'a Root)>) -> Self {
 		ChangeList {
 			input,
 			format,
+			sides,
 			line: Vec::new(),
 			line_no: 0,
 			last_name: Vec::new(),
@@ -200,11 +203,15 @@ impl<'a, R: BufRead> ChangeList<'a, R> {
 			Format::ZfsDiff(mounts) => match zfs_diff_line(line, mounts) {
 				ZfsLine::Pair(p) => Some(Entry::Pair(p)),
 				ZfsLine::Removed(p) => {
-					self.removed.insert(p);
+					if can_pair(self.sides.map(|s| s.1), &p) {
+						self.removed.insert(p);
+					}
 					None
 				}
 				ZfsLine::Added(p) => {
-					self.added.insert(p);
+					if can_pair(self.sides.map(|s| s.0), &p) {
+						self.added.insert(p);
+					}
 					None
 				}
 				ZfsLine::Skip => None,
@@ -262,6 +269,11 @@ impl<R: BufRead> Iterator for ChangeList<'_, R> {
 			}
 		}
 	}
+}
+
+// A - name pairs only with a + by that name, so --new has to have something there, and a + name needs --old to. The rest would be kept to the end for nothing, which a mass delete makes millions of. Only a name that isn't there at all is dropped. A symlink or mount on the way, or any other error, keeps it, so it's still counted as missing or not checked when it's compared.
+fn can_pair(other: Option<&Root>, rel: &Path) -> bool {
+	other.is_none_or(|root| !matches!(root.open_at(rel, libc::O_PATH), Err(e) if e.kind() == io::ErrorKind::NotFound))
 }
 
 // An absolute name makes join() drop --old and --new, so a file would be compared with itself.
@@ -740,7 +752,7 @@ fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: imp
 	let mut checker = Checker::new(old, new, src, show_all, frozen_at(old));
 	let (mut listed, mut unusable) = (0u64, 0u64);
 	let mut outside: Option<(u64, usize, Vec<u8>)> = None;
-	for entry in ChangeList::new(input, format) {
+	for entry in ChangeList::new(input, format, Some((old, new))) {
 		match entry.map_err(read_error)? {
 			Entry::Unusable(line_no, text) => {
 				unusable += 1;
@@ -800,7 +812,7 @@ mod tests {
 
 	fn parse(text: &[u8], format: Format) -> Parsed {
 		let mut parsed = Parsed::default();
-		for entry in ChangeList::new(text, format) {
+		for entry in ChangeList::new(text, format, None) {
 			match entry.unwrap() {
 				Entry::Pair(p) => parsed.pairs.push(p),
 				Entry::Unusable(n, t) => parsed.unusable.push((n, t)),
@@ -891,6 +903,45 @@ mod tests {
 		let text = b"-\t/home/u/saved\n+\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\nM\t/home/u/\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs, vec![same(""), same("saved")]);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn zfs_diff_keeps_only_names_that_can_pair() {
+		let _id = test_id("dfk0k");
+		let dir = scratch("snapdiff_canpair");
+		let (old, new) = (dir.join("old"), dir.join("new"));
+		fs::create_dir(&old).unwrap();
+		fs::create_dir(&new).unwrap();
+		for name in ["saved", "gone", "no_plus"] {
+			fs::write(old.join(name), b"o").unwrap();
+		}
+		for name in ["saved", "born", "no_plus"] {
+			fs::write(new.join(name), b"n").unwrap();
+		}
+		fs::create_dir(new.join("now_a_folder")).unwrap();
+		// Through a symlink it isn't in --new, but that's for the compare to count, as before.
+		fs::create_dir(new.join("real")).unwrap();
+		fs::write(new.join("real/f"), b"n").unwrap();
+		std::os::unix::fs::symlink("real", new.join("via_link")).unwrap();
+		let (old_root, new_root) = (Root::open(&old).unwrap(), Root::open(&new).unwrap());
+		let m = mounts("/home/u");
+		let text: &[u8] = b"-\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\n-\t/home/u/no_plus\n-\t/home/u/now_a_folder\n-\t/home/u/via_link/f\n-\t/home/u/not/there\n+\t/home/u/saved\n";
+		let mut cl = ChangeList::new(&b""[..], Format::ZfsDiff(&m), Some((&old_root, &new_root)));
+		for line in text.split(|&c| c == b'\n').filter(|l| !l.is_empty()) {
+			cl.line = line.to_vec();
+			assert!(cl.entry().is_none());
+		}
+		let names = |set: &BTreeSet<PathBuf>| set.iter().map(|p| show_path(p)).collect::<Vec<_>>();
+		assert_eq!(names(&cl.removed), ["no_plus", "now_a_folder", "saved", "via_link/f"]);
+		assert_eq!(names(&cl.added), ["saved"]);
+		let pairs: Vec<Pair> = ChangeList::new(text, Format::ZfsDiff(&m), Some((&old_root, &new_root)))
+			.map(|e| match e.unwrap() {
+				Entry::Pair(p) => p,
+				other => panic!("{other:?}"),
+			})
+			.collect();
+		assert_eq!(pairs, vec![same("saved")]);
 	}
 
 	#[test]
