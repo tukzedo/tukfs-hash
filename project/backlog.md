@@ -97,7 +97,8 @@
 - `--log` opens whatever is at the name: a FIFO hangs the scan, and under sudo root appends to another user's file in a sticky folder such as `/tmp`.
 	- ID: 2026111918562702
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -110,8 +111,21 @@
 	- Expected behavior [Bug]: The log is refused unless it's a regular file, and root gets no more reach through it than a shell `>>` would.
 	- Probable fix [Bug]: Keep `O_CREAT` on the retry, add `O_NONBLOCK`, then refuse anything but a regular file, as `scan::lock` does for the lock file.
 	- Sweep: other opens of a user-named file for writing. `hand_over` already uses `O_NONBLOCK`.
-	- Related IDs: 2026111019430926
+	- Related IDs: 2026111019430926, 2026111918562724
 	- Note: Repros are `fifo-log.bash` and `sticky-log-standin.bash` in `private/claude_simple/tools/review-20261119/db/`.
+	- Actual cause [Bug]: As the item says: the reopen after EEXIST had no `O_CREAT` or `O_NONBLOCK`, and nothing checked the file's type.
+	- Actual fix [Bug]: `say::open_append` keeps `O_CREAT` on the reopen and adds `O_NONBLOCK` to both opens. Anything but a regular file is refused with "not a regular file; refused", ENXIO from a FIFO with no reader included.
+	- Decisions:
+		- A character device such as `/dev/null` is refused too, since the item asks for a regular file only.
+		- A user's own scan is now refused another user's file in a sticky folder, as their shell's `>>` is, since `protected_regular` covers every user.
+		- A log removed between the 2 opens is made by the second one and isn't handed over under sudo. It's a race only the user can cause, and the log is then root's, as an older build left it.
+	- Swept: every open for writing in `src`. `scan::lock` and `hand_over` already use `O_NONBLOCK` and check the type. The rest are in tests, the soak tests, or the profiler's own folder.
+	- Test case: `dfjv7` (`a_log_that_isnt_a_regular_file_is_refused`): a FIFO with no reader, one with a reader, and `/dev/null`. The sudo case is `sticky-log-standin.bash`.
+	- Verified: `dfjv7` timed out on the code before and passes after. `fifo-log.bash`: the old build hung through one INT, the new one exits 1 at once. `sticky-log-standin.bash`, as uid 0 in a user namespace: the old build exited 0 and wrote 378 bytes to the other user's file, and the new one exits 1 with EACCES, as the plain `>>` does, and the file stays empty. Its FIFO case went from killed at the timeout to exit 1. `sudo-log-standin.bash` passes 8 of 8. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
+	- Branch: nov20-2026111918562702
+	- Commit: 9215ed4
+	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261120-172424
 
 - `install.bash` prints "Installed" at exit 0 when the install path is a link to a folder, and replaces nothing.
 	- ID: 2026111918562703
@@ -427,7 +441,8 @@
 - Refuse a `--log` that is the database or one of its own files.
 	- ID: 2026111918562724
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -435,7 +450,19 @@
 	- Origin: `1565fc2`. Confirmed: `--log db.sqlite` writes text after the last page, `.lock` writes into the lock file, and `-wal` is deleted by SQLite at the end of the run, log and all.
 	- Requirements  [Feature]:
 		- Match by device and inode as well as by name, the way the scan already leaves out the database's files.
-	- Related IDs: 2026111918562707
+	- Related IDs: 2026111918562707, 2026111918562702
+	- Progress log:
+		- `say::open_log` takes the `--db` path. Before the log is opened, it refuses the database's own names in the database's folder, with the folder matched by device and inode, so a bind mount of it should be caught too. That part is unverified, since the tests make no bind mount. After, it refuses a log that was already there and has the device and inode of one of those files, such as a hard link. The message is "is one of the database's files; refused".
+		- The names are in `scan::OWN_SUFFIXES`, which the scan's own skip of those files now shares.
+	- Decisions:
+		- A `--db` that can't be resolved isn't checked here, so the run still fails at the database with its reason in the log (dfdmm).
+	- Swept: `scan::excluded`, the only other place that matches the database's names, now goes through the same `own_name`.
+	- Test case: `dfjv8` (`a_log_that_is_the_database_is_refused`): the database, its lock, `-wal`, `-shm` and `-journal`, a hard link to the database and to the lock, and a `-wal` through a linked folder, with names that only start with the database's still allowed.
+	- Verified: `dfjv8` failed on the code before and passes after. A real scan with `--log` at each of the 4 names and at a hard link exits 1 with nothing written, and a log named `t.sqlite.log` beside it works. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
+	- Branch: nov20-2026111918562702
+	- Commit: 9215ed4
+	- Acceptance signoff: Self-closed: the requirement is met, and the test fails before and passes after.
+	- Closed: 20261120-172424
 
 - Wrap `install.bash` in a function called on its last line, so a cut-off one-liner download runs nothing.
 	- ID: 2026111918562725

@@ -26,18 +26,30 @@ pub enum Fit {
 	Break,
 }
 
-/// Appends every line from here on to `path`. Under sudo a log the scan makes is handed to that user, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926).
-pub fn open_log(path: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(), String> {
+/// Appends every line from here on to `path`. Under sudo a log the scan makes is handed to that user, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926). Anything but a regular file is refused, and so is one of the database's files (2026111918562702, 2026111918562724).
+pub fn open_log(path: &Path, db: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(), String> {
 	let failed = |e: String| format!("--log {e}");
 	let path = crate::util::canonical_name(path).map_err(failed)?;
 	if let Some(t) = crate::mounts::hands_off_at(mounts, &path) {
 		return Err(failed(format!("{} is on {t}, which isn't written to from Linux; put the log elsewhere", show_path(&path))));
 	}
 	let dir = crate::scan::open_dir("--log", &path, sudo)?;
-	let (f, made) = open_append(&dir, path.file_name().unwrap_or_default()).map_err(|e| match e.raw_os_error() {
+	let name = path.file_name().unwrap_or_default();
+	// A database that won't resolve fails the run later, with the reason in the log.
+	let db = crate::scan::canonical_db(db).ok();
+	let own = || failed(format!("{}: is one of the database's files; refused", show_path(&path)));
+	if db.as_deref().is_some_and(|db| crate::scan::is_db_name(db, &dir, name)) {
+		return Err(own());
+	}
+	let (f, made) = open_append(&dir, name).map_err(|e| match e.raw_os_error() {
 		Some(libc::ELOOP) => failed(format!("{}: is a symbolic link; refused", show_path(&path))),
+		// A FIFO with no reader, or a socket.
+		Some(libc::ENXIO) => failed(format!("{}: not a regular file; refused", show_path(&path))),
 		_ => failed(format!("{}: {e}", show_path(&path))),
 	})?;
+	if !made && db.as_deref().is_some_and(|db| crate::scan::is_db_file(db, &f)) {
+		return Err(own());
+	}
 	if made
 		&& let Some((uid, gid)) = sudo
 		&& let Err(e) = std::os::unix::fs::fchown(&f, Some(uid), Some(gid))
@@ -49,13 +61,18 @@ pub fn open_log(path: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::
 }
 
 // The file, and whether this made it. Under sudo, a link planted at the name would have root append to whatever it points at, so it's never followed.
+// O_CREAT stays on the second try so the kernel's protected_regular and protected_fifos checks still apply, as they do to a shell's >>, and O_NONBLOCK keeps a FIFO from waiting for a reader (2026111918562702).
 fn open_append(dir: &File, name: &OsStr) -> io::Result<(File, bool)> {
-	let flags = libc::O_WRONLY | libc::O_APPEND | libc::O_NOCTTY;
-	match beneath::openat(dir.as_raw_fd(), name, flags | libc::O_CREAT | libc::O_EXCL) {
-		Ok(f) => Ok((f, true)),
-		Err(e) if e.kind() == io::ErrorKind::AlreadyExists => beneath::openat(dir.as_raw_fd(), name, flags).map(|f| (f, false)),
-		Err(e) => Err(e),
+	let flags = libc::O_WRONLY | libc::O_APPEND | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CREAT;
+	let (f, made) = match beneath::openat(dir.as_raw_fd(), name, flags | libc::O_EXCL) {
+		Ok(f) => (f, true),
+		Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (beneath::openat(dir.as_raw_fd(), name, flags)?, false),
+		Err(e) => return Err(e),
+	};
+	if !f.metadata()?.file_type().is_file() {
+		return Err(io::Error::other("not a regular file; refused"));
 	}
+	Ok((f, made))
 }
 
 /// Each line of `text` on stdout, fitted to a terminal, and in full to the log.
@@ -148,7 +165,7 @@ fn fitted(line: &str, width: Option<usize>, fit: Fit) -> Vec<String> {
 mod tests {
 	use super::*;
 	use crate::testutil::test_id;
-	use std::os::unix::fs::MetadataExt;
+	use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 	#[test]
 	fn a_line_fits_its_terminal() {
@@ -177,7 +194,7 @@ mod tests {
 		let _id = test_id("df4xq");
 		let d = crate::testutil::scratch("say_log_link");
 		std::os::unix::fs::symlink(d.join("elsewhere"), d.join("scan.log")).unwrap();
-		let got = open_log(&d.join("scan.log"), None, &[]).unwrap_err();
+		let got = open_log(&d.join("scan.log"), &d.join("t.sqlite"), None, &[]).unwrap_err();
 		assert!(got.starts_with("--log "), "{got}");
 		assert!(!d.join("elsewhere").exists());
 	}
@@ -196,7 +213,7 @@ mod tests {
 			fstype: "ntfs3".into(),
 			source: "/dev/sdz1".into(),
 		};
-		let got = open_log(&d.join("scan.log"), None, &[win]).unwrap_err();
+		let got = open_log(&d.join("scan.log"), &d.join("t.sqlite"), None, &[win]).unwrap_err();
 		assert!(got.contains("is on ntfs3"), "{got}");
 		assert!(!d.join("scan.log").exists());
 	}
@@ -221,8 +238,53 @@ mod tests {
 		let d = crate::testutil::scratch("say_log_folder");
 		let me = std::fs::metadata(&*d).unwrap();
 		let log = d.join("scan.log");
-		let said = open_log(&log, Some((me.uid() + 1, me.gid())), &[]).unwrap_err();
+		let said = open_log(&log, &d.join("t.sqlite"), Some((me.uid() + 1, me.gid())), &[]).unwrap_err();
 		assert!(said.starts_with("--log folder ") && said.ends_with("; refused"), "{said}");
 		assert!(!log.exists());
+	}
+
+	// A FIFO with no reader hung the scan in open(), and one with a reader took the log (2026111918562702).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri can't make a FIFO")]
+	fn a_log_that_isnt_a_regular_file_is_refused() {
+		let _id = test_id("dfjv7");
+		let d = crate::testutil::scratch("say_log_fifo");
+		let fifo = d.join("scan.log");
+		let c = crate::util::cpath(&fifo).unwrap();
+		// SAFETY: c is NUL-terminated and outlives the call.
+		assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+		let db = d.join("t.sqlite");
+		let refused = |log: &Path| {
+			let got = open_log(log, &db, None, &[]).unwrap_err();
+			assert!(got.ends_with(": not a regular file; refused"), "{got}");
+		};
+		refused(&fifo);
+		let _reader = File::options().read(true).custom_flags(libc::O_NONBLOCK).open(&fifo).unwrap();
+		refused(&fifo);
+		refused(Path::new("/dev/null"));
+	}
+
+	// Text after the database's last page, in its lock, or in a -wal that SQLite deletes (2026111918562724).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
+	fn a_log_that_is_the_database_is_refused() {
+		let _id = test_id("dfjv8");
+		let d = crate::testutil::scratch("say_log_db");
+		let db = d.join("t.sqlite");
+		std::fs::write(&db, "db").unwrap();
+		std::fs::write(d.join("t.sqlite.lock"), "").unwrap();
+		std::fs::hard_link(&db, d.join("linked.log")).unwrap();
+		std::fs::hard_link(d.join("t.sqlite.lock"), d.join("lock.log")).unwrap();
+		std::os::unix::fs::symlink(&*d, d.join("alias")).unwrap();
+		for name in ["t.sqlite", "t.sqlite.lock", "t.sqlite-wal", "t.sqlite-shm", "t.sqlite-journal", "linked.log", "lock.log", "alias/t.sqlite-wal"] {
+			let got = open_log(&d.join(name), &db, None, &[]).unwrap_err();
+			assert!(got.ends_with(": is one of the database's files; refused"), "{name}: {got}");
+		}
+		assert_eq!(std::fs::read(&db).unwrap(), b"db");
+		assert!(!d.join("t.sqlite-wal").exists());
+		let dir = File::open(&*d).unwrap();
+		for other in ["t.sqlite.log", "t.sqlite-wal2", "u.sqlite", "scan.log"] {
+			assert!(!crate::scan::is_db_name(&db, &dir, OsStr::new(other)), "{other}");
+		}
 	}
 }

@@ -592,7 +592,7 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let Plan { groups: planned, dropped, unresolved, mounts } = plan(&o.roots, &o.threads)?;
 	if let Some(l) = &o.log {
-		say::open_log(l, sudo_ids(), &mounts)?;
+		say::open_log(l, &o.db, sudo_ids(), &mounts)?;
 	}
 	for d in &dropped {
 		say::err(&format!("skipping root {d}"));
@@ -1069,8 +1069,34 @@ fn inside_any(names: &[(PathBuf, PathBuf)], ids: &HashSet<(u64, u64)>) -> bool {
 
 // The database, its journal files and its lock, in its folder under any name. Anything else that only starts with its name is read like any other file.
 fn excluded(sh: &Shared, p: &Path, in_db_dir: bool) -> bool {
-	let own = in_db_dir && p.file_name().zip(sh.db.file_name()).is_some_and(|(n, d)| n.as_bytes().strip_prefix(d.as_bytes()).is_some_and(|sfx| matches!(sfx, b"" | b"-wal" | b"-shm" | b"-journal" | b".lock")));
+	let own = in_db_dir && p.file_name().zip(sh.db.file_name()).is_some_and(|(n, d)| own_name(n, d));
 	own || sh.excludes.iter().any(|x| p.starts_with(x))
+}
+
+const OWN_SUFFIXES: [&str; 5] = ["", "-wal", "-shm", "-journal", ".lock"];
+
+fn own_name(name: &OsStr, db: &OsStr) -> bool {
+	name.as_bytes().strip_prefix(db.as_bytes()).is_some_and(|sfx| OWN_SUFFIXES.iter().any(|s| sfx == s.as_bytes()))
+}
+
+/// Whether `name` in `dir` is one of the database's own names, with `dir` its folder under any name, as for a bind mount.
+pub(crate) fn is_db_name(db: &Path, dir: &File, name: &OsStr) -> bool {
+	let (Some(d), Ok(at), Ok(here)) = (db.file_name(), db_dir(db), dir.metadata()) else {
+		return false;
+	};
+	(here.dev(), here.ino()) == at && own_name(name, d)
+}
+
+/// Whether `f` is one of the database's own files under another name, as a hard link.
+pub(crate) fn is_db_file(db: &Path, f: &File) -> bool {
+	let Ok(m) = f.metadata() else {
+		return false;
+	};
+	OWN_SUFFIXES.iter().any(|s| {
+		let mut p = db.as_os_str().to_owned();
+		p.push(s);
+		fs::symlink_metadata(p).is_ok_and(|o| (o.dev(), o.ino()) == (m.dev(), m.ino()))
+	})
 }
 
 // git looks for `.git` up from the work folder until the filesystem changes, so this does too.
