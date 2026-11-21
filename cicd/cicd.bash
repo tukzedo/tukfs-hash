@@ -498,6 +498,15 @@ fInUse(){   ## fInUse PATH
 	done
 	return 1
 }
+## The temp copy fInstallAtomic is making, so a stop takes it out of the synced folder too.
+install_tmp=""
+fInstallTmpGone(){
+	[[ -n "${install_tmp}" ]] || return 0
+	if rm -f -- "${install_tmp}" 2>/dev/null; then install_tmp=""; return 0; fi
+	printf '[ could not remove %s; rm -f -- "%s" ]\n' "${install_tmp}" "${install_tmp}" >&2
+	install_tmp=""
+	return 1
+}
 ## Through a temp file in the same dir and a rename, so a copy started by hand never sees a half-written file, and the sync never sends one.
 fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 	local src="$1" dir="$2" name="$3" mode="$4" tmp="$2/.$3.$$.tmp"
@@ -506,12 +515,15 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 		if [[ -L "${dir}/${name}" ]]; then fEcho "WARNING: ${dir}/${name} is a link to a folder; not installed"; else fEcho "WARNING: ${dir}/${name} is a folder; not installed"; fi
 		return 1
 	fi
+	## Named before the copy starts, since a stop's trap runs between any 2 commands below.
+	install_tmp="${tmp}"
 	## -T, so a link to a folder that turned up since the check is replaced, not moved into.
 	if cp -f -- "${src}" "${tmp}" && chmod "${mode}" -- "${tmp}" && mv -fT -- "${tmp}" "${dir}/${name}"; then
+		install_tmp=""
 		fEcho "OK: installed ${dir}/${name}"
 		return 0
 	fi
-	rm -f -- "${tmp}"
+	fInstallTmpGone || true
 	fEcho "WARNING: could not install ${dir}/${name}"
 	return 1
 }
@@ -690,6 +702,8 @@ fRunTmpGone(){
 	if ((! run_said && ! inner_run)); then printf '\n[ CICD ABORTED (stopped) ]\n' >&2; fi
 	## First, or what's still running reads a copy and a temp dir already gone.
 	fStopDescendants || true
+	## After the stop, so its cp isn't still writing it.
+	fInstallTmpGone || true
 	## After the trap above, so a TERM in its git calls can't skip the rest (2026111011092309), and after the stop, so no git of ours has the ref locked.
 	fTagUndo || true
 	fCtrsGone || true
@@ -2027,3 +2041,4 @@ exit 0
 ##		  message, so a stop ends it, and a stop after the push leaves the tag
 ##		  on. The dogfood copy refuses a folder, or a link to one, at the name.
 ##		  Containers get the run's PID too, so 2 temp roots can't share a run.
+##		  A stop during the dogfood copy removes its temp copy.

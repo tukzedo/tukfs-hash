@@ -29,10 +29,23 @@
 
 ## Issues
 
+- A stop between the demo gif's copy and its rename leaves `<gif>.tmp.<pid>` beside the tracked gif in the repo.
+	- ID: 2026112019541396
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261120-195413
+	- Opened by: sweep for 2026112019472699
+	- Related IDs: 2026112019472699
+	- Origin: Plausible, read only. `cicd/utility/demo-gif.bash` has no EXIT trap, and copies to `${out}.tmp.$$` before the rename.
+	- Probable fix [Bug]: An EXIT trap that removes the temp copy once it's named, with INT, TERM and HUP trapped so it runs.
+
 - A stop between the dogfood stage's copy and its rename leaves `.tukfs-hash.<pid>.tmp` in the synced `linux/bin`.
 	- ID: 2026112019472699
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261120-194726
@@ -40,6 +53,19 @@
 	- Related IDs: 2026111918562717
 	- Origin: Plausible, read only. `fInstallAtomic` in `cicd/cicd.bash` removes its temp copy only when the copy or rename fails, not on a stop, the same as `install.bash` before 2026111918562717.
 	- Probable fix [Bug]: Remove the temp copy from the run's EXIT trap once it's named, or sweep `.*.tmp` names with a dead PID at the next run.
+	- Reproduced [Bug]: Yes, with stand-ins that send TERM to the script after the copy, after the chmod, and with half a copy written. Each left the temp copy beside the old file.
+	- Actual cause [Bug]: Only the failure path removed the temp copy. A stop's trap exits between 2 commands of the copy, and the EXIT trap didn't know the name.
+	- Actual fix [Bug]: `fInstallAtomic` names its temp copy in a global before the copy starts, and clears it after the rename. `fRunTmpGone` removes it once what the run started has been stopped. When that fails, it prints the name and the `rm` to run.
+	- Decisions:
+		- The EXIT trap rather than a sweep at the next run. The folder is synced, so a temp copy whose PID is dead here can be another box's copy in progress.
+		- A KILL still leaves the file, as it does for `install.bash`, since no trap runs then.
+	- Branch: nov20-2026112019472699
+	- Commit: `457e7bb`
+	- Test case: none with an ID (2026102508462883). `dogfood-install-check.bash REPO [REV]`, in the private tools folder, now 10 cases. The 3 "stopped after ..." cases and the `fRunTmpGone` call check fail on `HEAD` before the fix, and all 10 pass after.
+	- Swept: both callers in `fStageDogfood` go through `fInstallAtomic`. The release set's sums temp is removed at the next run's start, and green-tree's list temp in the git folder has a fixed name that the next run overwrites. The demo gif's temp copy beside the tracked gif is the same gap, filed as 2026112019541396.
+	- Verified: `dogfood-install-check.bash` both ways, shellcheck, and `--backlog-run-quick`.
+	- Acceptance signoff: Self-closed: the stop cases fail before and pass after, and nothing a person sees changed.
+	- Closed: 20261120-195500
 
 - The dogfood copy moves the binary into a folder when its name in the synced `linux/bin` is a link to one.
 	- ID: 2026112017341780
