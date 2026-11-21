@@ -274,7 +274,8 @@
 - A root is opened again by path when its walk starts, so if a mount or a symlink now sits in its path, that other filesystem is scanned, and NTFS gets attributes.
 	- ID: 2026111918562706
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -284,12 +285,28 @@
 	- Decisions: `walk` refuses a root whose opened folder isn't the device and inode the plan resolved. It's a `dir-error` with exit 8, the same as a root that's gone after the plan. This narrows code review 20261110's call (answered 2026-11-20).
 		- The root is still the user's choice when the scan starts, and what's inside it can still change.
 		- A refusal was picked over only keeping attributes off NTFS. The plan's groups, threads, skips and percent were all worked out for the folder it resolved, so a scan of some other folder is wrong in more ways than the attributes.
+		- A root missing from the plan's ids matches no folder, so it's refused too.
+		- `names_above`, `inside_any` and `git_tree_above` still go by path. They run next to the checked open, so only the moment between is left, the case code review 20261110 decided against.
 	- Incorrect behavior [Bug]: Exit 0, and `user.blake3.*` on a file inside the NTFS image.
 	- Expected behavior [Bug]: The root is refused as a `dir-error`, or at least nothing is written to NTFS.
 	- Probable fix [Bug]: Keep each root's device and inode from the plan, and have `walk` refuse a root whose opened folder differs.
 	- Sweep: `names_above`, `inside_any`, `git_tree_above`, `bytes_under`, `hands_off` and `size_parts`, which all go by path.
 	- Related IDs: 2026111918562705
 	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r3/inner.bash DIR mount|symlink`, under `unshare -rm --map-auto`.
+		- Since 2026-11-20 it takes the binary from `B` and the folder with `gate.so` from `S`, built from `scan/bin/gate.c`.
+	- Reproduced [Bug]: Yes, with the walk's new check taken out: both modes exit 0, and the NTFS file gets `user.blake3.*`.
+	- Actual cause [Bug]: `walk` opened each root again by its path and used whatever folder it got. Nothing compared it with the folder the plan resolved, so a mount or link put in the path since sent the walk to another filesystem, whose device wasn't in `no_write_devs`.
+	- Actual fix [Bug]: `plan` keeps each root's device and inode. `walk` refuses a root whose opened folder differs, as a `dir-error` that says it's not the folder that was there when the scan began, and the size count counts 0 for it. design.md, "Reading files", says so.
+	- Branch: nov20-2026111918562706
+	- Commit: `b226adc`
+	- Test case: `dfjxp` (`scan::tests::a_root_thats_another_folder_since_the_plan_is_refused`): a link put above a root, then another folder put at its name, each refused and counted as 0.
+	- Verified:
+		- `dfjxp` fails with the check taken out, and passes with it.
+		- The repro in both modes: exit 8, `dir-error 1`, and no attribute on the NTFS file. Without the check, exit 0 and `user.blake3.b64u` on it.
+		- `--backlog-run-quick` passed in 2m 36s, its `miri` area in 53s, and `codeql-ours` in 2m 21s.
+	- Swept: `hands_off` and `size_parts` read each root by path right after the plan. A root that's changed by its walk is refused, so nothing is written under a stale `no_write_devs`, and only the percent can be off. `bytes_under` checks the root's id now too. snapdiff's `Root::open` takes the user's own paths, with no plan. The rest are under Decisions.
+	- Acceptance signoff: Self-closed: the repro fails before and passes after, and the test fails without the check.
+	- Closed: 20261120-184539
 
 - The `--log` file is read and gets attributes when a root reaches it under another name, such as a bind mount.
 	- ID: 2026111918562707
@@ -359,7 +376,8 @@
 - Under sudo, the database is opened by path after its folder was checked, so a swap in between could have root's SQLite make files elsewhere.
 	- ID: 2026111918562711
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -369,6 +387,23 @@
 	- Expected behavior [Bug]: The database and its files are made in the folder that was checked.
 	- Probable fix [Bug]: Open through `/proc/self/fd/<folder fd>/<name>`.
 	- Related IDs: 2026111011092301
+	- Reproduced [Bug]: Yes, as a test, not as root: with the folder moved after `Held::take_as` checked it and another put at its name, `Held::open` made the database in the new one. The open is the same code under sudo.
+	- Actual cause [Bug]: SQLite takes only a path, and `Held::open` and the walks' lookups gave it the database's path by name, which can lead to another folder once the check is done.
+	- Actual fix [Bug]: The database is opened by the path that `/proc/self/fd/<folder fd>` reads now, from the fd `Held` keeps. That's for `scan`, `accept` and `prune`, and for each walk's lookup connection. The walk's id for the database folder comes from that fd too. design.md, "Database", says so.
+	- Decisions:
+		- SQLite isn't given `/proc/self/fd/<fd>/<name>` as filed. It reads that link back as a path anyway, and with `SQLITE_OPEN_NOFOLLOW` it refuses it as a link. Reading the link here keeps `NOFOLLOW`, and SQLite gets the path it would have used.
+		- SQLite still goes by that path for files it makes later, such as the `-journal` when the run leaves WAL mode. A swap in the moment after the link is read, or during the run, still reaches those. Closing that needs a SQLite VFS that opens by fd, which costs more than a Low item that's only plausible.
+	- Branch: nov20-2026111918562706
+	- Commit: `b226adc`
+	- Test case: `dfjxq` (`scan::tests::the_database_opens_in_the_checked_folder`), and a new case in `ddy8f` (`a_group_with_no_workers_ends`) whose lookups open through a moved folder.
+	- Verified:
+		- `dfjxq` and `ddy8f`'s new case fail with the open by name put back, and pass after.
+		- Given `/proc/self/fd/<fd>/t.sqlite` with `NOFOLLOW`, `dfjxq` fails with "unable to open database file". The system SQLite 3.46.1, given it without `NOFOLLOW`, made the file in the moved folder.
+		- `sudo-folder-standin.bash`, `sudo-links-standin.bash`, `fail-handback-standin.bash` and `sudo-log-standin.bash` passed all 54 checks as uid 0 in a user namespace.
+		- The gates as in 2026111918562706.
+	- Swept: every open of the database while `Held` has it, which is `Held::open` and `run_group`'s lookups. `runs`, `report` and `gone` open read only with no checked folder, and make nothing. `say::open_log` and `is_db_file` still find the database's names by path, and only refuse a log there.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the test fails before the fix and passes after. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261120-184539
 
 - A TERM or HUP to cicd.bash's own PID during publish doesn't stop the publisher, which commits and pushes before the run exits 143.
 	- ID: 2026111918562712

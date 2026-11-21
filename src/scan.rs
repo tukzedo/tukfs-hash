@@ -263,6 +263,8 @@ struct Shared {
 	db: PathBuf,
 	// The database's folder by device and inode, since a bind mount can show it to a root's walk under another name.
 	db_dir: (u64, u64),
+	// The folder Held checked, which the walks' lookups open the database through. Tests without one go by name.
+	db_folder: Option<File>,
 	excludes: Vec<PathBuf>,
 	no_xattr: Vec<PathBuf>,
 	// --exclude and --no-xattr by device and inode too, for the same reason.
@@ -270,6 +272,8 @@ struct Shared {
 	no_xattr_ids: HashSet<(u64, u64)>,
 	mount_points: BTreeMap<PathBuf, String>,
 	mounts: Vec<mounts::Mount>,
+	// From the plan, which everything about a root's group was worked out for.
+	root_ids: HashMap<PathBuf, (u64, u64)>,
 	// Devices of roots on NTFS, APFS or HFS+. The walk stays on its root's.
 	no_write_devs: BTreeSet<u64>,
 	write_xattrs: bool,
@@ -347,6 +351,8 @@ pub struct Plan {
 	/// Roots that couldn't be resolved, made absolute, with the error. A scan with any refuses to start.
 	pub unresolved: Vec<(PathBuf, String)>,
 	pub mounts: Vec<mounts::Mount>,
+	/// Each root's device and inode as resolved here. A walk refuses a root that's another folder by then.
+	pub ids: HashMap<PathBuf, (u64, u64)>,
 }
 
 /// Roots that resolve to the same place, or whose folder another root's walk reaches, are dropped, so nothing is read twice. Bind mounts are the usual cause here.
@@ -383,6 +389,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 		found.push((c, (md.dev(), md.ino()), m));
 	}
 	// Against every other root, since a bind mount can sort before the root it's from. The device test keeps an unmounted btrfs subvolume, which the outer walk stops at.
+	let ids = found.iter().map(|(c, id, _)| (c.clone(), *id)).collect();
 	let inside: Vec<Option<String>> = found
 		.iter()
 		.map(|(c, id, _)| {
@@ -424,7 +431,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			threads: n.max(1),
 		});
 	}
-	Ok(Plan { groups, dropped, unresolved, mounts })
+	Ok(Plan { groups, dropped, unresolved, mounts, ids })
 }
 
 /// Takes the database's lock file, so 2 scans can't share it.
@@ -488,7 +495,7 @@ pub(crate) fn open_dir(what: &str, file: &Path, sudo: Option<(u32, u32)>) -> Res
 #[derive(Debug)]
 pub struct Held {
 	db: PathBuf,
-	// The folder that was checked. The lock is made and the files are handed back through it.
+	// The folder that was checked. The lock is made, the database opened and the files handed back through it.
 	dir: File,
 	sudo: Option<(u32, u32)>,
 	conn: Option<rusqlite::Connection>,
@@ -514,7 +521,7 @@ impl Held {
 	}
 
 	pub fn open(&mut self) -> Result<&mut rusqlite::Connection, String> {
-		Ok(self.conn.insert(db::open_rw(&self.db)?))
+		Ok(self.conn.insert(db::open_rw(&through(&self.dir, &self.db)?)?))
 	}
 
 	/// For the writer thread. `put_back` returns it, to be closed here.
@@ -547,6 +554,12 @@ impl Drop for Held {
 		}
 		self.give_back();
 	}
+}
+
+// SQLite takes only a path, so it gets the checked folder's path as it is now, which the kernel knows from the fd. Another folder put at the old name since isn't used (2026111918562711).
+fn through(dir: &File, db: &Path) -> Result<PathBuf, String> {
+	let at = fs::read_link(format!("/proc/self/fd/{}", dir.as_raw_fd())).map_err(|e| format!("database folder of {}: {e}", db.display()))?;
+	Ok(at.join(db.file_name().unwrap_or_default()))
 }
 
 /// This box's hostname, or empty.
@@ -590,7 +603,13 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 
 /// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
-	let Plan { groups: planned, dropped, unresolved, mounts } = plan(&o.roots, &o.threads)?;
+	let Plan {
+		groups: planned,
+		dropped,
+		unresolved,
+		mounts,
+		ids: root_ids,
+	} = plan(&o.roots, &o.threads)?;
 	if let Some(l) = &o.log {
 		say::open_log(l, &o.db, sudo_ids(), &mounts)?;
 	}
@@ -617,7 +636,9 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	let hands_off = hands_off(&mounts, &planned)?;
 	let db_path = canonical_db(&o.db)?;
 	let mut held = Held::take(&db_path, &mounts)?;
-	let db_dir = db_dir(&db_path)?;
+	let failed = |e: io::Error| format!("database folder of {}: {e}", db_path.display());
+	let db_dir = held.dir.metadata().map(|m| (m.dev(), m.ino())).map_err(failed)?;
+	let db_folder = Some(held.dir.try_clone().map_err(failed)?);
 	let conn = held.open()?;
 	let open_misses = db::open_misses(conn)?;
 
@@ -646,12 +667,14 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		cutoff_us: cutoff_us.min(run_started),
 		db: db_path.clone(),
 		db_dir,
+		db_folder,
 		exclude_ids: ids_of(&excludes),
 		no_xattr_ids: ids_of(&no_xattr),
 		excludes,
 		no_xattr,
 		mount_points: mounts::mount_points(&mounts),
 		mounts,
+		root_ids,
 		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
 		// A quick check leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
@@ -810,7 +833,7 @@ fn count_group(g: &Group, sh: &Shared) {
 	};
 	let mut total = c.used;
 	for r in &c.folders {
-		let Some(n) = bytes_under(r, sh) else {
+		let Some(n) = bytes_under(r, planned_id(sh, r), sh) else {
 			return;
 		};
 		total += n;
@@ -819,11 +842,12 @@ fn count_group(g: &Group, sh: &Shared) {
 }
 
 // The bytes a walk of root would read, by the walk's rules: its own device, no mounts under it, no --exclude and not the database. Each name of a hard link counts its share, as a skipped one does. None after a stop.
-fn bytes_under(root: &Path, sh: &Shared) -> Option<u64> {
+fn bytes_under(root: &Path, want: (u64, u64), sh: &Shared) -> Option<u64> {
 	if inside_any(&names_above(&sh.mounts, root), &sh.exclude_ids) {
 		return Some(0);
 	}
-	let Ok(top) = fs::metadata(root) else {
+	// The walk refuses another folder there.
+	let Some(top) = fs::metadata(root).ok().filter(|m| (m.dev(), m.ino()) == want) else {
 		return Some(0);
 	};
 	let mut total = 0u64;
@@ -969,7 +993,7 @@ fn run_group(g: &Group, sh: &Shared) {
 		}
 		drop(jrx);
 		guarded(sh, "a folder walk", || {
-			let look = match db::open_ro(&sh.db) {
+			let look = match sh.db_folder.as_ref().map_or_else(|| Ok(sh.db.clone()), |d| through(d, &sh.db)).and_then(|p| db::open_ro(&p)) {
 				Ok(c) => c,
 				Err(e) => return sh.faults.add(&sh.stop, e),
 			};
@@ -977,11 +1001,16 @@ fn run_group(g: &Group, sh: &Shared) {
 				if sh.stop.load(Relaxed) {
 					break;
 				}
-				walk(r, sh, &g.stats, &look, &jtx);
+				walk(r, planned_id(sh, r), sh, &g.stats, &look, &jtx);
 			}
 		});
 		drop(jtx);
 	});
+}
+
+// A root that isn't in the plan matches no folder, so it's refused.
+fn planned_id(sh: &Shared, root: &Path) -> (u64, u64) {
+	sh.root_ids.get(root).copied().unwrap_or_default()
 }
 
 fn event(sh: &Shared, kind: Kind, path: &Path, detail: String) {
@@ -1145,14 +1174,15 @@ struct Frame {
 struct Closed;
 
 // Depth first, files before folders. Folders go in name order; files go in inode order, which on most filesystems is close to the order on disk.
-fn walk(root: &Path, sh: &Shared, stats: &Stats, look: &rusqlite::Connection, jobs: &SyncSender<Job>) {
+fn walk(root: &Path, want: (u64, u64), sh: &Shared, stats: &Stats, look: &rusqlite::Connection, jobs: &SyncSender<Job>) {
 	let names = names_above(&sh.mounts, root);
 	if inside_any(&names, &sh.exclude_ids) {
 		return;
 	}
-	let root = match Root::open(root) {
+	// A root gone since the plan wasn't read either. Nor is one that's another folder now, as when a mount or a link has gone into its path, since its group, skips and attributes were all worked out for the one the plan found (2026111918562706).
+	let opened = Root::open(root).and_then(|r| if (r.dev, r.ino) == want { Ok(r) } else { Err(io::Error::other("not the folder that was here when the scan began")) });
+	let root = match opened {
 		Ok(r) => Arc::new(r),
-		// A root gone since the plan wasn't read either.
 		Err(e) => {
 			stats.other_err.fetch_add(1, Relaxed);
 			event(sh, Kind::DirError, root, e.to_string());
@@ -1997,6 +2027,7 @@ mod tests {
 			run_id: 1,
 			cutoff_us: 0,
 			db_dir: db_dir(&db).unwrap_or_default(),
+			db_folder: None,
 			db,
 			excludes: Vec::new(),
 			no_xattr: Vec::new(),
@@ -2004,6 +2035,7 @@ mod tests {
 			no_xattr_ids: HashSet::new(),
 			mount_points: BTreeMap::new(),
 			mounts: Vec::new(),
+			root_ids: HashMap::new(),
 			no_write_devs: BTreeSet::new(),
 			write_xattrs: false,
 			rmlint: false,
@@ -2028,8 +2060,10 @@ mod tests {
 			File::create(tree.join(format!("f{i}"))).unwrap();
 		}
 		drop(db::open_rw(&dir.join("t.sqlite")).unwrap());
-		let ends = |db: PathBuf, threads| {
-			let (sh, _rx) = test_shared(db);
+		let ends = |db: PathBuf, threads, folder: Option<File>| {
+			let (mut sh, _rx) = test_shared(db);
+			sh.root_ids.insert(tree.clone(), id_of(&tree));
+			sh.db_folder = folder;
 			let g = Group {
 				name: "g".into(),
 				roots: vec![tree.clone()],
@@ -2047,11 +2081,18 @@ mod tests {
 			});
 			drx.recv_timeout(Duration::from_secs(20)).expect("the group never ended")
 		};
-		let (done, stopped, why) = ends(dir.join("t.sqlite"), 0);
+		let (done, stopped, why) = ends(dir.join("t.sqlite"), 0, None);
 		assert!(done && !stopped && why.is_empty(), "{why:?}");
-		let (done, stopped, why) = ends(dir.join("not here/t.sqlite"), 2);
+		let (done, stopped, why) = ends(dir.join("not here/t.sqlite"), 2, None);
 		assert!(done && stopped);
 		assert_eq!(why.len(), 1, "{why:?}");
+		// The lookups go through the folder that was checked, wherever it is now (2026111918562711).
+		fs::create_dir(dir.join("m")).unwrap();
+		drop(db::open_rw(&dir.join("m/t.sqlite")).unwrap());
+		let folder = File::open(dir.join("m")).unwrap();
+		fs::rename(dir.join("m"), dir.join("m.moved")).unwrap();
+		let (done, stopped, why) = ends(dir.join("m/t.sqlite"), 0, Some(folder));
+		assert!(done && !stopped && why.is_empty(), "{why:?}");
 	}
 
 	// ntfs3 returns EOPNOTSUPP for compressed and EFS files. That's not damage.
@@ -2148,6 +2189,10 @@ mod tests {
 		assert_eq!(roots_diff(&a, &roots_key(&g(&["/a", "/d"]))), "not given now: /b, /c; not in that run: /d");
 	}
 
+	fn id_of(p: &Path) -> (u64, u64) {
+		fs::metadata(p).map(|m| (m.dev(), m.ino())).unwrap_or_default()
+	}
+
 	fn test_group(root: &Path) -> Group {
 		Group {
 			name: "g".into(),
@@ -2198,12 +2243,55 @@ mod tests {
 		let (sh, rx) = test_shared(PathBuf::from("/nowhere/t.sqlite"));
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let (jtx, jrx) = sync_channel(1 << 16);
-		walk(Path::new("/dev"), &sh, &Stats::default(), &look, &jtx);
+		walk(Path::new("/dev"), id_of(Path::new("/dev")), &sh, &Stats::default(), &look, &jtx);
 		drop((jtx, sh));
 		drain.join().unwrap();
 		let jobs: Vec<PathBuf> = jrx.iter().map(|j| j.path).collect();
 		fs::remove_file(&mine).unwrap();
 		assert!(!jobs.iter().any(|p| p.starts_with("/dev/shm")), "{jobs:?}");
+	}
+
+	// A root that's another folder since the plan, through a link put above it or a folder put at its name, is refused rather than read, and isn't counted. A mount over it is the same case to the walk (2026111918562706).
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn a_root_thats_another_folder_since_the_plan_is_refused() {
+		let _id = test_id("dfjxp");
+		let d = scratch("scan_rootswap");
+		let d = fs::canonicalize(&*d).unwrap();
+		for top in ["up/r", "other/r"] {
+			fs::create_dir_all(d.join(top)).unwrap();
+			fs::write(d.join(top).join("f"), "x").unwrap();
+		}
+		let look = db::open_rw(&d.join("look.sqlite")).unwrap();
+		let walked = |root: &Path, want| {
+			let (sh, rx) = test_shared(d.join("t.sqlite"));
+			let stats = Stats::default();
+			let drain = std::thread::spawn(move || rx.iter().filter_map(|m| if let Msg::Event { kind, path, .. } = m { Some((kind, path)) } else { None }).collect::<Vec<_>>());
+			let (jtx, jrx) = sync_channel(64);
+			walk(root, want, &sh, &stats, &look, &jtx);
+			let counted = bytes_under(root, want, &sh);
+			drop((jtx, sh));
+			let jobs = jrx.iter().map(|j| j.path).collect::<Vec<_>>();
+			(jobs, drain.join().unwrap(), stats.other_err.load(Relaxed), counted)
+		};
+		let root = d.join("up/r");
+		let planned = id_of(&root);
+		let refused = |how: &str| {
+			let (jobs, events, errs, counted) = walked(&root, planned);
+			assert_eq!(jobs, Vec::<PathBuf>::new(), "{how}");
+			assert_eq!(events, [(Kind::DirError, root.as_os_str().as_bytes().to_vec())], "{how}");
+			assert_eq!((errs, counted), (1, Some(0)), "{how}");
+		};
+		assert_eq!(walked(&root, planned).0, [root.join("f")]);
+		fs::rename(d.join("up"), d.join("up.old")).unwrap();
+		std::os::unix::fs::symlink(d.join("other"), d.join("up")).unwrap();
+		refused("a link above it");
+		fs::remove_file(d.join("up")).unwrap();
+		fs::rename(d.join("up.old"), d.join("up")).unwrap();
+		fs::rename(&root, d.join("up/r.old")).unwrap();
+		fs::create_dir(&root).unwrap();
+		fs::write(root.join("f"), "x").unwrap();
+		refused("another folder at its name");
 	}
 
 	// The walk looks each file up, a batch to a transaction, and a row it can't read skips that file alone (2026102810135573).
@@ -2242,7 +2330,7 @@ mod tests {
 		});
 		let (jtx, jrx) = sync_channel(1 << 16);
 		let stats = Stats::default();
-		walk(&tree, &sh, &stats, &look, &jtx);
+		walk(&tree, id_of(&tree), &sh, &stats, &look, &jtx);
 		drop((jtx, sh));
 		let events = drain.join().unwrap();
 		let jobs: BTreeMap<PathBuf, Option<i64>> = jrx.iter().map(|j| (j.path, j.prior.map(|p| p.bytes))).collect();
@@ -2288,7 +2376,7 @@ mod tests {
 		sh.db_dir = db_dir(&sub.join("t.sqlite")).unwrap();
 		let drain = std::thread::spawn(move || rx.iter().count());
 		let (jtx, jrx) = sync_channel(64);
-		walk(&tree, &sh, &Stats::default(), &look, &jtx);
+		walk(&tree, id_of(&tree), &sh, &Stats::default(), &look, &jtx);
 		drop((jtx, sh));
 		drain.join().unwrap();
 		let jobs: BTreeSet<PathBuf> = jrx.iter().map(|j| j.path).collect();
@@ -2317,7 +2405,7 @@ mod tests {
 			sh.no_xattr_ids = ids_of(&[tree.join("nx")]);
 			let drain = std::thread::spawn(move || rx.iter().count());
 			let (jtx, jrx) = sync_channel(64);
-			walk(root, &sh, &Stats::default(), &look, &jtx);
+			walk(root, id_of(root), &sh, &Stats::default(), &look, &jtx);
 			drop((jtx, sh));
 			drain.join().unwrap();
 			jrx.iter().map(|j| (j.path, j.no_xattr)).collect::<BTreeMap<_, _>>()
@@ -2403,7 +2491,7 @@ mod tests {
 			assert!(!git_tree_above(&names, dev + 1), "{top}: past the filesystem");
 			let (sh, _rx) = test_shared(d.join("t.sqlite"));
 			let (jtx, jrx) = sync_channel(64);
-			walk(&root, &sh, &Stats::default(), &look, &jtx);
+			walk(&root, id_of(&root), &sh, &Stats::default(), &look, &jtx);
 			drop((jtx, sh));
 			let jobs: Vec<(PathBuf, bool)> = jrx.iter().map(|j| (j.path, j.in_git)).collect();
 			assert_eq!(jobs.len(), 2, "{top}");
@@ -2438,7 +2526,8 @@ mod tests {
 			sh.no_xattr_ids = ids_of(&[d.join("wide/nx")]);
 			let drain = std::thread::spawn(move || rx.iter().count());
 			let (jtx, jrx) = sync_channel(64);
-			walk(&d.join("mnt").join(top), &sh, &Stats::default(), &look, &jtx);
+			let root = d.join("mnt").join(top);
+			walk(&root, id_of(&root), &sh, &Stats::default(), &look, &jtx);
 			drop((jtx, sh));
 			drain.join().unwrap();
 			jrx.iter().map(|j| (j.in_git, j.no_xattr)).collect::<Vec<_>>()
@@ -2609,7 +2698,8 @@ mod tests {
 		std::os::unix::fs::symlink(d.join("a"), d.join("s")).unwrap();
 		let (mut sh, _rx) = test_shared(d.join("t.sqlite"));
 		sh.excludes.push(d.join("ex"));
-		assert_eq!(bytes_under(&d, &sh), Some(180));
+		sh.root_ids.insert(d.to_path_buf(), id_of(&d));
+		assert_eq!(bytes_under(&d, id_of(&d), &sh), Some(180));
 		let mut g = test_group(&d);
 		g.to_count = Some(ToCount { used: 20, folders: vec![d.to_path_buf()] });
 		g.stats.bytes.store(100, Relaxed);
@@ -2624,9 +2714,10 @@ mod tests {
 		let _id = test_id("df4x5");
 		let d = scratch("scan_count_stop");
 		fs::write(d.join("a"), [0u8; 100]).unwrap();
-		let (sh, _rx) = test_shared(d.join("t.sqlite"));
+		let (mut sh, _rx) = test_shared(d.join("t.sqlite"));
+		sh.root_ids.insert(d.to_path_buf(), id_of(&d));
 		sh.stop.store(true, Relaxed);
-		assert_eq!(bytes_under(&d, &sh), None);
+		assert_eq!(bytes_under(&d, id_of(&d), &sh), None);
 		let mut g = test_group(&d);
 		g.to_count = Some(ToCount { used: 0, folders: vec![d.to_path_buf()] });
 		count_group(&g, &sh);
@@ -2984,6 +3075,26 @@ mod tests {
 		// Uid 0 fails for each file there, which names them.
 		let failed: Vec<PathBuf> = hand_over(&held.dir, &db, 0, 0).into_iter().map(|f| f.0).collect();
 		assert_eq!(failed, [lock_path(&db)]);
+	}
+
+	// So is the database itself, and its WAL files (2026111918562711).
+	#[test]
+	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
+	fn the_database_opens_in_the_checked_folder() {
+		let _id = test_id("dfjxq");
+		let d = scratch("scan_db_folder_moved");
+		fs::create_dir(d.join("a")).unwrap();
+		let db = d.join("a/t.sqlite");
+		let mut held = Held::take_as(&db, &mounts::read_mounts().unwrap(), None).unwrap();
+		fs::rename(d.join("a"), d.join("b")).unwrap();
+		fs::create_dir(d.join("a")).unwrap();
+		let conn = held.open().unwrap();
+		conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+		conn.execute_batch("CREATE TABLE w (a)").unwrap();
+		assert!(d.join("b/t.sqlite-wal").exists());
+		drop(held);
+		assert_eq!(fs::read_dir(d.join("a")).unwrap().count(), 0);
+		assert!(d.join("b/t.sqlite").exists());
 	}
 
 	#[test]

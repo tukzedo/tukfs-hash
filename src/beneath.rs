@@ -21,6 +21,7 @@ use std::thread::{self, ThreadId};
 pub struct Root {
 	pub path: PathBuf,
 	pub dev: u64,
+	pub ino: u64,
 	dir: File,
 	// Cleared on a kernel before 5.6, which has no openat2.
 	openat2: AtomicBool,
@@ -95,9 +96,11 @@ impl Root {
 	/// Opens a root folder.
 	pub fn open(path: &Path) -> io::Result<Root> {
 		let dir = openat(libc::AT_FDCWD, path.as_os_str(), libc::O_RDONLY | libc::O_DIRECTORY)?;
+		let md = dir.metadata()?;
 		Ok(Root {
 			path: path.to_path_buf(),
-			dev: dir.metadata()?.dev(),
+			dev: md.dev(),
+			ino: md.ino(),
 			dir,
 			openat2: AtomicBool::new(true),
 			near: Mutex::new(Vec::new()),
