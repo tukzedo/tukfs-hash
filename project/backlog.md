@@ -32,7 +32,7 @@
 - A stop between the demo gif's copy and its rename leaves `<gif>.tmp.<pid>` beside the tracked gif in the repo.
 	- ID: 2026112019541396
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261120-195413
@@ -40,6 +40,21 @@
 	- Related IDs: 2026112019472699
 	- Origin: Plausible, read only. `cicd/utility/demo-gif.bash` has no EXIT trap, and copies to `${out}.tmp.$$` before the rename.
 	- Probable fix [Bug]: An EXIT trap that removes the temp copy once it's named, with INT, TERM and HUP trapped so it runs.
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, with stand-in `cp` and `mv` that send TERM to the script during the copy, after it, and before the rename. Each left `<gif>.tmp.<pid>` beside the old gif. A stop during the rotated copy left a half gif under its real name in the rotate folder.
+	- Actual cause [Bug]: The script had no signal or EXIT trap, so a stop ended it between the copy and the rename. The rotated copy had no temp name at all.
+	- Actual fix [Bug]: Both copies go through `fCopyAtomic`, which names its temp copy in a global and clears it after the rename. INT, TERM and HUP are trapped from the copies on, so the EXIT trap runs and removes the temp copy. When that fails it prints the name and the `rm` to run.
+	- Decisions:
+		- The rotated copy into the private folder goes through a temp name too, a dot name the rotation's glob skips. It was the same stop gap in the same script, with a half gif left under a real name.
+		- The signals are trapped only from the copies on, so a TERM to the script alone during the render still ends it at once rather than waiting for the render.
+		- A KILL still leaves the temp copy, since no trap runs then.
+	- Branch: nov20-2026112019541396
+	- Commit: `6537f0e`
+	- Test case: none with an ID (2026102508462883). `demo-gif-stop-check.bash REPO [REV]`, in the private tools folder, 7 cases. The 6 stop cases fail on the code before, and all pass after.
+	- Swept: the only other copy in `demo-gif.bash` is the rotated one, fixed here. `gfs_rotate` renames and prunes, and copies nothing. `gen-demo-gif.py` writes into the run's temp folder, which the run's cleanup removes.
+	- Verified: `demo-gif-stop-check.bash` both ways, shellcheck, and `--backlog-run-quick`.
+	- Acceptance signoff: Self-closed: the stop cases fail before and pass after, and nothing a person sees changed.
+	- Closed: 20261120-200124
 
 - A stop between the dogfood stage's copy and its rename leaves `.tukfs-hash.<pid>.tmp` in the synced `linux/bin`.
 	- ID: 2026112019472699

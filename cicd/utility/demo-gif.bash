@@ -12,7 +12,7 @@
 ##		- ROTATE_DIR is resolved before anything goes in it, and has to end
 ##		  in /demo/gif with no link inside the private dir. Nothing is written
 ##		  anywhere else but OUT and TMPDIR, and nothing is removed here but by
-##		  the rotation.
+##		  the rotation, and the temp copy a stop leaves.
 ##	Syntax:
 ##		demo-gif.bash BIN SCENARIO OUT ROTATE_DIR STAMP
 ##		Run from the repo root, with TMPDIR the run's temp dir.
@@ -84,6 +84,23 @@ else
 	esac
 fi
 
+## Both copies go through a temp name and a rename, so a stop never leaves a half gif under a real name. The signals are trapped so a stop still gets to the EXIT trap, which takes the temp copy. Only from here, so a stop during the render doesn't wait for it.
+gifTmp=""
+fTmpGone(){
+	trap '' INT TERM HUP
+	[[ -n "${gifTmp}" ]] || return 0
+	rm -f -- "${gifTmp}" 2>/dev/null || printf 'demo-gif: could not remove %s; rm -f -- "%s"\n' "${gifTmp}" "${gifTmp}" >&2
+	gifTmp=""
+}
+fCopyAtomic(){   ## fCopyAtomic SRC DEST TMP
+	gifTmp="$3"
+	cp -- "$1" "$3"
+	mv -f -- "$3" "$2"
+	gifTmp=""
+}
+trap fTmpGone EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+
 ## The newest gif the rotation kept, by the stamp in its name, or nothing.
 fNewestKept(){
 	local f="" last=""
@@ -103,7 +120,7 @@ if [[ -n "${rotReal}" ]]; then
 		echo "not rotated, since ${kept##*/} is already this gif"
 	else
 		## Born "frequent". The rotation gives it another role, by the stamp.
-		cp -- "${gif}" "${rotReal}/demo_${stamp}_frequent.gif"
+		fCopyAtomic "${gif}" "${rotReal}/demo_${stamp}_frequent.gif" "${rotReal}/.demo_${stamp}_frequent.gif.tmp.$$"
 		gfs_rotate "${rotReal}" demo gif >/dev/null
 		newest="$(compgen -G "${rotReal}/demo_${stamp}_*.gif" || true)"
 		newest="${newest%%$'\n'*}"
@@ -116,8 +133,7 @@ if cmp -s -- "${newest}" "${out}"; then
 	echo "${out} is already this gif"
 else
 	mkdir -p -- "$(dirname -- "${out}")"
-	cp -- "${newest}" "${out}.tmp.$$"
-	mv -f -- "${out}.tmp.$$" "${out}"
+	fCopyAtomic "${newest}" "${out}" "${out}.tmp.$$"
 	echo "updated ${out} ($(stat -c %s -- "${out}") bytes)"
 fi
 
@@ -127,3 +143,5 @@ fi
 ##		- 2026-10-23: A gif the same as the newest rotated one isn't rotated in.
 ##		- 2026-11-02: The scenario runs in the test sandbox.
 ##		- 2026-11-20: A skip goes on the run's skip list.
+##		- 2026-11-20: A stop removes the temp copy, and the rotated copy goes
+##		  through a temp name too.
