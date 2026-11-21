@@ -311,7 +311,7 @@
 - The `--log` file is read and gets attributes when a root reaches it under another name, such as a bind mount.
 	- ID: 2026111918562707
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -324,11 +324,23 @@
 	- Probable fix [Bug]: Keep the log's device and inode, and skip a file with that id after `stat`.
 	- Related IDs: 2026110720070507, 2026111011092307
 	- Note: Repro is part (a) of `private/claude_simple/tools/review-20261119/scan/r4/inner.bash`.
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as integration check dfjye in a user namespace, with the build from before the fix: the database had a row for the log under the bind mount's name, and the log got `user.blake3.b64u`.
+	- Actual cause [Bug]: The scan left the log out only by its path, so a root that showed it under another name, as a bind mount, or a hard link to it, read it like any file.
+	- Actual fix [Bug]: `say::open_log` gives the log's device and inode, and a worker skips a file with that id right after its `stat`, before it's counted, read or given attributes. The size count for the percent leaves it out the same way. The path rule stays. design.md, "Runs and exit codes", says so.
+	- Decisions: The skip is in the worker's `stat`, as filed, rather than the walk's listing, since the listing's inode can differ from the file's on some filesystems, such as overlayfs.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyd` (`scan::tests::the_log_under_another_name_is_left_out`, unit, a hard link to the log), `dfjye` (integration step 25, a bind mount, in a user namespace, skipped on ZFS).
+	- Verified: `dfjye` fails against the build from before the fix and passes after, on ext4. `dfjyd` fails with the check taken out and passes with it. `--backlog-run-quick` passed in 2m 27s, its `miri` area in 52s, and `codeql-ours` in 2m 20s.
+	- Swept: `Worker::stat` is the only place a file is judged before it's read, and `bytes_under` the only other walk that counts files. `excluded` keeps the path rule. The database's own files are still left out by name in their folder, per 2026110719570617, which this didn't change.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261120-190540
 
 - A scan that fails during planning writes nothing to its `--log`, and the log isn't made.
 	- ID: 2026111918562708
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -341,6 +353,18 @@
 	- Probable fix [Bug]: Read the mount table once before `plan`, open the log with it, and pass the table into `plan`.
 	- Related IDs: 2026111700232501, 2026111700232502
 	- Note: 2 fixes in one release undid each other, so the fix needs a test for each case together.
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as integration check dfjyg, with the build from before the fix: `--root` a file with `--log` exited 1 and made no log.
+	- Actual cause [Bug]: `scan::run` opened the log after `plan`, to use the mount table `plan` read, so an error in `plan` returned before there was a log.
+	- Actual fix [Bug]: `scan::run` reads the mount table once, opens the log with it, and then passes the table to `plan`, which no longer reads it or hands it back. The `plan` command reads it for itself. design.md, "Runs and exit codes", says so.
+	- Decisions: A failed read of the mount table itself still comes before the log, since the log's hands-off check needs the table. It's on stderr.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyg` (integration step 35, a root that's a file), with `dfdmk` (NTFS log refused) and `dfdmm` ("nothing to scan" in the log) in the same run, for the 2 fixes this undid.
+	- Verified: `dfjyg` fails against the build from before the fix and passes after. `dfdmk`, `dfdmm` and `dehzd` (the mount table read once) still pass. `--backlog-run-quick` passed.
+	- Swept: `scan::plan` has 2 callers, `scan::run` and the `plan` command in `main.rs`, and both pass a table now. Nothing else reads `Plan.mounts`, which is gone.
+	- Acceptance signoff: Self-closed: the probable fix, the test fails before and passes after.
+	- Closed: 20261120-190540
 
 - On a terminal, the scan's summary cuts the events line, so the event kinds late in the list don't show.
 	- ID: 2026111918562709
@@ -483,13 +507,24 @@
 - Each `--log` line is written in 2 writes, so 2 scans sharing one log can mix their lines.
 	- ID: 2026111918562715
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 16
 	- Origin: `1565fc2`. The split write is confirmed with strace. A mixed line wasn't seen, so that part is Plausible.
 	- Probable fix [Bug]: Build the line and its newline in one buffer and write it once. `O_APPEND` then keeps each line whole.
+	- Closed reason: Done
+	- Reproduced [Bug]: The split write, yes, as unit test dfjyb with the old `writeln!` put back. A mixed line wasn't tried.
+	- Actual cause [Bug]: `writeln!` on an unbuffered `File` writes the text and the newline in 2 calls, so another writer's line can come between them.
+	- Actual fix [Bug]: Each log line is built with its newline and written with one `write_all`. A line on stderr from `say::err` is written the same way.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyb` (`say::tests::a_log_line_is_one_write`).
+	- Verified: `dfjyb` fails with the 2-write form put back and passes after. An strace of a scan with `--log` shows one write per line, newline included. `--backlog-run-quick` passed.
+	- Swept: `say::to_log` and `say::err` are the scan's only unbuffered line writes. `say::out` goes through stdout's line buffer. The `out!` and `err!` macros in `main.rs`, for the other commands, weren't changed.
+	- Acceptance signoff: Self-closed: the probable fix, the test fails before and passes after.
+	- Closed: 20261120-190540
 
 - `install.bash` says "nothing to do" when the installed file has the right bytes but isn't executable.
 	- ID: 2026111918562716
@@ -599,13 +634,22 @@
 - Warn once on stderr when the `--log` can't be written, such as on a full disk.
 	- ID: 2026111918562723
 	- Type: Enhancement
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 24
 	- Origin: `1565fc2`. Confirmed on a full 8k tmpfs: exit 0, an empty log, and no word.
 	- Note: Code review 20261110 decided `out!` may drop write errors on stdout. A log is the record someone asked for, so it's weighed apart.
+	- Closed reason: Done
+	- Progress log: 2026-11-20: The first log line that can't be written puts `warning: can't write to --log PATH: ERROR, so it's missing lines` on stderr. Later failures say nothing. design.md, "Runs and exit codes", says so.
+	- Decisions: The exit code doesn't change. The scan's own results are in the database and on stdout, and a full disk under the log isn't a fault in what was scanned. The warning goes only to stderr, since the log can't take it.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyc` (`say::tests::a_log_that_cant_be_written_is_said_once`), `dfjyf` (integration step 30, a log on a full 8k tmpfs, in a user namespace, skipped on ZFS).
+	- Verified: `dfjyf` fails against the build from before (exit 0, no warning) and passes after, on ext4. `dfjyc` fails with the warning taken out and passes after. `--backlog-run-quick` passed, and so did `codeql-ours`.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the test fails before and passes after. The warning's wording is the only part left to taste.
+	- Closed: 20261120-190540
 
 - Refuse a `--log` that is the database or one of its own files.
 	- ID: 2026111918562724

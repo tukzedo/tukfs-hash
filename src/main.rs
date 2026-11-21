@@ -351,7 +351,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			)
 		}
 		"plan" => {
-			let plan = scan::plan(&roots, &threads)?;
+			let plan = scan::plan(&roots, &threads, &mounts::read_mounts()?)?;
 			for d in &plan.dropped {
 				out!("skip {d}");
 			}

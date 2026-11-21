@@ -865,6 +865,7 @@ fi
 # --no-xattr and --exclude given by the mount's name still apply, also to a
 # root under it (2026110720070507). A root that's the bind mount is still
 # under the folders above its source, a git work tree too (2026111011092307).
+# A --log that a root shows under another name isn't read (2026111918562707).
 cat > "${ns}/bind.bash" << 'EOF2'
 cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
 for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
@@ -888,6 +889,9 @@ escan g1 "${2}" --root g/mnt/ex --exclude g/ex --no-xattrs > g1.got
 escan g2 "${2}" --root g/mnt/nx --no-xattr g/nx > g2.got
 escan g3 "${2}" --root g/mnt/repo --root g/mnt/plain > g3.got
 cat e3.out g1.out | grep -c '^skipping root .*: inside --exclude ' > eg.skips
+mkdir -p l/data l/mnt && printf 'l\n' > l/data/f && mount --bind l/data l/mnt || exit 1
+rc=0; "${2}" scan --db l.sqlite --root l/mnt --log l/data/scan.log --progress 3600 > l.out 2>&1 || rc=$?
+echo "${rc}" > l.got
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -902,6 +906,7 @@ if [[ "${nsfs}" == zfs ]]; then
 	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (ZFS pools aren't seen from a user namespace)"
 	skip df4ja "root that's a bind of a folder in a git work tree (ZFS pools aren't seen from a user namespace)"
 	skip df4m4 "root under an --exclude folder by another name named as skipped (ZFS pools aren't seen from a user namespace)"
+	skip dfjye "--log under a bind mount's name not read (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
@@ -915,6 +920,7 @@ elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df4j9 "root that's a bind of a folder in a --no-xattr folder" "$(cat "${ns}/g2.got") $(xget "${gt}/nx/src/f" user.blake3.b64u | wc -c)" "0 files 1 0"
 	check df4ja "root that's a bind of a folder in a git work tree" "$(cat "${ns}/g3.got") $(xget "${gt}/repo/src/f" user.blake3.b64u | wc -c) $(xget "${gt}/plain/src/f" user.blake3.b64u | wc -c)" "0 files 2 0 43"
 	check df4m4 "root under an --exclude folder by another name named as skipped" "$(cat "${ns}/eg.skips")" 2
+	check dfjye "--log under a bind mount's name not read" "$(cat "${ns}/l.got") $(sqlite3 "${ns}/l.sqlite" 'SELECT group_concat(path) FROM paths') $(xget "${ns}/l/data/scan.log" user.blake3.b64u)" "0 ${ns}/l/mnt/f "
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
@@ -925,6 +931,7 @@ else
 	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (no user namespace here)"
 	skip df4ja "root that's a bind of a folder in a git work tree (no user namespace here)"
 	skip df4m4 "root under an --exclude folder by another name named as skipped (no user namespace here)"
+	skip dfjye "--log under a bind mount's name not read (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
@@ -1043,7 +1050,8 @@ fi
 # as step 23. 8k fails before a page is written, 96k partway through making
 # the tables. The marker goes once the tmpfs is mounted, before the scan, as
 # in steps 23 and 25, so a first scan that leaves no file fails here rather
-# than skipping as if there were no user namespace (2026111011092324).
+# than skipping as if there were no user namespace (2026111011092324). A
+# --log on a full disk is named on stderr, once.
 cat > "${ns}/full.bash" << 'EOF2'
 cd "${1}" && mkdir -p full fr && printf 'x\n' > fr/f || exit 1
 for sz in 8k 96k; do
@@ -1054,12 +1062,19 @@ for sz in 8k 96k; do
 	if [[ -e full/t.sqlite ]]; then cp full/t.sqlite "full-${sz}.sqlite" || exit 1; fi
 	umount full || exit 1
 done
+# A log on it says once that it can't be written (2026111918562723).
+mount -t tmpfs -o size=8k none full || exit 1
+head -c 1M /dev/zero > full/fill 2> /dev/null
+rc=0; "${2}" scan --db full-log.sqlite --root fr --progress 3600 --log full/scan.log > /dev/null 2> full-log.err || rc=$?
+echo "${rc} $(grep -c "^warning: can't write to --log .*/full/scan.log: " full-log.err)" > full-log.got
+umount full || exit 1
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/full.bash" "${ns}" "${bin}" 2> /dev/null || true
 fi
 if [[ "${nsfs}" == zfs ]]; then
 	skip df1qb "database left by a full disk taken as new (ZFS pools aren't seen from a user namespace)"
+	skip dfjyf "--log on a full disk said once (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/full.mounted" ]]; then
 	fullGot=''
 	for sz in 8k 96k; do
@@ -1069,8 +1084,10 @@ elif [[ -e "${ns}/full.mounted" ]]; then
 		fullGot+="${firstRc:-none} ${rc} "
 	done
 	check df1qb "database left by a full disk taken as new" "${fullGot}" "1 0 1 0 "
+	check dfjyf "--log on a full disk said once" "$(cat "${ns}/full-log.got" 2> /dev/null)" "0 1"
 else
 	skip df1qb "database left by a full disk taken as new (no user namespace here)"
+	skip dfjyf "--log on a full disk said once (no user namespace here)"
 fi
 
 # 31. accept of a name no scan has a row for says so, since a scan may know
@@ -1226,6 +1243,9 @@ check df4xn "--log: the scan's lines in full, and the log not read" "${rc} $(cmp
 # A scan that stops on an error has the reason in its log too.
 rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --exclude "${lg}/tree" --log "${lg}/why.log" > /dev/null 2>&1 || rc=$?
 check dfdmm "--log: a refused scan's reason is in the log" "${rc} $(grep -cxF 'tukfs-hash: nothing to scan' "${lg}/why.log" || true)" "1 1"
+# So does one that fails in planning, which once came before the log was made (2026111918562708).
+rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree/f" --log "${lg}/plan.log" > /dev/null 2>&1 || rc=$?
+check dfjyg "--log: a scan that fails in planning has its reason in the log" "${rc} $(grep -cxF "tukfs-hash: ${lg}/tree/f: not a folder" "${lg}/plan.log" 2> /dev/null || true)" "1 1"
 
 # 36. A second Ctrl+C ends the scan at once, with 130, as README and --help
 # say. The run is left marked running, and the next scan marks it killed. The

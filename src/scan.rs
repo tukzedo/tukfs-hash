@@ -270,6 +270,8 @@ struct Shared {
 	// --exclude and --no-xattr by device and inode too, for the same reason.
 	exclude_ids: HashSet<(u64, u64)>,
 	no_xattr_ids: HashSet<(u64, u64)>,
+	// The --log, which a root can show under another name, as through a bind mount, or as a hard link.
+	log_id: Option<(u64, u64)>,
 	mount_points: BTreeMap<PathBuf, String>,
 	mounts: Vec<mounts::Mount>,
 	// From the plan, which everything about a root's group was worked out for.
@@ -350,14 +352,12 @@ pub struct Plan {
 	pub dropped: Vec<String>,
 	/// Roots that couldn't be resolved, made absolute, with the error. A scan with any refuses to start.
 	pub unresolved: Vec<(PathBuf, String)>,
-	pub mounts: Vec<mounts::Mount>,
 	/// Each root's device and inode as resolved here. A walk refuses a root that's another folder by then.
 	pub ids: HashMap<PathBuf, (u64, u64)>,
 }
 
 /// Roots that resolve to the same place, or whose folder another root's walk reaches, are dropped, so nothing is read twice. Bind mounts are the usual cause here.
-pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, String> {
-	let mounts = mounts::read_mounts()?;
+pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)], mounts: &[mounts::Mount]) -> Result<Plan, String> {
 	let mut dropped = Vec::new();
 	let mut unresolved = Vec::new();
 	let mut found: Vec<(PathBuf, (u64, u64), &mounts::Mount)> = Vec::new();
@@ -384,7 +384,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			dropped.push(format!("{}: same folder as {}", c.display(), first.display()));
 			continue;
 		}
-		let m = mounts::mount_for(&mounts, &c).ok_or_else(|| format!("{}: no mount found", c.display()))?;
+		let m = mounts::mount_for(mounts, &c).ok_or_else(|| format!("{}: no mount found", c.display()))?;
 		seen_ids.insert((md.dev(), md.ino()), c.clone());
 		found.push((c, (md.dev(), md.ino()), m));
 	}
@@ -397,7 +397,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 				if k == c || kid.0 != id.0 {
 					return None;
 				}
-				let at = mounts::seen_from(&mounts, k, c)?;
+				let at = mounts::seen_from(mounts, k, c)?;
 				let md = fs::symlink_metadata(&at).ok()?;
 				if (md.dev(), md.ino()) != *id {
 					return None;
@@ -413,7 +413,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			dropped.push(why);
 			continue;
 		}
-		let disks = mounts::disks_for(m, &mounts)?;
+		let disks = mounts::disks_for(m, mounts)?;
 		kept.push(mounts::RootDisks { root: c, disks });
 	}
 	let given: Vec<(PathBuf, usize)> = threads.iter().filter_map(|(p, t)| fs::canonicalize(p).ok().map(|c| (c, *t))).collect();
@@ -431,7 +431,7 @@ pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)]) -> Result<Plan, Str
 			threads: n.max(1),
 		});
 	}
-	Ok(Plan { groups, dropped, unresolved, mounts, ids })
+	Ok(Plan { groups, dropped, unresolved, ids })
 }
 
 /// Takes the database's lock file, so 2 scans can't share it.
@@ -603,16 +603,10 @@ fn hand_over(dir: &File, db: &Path, uid: u32, gid: u32) -> Vec<(PathBuf, io::Err
 
 /// The `scan` command.
 pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
-	let Plan {
-		groups: planned,
-		dropped,
-		unresolved,
-		mounts,
-		ids: root_ids,
-	} = plan(&o.roots, &o.threads)?;
-	if let Some(l) = &o.log {
-		say::open_log(l, &o.db, sudo_ids(), &mounts)?;
-	}
+	let mounts = mounts::read_mounts()?;
+	// Before the plan, so a plan that fails has its reason in the log (2026111918562708).
+	let log_id = o.log.as_deref().map(|l| say::open_log(l, &o.db, sudo_ids(), &mounts)).transpose()?;
+	let Plan { groups: planned, dropped, unresolved, ids: root_ids } = plan(&o.roots, &o.threads, &mounts)?;
 	for d in &dropped {
 		say::err(&format!("skipping root {d}"));
 	}
@@ -670,6 +664,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		db_folder,
 		exclude_ids: ids_of(&excludes),
 		no_xattr_ids: ids_of(&no_xattr),
+		log_id,
 		excludes,
 		no_xattr,
 		mount_points: mounts::mount_points(&mounts),
@@ -873,7 +868,7 @@ fn bytes_under(root: &Path, want: (u64, u64), sh: &Shared) -> Option<u64> {
 			let sub = (md.dev(), md.ino());
 			if md.is_dir() && md.dev() == top.dev() && !sh.exclude_ids.contains(&sub) {
 				dirs.push((p, sub));
-			} else if md.is_file() {
+			} else if md.is_file() && sh.log_id != Some(sub) {
 				total += md.len() / md.nlink().max(1);
 			}
 		}
@@ -1753,6 +1748,8 @@ impl<'a> Worker<'a> {
 
 	fn stat(&self, job: &Job, rel: &Path) -> Option<fs::Metadata> {
 		let md = match job.root.open_at(rel, libc::O_PATH).and_then(|f| f.metadata()) {
+			// It changes as it's read, and writing attributes to it would move its ctime under whoever else appends (2026111918562707).
+			Ok(m) if self.sh.log_id == Some((m.dev(), m.ino())) => return None,
 			Ok(m) if m.file_type().is_file() => m,
 			Ok(_) => return None,
 			Err(e) if beneath::moved(&e) => return None,
@@ -2033,6 +2030,7 @@ mod tests {
 			no_xattr: Vec::new(),
 			exclude_ids: HashSet::new(),
 			no_xattr_ids: HashSet::new(),
+			log_id: None,
 			mount_points: BTreeMap::new(),
 			mounts: Vec::new(),
 			root_ids: HashMap::new(),
@@ -2443,6 +2441,35 @@ mod tests {
 		}
 		assert_eq!(g.stats.files.load(Relaxed), 2);
 		assert_eq!(b3("given"), None);
+	}
+
+	// The log is known by device and inode, so a root that shows it under another name, as a bind mount does, doesn't read it or record it (2026111918562707).
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn the_log_under_another_name_is_left_out() {
+		let _id = test_id("dfjyd");
+		let d = scratch("scan_logid");
+		fs::write(d.join("scan.log"), "line\n").unwrap();
+		fs::hard_link(d.join("scan.log"), d.join("other.log")).unwrap();
+		fs::write(d.join("f"), "x").unwrap();
+		let (mut sh, rx) = test_shared(d.join("t.sqlite"));
+		sh.log_id = ids_of(&[d.join("scan.log")]).into_iter().next();
+		let drain = std::thread::spawn(move || {
+			rx.iter()
+				.filter_map(|m| match m {
+					Msg::Hashed(h) => Some(h.path),
+					_ => None,
+				})
+				.collect::<Vec<_>>()
+		});
+		let g = test_group(&d);
+		let r = Arc::new(Root::open(&d).unwrap());
+		read_one(&g, &sh, &job(&r, "other.log"), &Links::default());
+		read_one(&g, &sh, &job(&r, "f"), &Links::default());
+		drop(sh);
+		let hashed = drain.join().unwrap();
+		assert_eq!(hashed, [r.path.join("f").as_os_str().as_bytes().to_vec()]);
+		assert_eq!(g.stats.files.load(Relaxed), 1);
 	}
 
 	// A root in or at an --exclude folder is dropped before the run, and a group left with no roots goes with it (2026111011092318).

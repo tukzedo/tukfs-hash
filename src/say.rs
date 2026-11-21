@@ -9,10 +9,18 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::path::Path;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-static LOG: OnceLock<Mutex<File>> = OnceLock::new();
+static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
+
+struct Log<W = File> {
+	to: W,
+	path: PathBuf,
+	// Once, since every line after a full disk fails the same way.
+	warned: bool,
+}
 
 // A terminal shows a tab as far as the next multiple of 8.
 const TAB: usize = 8;
@@ -26,8 +34,8 @@ pub enum Fit {
 	Break,
 }
 
-/// Appends every line from here on to `path`. Under sudo a log the scan makes is handed to that user, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926). Anything but a regular file is refused, and so is one of the database's files (2026111918562702, 2026111918562724).
-pub fn open_log(path: &Path, db: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(), String> {
+/// Appends every line from here on to `path`, and gives the log's device and inode, which the scan leaves out under any name (2026111918562707). Under sudo a log the scan makes is handed to that user, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926). Anything but a regular file is refused, and so is one of the database's files (2026111918562702, 2026111918562724).
+pub fn open_log(path: &Path, db: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(u64, u64), String> {
 	let failed = |e: String| format!("--log {e}");
 	let path = crate::util::canonical_name(path).map_err(failed)?;
 	if let Some(t) = crate::mounts::hands_off_at(mounts, &path) {
@@ -56,8 +64,9 @@ pub fn open_log(path: &Path, db: &Path, sudo: Option<(u32, u32)>, mounts: &[crat
 	{
 		err(&format!("warning: can't give {} to uid {uid}: {e}", show_path(&path)));
 	}
-	let _ = LOG.set(Mutex::new(f));
-	Ok(())
+	let id = f.metadata().map(|m| (m.dev(), m.ino())).map_err(|e| failed(format!("{}: {e}", show_path(&path))))?;
+	let _ = LOG.set(Mutex::new(Log { to: f, path, warned: false }));
+	Ok(id)
 }
 
 // The file, and whether this made it. Under sudo, a link planted at the name would have root append to whatever it points at, so it's never followed.
@@ -90,13 +99,40 @@ pub fn out(text: &str, fit: Fit) {
 /// A line on stderr, and in the log. It's never cut, since it says what went wrong.
 pub fn err(text: &str) {
 	to_log(text);
-	let _ = writeln!(io::stderr().lock(), "{text}");
+	to_stderr(text);
 }
 
-// A log that can't be written is dropped, as stdout is.
+// Unbuffered, so writeln! would be 2 writes, which 2 scans sharing a file through 2>> could mix.
+fn to_stderr(text: &str) {
+	let _ = io::stderr().lock().write_all(line(text).as_bytes());
+}
+
+fn line(text: &str) -> String {
+	let mut l = String::with_capacity(text.len() + 1);
+	l.push_str(text);
+	l.push('\n');
+	l
+}
+
+// A line that can't be written is dropped, as stdout's are, but stderr says so once, since the log is the record that was asked for (2026111918562723).
 fn to_log(text: &str) {
-	if let Some(f) = LOG.get() {
-		let _ = writeln!(f.lock().unwrap_or_else(PoisonError::into_inner), "{text}");
+	let Some(log) = LOG.get() else {
+		return;
+	};
+	let warning = log.lock().unwrap_or_else(PoisonError::into_inner).put(text);
+	if let Some(w) = warning {
+		to_stderr(&w);
+	}
+}
+
+impl<W: Write> Log<W> {
+	// The text and its newline in one write, so O_APPEND keeps it whole when 2 scans share a log (2026111918562715). The warning to give, on the first that fails.
+	fn put(&mut self, text: &str) -> Option<String> {
+		let e = self.to.write_all(line(text).as_bytes()).err()?;
+		if std::mem::replace(&mut self.warned, true) {
+			return None;
+		}
+		Some(format!("warning: can't write to --log {}: {e}, so it's missing lines", show_path(&self.path)))
 	}
 }
 
@@ -165,7 +201,7 @@ fn fitted(line: &str, width: Option<usize>, fit: Fit) -> Vec<String> {
 mod tests {
 	use super::*;
 	use crate::testutil::test_id;
-	use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+	use std::os::unix::fs::OpenOptionsExt;
 
 	#[test]
 	fn a_line_fits_its_terminal() {
@@ -286,5 +322,56 @@ mod tests {
 		for other in ["t.sqlite.log", "t.sqlite-wal2", "u.sqlite", "scan.log"] {
 			assert!(!crate::scan::is_db_name(&db, &dir, OsStr::new(other)), "{other}");
 		}
+	}
+
+	// Each write the log gets, as the file would see it.
+	#[derive(Default)]
+	struct Writes {
+		got: Vec<Vec<u8>>,
+		fail: Option<i32>,
+	}
+
+	impl Write for Writes {
+		fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+			if let Some(n) = self.fail {
+				return Err(io::Error::from_raw_os_error(n));
+			}
+			self.got.push(b.to_vec());
+			Ok(b.len())
+		}
+		fn flush(&mut self) -> io::Result<()> {
+			Ok(())
+		}
+	}
+
+	fn test_log(fail: Option<i32>) -> Log<Writes> {
+		Log {
+			to: Writes { got: Vec::new(), fail },
+			path: "/x/scan.log".into(),
+			warned: false,
+		}
+	}
+
+	// A line and its newline went out in 2 writes, so 2 scans appending to one log could mix them (2026111918562715).
+	#[test]
+	fn a_log_line_is_one_write() {
+		let _id = test_id("dfjyb");
+		let mut l = test_log(None);
+		assert_eq!(l.put("run 1 done"), None);
+		assert_eq!(l.put("a\nb"), None);
+		assert_eq!(l.to.got, [b"run 1 done\n".to_vec(), b"a\nb\n".to_vec()]);
+	}
+
+	// A full disk left the log empty, with no word (2026111918562723).
+	#[test]
+	fn a_log_that_cant_be_written_is_said_once() {
+		let _id = test_id("dfjyc");
+		let mut l = test_log(Some(libc::ENOSPC));
+		let first = l.put("a").unwrap();
+		assert!(first.starts_with("warning: can't write to --log /x/scan.log: ") && first.ends_with(", so it's missing lines"), "{first}");
+		assert_eq!(l.put("b"), None);
+		l.to.fail = None;
+		assert_eq!(l.put("c"), None);
+		assert_eq!(l.to.got, [b"c\n".to_vec()]);
 	}
 }
