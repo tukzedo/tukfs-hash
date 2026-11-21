@@ -32,7 +32,8 @@
 - The dogfood copy moves the binary into a folder when its name in the synced `linux/bin` is a link to one.
 	- ID: 2026112017341780
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261120-173417
@@ -40,6 +41,18 @@
 	- Related IDs: 2026111918562703
 	- Origin: Plausible, read only. The same rename onto a name that 2026111918562703 fixed in `install.bash`.
 	- Probable fix [Bug]: `mv -fT` in `fInstallAtomic` in `cicd/cicd.bash`, or skip a name that leads to a folder.
+	- Reproduced [Bug]: Yes. A link to a folder at the name, and a real folder too, each gave "OK: installed" with the file moved inside the folder. So did a link made after the check.
+	- Actual cause [Bug]: `fInstallAtomic` renamed with `mv -f`, which moves the file into a folder, or a link to one, at the name. Nothing checked for a folder.
+	- Actual fix [Bug]: A folder, or a link to one, at the name is refused with a warning, and the dogfood stage fails at its end, as for any copy that failed. The rename is `mv -fT`, so a link to a folder made after the check is replaced, not moved into.
+	- Decisions:
+		- Refused rather than replaced, as `install.bash` does since 2026111918562703. A real folder is refused too, since it had the same bug.
+	- Branch: nov20-2026112017341780
+	- Commit: `0248f77`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `dogfood-install-check.bash REPO [REV]`, new in the private tools folder, 6 cases. The folder, link to a folder and late link cases fail on the code before, and all 6 pass after.
+	- Swept: every other rename onto a name in `cicd/`, `utility/` and `tests/`. The dogfood runner copies go through the same function. green-tree's list, the gif rotation, the gif, the flamegraph and the release set are renamed inside folders the run owns. The launcher copies into a new dated name in its pool.
+	- Verified: `dogfood-install-check.bash` both ways, shellcheck, and `--backlog-run-quick`.
+	- Acceptance signoff: Self-closed: a folder or a link to one gets the same refusal as in `install.bash`, pinned by a check that fails before and passes after.
+	- Closed: 20261120-180320
 
 - A run with no options records its tree, and on `main` goes on to the release upload, after advisories, a sanitizer, CodeQL or the demo gif skipped for a missing tool.
 	- ID: 2026111918562700
@@ -321,7 +334,8 @@
 - A TERM or HUP to cicd.bash's own PID during publish doesn't stop the publisher, which commits and pushes before the run exits 143.
 	- ID: 2026111918562712
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -331,16 +345,29 @@
 	- Decisions: The publisher runs through `fBg` when the run already has its commit message, and stays in the foreground only when git's editor is needed. This narrows 2026102814341436's foreground list (answered 2026-11-20).
 		- A stop takes the local tag off only when nothing was pushed.
 		- A run with no message still waits for the publisher on a stop, since the editor needs the terminal. `--help` should say so.
+		- Pushed means the branch's upstream ref moved after publish started. A push cut off by the stop after the git host took it, but before git moved that ref, reads as not pushed, and the tag comes off. The next run tags again.
+		- When the tag stays, the stop prints the command that uploads the release by hand.
 	- Incorrect behavior [Bug]: Bash runs the trap only once the foreground child exits. On `main` the run then takes the local tag off after `main` was pushed.
 	- Expected behavior [Bug]: A stop before the commit commits nothing, as 2026111011092310 gives the publisher's own PID.
 	- Probable fix [Bug]: Run the publisher through `fBg` when it has a message, and keep the foreground only for the editor case.
 	- Related IDs: 2026111011092310, 2026102814341436
 	- Note: Repro is `private/claude_simple/tools/review-20261119/cicd/term-during-publish.bash`.
+	- Reproduced [Bug]: Yes, on `main` in a scratch clone, with a stand-in publisher that sends TERM to the run's PID. On the code before, it went on to commit and push, and when it had pushed the tag came off anyway.
+	- Actual cause [Bug]: The publisher ran in the foreground, so the run's TERM trap waited for it to finish. `fTagUndo` took the tag off on any stop before the upload, pushed or not.
+	- Actual fix [Bug]: With a message the publisher runs through `fBg`, so a stop ends it where it is. With no message it stays in the foreground. `fTagUndo` leaves the tag on once publish has pushed. `--help` and design.md, "Build and release", say both.
+	- Branch: nov20-2026112017341780
+	- Commit: `0248f77`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `release-upload-check.bash REPO`, 3 new "TERM during publish" cases: with a message before the commit, with a message after the push, and with no message. All 3 fail on the code before and pass after.
+	- Swept: the other steps cicd.bash runs in the foreground are format and sync, which are short (2026102814341436). The upload already runs through `fBg`. The real publisher runs through `fBg` in `publish-check.bash`'s runs with a message.
+	- Verified: `release-upload-check.bash` passes every case, and `publish-check.bash` passes. rar exits 6 with no prompt when it can't read a file and its stdin is /dev/null, as under `fBg`. shellcheck and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: the calls were answered on 2026-11-20, and the check fails before and passes after.
+	- Closed: 20261120-180320
 
 - 2 cicd runs under different temp roots that start in the same second get the same run name, and one's cleanup can remove the other's live containers.
 	- ID: 2026111918562713
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
+	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -349,6 +376,19 @@
 	- Incorrect behavior [Bug]: The run name's `_NNN` is unique only within one temp root. The private check scripts use their own `HOST_TEMP`. `fCtrsGone` runs `docker rm -f` by label.
 	- Expected behavior [Bug]: A run removes only its own containers.
 	- Probable fix [Bug]: Add the PID to the label and the container names.
+	- Reproduced [Bug]: Pinned, not reproduced with 2 live runs. On the code before, the end listed the run's containers by project and folder name only, and a container's name had nothing else, so 2 runs with one folder name would also collide on names.
+	- Actual cause [Bug]: The run folder's name is unique only in one temp root, and the labels and names had nothing else to tell 2 runs apart.
+	- Actual fix [Bug]: Every container and image gets a `dev.pid` label with the run's PID, and the container name has `_p<PID>` after the folder name. The end removes only containers with both the run's folder name and PID. The run on the frozen copy takes both from the outer run.
+	- Decisions:
+		- The PID is a label of its own, and `dev.run` stays the folder name, as the CICD style guide gives it. The stale sweep still finds a container's folder by `dev.run` alone, and is unchanged.
+	- Branch: nov20-2026112017341780
+	- Commit: `0248f77`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `temp-ctr-check.bash REPO stub`: the `dev.pid` label, the name with `_p<PID>`, the end's filter by PID, and the `--keep-temp` line. 4 fail on the code before and all pass after.
+		- 2026-11-20: Its name, label, filter and `--keep-temp` asserts take the PID now, which the item asked for. The rest of each is as it was.
+	- Swept: every `dev.run` and `TUKFS_RUN_NAME` in `cicd/`, `tests/` and the private tools. `mem-cap-check.bash` sets its own run name and filters by `dev.run` alone, which still matches. `tests/integration.bash` only checks that the name is set.
+	- Verified: `temp-ctr-check.bash` stub, stale and image pass. shellcheck and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: the run's containers have its PID, pinned by checks that fail before and pass after.
+	- Closed: 20261120-180320
 
 - A btrfs subvolume that isn't a mount point gets its percent from the whole filesystem, so a finished scan ends at "~0%".
 	- ID: 2026111918562714

@@ -31,7 +31,8 @@
 ##	  11. release upload (on main only: the release set to the git host as
 ##	      release v<version>, through utility/release-upload.bash. The run
 ##	      tags HEAD v<version> before it builds, when it isn't yet, and takes
-##	      the tag off again if it stops before this stage. A skip, or a set
+##	      the tag off again if it stops before this stage, unless publish
+##	      has pushed by then. A skip, or a set
 ##	      that isn't a release build, stops the run before publish, and
 ##	      no release image leaves this stage out of the plan)
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
@@ -109,7 +110,10 @@
 ##	  with no steps at all, are refused rather than run as nothing.
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
 ##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
-##	  stops the whole run.
+##	  stops the whole run. A stop during publish ends the publisher where it
+##	  is, so it doesn't go on to commit and push. With a blank message the
+##	  stop waits for the publisher to finish instead, since the editor
+##	  needs the terminal.
 ##	- Publish refuses when the checkout's tree is no longer the one the run
 ##	  tested, other than the demo gif it drew, or when the upstream has
 ##	  commits the run didn't take.
@@ -137,7 +141,8 @@
 ##	  TMPDIR, with TMPDIR, TEMP and TMP pointed into it, so what a failed
 ##	  test leaves goes with it. It has the run's PID in run.pid. It's
 ##	  removed at the end, even when the run fails or is stopped, and only by
-##	  fSafeRm, and so are the run's containers, by their dev.run label. A
+##	  fSafeRm, and so are the run's containers, by their dev.run label, the
+##	  dir's name, and dev.pid, the run's PID. A
 ##	  stop kills the running ones first. Each run also removes this
 ##	  project's run dirs whose run is gone, such as a killed run's.
 ##	  --keep-temp keeps the dir and the containers, and says where, and the
@@ -496,7 +501,13 @@ fInUse(){   ## fInUse PATH
 ## Through a temp file in the same dir and a rename, so a copy started by hand never sees a half-written file, and the sync never sends one.
 fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 	local src="$1" dir="$2" name="$3" mode="$4" tmp="$2/.$3.$$.tmp"
-	if cp -f -- "${src}" "${tmp}" && chmod "${mode}" -- "${tmp}" && mv -f -- "${tmp}" "${dir}/${name}"; then
+	## A rename onto a folder, or a link to one, puts the file inside it. Refused, as install.bash does.
+	if [[ -d "${dir}/${name}" ]]; then
+		if [[ -L "${dir}/${name}" ]]; then fEcho "WARNING: ${dir}/${name} is a link to a folder; not installed"; else fEcho "WARNING: ${dir}/${name} is a folder; not installed"; fi
+		return 1
+	fi
+	## -T, so a link to a folder that turned up since the check is replaced, not moved into.
+	if cp -f -- "${src}" "${tmp}" && chmod "${mode}" -- "${tmp}" && mv -fT -- "${tmp}" "${dir}/${name}"; then
 		fEcho "OK: installed ${dir}/${name}"
 		return 0
 	fi
@@ -621,8 +632,8 @@ fRunDirMake "${run_tmp_root}"
 run_tmp="${made_dir}"
 ## So what the steps write, and the runs they start, go in it.
 export TMPDIR="${run_tmp}" TEMP="${run_tmp}" TMP="${run_tmp}" HOST_TEMP="${run_tmp}"
-## Every container of the run is labeled with this, the outer run's name.
-if ((! inner_run)) || [[ ! "${TUKFS_RUN_NAME:-}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]]; then export TUKFS_RUN_NAME="${run_tmp##*/}"; fi
+## Every container of the run is labeled with these, the outer run's name and PID. The name is unique only in one temp root, so the PID tells 2 runs apart that started in the same second under different ones (2026111918562713).
+if ((! inner_run)) || [[ ! "${TUKFS_RUN_NAME:-}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]] || [[ ! "${TUKFS_RUN_PID:-}" =~ ^[0-9]+$ ]]; then export TUKFS_RUN_NAME="${run_tmp##*/}" TUKFS_RUN_PID="$$"; fi
 ## Every container a step starts leaves its ID here, so a stop of the run kills each one, however far down its client is.
 if ((! inner_run)); then
 	mkdir -- "${run_tmp}/cid" || fDie "could not make ${run_tmp}/cid"
@@ -654,11 +665,11 @@ fCtrsGone(){
 	ctrs_done=1; ctrs_said=""; ctrs_kb=0
 	[[ -n "${stop_cid_dir}" ]] && compgen -G "${stop_cid_dir}/name_*" >/dev/null 2>&1 || return 0
 	if command -v timeout >/dev/null 2>&1; then limit=(timeout 30); fi
-	out="$("${limit[@]}" "${engine}" ps -a --size --filter "label=dev.project=${APP_NAME}" --filter "label=dev.run=${TUKFS_RUN_NAME}" \
+	out="$("${limit[@]}" "${engine}" ps -a --size --filter "label=dev.project=${APP_NAME}" --filter "label=dev.run=${TUKFS_RUN_NAME}" --filter "label=dev.pid=${TUKFS_RUN_PID}" \
 		--format '{{.ID}} {{.Size}}' 2>/dev/null || true)"
 	while read -r line; do [[ "${line%% *}" =~ ^[0-9a-f]{12,64}$ ]] && ids+=("${line%% *}"); done <<< "${out}"
 	((${#ids[@]})) || return 0
-	if ((keep_temp)); then ctrs_said="kept (--keep-temp): ${#ids[@]} container(s) labeled dev.run=${TUKFS_RUN_NAME}"; return 0; fi
+	if ((keep_temp)); then ctrs_said="kept (--keep-temp): ${#ids[@]} container(s) labeled dev.run=${TUKFS_RUN_NAME} dev.pid=${TUKFS_RUN_PID}"; return 0; fi
 	## docker's sizes are SI, such as 12.3kB, before "(virtual ...)".
 	ctrs_kb="$(awk '{ v = $2; u = v; sub(/^[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
 		m = (u == "kB") ? 1 : (u == "MB") ? 1e3 : (u == "GB") ? 1e6 : (u == "TB") ? 1e9 : 0; t += v * m } END { printf "%d", t / 1.024 }' <<< "${out}")"
@@ -666,7 +677,7 @@ fCtrsGone(){
 	if "${limit[@]}" "${engine}" rm -f "${ids[@]}" >/dev/null 2>&1; then
 		ctrs_said="${#ids[@]} container(s)"
 	else
-		ctrs_said="some of ${#ids[@]} container(s), labeled dev.run=${TUKFS_RUN_NAME}"
+		ctrs_said="some of ${#ids[@]} container(s), labeled dev.run=${TUKFS_RUN_NAME} dev.pid=${TUKFS_RUN_PID}"
 	fi
 	return 0
 }
@@ -705,11 +716,18 @@ fRunTmpGone(){
 }
 ## The tag fReleaseTag made, as TAG=OBJECT, until the upload starts.
 tag_made=""
-## Only the tag this run made, and only while it's still the one it made.
+## The upstream's ref as publish started, and whether it did.
+pub_upstream=""; pub_started=0
+## Only the tag this run made, and only while it's still the one it made. Kept once publish has pushed, since its commit is on the git host then.
 fTagUndo(){
 	local tag="${tag_made%%=*}" obj="${tag_made#*=}"
 	[[ -n "${tag_made}" ]] || return 0
 	tag_made=""
+	if ((pub_started)) && [[ "$(git -C "${root}" rev-parse -q --verify '@{upstream}' 2>/dev/null)" != "${pub_upstream}" ]]; then
+		printf '[ left tag %s on, since publish pushed before the run stopped ]\n' "${tag}" >&2
+		if [[ -n "${upload_line:-}" ]]; then printf '[ to upload the release: cicd/utility/release-upload.bash "%s" %s "%s" "%s" %s ]\n' "${root}" "${upload_ver:-}" "${release_dir}" "${upload_line}" "${RELEASE_BRANCH}" >&2; fi
+		return 0
+	fi
 	if [[ "$(git -C "${root}" rev-parse -q --verify "refs/tags/${tag}" 2>/dev/null)" == "${obj}" ]] && git -C "${root}" tag -d "${tag}" >/dev/null 2>&1; then
 		printf '[ took tag %s off, since the run stopped before the upload ]\n' "${tag}" >&2
 	fi
@@ -1598,10 +1616,13 @@ fStagePublish(){
 	command -v rar >/dev/null 2>&1 || export GIT_BACKUP_AND_PUBLISH_NOBACKUP=1
 	## This run already asked, so the publisher doesn't. -q also quiets it.
 	((quiet)) && flag="--quiet"
+	## So a stop can tell whether the push went out, for fTagUndo.
+	pub_upstream="$(git -C "${root}" rev-parse -q --verify '@{upstream}' 2>/dev/null || true)"; pub_started=1
 	if [[ -n "${publish_msg}" ]]; then
-		## The GIT_EDITOR helper fills the message, so no editor opens.
-		GIT_AUTO_MESSAGE="${publish_msg}" GIT_EDITOR="${here}/utility/git-auto-msg.bash" "${GIT_PUBLISH[@]}" "${flag}"
+		## The GIT_EDITOR helper fills the message, so no editor opens. In the background, so a stop ends it before it commits (2026111918562712).
+		GIT_AUTO_MESSAGE="${publish_msg}" GIT_EDITOR="${here}/utility/git-auto-msg.bash" fBg "${GIT_PUBLISH[@]}" "${flag}"
 	else
+		## git's editor needs the terminal, so a stop waits for this one.
 		"${GIT_PUBLISH[@]}" "${flag}"
 	fi
 	fEcho "OK: published"
@@ -2002,3 +2023,7 @@ exit 0
 ##		  no release image leaves it out of the plan.
 ##		- 2026-11-10: The run folder sweeps check the owner, and that the marks
 ##		  are plain files, before they read them.
+##		- 2026-11-20: The publisher runs in the background when the run has its
+##		  message, so a stop ends it, and a stop after the push leaves the tag
+##		  on. The dogfood copy refuses a folder, or a link to one, at the name.
+##		  Containers get the run's PID too, so 2 temp roots can't share a run.
