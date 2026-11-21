@@ -32,11 +32,12 @@
 ##			                    flags and SOURCE_DATE_EPOCH go in when
 ##			                    they're set.
 ##			                    Returns the script's exit, or 2.
-##		Every container is named tukfs-hash-<run>-<step>-<n> and labeled
-##		dev.project and dev.run, and every image dev.project and dev.run too.
-##		<run> is TUKFS_RUN_NAME, the cicd run's folder name, and <step> is
+##		Every container is named tukfs-hash-<run>_p<pid>-<step>-<n> and
+##		labeled dev.project, dev.run and dev.pid, and every image dev.project,
+##		dev.run and dev.pid too. <run> is TUKFS_RUN_NAME, the cicd run's
+##		folder name, <pid> TUKFS_RUN_PID, its PID, and <step> is
 ##		ctr_step, which the caller sets. cicd.bash removes a run's
-##		containers by that label at its end.
+##		containers by those labels at its end.
 ##		A build keeps the new tag and the one before it, once the new one has
 ##		answered, and then removes any <none> image of ours. Docker's build
 ##		cache is left to the daemon's own gc, since every project shares it.
@@ -53,14 +54,15 @@
 ctr_tag=""
 ctr_kind="leak"
 ctr_step="${ctr_step:-ctr}"
-ctr_run=""; ctr_labels=()
+ctr_run=""; ctr_pid=""; ctr_labels=()
 
 ## At first use, since cicd.bash names its run after this is sourced. A script run on its own, outside a cicd run, gets a name of its own.
 fCtrLabels(){
 	[[ -z "${ctr_run}" ]] || return 0
-	ctr_run="${TUKFS_RUN_NAME:-}"
-	[[ "${ctr_run}" =~ ^[A-Za-z0-9_.-]+$ ]] || printf -v ctr_run '%(%Y%m%d-%H%M%S)T_p%s' -1 "$$"
-	ctr_labels=(--label "dev.project=${APP_NAME}" --label "dev.run=${ctr_run}")
+	ctr_run="${TUKFS_RUN_NAME:-}"; ctr_pid="${TUKFS_RUN_PID:-}"
+	[[ "${ctr_run}" =~ ^[A-Za-z0-9_.-]+$ ]] || printf -v ctr_run '%(%Y%m%d-%H%M%S)T' -1
+	[[ "${ctr_pid}" =~ ^[0-9]+$ ]] || ctr_pid="$$"
+	ctr_labels=(--label "dev.project=${APP_NAME}" --label "dev.run=${ctr_run}" --label "dev.pid=${ctr_pid}")
 }
 
 fCtrUseRelease(){
@@ -124,7 +126,7 @@ fCtrRun(){   ## fCtrRun DIR STEP RUN_ARG...
 		set -- "${args[@]}"
 	fi
 	stop_cidfiles+=("${cidfile}")
-	"${engine}" run --cidfile "${cidfile}" --name "${APP_NAME}-${ctr_run}-${step}-${n}" "${ctr_labels[@]}" \
+	"${engine}" run --cidfile "${cidfile}" --name "${APP_NAME}-${ctr_run}_p${ctr_pid}-${step}-${n}" "${ctr_labels[@]}" \
 		--cpus "${CPU_CAP:-1}" --cpu-shares 256 "${mem_ctr_args[@]}" "$@" || rc=$?
 	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
 	stop_cidfiles=("${kept[@]}")
@@ -251,3 +253,5 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		  and the daemon's gc trims it now.
 ##		- 2026-11-09: The memory cap from mem-cap.bash on every container,
 ##		  with no swap and --oom-score-adj 1000.
+##		- 2026-11-20: A dev.pid label, and the PID in the name, since a cicd
+##		  run's folder name is unique only in one temp root.

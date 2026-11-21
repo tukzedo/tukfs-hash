@@ -83,7 +83,7 @@ The first scan reads every file and records it. Run the same scan again on a lat
 
 - It stops cleanly on Ctrl+C, and `--resume` picks up where it left off. A file that was read since the start of the day, or since the `--since` date, isn't read again. `--resume` only takes the newest scan, and only when that scan had the same roots and the same `--verify` setting, so 2 scripts that share one database can't finish each other's runs.
 
-- Progress lines and the summary show roughly how far each group has got, as a share of the space used on its filesystems. The share is only shown when every root in the group is a whole filesystem. It's a rough figure, since compression, reflinks, and snapshots make the space used differ from what gets read.
+- Progress lines and the summary show roughly how far each group has got. A root that's a whole filesystem, or a mounted btrfs subvolume, is measured against the space used on it. A root that's a folder is counted by a walk beside the scan, and the share shows once that count is in. It's a rough figure, since compression, reflinks, and snapshots make the space used differ from what gets read.
 
 - `scan --verify` is a quicker check between full runs. It reads again only the files that have a checksum stored at their current size and time, even ones that were read earlier that day, and it doesn't write any attributes. New and edited files aren't read until the next full scan.
 

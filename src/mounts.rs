@@ -10,6 +10,8 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::util::show_path;
+
 /// One line of the mount table.
 #[derive(Debug, Clone)]
 pub struct Mount {
@@ -188,9 +190,9 @@ pub fn wider_views(mounts: &[Mount], path: &Path) -> Vec<(PathBuf, PathBuf)> {
 // btrfs gives every subvolume's top folder this inode.
 const BTRFS_SUBVOL_INO: u64 = 256;
 
-/// Whether `path` is the top of its filesystem, so the filesystem's used space stands for what's under it. A btrfs subvolume's top counts, since its used space is the whole filesystem's anyway. A bind mount of a folder doesn't, wherever it's mounted (2026111011092313).
+/// Whether `path` is the top of its filesystem, so the filesystem's used space stands for what's under it. A btrfs subvolume mounted at `path` counts, such as `/home` from `/@home`, since its used space is the whole filesystem's anyway. A bind mount of a folder doesn't, wherever it's mounted (2026111011092313), and nor does a subvolume that isn't a mount point, such as a snapshot, which would read near 0 (2026111918562714).
 pub fn shows_whole(mounts: &[Mount], path: &Path, ino: u64) -> bool {
-	mount_for(mounts, path).is_some_and(|m| (path == m.point && m.root == Path::new("/")) || (m.fstype == "btrfs" && ino == BTRFS_SUBVOL_INO))
+	mount_for(mounts, path).is_some_and(|m| path == m.point && (m.root == Path::new("/") || (m.fstype == "btrfs" && ino == BTRFS_SUBVOL_INO)))
 }
 
 fn kname_of(dev: &str) -> Option<String> {
@@ -305,18 +307,18 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 				return Err(format!("cannot resolve {}", m.source));
 			}
 			None => {
-				return Err(format!("{} is {} from {}, not a local disk", m.point.display(), m.fstype, m.source));
+				return Err(format!("{} is {} from {}, not a local disk", show_path(&m.point), m.fstype, m.source));
 			}
 		},
 	}
 	if out.is_empty() {
-		return Err(format!("no disks found under {}", m.point.display()));
+		return Err(format!("no disks found under {}", show_path(&m.point)));
 	}
 	let mut real = BTreeSet::new();
 	for d in out {
 		match loop_backing(&d) {
 			Some(f) if depth < 4 => {
-				let bm = mount_for(mounts, &f).ok_or_else(|| format!("{d}: no mount found for {}", f.display()))?;
+				let bm = mount_for(mounts, &f).ok_or_else(|| format!("{d}: no mount found for {}", show_path(&f)))?;
 				real.extend(disks_under(bm, mounts, depth + 1)?);
 			}
 			_ => {
@@ -758,7 +760,8 @@ mod tests {
 	fn only_a_filesystems_top_shows_all_of_it() {
 		let _id = test_id("df4j6");
 		let btrfs = "7 1 0:27 /@home /home rw - btrfs /dev/sde1 rw\n\
-			8 1 0:27 /@home/u/dir /t/bd rw - btrfs /dev/sde1 rw\n";
+			8 1 0:27 /@home/u/dir /t/bd rw - btrfs /dev/sde1 rw\n\
+			9 1 0:27 /@home/s /t/sv rw - btrfs /dev/sde1 rw\n";
 		let all = visible(parse_mountinfo(&[BIND, btrfs.as_bytes()].concat()));
 		let whole = |path: &str, ino| shows_whole(&all, Path::new(path), ino);
 		assert!(whole("/", 2));
@@ -768,11 +771,14 @@ mod tests {
 		// Bind mounts of a folder, from this filesystem and from another.
 		assert!(!whole("/t/bind", 9));
 		assert!(!whole("/t/other", 9));
-		// A btrfs subvolume, mounted or not, and a folder in one.
+		// A mounted btrfs subvolume, a nested one that's mounted too, and a folder in one.
 		assert!(whole("/home", 256));
-		assert!(whole("/home/u", 256));
+		assert!(whole("/t/sv", 256));
 		assert!(!whole("/home/u", 300));
 		assert!(!whole("/t/bd", 300));
+		// A subvolume that isn't a mount point, such as a snapshot, is a folder (2026111918562714).
+		assert!(!whole("/home/u", 256));
+		assert!(!whole("/t/sv/n", 256));
 	}
 
 	#[test]

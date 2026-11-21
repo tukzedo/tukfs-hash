@@ -166,10 +166,12 @@ fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
-/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names are kept to the end, since the 2 lines of a replaced file can be far apart.
+/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names that can pair are kept to the end, since the 2 lines of a replaced file can be far apart.
 struct ChangeList<'a, R> {
 	input: R,
 	format: Format<'a>,
+	// --old and --new, to drop a - or + name that can't pair. None keeps them all.
+	sides: Option<(&'a Root, &'a Root)>,
 	line: Vec<u8>,
 	line_no: usize,
 	// find-new prints a line per extent, a file's all together.
@@ -180,10 +182,11 @@ struct ChangeList<'a, R> {
 }
 
 impl<'a, R: BufRead> ChangeList<'a, R> {
-	fn new(input: R, format: Format<'a>) -> Self {
+	fn new(input: R, format: Format<'a>, sides: Option<(&'a Root, &'a Root)>) -> Self {
 		ChangeList {
 			input,
 			format,
+			sides,
 			line: Vec::new(),
 			line_no: 0,
 			last_name: Vec::new(),
@@ -200,11 +203,15 @@ impl<'a, R: BufRead> ChangeList<'a, R> {
 			Format::ZfsDiff(mounts) => match zfs_diff_line(line, mounts) {
 				ZfsLine::Pair(p) => Some(Entry::Pair(p)),
 				ZfsLine::Removed(p) => {
-					self.removed.insert(p);
+					if can_pair(self.sides.map(|s| s.1), &p) {
+						self.removed.insert(p);
+					}
 					None
 				}
 				ZfsLine::Added(p) => {
-					self.added.insert(p);
+					if can_pair(self.sides.map(|s| s.0), &p) {
+						self.added.insert(p);
+					}
 					None
 				}
 				ZfsLine::Skip => None,
@@ -262,6 +269,11 @@ impl<R: BufRead> Iterator for ChangeList<'_, R> {
 			}
 		}
 	}
+}
+
+// A - name pairs only with a + by that name, so --new has to have something there, and a + name needs --old to. The rest would be kept to the end for nothing, which a mass delete makes millions of. Only a name that isn't there at all is dropped. A symlink or mount on the way, or any other error, keeps it, so it's still counted as missing or not checked when it's compared.
+fn can_pair(other: Option<&Root>, rel: &Path) -> bool {
+	other.is_none_or(|root| !matches!(root.open_at(rel, libc::O_PATH), Err(e) if e.kind() == io::ErrorKind::NotFound))
 }
 
 // An absolute name makes join() drop --old and --new, so a file would be compared with itself.
@@ -430,7 +442,10 @@ struct SubvolInfo {
 	_uuid: [u8; 16],
 	_parent_uuid: [u8; 16],
 	received_uuid: [u8; 16],
-	_transids: [u64; 4],
+	ctransid: u64,
+	otransid: u64,
+	_stransid: u64,
+	_rtransid: u64,
 	_ctime: BtrfsTime,
 	otime: BtrfsTime,
 	_stime: BtrfsTime,
@@ -442,11 +457,10 @@ const _: () = assert!(mem::size_of::<SubvolInfo>() == 504);
 // The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for making snapshots.
 const BTRFS_ROOT_SUBVOL_RDONLY: u64 = 1;
 
-// When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root. Nothing born after that is in it. A received one is left out, since its files are born after it.
+// When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root.
 fn frozen_at(root: &Root) -> Option<SystemTime> {
 	let mut info = mem::MaybeUninit::<SubvolInfo>::zeroed();
-	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by
-	// size, and outlives the call.
+	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by size, and outlives the call.
 	let r = unsafe { libc::ioctl(root.as_raw_fd(), libc::_IOR::<SubvolInfo>(0x94, 60), info.as_mut_ptr()) };
 	// Some kernels return 1 from a search left over, with the info filled in.
 	if r < 0 {
@@ -454,7 +468,12 @@ fn frozen_at(root: &Root) -> Option<SystemTime> {
 	}
 	// SAFETY: all zeros is a valid SubvolInfo, and the kernel filled it in.
 	let info = unsafe { info.assume_init() };
-	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] {
+	taken_at(&info)
+}
+
+// Nothing born after the snapshot was taken is in it, if it stayed read-only. A received one is left out, since its files are born after it. One made writable for a while may have had files added. Making an inode moves ctransid past otransid, as does any change to a name or to an inode's times. A write of bytes alone doesn't, and can't change a birth time.
+fn taken_at(info: &SubvolInfo) -> Option<SystemTime> {
+	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] || info.ctransid > info.otransid {
 		return None;
 	}
 	let otime = &info.otime;
@@ -732,7 +751,7 @@ fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: imp
 	let mut checker = Checker::new(old, new, src, show_all, frozen_at(old));
 	let (mut listed, mut unusable) = (0u64, 0u64);
 	let mut outside: Option<(u64, usize, Vec<u8>)> = None;
-	for entry in ChangeList::new(input, format) {
+	for entry in ChangeList::new(input, format, Some((old, new))) {
 		match entry.map_err(read_error)? {
 			Entry::Unusable(line_no, text) => {
 				unusable += 1;
@@ -792,7 +811,7 @@ mod tests {
 
 	fn parse(text: &[u8], format: Format) -> Parsed {
 		let mut parsed = Parsed::default();
-		for entry in ChangeList::new(text, format) {
+		for entry in ChangeList::new(text, format, None) {
 			match entry.unwrap() {
 				Entry::Pair(p) => parsed.pairs.push(p),
 				Entry::Unusable(n, t) => parsed.unusable.push((n, t)),
@@ -883,6 +902,45 @@ mod tests {
 		let text = b"-\t/home/u/saved\n+\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\nM\t/home/u/\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs, vec![same(""), same("saved")]);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn zfs_diff_keeps_only_names_that_can_pair() {
+		let _id = test_id("dfk0k");
+		let dir = scratch("snapdiff_canpair");
+		let (old, new) = (dir.join("old"), dir.join("new"));
+		fs::create_dir(&old).unwrap();
+		fs::create_dir(&new).unwrap();
+		for name in ["saved", "gone", "no_plus"] {
+			fs::write(old.join(name), b"o").unwrap();
+		}
+		for name in ["saved", "born", "no_plus"] {
+			fs::write(new.join(name), b"n").unwrap();
+		}
+		fs::create_dir(new.join("now_a_folder")).unwrap();
+		// Through a symlink it isn't in --new, but that's for the compare to count, as before.
+		fs::create_dir(new.join("real")).unwrap();
+		fs::write(new.join("real/f"), b"n").unwrap();
+		std::os::unix::fs::symlink("real", new.join("via_link")).unwrap();
+		let (old_root, new_root) = (Root::open(&old).unwrap(), Root::open(&new).unwrap());
+		let m = mounts("/home/u");
+		let text: &[u8] = b"-\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\n-\t/home/u/no_plus\n-\t/home/u/now_a_folder\n-\t/home/u/via_link/f\n-\t/home/u/not/there\n+\t/home/u/saved\n";
+		let mut cl = ChangeList::new(&b""[..], Format::ZfsDiff(&m), Some((&old_root, &new_root)));
+		for line in text.split(|&c| c == b'\n').filter(|l| !l.is_empty()) {
+			cl.line = line.to_vec();
+			assert!(cl.entry().is_none());
+		}
+		let names = |set: &BTreeSet<PathBuf>| set.iter().map(|p| show_path(p)).collect::<Vec<_>>();
+		assert_eq!(names(&cl.removed), ["no_plus", "now_a_folder", "saved", "via_link/f"]);
+		assert_eq!(names(&cl.added), ["saved"]);
+		let pairs: Vec<Pair> = ChangeList::new(text, Format::ZfsDiff(&m), Some((&old_root, &new_root)))
+			.map(|e| match e.unwrap() {
+				Entry::Pair(p) => p,
+				other => panic!("{other:?}"),
+			})
+			.collect();
+		assert_eq!(pairs, vec![same("saved")]);
 	}
 
 	#[test]
@@ -1033,6 +1091,40 @@ transid marker was 12\n";
 	}
 
 	#[test]
+	fn a_snapshot_changed_since_it_was_taken_has_no_time() {
+		let _id = test_id("dfjtt");
+		let info = |flags, received: u8, ctransid, otransid| SubvolInfo {
+			_treeid: 257,
+			_name: [0; 256],
+			_parent_id: 5,
+			_dirid: 256,
+			_generation: 0,
+			flags,
+			_uuid: [0; 16],
+			_parent_uuid: [0; 16],
+			received_uuid: [received; 16],
+			ctransid,
+			otransid,
+			_stransid: 0,
+			_rtransid: 0,
+			_ctime: BtrfsTime { sec: 0, nsec: 0 },
+			otime: BtrfsTime { sec: 1_700_000_000, nsec: 5 },
+			_stime: BtrfsTime { sec: 0, nsec: 0 },
+			_rtime: BtrfsTime { sec: 0, nsec: 0 },
+			_reserved: [0; 8],
+		};
+		let taken = UNIX_EPOCH.checked_add(Duration::new(1_700_000_000, 5));
+		// Its last change was before or in the transaction that took it.
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 90, 100)), taken);
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 100, 100)), taken);
+		// Made writable, changed, and read-only again.
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 101, 100)), None);
+		// Writable, or received.
+		assert_eq!(taken_at(&info(0, 0, 90, 100)), None);
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 1, 90, 100)), None);
+	}
+
+	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
 	fn a_birth_time_from_the_future_waits_for_the_walk() {
 		let _id = test_id("dfe66");
@@ -1051,8 +1143,7 @@ transid marker was 12\n";
 		let src = Source::FindNew(dir.join("unread"));
 		let ino = fs::metadata(new.join("now")).unwrap().ino();
 		let found_at = |now| {
-			// The clock was ahead when the file was made, and set back before
-			// --old was taken.
+			// The clock was ahead when the file was made, and set back before --old was taken.
 			let frozen = born - Duration::from_secs(60);
 			let mut c = Checker::new(&old_root, &new_root, &src, false, Some(frozen));
 			c.now = now;

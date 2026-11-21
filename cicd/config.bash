@@ -82,13 +82,9 @@ LINT_EXTRA=(
 	'test IDs|python3 cicd/utility/test-ids.py check'
 )
 
-## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the
-## integration test on a release build, once per root below, given as its
-## HOST_TEMP, so it makes its own dir under <root>/tukfs-hash/. "label|root".
-## A root that isn't there skips with a note. TUKFS_CICD_IT_EXT4 and
-## TUKFS_CICD_IT_ZFS override them.
-## libtest-quiet.bash drops libtest's per-test lines, since each test prints
-## its own with its test ID.
+## Stage 4: tests. Unit tests first, with TMPDIR in the run's temp dir. Then the integration test on a release build, once per root below, given as its HOST_TEMP, so it makes its own dir under <root>/tukfs-hash/. "label|root".
+## A root that isn't there skips with a note. TUKFS_CICD_IT_EXT4 and TUKFS_CICD_IT_ZFS override them.
+## libtest-quiet.bash drops libtest's per-test lines, since each test prints its own with its test ID.
 TEST_CMD=(cicd/utility/libtest-quiet.bash cargo test --release --locked)
 IT_CMD=(tests/integration.bash)
 ## For --list: the IDs and names TEST_CMD's tests print, given unit, and IT_CMD's, given it.
@@ -198,13 +194,8 @@ DOGFOOD_RUNNERS=(
 	"utility/dogfood_tukfs-hash|${_dfUtil}/linux/bash"
 )
 
-## Stage 9: demo gif, eval'd. cicd/demo/scenario.toml runs against the
-## native release build from stage 6, in a home in the run's temp dir, and
-## gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in
-## the private dir beside the checkout, unless it's the same as the newest
-## there, and copied to GIF_OUT when it differs.
-## No Pillow or font warns and passes. --quick and --backlog-run-quick leave
-## it out, and the merge gate and --backlog-run-full draw it into the temp dir.
+## Stage 9: demo gif, eval'd. cicd/demo/scenario.toml runs against the native release build from stage 6, in a home in the run's temp dir, and gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in the private dir beside the checkout, unless it's the same as the newest there, and copied to GIF_OUT when it differs.
+## No Pillow or font warns and passes. --quick and --backlog-run-quick leave it out, and the merge gate and --backlog-run-full draw it into the temp dir.
 GIF_ENABLE=1
 GIF_SCENARIO="cicd/demo/scenario.toml"
 GIF_OUT="assets/demo.gif"
@@ -212,9 +203,7 @@ GIF_ROTATE_DIR="${root}/../private/demo/gif"
 GIF_CMD='cicd/utility/demo-gif.bash "${release_dir}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
 
 ## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
-## A leak area keeps each leak check its text is in, and one whose text
-## starts with + runs that text as a leak check of its own, which no other
-## run has. With no area named it's fmt, build, lint, unit and it.
+## A leak area keeps each leak check its text is in, and one whose text starts with + runs that text as a leak check of its own, which no other run has. With no area named it's fmt, build, lint, unit and it.
 BACKLOG_AREAS=(
 	"fmt||the format check"
 	"build||the debug build"

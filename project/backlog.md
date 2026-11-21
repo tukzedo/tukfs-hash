@@ -29,337 +29,11 @@
 
 ## Issues
 
-- A run with no options records its tree, and on `main` goes on to the release upload, after advisories, a sanitizer, CodeQL or the demo gif skipped for a missing tool.
-	- ID: 2026111918562700
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 1
-	- Origin: `93275db`, 2026102814341405's fix, which covered only the 3 check-only modes. A sibling that fix missed. Not seen before. Confirmed.
-	- Steps to reproduce [Bug]:
-		- In a scratch clone with a stub config, hide cargo-deny from PATH and run cicd with no options.
-		- It prints "advisories: skipped, since cargo-deny isn't installed", then records the tree, and exits 0 with no "Skipped:" line.
-	- Incorrect behavior [Bug]: `fLeakHostSkip` adds to the skip list only under `TUKFS_GATE_STRICT`. advisories' `fSkip` and demo-gif's `fWarn` never add to it. `fRecordGreen` and `fUploadReady` read only the skip list.
-	- Expected behavior [Bug]: cicd.bash's own header says a missing tool keeps a run from recording. The lint stage's ruff, mypy and `fLintTool` skips already go on the list in every mode.
-	- Probable fix [Bug]: Each of those skips adds its name to `TUKFS_GATE_SKIPS` whenever it's set, and fails only under strict.
-	- Sweep: every `exit 0` skip path in `cicd/utility/*.bash`.
-	- Related IDs: 2026102814341405, 2026102814341404
-	- Note: Repro is `private/claude_simple/tools/review-20261119/cicd/record-after-skip.bash`. On b23 every tool is installed, so a box missing one is what it takes.
-
-- snapdiff `--find-new` calls a renamed, damaged file "only in --new" and exits 0 when `--old` was made writable, written to, and made read-only again.
-	- ID: 2026111918562701
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 2
-	- Origin: `36ab621`, 2026111011092305's fix (round-20261110b). A case that fix didn't weigh. Not seen before. Confirmed, on real btrfs snapshots.
-	- Steps to reproduce [Bug]:
-		- Take a read-only snapshot O, set it writable, add a file, set it read-only again.
-		- From O make a writable snapshot, rename the file, change its bytes in place at the same size and time, then take read-only snapshot N.
-		- `snapdiff --find-new` over O and N prints "new y only in --new" and exits 0.
-	- Incorrect behavior [Bug]: `frozen_at` trusts the snapshot's creation time for any read-only, non-received subvolume. Files added while it was writable look born after it, so they skip the inode walk.
-	- Expected behavior [Bug]: `content-changed-same-mtime` and exit 4, as the same trees give with O left writable. design.md trusts the time only because nothing can be added to a read-only snapshot.
-	- Probable fix [Bug]: The same ioctl gives `ctransid` and `otransid`. Treat the time as unknown when `ctransid > otransid`.
-	- Sweep: `born_since_old` is the only place the time is trusted.
-	- Related IDs: 2026111011092305, 2026111700232503
-	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/ro-later.bash BIN DIR`, under `/tmp` (btrfs), no root. A wrong answer at exit 0, so the tree isn't release-ready until it's fixed.
-
-- `--log` opens whatever is at the name: a FIFO hangs the scan, and under sudo root appends to another user's file in a sticky folder such as `/tmp`.
-	- ID: 2026111918562702
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 3
-	- Origin: `8fa5810`, 2026111019430926's fix. New ground. Confirmed, the sudo case as uid 0 in a user namespace.
-	- Steps to reproduce [Bug]:
-		- `mkfifo L; tukfs-hash scan --root R --log L`. It blocks before scanning, and one Ctrl+C doesn't stop it.
-		- As root with `SUDO_UID` set, in a root-owned 1777 folder where another user made `scan.log` first: the scan exits 0 and appends its lines to that user's file. A plain root `>>` to it is refused.
-	- Incorrect behavior [Bug]: After EEXIST, `say::open_append` opens again without `O_CREAT`, which skips the kernel's `protected_regular` and `protected_fifos` checks. There's no `O_NONBLOCK` and no regular-file check.
-	- Expected behavior [Bug]: The log is refused unless it's a regular file, and root gets no more reach through it than a shell `>>` would.
-	- Probable fix [Bug]: Keep `O_CREAT` on the retry, add `O_NONBLOCK`, then refuse anything but a regular file, as `scan::lock` does for the lock file.
-	- Sweep: other opens of a user-named file for writing. `hand_over` already uses `O_NONBLOCK`.
-	- Related IDs: 2026111019430926
-	- Note: Repros are `fifo-log.bash` and `sticky-log-standin.bash` in `private/claude_simple/tools/review-20261119/db/`.
-
-- `install.bash` prints "Installed" at exit 0 when the install path is a link to a folder, and replaces nothing.
-	- ID: 2026111918562703
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 4
-	- Origin: `f249afd`, 2026110218175402. New ground. Confirmed with a stand-in curl.
-	- Steps to reproduce [Bug]:
-		- `mkdir ~/somedir; ln -s ~/somedir ~/.local/bin/tukfs-hash; bash install.bash -y`
-	- Incorrect behavior [Bug]: Exit 0 and "Installed". The link is unchanged, and `somedir/.tukfs-hash.new.<pid>` is left. Under `--target system` the root-owned file goes wherever the link points.
-	- Expected behavior [Bug]: The plan says it replaces a link with the file itself.
-	- Probable fix [Bug]: `mv -fT`, or refuse a link that leads to a folder, as a real folder is refused.
-	- Note: Repro is case A of `private/claude_simple/tools/review-20261119/install/install/repro-findings.bash`.
-
-- Make `install.bash` work with a noexec temp folder, or say that's the cause, in place of "doesn't run on this system".
-	- ID: 2026111918562721
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 22
-	- Origin: `f249afd`. Confirmed with a noexec tmpfs at TMPDIR in a user namespace.
-	- Requirements  [Feature]:
-		- Try the staged copy in the target folder, which is written anyway, before the rename.
-		- Or name the noexec temp folder as a likely cause and suggest TMPDIR.
-
-- On a kernel before 5.6, a scan reads the old folder's files under the new path when a kept folder is replaced mid-scan, and exits 0 where openat2 exits 4.
-	- ID: 2026111918562704
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 5
-	- Origin: `123ba47`, 2026111914041556's fix. A regression from round nov19. Confirmed, with openat2 refused through seccomp.
-	- Steps to reproduce [Bug]:
-		- Scan a tree, then start `--verify` with 1 worker. While it's busy in `d`, move `d` out of the root and move another `d` in, whose `sub/g` has new bytes at the same size and time.
-		- With openat2: exit 4, `b3-db-mismatch 1`. Without: exit 0, the moved-out files are read, and the row for `d/sub/g` gets the old file's inode.
-	- Incorrect behavior [Bug]: `step_by_step` trusts any open that succeeds through a kept folder.
-	- Expected behavior [Bug]: Both open paths give the same answer. 2026111914041556 accepted only that a moved-out folder stays readable.
-	- Probable fix [Bug]: Keep the listed inode in `Job`, and when an open through a kept folder gives another inode, open again from the root.
-	- Sweep: `list_dir` and snapdiff's opens through kept folders.
-	- Related IDs: 2026111914041556
-	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r1/run.bash DIR fallback|openat2`.
-
-- On a kernel before 5.6, a file that's mounted over after the walk queued it is read and gets attributes, on NTFS too.
-	- ID: 2026111918562705
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 6
-	- Origin: `9120949`, the fallback. New ground. Confirmed, with an NTFS image through ntfs-3g in a user namespace.
-	- Steps to reproduce [Bug]:
-		- While the worker is held, bind-mount a file from an NTFS image over a queued file.
-		- Without openat2: the NTFS file gets `user.blake3.*`. With openat2 it's skipped.
-	- Incorrect behavior [Bug]: `beneath.rs`'s comment says the walk checks each folder's device, but `Worker::stat` and `Worker::open` don't check a file's device against the root's.
-	- Expected behavior [Bug]: Nothing is written to NTFS, APFS or HFS+, and both open paths agree.
-	- Probable fix [Bug]: Treat `md.dev() != job.root.dev` as moved in `stat` and `open`, which matches `RESOLVE_NO_XDEV`.
-	- Sweep: snapdiff's opens through `open_at`.
-	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r5/inner.bash DIR fallback|openat2`, under `unshare -rm --map-auto`.
-
-- A root is opened again by path when its walk starts, so if a mount or a symlink now sits in its path, that other filesystem is scanned, and NTFS gets attributes.
-	- ID: 2026111918562706
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 7
-	- Origin: `9120949` and `25144d2`. Code review 20261110 saw a folder above a root swapped and decided against it. Confirmed, with an NTFS image mounted over a later root's parent while the first root was scanned.
-	- Against: code review 20261110's "Decided against: a folder above a root swapped after it was resolved." That call weighed whose choice the root is. It didn't weigh the rule that nothing is written to NTFS, since the walk's device isn't in `no_write_devs`.
-	- Decisions: `walk` refuses a root whose opened folder isn't the device and inode the plan resolved. It's a `dir-error` with exit 8, the same as a root that's gone after the plan. This narrows code review 20261110's call (answered 2026-11-20).
-		- The root is still the user's choice when the scan starts, and what's inside it can still change.
-		- A refusal was picked over only keeping attributes off NTFS. The plan's groups, threads, skips and percent were all worked out for the folder it resolved, so a scan of some other folder is wrong in more ways than the attributes.
-	- Incorrect behavior [Bug]: Exit 0, and `user.blake3.*` on a file inside the NTFS image.
-	- Expected behavior [Bug]: The root is refused as a `dir-error`, or at least nothing is written to NTFS.
-	- Probable fix [Bug]: Keep each root's device and inode from the plan, and have `walk` refuse a root whose opened folder differs.
-	- Sweep: `names_above`, `inside_any`, `git_tree_above`, `bytes_under`, `hands_off` and `size_parts`, which all go by path.
-	- Related IDs: 2026111918562705
-	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r3/inner.bash DIR mount|symlink`, under `unshare -rm --map-auto`.
-
-- The `--log` file is read and gets attributes when a root reaches it under another name, such as a bind mount.
-	- ID: 2026111918562707
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 8
-	- Origin: `1565fc2`, 2026111019145405. The bind-mount class a third time, after 2026110720070507 and 2026111011092307. Confirmed in a user namespace.
-	- Steps to reproduce [Bug]:
-		- `mount --bind data mnt/b; tukfs-hash scan --root mnt/b --log data/scan.log`
-	- Incorrect behavior [Bug]: The database has a row for `mnt/b/scan.log`, and the log gets `user.blake3.*`.
-	- Expected behavior [Bug]: design.md says the scan skips its log.
-	- Probable fix [Bug]: Keep the log's device and inode, and skip a file with that id after `stat`.
-	- Related IDs: 2026110720070507, 2026111011092307
-	- Note: Repro is part (a) of `private/claude_simple/tools/review-20261119/scan/r4/inner.bash`.
-
-- A scan that fails during planning writes nothing to its `--log`, and the log isn't made.
-	- ID: 2026111918562708
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 9
-	- Origin: `38fa34e`. A regression: 2026111700232501's fix moved `open_log` after `plan`, which undid 2026111700232502 in the same release. Confirmed.
-	- Steps to reproduce [Bug]:
-		- `tukfs-hash scan --root afile --log L`, or `--root /dev/shm`. Both exit 1, and L isn't made.
-	- Incorrect behavior [Bug]: "not a folder", "not a local disk", "no mount found" and a failed `zpool list` never reach the log.
-	- Expected behavior [Bug]: 2026111700232502: a failed scan's reason goes to the log.
-	- Probable fix [Bug]: Read the mount table once before `plan`, open the log with it, and pass the table into `plan`.
-	- Related IDs: 2026111700232501, 2026111700232502
-	- Note: 2 fixes in one release undid each other, so the fix needs a test for each case together.
-
-- On a terminal, the scan's summary cuts the events line, so the event kinds late in the list don't show.
-	- ID: 2026111918562709
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 10
-	- Origin: `1565fc2`, 2026111019145405. New ground. Confirmed in an 80-column pty.
-	- Steps to reproduce [Bug]:
-		- A scan with 3 mismatches, a `dir-error` and an `open-error` shows `... b3-xattr-mism~` at 80 columns, while the log has every kind.
-	- Incorrect behavior [Bug]: `Fit::Break` breaks only at " | ", and the kinds are joined with ", ". Kinds sort by name, so `read-error`, which sets exit 4, is among the first cut.
-	- Expected behavior [Bug]: design.md says every count in the summary matters.
-	- Probable fix [Bug]: Let `Break` break at ", " too, or join the kinds with " | ".
-	- Related IDs: 2026111019145405
-
-- The scan's root lines print names as they are: bytes that aren't UTF-8 become U+FFFD, and a newline splits a root over 2 lines, on the terminal and in the log.
-	- ID: 2026111918562710
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 11
-	- Origin: `f05c368`. 2026101406340924's sweep noted these lines and never filed them. Since `--log` they reach the log too. Confirmed.
-	- Incorrect behavior [Bug]: `scan.rs` prints roots and "skipping root" lines with `display()`. `plan` uses `show_path`, which prints `\xff` and `\x0a` for them.
-	- Expected behavior [Bug]: README says names are escaped, and design.md says each root takes one line.
-	- Probable fix [Bug]: Use `show_path` for the root lines and the `dropped` and "inside" strings.
-	- Sweep: every `display()` that reaches stdout or the log.
-	- Related IDs: 2026101406340924
-
-- Under sudo, the database is opened by path after its folder was checked, so a swap in between could have root's SQLite make files elsewhere.
-	- ID: 2026111918562711
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 12
-	- Origin: `63957eb`, 2026111011092301's fix. Not seen before. Plausible, from reading.
-	- Incorrect behavior [Bug]: `Held::open` gives SQLite the path after `open_dir` checked the folder by fd. A root-owned database folder whose parent another user can write could be swapped in between.
-	- Expected behavior [Bug]: The database and its files are made in the folder that was checked.
-	- Probable fix [Bug]: Open through `/proc/self/fd/<folder fd>/<name>`.
-	- Related IDs: 2026111011092301
-
-- A TERM or HUP to cicd.bash's own PID during publish doesn't stop the publisher, which commits and pushes before the run exits 143.
-	- ID: 2026111918562712
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 13
-	- Origin: `1282504`. Not seen before as a stop. Confirmed with a stand-in publisher in a scratch clone.
-	- Against: code review 20261110's "Decided against: publish stays in the foreground, per 2026102814341436." That call weighed the wait, and didn't weigh a commit and push after a stop.
-	- Decisions: The publisher runs through `fBg` when the run already has its commit message, and stays in the foreground only when git's editor is needed. This narrows 2026102814341436's foreground list (answered 2026-11-20).
-		- A stop takes the local tag off only when nothing was pushed.
-		- A run with no message still waits for the publisher on a stop, since the editor needs the terminal. `--help` should say so.
-	- Incorrect behavior [Bug]: Bash runs the trap only once the foreground child exits. On `main` the run then takes the local tag off after `main` was pushed.
-	- Expected behavior [Bug]: A stop before the commit commits nothing, as 2026111011092310 gives the publisher's own PID.
-	- Probable fix [Bug]: Run the publisher through `fBg` when it has a message, and keep the foreground only for the editor case.
-	- Related IDs: 2026111011092310, 2026102814341436
-	- Note: Repro is `private/claude_simple/tools/review-20261119/cicd/term-during-publish.bash`.
-
-- 2 cicd runs under different temp roots that start in the same second get the same run name, and one's cleanup can remove the other's live containers.
-	- ID: 2026111918562713
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 14
-	- Origin: the container labels in `ctr-image.bash`, 2026-10-25. Plausible, from reading.
-	- Incorrect behavior [Bug]: The run name's `_NNN` is unique only within one temp root. The private check scripts use their own `HOST_TEMP`. `fCtrsGone` runs `docker rm -f` by label.
-	- Expected behavior [Bug]: A run removes only its own containers.
-	- Probable fix [Bug]: Add the PID to the label and the container names.
-
-- A btrfs subvolume that isn't a mount point gets its percent from the whole filesystem, so a finished scan ends at "~0%".
-	- ID: 2026111918562714
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 15
-	- Origin: `831dbfd`, 2026111011092313. Confirmed under `/tmp`: a subvolume with 1 MB ends `~0% of 552.2 GiB`, and a folder with the same file `~100% of 976.6 KiB`.
-	- Against: 2026111011092313's call that a subvolume top counts as whole. That call had `/home` from `/@home` in mind, a mounted subvolume. It didn't weigh nested ones such as snapper snapshots.
-	- Decisions: A btrfs subvolume's top counts as whole only when it's also its mount's point. A nested one is a folder root, and gets its percent from the counting walk. This narrows 2026111011092313's call (answered 2026-11-20).
-		- A mounted subvolume such as `/home` from `/@home` keeps its percent against the whole volume's use, as 2026110407135700 answered.
-	- Expected behavior [Bug]: design.md counts folder roots because used space would read near 0.
-	- Probable fix [Bug]: Take the inode-256 branch only when the root is also its mount's point, which keeps `/home` from `/@home`.
-	- Related IDs: 2026111011092313
-
-- Each `--log` line is written in 2 writes, so 2 scans sharing one log can mix their lines.
-	- ID: 2026111918562715
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 16
-	- Origin: `1565fc2`. The split write is confirmed with strace. A mixed line wasn't seen, so that part is Plausible.
-	- Probable fix [Bug]: Build the line and its newline in one buffer and write it once. `O_APPEND` then keeps each line whole.
-
-- `install.bash` says "nothing to do" when the installed file has the right bytes but isn't executable.
-	- ID: 2026111918562716
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 17
-	- Origin: `f249afd`. Confirmed: a copy at mode 644 stays at 644, and the run exits 0.
-	- Probable fix [Bug]: Take the early exit only when the file is also executable.
-
-- A stop between the install and the rename leaves `.tukfs-hash.new.<pid>` in the target folder, owned by root under `--target system`.
-	- ID: 2026111918562717
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 18
-	- Origin: `f249afd`. Confirmed with a stand-in `mv` that sends TERM to the script.
-	- Incorrect behavior [Bug]: The EXIT trap cleans only the work folder. A Ctrl+C at a sudo password prompt for the rename leaves the file.
-	- Probable fix [Bug]: Have the trap remove the staged file once it's set, through `fAsTarget`.
-
-- `install.bash` says a folder isn't on PATH when HOME ends in a slash, and fails when `CDPATH` is set and TMPDIR is relative.
-	- ID: 2026111918562718
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 19
-	- Origin: `f249afd`. Confirmed: `HOME=/home/u/` gives "/home/u//.local/bin isn't on PATH". With `CDPATH` the `cd` prints the path, so mktemp gets 2 lines.
-	- Probable fix [Bug]: Drop trailing slashes from HOME, and use `CDPATH= cd --`.
-
-- `sudo bash install.bash` without `--target system` can install into the user's `~/.local/bin` as root and leave it owned by root.
-	- ID: 2026111918562719
-	- Type: Bug
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 20
-	- Origin: `f249afd`. Plausible, from reading: it needs a sudo that keeps HOME, as older Ubuntu did.
-	- Probable fix [Bug]: As root with `SUDO_USER` set and a HOME that isn't root's, refuse the user target and point to `--target system`.
-
 - README's "Details" says the percent shows only when every root is a whole filesystem.
 	- ID: 2026111918562720
 	- Type: Bug
-	- Status: Queued
+	- Status: Waiting on UAT
+		- Read README's "Details" percent bullet against design.md's.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -367,83 +41,12 @@
 	- Origin: `9175cd9`. Left as it was by `4bc2de4`, which gave folder roots a percent (2026111019145393). Confirmed: a folder root ends `~100% of 2 B`.
 	- Probable fix [Bug]: Say what design.md's percent paragraph says.
 	- Related IDs: 2026111019145393
-
-- Keep snapdiff `--zfs-diff` memory bounded when the list has many deleted files.
-	- ID: 2026111918562722
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 23
-	- Origin: `f6f4e7a`, 2026110715441806, which measured only `M` lines. Confirmed: about 110 bytes per `-` line, 111 MB for 1M and 222 MB for 2M, against 2.5 MB for 1M `M` lines.
-	- Against: 2026110715441806 keeps the `-` and `+` names to the end. Its goal was memory that doesn't grow with the list, which a mass delete breaks.
-	- Decisions: A `-` name is kept only when `--new` has something by that name. This narrows 2026110715441806's call to the names that can pair (answered 2026-11-20).
-		- A `+` name gets the same rule against `--old`, since a mass create fills the `added` set the same way. That's from reading the code, and wasn't measured.
-		- Which files get compared stays the same. A name with both a `-` and a `+` line is in both snapshots, so neither check drops it.
-		- The memory check gets a case with many `-` and `+` lines.
-	- Requirements  [Feature]:
-		- Keep a `-` name only when `--new` has something by that name, so memory grows with replaced files only.
-	- Related IDs: 2026110715441806
-	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/zfs-minus-mem.bash BIN DIR N`.
-
-- Warn once on stderr when the `--log` can't be written, such as on a full disk.
-	- ID: 2026111918562723
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 24
-	- Origin: `1565fc2`. Confirmed on a full 8k tmpfs: exit 0, an empty log, and no word.
-	- Note: Code review 20261110 decided `out!` may drop write errors on stdout. A log is the record someone asked for, so it's weighed apart.
-
-- Refuse a `--log` that is the database or one of its own files.
-	- ID: 2026111918562724
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 25
-	- Origin: `1565fc2`. Confirmed: `--log db.sqlite` writes text after the last page, `.lock` writes into the lock file, and `-wal` is deleted by SQLite at the end of the run, log and all.
-	- Requirements  [Feature]:
-		- Match by device and inode as well as by name, the way the scan already leaves out the database's files.
-	- Related IDs: 2026111918562707
-
-- Wrap `install.bash` in a function called on its last line, so a cut-off one-liner download runs nothing.
-	- ID: 2026111918562725
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 26
-	- Origin: `f249afd`. Confirmed: of 3,869 cut points, 876 exit 0 with nothing installed, 31 leave the temp folder, and 3 leave `.tukfs-hash.new.*` in `~/.local/bin`. No cut skipped the checksum.
-	- Note: Repro is `private/claude_simple/tools/review-20261119/install/install/cut-sweep.bash INST STEP`.
-
-- Make the style guide's Bash rules say they're for new scripts, since several tracked scripts differ.
-	- ID: 2026111918562726
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 27
-	- Origin: `project/style-guide_code.md`, 2026102808215637, closed 2026-11-19. Confirmed by reading.
-	- Note: `tests/integration.bash` and `git-auto-msg.bash` use `set -euo pipefail`, `box-side.bash` uses `-Euo`, the launcher uses `-eu`, and integration.bash has `name() {` functions and a `Usage:` header. Renaming them was decided against before.
-	- Related IDs: 2026102808215637
-
-- Join the comment blocks that are still wrapped mid-sentence, per the line length directive of 2026-11-19.
-	- ID: 2026111918562727
-	- Type: Enhancement
-	- Status: Queued
-	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
-	- Opened: 20261119-185627
-	- Opened by: code review 20261119, item 28
-	- Origin: `2a5f505` "comment wraps" missed them. Directive of 2026-11-19. Confirmed by reading.
-	- Note: `snapdiff.rs`'s SAFETY comment near `frozen_at` and the one near line 1054, `cicd.bash` near lines 196, 745 and 1972, `config.bash` near line 214, and the comments in `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` and `deny.toml`.
+	- Actual fix [Bug]: README's "Details" says a whole filesystem or a mounted btrfs subvolume is measured against its used space, and a folder is counted by a walk beside the scan, with the share shown once that count is in.
+	- Decisions: Only the wrong sentence was replaced, and the first sentence lost its "as a share of the space used" clause. The rest of the bullet is as it was.
+	- Branch: nov20-2026111918562714
+	- Commit: `86955aa`
+	- Test case: None, since it's README wording. `dfjzd`, `df4x7` and `df4x8` pin the behavior it describes.
+	- Stand-in: none (20261120). Only the wording is left to judge.
 
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
@@ -615,6 +218,38 @@
 	- Swept: The zfs names already use the full dataset name. In `vm-scan`, the mount folder and fsck log use the image's base name within its dataset, so 2 images of one name in different subfolders would share them. No dataset has 2 such images today.
 	- Acceptance signoff: Self-closed: the probable fix as written, test failed before and passes after.
 	- Closed: 20261014-065308
+
+- A run with no options records its tree, and on `main` goes on to the release upload, after advisories, a sanitizer, CodeQL or the demo gif skipped for a missing tool.
+	- ID: 2026111918562700
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: High
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 1
+	- Origin: `93275db`, 2026102814341405's fix, which covered only the 3 check-only modes. A sibling that fix missed. Not seen before. Confirmed.
+	- Steps to reproduce [Bug]:
+		- In a scratch clone with a stub config, hide cargo-deny from PATH and run cicd with no options.
+		- It prints "advisories: skipped, since cargo-deny isn't installed", then records the tree, and exits 0 with no "Skipped:" line.
+	- Incorrect behavior [Bug]: `fLeakHostSkip` adds to the skip list only under `TUKFS_GATE_STRICT`. advisories' `fSkip` and demo-gif's `fWarn` never add to it. `fRecordGreen` and `fUploadReady` read only the skip list.
+	- Expected behavior [Bug]: cicd.bash's own header says a missing tool keeps a run from recording. The lint stage's ruff, mypy and `fLintTool` skips already go on the list in every mode.
+	- Probable fix [Bug]: Each of those skips adds its name to `TUKFS_GATE_SKIPS` whenever it's set, and fails only under strict.
+	- Sweep: every `exit 0` skip path in `cicd/utility/*.bash`.
+	- Related IDs: 2026102814341405, 2026102814341404
+	- Note: Repro is `private/claude_simple/tools/review-20261119/cicd/record-after-skip.bash`. On b23 every tool is installed, so a box missing one is what it takes.
+	- Closed reason: Done
+	- Reproduced [Bug]: 2026-11-20, in a scratch clone with a stub config: a run with no options with cargo-deny hidden, and one with Pillow hidden, each recorded the tree.
+	- Actual cause [Bug]: 2026102814341405's fix wrote the skip list only under strict, in `fLeakHostSkip`. advisories and demo-gif failed under strict and otherwise left nothing on the list, which is all the record and the upload read.
+	- Actual fix [Bug]: `fLeakHostSkip` writes the skip list whenever `TUKFS_GATE_SKIPS` is set. advisories' `fSkip` calls it, and demo-gif's `fWarn` puts `demo-gif` on the list. Under strict both still fail. design.md, "Build and release" and "Demo gif", say so.
+	- Decisions: An advisory database that can't be fetched counts as a skip too, so an offline run with no options doesn't record or upload. The "Skipped:" summary still lists only remote hosts, as with a missing ruff, and the "tree not recorded" line names the rest. The profiler's hot spot report without python3 and the dogfood skips stay off the list, since neither is a check.
+	- Branch: nov20-2026111918562700
+	- Commit: `a9ccdb3`
+	- Test case: none with an ID. The private `gate-record-check.bash REPO`, cases "no options, no cargo-deny" and "no options, no Pillow", and the script cases, which now check the skip list in both modes.
+		- 2026-11-20: "image checks, strict=no" wanted exit codes `0 0` and an empty skip list, and now wants `0 0 sanitize-rust-miri codeql`, as this item asks.
+	- Verified: `gate-record-check.bash REPO` passes 28 of 28, and 8 fail on the code before. `cicd/cicd.bash --backlog-run-quick` and `--backlog-run-quick advisories` pass.
+	- Swept: every `exit 0` in `cicd/utility/*.bash`: advisories, demo-gif, and sanitize-rust and codeql-scan through `fLeakHostSkip`. remote-tests' skip exits 3, which cicd.bash already lists. The rest, in release-upload, git-auto-msg, lint-report, ctr-fetch and remote-tests' pass, aren't skips. In cicd.bash, `fLintTool`, ruff, mypy, `fRunIt`, a missing test root, the release image and remote hosts already add to the list.
+	- Acceptance signoff: Self-closed: the check fails on the code before and passes after.
+	- Closed: 20261120-165455
 
 - A read error found by `--verify` is skipped by a plain scan later the same day, which exits 0.
 	- ID: 2026111011092300
@@ -1418,6 +1053,102 @@
 	- Acceptance signoff: Self-closed after the root run.
 	- Closed: 20261015-130151
 
+- snapdiff `--find-new` calls a renamed, damaged file "only in --new" and exits 0 when `--old` was made writable, written to, and made read-only again.
+	- ID: 2026111918562701
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 2
+	- Origin: `36ab621`, 2026111011092305's fix (round-20261110b). A case that fix didn't weigh. Not seen before. Confirmed, on real btrfs snapshots.
+	- Steps to reproduce [Bug]:
+		- Take a read-only snapshot O, set it writable, add a file, set it read-only again.
+		- From O make a writable snapshot, rename the file, change its bytes in place at the same size and time, then take read-only snapshot N.
+		- `snapdiff --find-new` over O and N prints "new y only in --new" and exits 0.
+	- Incorrect behavior [Bug]: `frozen_at` trusts the snapshot's creation time for any read-only, non-received subvolume. Files added while it was writable look born after it, so they skip the inode walk.
+	- Expected behavior [Bug]: `content-changed-same-mtime` and exit 4, as the same trees give with O left writable. design.md trusts the time only because nothing can be added to a read-only snapshot.
+	- Probable fix [Bug]: The same ioctl gives `ctransid` and `otransid`. Treat the time as unknown when `ctransid > otransid`.
+	- Sweep: `born_since_old` is the only place the time is trusted.
+	- Related IDs: 2026111011092305, 2026111700232503
+	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/ro-later.bash BIN DIR`, under `/tmp` (btrfs), no root. A wrong answer at exit 0, so the tree isn't release-ready until it's fixed.
+	- Reproduced [Bug]: Yes, with the review's repro: "new y only in --new", exit 0.
+	- Actual cause [Bug]: `frozen_at` checked only the read-only flag and the received UUID. Setting a snapshot writable and back leaves both as they were, so files added in between looked born after it.
+	- Actual fix [Bug]: The snapshot's time is unknown when its `ctransid` is later than its `otransid`, so its new-looking files wait for the inode walk. design.md, Snapshot diffs, says so.
+	- Decisions:
+		- `ctransid > otransid` is the test, as the item proposed. On this box's kernel, making a file, an `O_TMPFILE`, a folder or a link, and a `touch`, each moved `ctransid` past `otransid` on a toggled snapshot. Toggling alone, an in-place overwrite and an append didn't. Those can't make a birth time, so trust stays for them.
+		- A rename or delete there moved it too, so it also costs the trust, though it adds nothing new. That's the safe side, and a walk is all it costs.
+	- Branch: nov20-2026111918562701
+	- Test case: `dfjtt` (`snapdiff::tests::a_snapshot_changed_since_it_was_taken_has_no_time`), and `dfjtv` in `tests/integration.bash` on real btrfs snapshots: the review's case gives `content-changed-same-mtime y` and exit 4. Both fail before the fix, `dfjtt` with `Some(..)` where `None` is wanted and `dfjtv` with exit 0 and no line, and pass after.
+	- Swept: `frozen_at` is the only reader of the subvolume info, and `born_since_old` the only place its time is used. `df4qf`, over a snapshot never made writable, still skips the walk.
+	- Verified: The repro gives exit 4 and `content-changed-same-mtime`. `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri`.
+	- Acceptance signoff: Self-closed: the item's expected behavior, pinned by tests that fail before and pass after.
+	- Closed reason: Done
+	- Closed: 20261120-170804
+
+- `--log` opens whatever is at the name: a FIFO hangs the scan, and under sudo root appends to another user's file in a sticky folder such as `/tmp`.
+	- ID: 2026111918562702
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 3
+	- Origin: `8fa5810`, 2026111019430926's fix. New ground. Confirmed, the sudo case as uid 0 in a user namespace.
+	- Steps to reproduce [Bug]:
+		- `mkfifo L; tukfs-hash scan --root R --log L`. It blocks before scanning, and one Ctrl+C doesn't stop it.
+		- As root with `SUDO_UID` set, in a root-owned 1777 folder where another user made `scan.log` first: the scan exits 0 and appends its lines to that user's file. A plain root `>>` to it is refused.
+	- Incorrect behavior [Bug]: After EEXIST, `say::open_append` opens again without `O_CREAT`, which skips the kernel's `protected_regular` and `protected_fifos` checks. There's no `O_NONBLOCK` and no regular-file check.
+	- Expected behavior [Bug]: The log is refused unless it's a regular file, and root gets no more reach through it than a shell `>>` would.
+	- Probable fix [Bug]: Keep `O_CREAT` on the retry, add `O_NONBLOCK`, then refuse anything but a regular file, as `scan::lock` does for the lock file.
+	- Sweep: other opens of a user-named file for writing. `hand_over` already uses `O_NONBLOCK`.
+	- Related IDs: 2026111019430926, 2026111918562724
+	- Note: Repros are `fifo-log.bash` and `sticky-log-standin.bash` in `private/claude_simple/tools/review-20261119/db/`.
+	- Actual cause [Bug]: As the item says: the reopen after EEXIST had no `O_CREAT` or `O_NONBLOCK`, and nothing checked the file's type.
+	- Actual fix [Bug]: `say::open_append` keeps `O_CREAT` on the reopen and adds `O_NONBLOCK` to both opens. Anything but a regular file is refused with "not a regular file; refused", ENXIO from a FIFO with no reader included.
+	- Decisions:
+		- A character device such as `/dev/null` is refused too, since the item asks for a regular file only.
+		- A user's own scan is now refused another user's file in a sticky folder, as their shell's `>>` is, since `protected_regular` covers every user.
+		- A log removed between the 2 opens is made by the second one and isn't handed over under sudo. It's a race only the user can cause, and the log is then root's, as an older build left it.
+	- Swept: every open for writing in `src`. `scan::lock` and `hand_over` already use `O_NONBLOCK` and check the type. The rest are in tests, the soak tests, or the profiler's own folder.
+	- Test case: `dfjv7` (`a_log_that_isnt_a_regular_file_is_refused`): a FIFO with no reader, one with a reader, and `/dev/null`. The sudo case is `sticky-log-standin.bash`.
+	- Verified: `dfjv7` timed out on the code before and passes after. `fifo-log.bash`: the old build hung through one INT, the new one exits 1 at once. `sticky-log-standin.bash`, as uid 0 in a user namespace: the old build exited 0 and wrote 378 bytes to the other user's file, and the new one exits 1 with EACCES, as the plain `>>` does, and the file stays empty. Its FIFO case went from killed at the timeout to exit 1. `sudo-log-standin.bash` passes 8 of 8. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
+	- Branch: nov20-2026111918562702
+	- Commit: 9215ed4
+	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261120-172424
+
+- `install.bash` prints "Installed" at exit 0 when the install path is a link to a folder, and replaces nothing.
+	- ID: 2026111918562703
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 4
+	- Origin: `f249afd`, 2026110218175402. New ground. Confirmed with a stand-in curl.
+	- Steps to reproduce [Bug]:
+		- `mkdir ~/somedir; ln -s ~/somedir ~/.local/bin/tukfs-hash; bash install.bash -y`
+	- Incorrect behavior [Bug]: Exit 0 and "Installed". The link is unchanged, and `somedir/.tukfs-hash.new.<pid>` is left. Under `--target system` the root-owned file goes wherever the link points.
+	- Expected behavior [Bug]: The plan says it replaces a link with the file itself.
+	- Probable fix [Bug]: `mv -fT`, or refuse a link that leads to a folder, as a real folder is refused.
+	- Note: Repro is case A of `private/claude_simple/tools/review-20261119/install/install/repro-findings.bash`.
+	- Reproduced [Bug]: Yes, with install-check's new cases: exit 0, "Installed", the link unchanged, and the staged file inside the folder.
+	- Actual cause [Bug]: The folder check let any link through, and `mv -f` onto a link to a folder moves the file into the folder.
+	- Actual fix [Bug]: A link to a folder at the name is refused before anything is fetched, as a real folder is. The rename is `mv -fT`, so a link to a folder made after the check is replaced, not moved into.
+	- Decisions:
+		- Refused rather than replaced. From outside it looks like a folder, and a real folder is already refused. A link to a file is still replaced, as the plan says.
+		- `-T` as well, for a link made between the check and the rename. BusyBox `mv -T` follows the link and fails there, so that gives exit 1 and "couldn't put tukfs-hash in place", never a false "Installed".
+	- Branch: nov20-2026111918562703
+	- Commit: `ef2ed39`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `install-check.bash` cases "link to folder" (6) and "late link" (5). 8 of them fail on the code before and all pass after.
+	- Swept: the other uses of the name. The same-bytes check uses `-f`, which follows a link to a file, as before. The `install` writes a new name in the target folder. `fInstallAtomic` in `cicd/cicd.bash` renames onto a name the same way, filed as 2026112017341780.
+	- Verified: `install-check.bash` passes 114 of 114, up from 91. The 2 refusals give the same messages under Bash 3.2.57. shellcheck is clean, and `--backlog-run-quick` passed.
+	- Acceptance signoff: Self-closed: a link to a folder gets the same refusal as a folder, pinned by checks that fail before and pass after.
+	- Closed: 20261120-173417
+
 - A scan's `--log` can be made and written on NTFS, APFS or HFS+.
 	- ID: 2026111700232501
 	- Type: Bug
@@ -1996,6 +1727,30 @@
 	- Note: The events from that run stay as `read-error`. Those files only get checked from inside Windows, which the 2026-10-13 native checks did for the system files.
 	- Acceptance signoff: Self-closed.
 	- Closed: 20261015-130151
+
+- Make `install.bash` work with a noexec temp folder, or say that's the cause, in place of "doesn't run on this system".
+	- ID: 2026111918562721
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 22
+	- Origin: `f249afd`. Confirmed with a noexec tmpfs at TMPDIR in a user namespace.
+	- Requirements  [Feature]:
+		- Try the staged copy in the target folder, which is written anyway, before the rename.
+		- Or name the noexec temp folder as a likely cause and suggest TMPDIR.
+	- Decisions:
+		- The first way. The trial run is now only from the new copy in the install folder, so the temp folder never needs to run anything. One trial, not one in each place.
+		- An install folder that won't run programs is refused as "won't run programs, as on a noexec mount", from the execute check on the new copy, before the trial.
+		- Under `--target system` the sudo prompt now comes before the trial run, since the copy is written first. The trial still runs as the user, not through sudo.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "noexec TMPDIR" (3) and "noexec install folder" (4), on noexec tmpfs mounts in a user namespace. 6 of them fail on the code before, and all pass after.
+	- Swept: the work folder is only written and read now, never run from. The dogfood stage copies within the synced folder and runs nothing.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the stand-in mounts cover both folders, and the requirement named this way.
+	- Closed: 20261120-194733
 
 - No step puts the release set on the git host when `dev` is merged into `main`.
 	- ID: 2026110218175401
@@ -3046,6 +2801,550 @@
 	- Branch: cicd
 	- Test case: none with an ID. In the private tools folder: `cicd-flags-check.bash REPO` for the flags and the hook, `cicd-steps-check.bash REPO` for a format failure failing the run, `cicd-stop-check.bash REPO` for a stopped run's cleanup, and new `report-check.bash REPO` for `lint-report.bash --check`. Not in CI, since the first 3 run the pipeline itself in a scratch clone. The release stage checks the build number in `--version` on every run that builds a release.
 	- Closed: 20261023-104516
+
+- A stop between the demo gif's copy and its rename leaves `<gif>.tmp.<pid>` beside the tracked gif in the repo.
+	- ID: 2026112019541396
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261120-195413
+	- Opened by: sweep for 2026112019472699
+	- Related IDs: 2026112019472699
+	- Origin: Plausible, read only. `cicd/utility/demo-gif.bash` has no EXIT trap, and copies to `${out}.tmp.$$` before the rename.
+	- Probable fix [Bug]: An EXIT trap that removes the temp copy once it's named, with INT, TERM and HUP trapped so it runs.
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, with stand-in `cp` and `mv` that send TERM to the script during the copy, after it, and before the rename. Each left `<gif>.tmp.<pid>` beside the old gif. A stop during the rotated copy left a half gif under its real name in the rotate folder.
+	- Actual cause [Bug]: The script had no signal or EXIT trap, so a stop ended it between the copy and the rename. The rotated copy had no temp name at all.
+	- Actual fix [Bug]: Both copies go through `fCopyAtomic`, which names its temp copy in a global and clears it after the rename. INT, TERM and HUP are trapped from the copies on, so the EXIT trap runs and removes the temp copy. When that fails it prints the name and the `rm` to run.
+	- Decisions:
+		- The rotated copy into the private folder goes through a temp name too, a dot name the rotation's glob skips. It was the same stop gap in the same script, with a half gif left under a real name.
+		- The signals are trapped only from the copies on, so a TERM to the script alone during the render still ends it at once rather than waiting for the render.
+		- A KILL still leaves the temp copy, since no trap runs then.
+	- Branch: nov20-2026112019541396
+	- Commit: `6537f0e`
+	- Test case: none with an ID (2026102508462883). `demo-gif-stop-check.bash REPO [REV]`, in the private tools folder, 7 cases. The 6 stop cases fail on the code before, and all pass after.
+	- Swept: the only other copy in `demo-gif.bash` is the rotated one, fixed here. `gfs_rotate` renames and prunes, and copies nothing. `gen-demo-gif.py` writes into the run's temp folder, which the run's cleanup removes.
+	- Verified: `demo-gif-stop-check.bash` both ways, shellcheck, and `--backlog-run-quick`.
+	- Acceptance signoff: Self-closed: the stop cases fail before and pass after, and nothing a person sees changed.
+	- Closed: 20261120-200124
+
+- A stop between the dogfood stage's copy and its rename leaves `.tukfs-hash.<pid>.tmp` in the synced `linux/bin`.
+	- ID: 2026112019472699
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261120-194726
+	- Opened by: sweep for 2026111918562717
+	- Related IDs: 2026111918562717
+	- Origin: Plausible, read only. `fInstallAtomic` in `cicd/cicd.bash` removes its temp copy only when the copy or rename fails, not on a stop, the same as `install.bash` before 2026111918562717.
+	- Probable fix [Bug]: Remove the temp copy from the run's EXIT trap once it's named, or sweep `.*.tmp` names with a dead PID at the next run.
+	- Reproduced [Bug]: Yes, with stand-ins that send TERM to the script after the copy, after the chmod, and with half a copy written. Each left the temp copy beside the old file.
+	- Actual cause [Bug]: Only the failure path removed the temp copy. A stop's trap exits between 2 commands of the copy, and the EXIT trap didn't know the name.
+	- Actual fix [Bug]: `fInstallAtomic` names its temp copy in a global before the copy starts, and clears it after the rename. `fRunTmpGone` removes it once what the run started has been stopped. When that fails, it prints the name and the `rm` to run.
+	- Decisions:
+		- The EXIT trap rather than a sweep at the next run. The folder is synced, so a temp copy whose PID is dead here can be another box's copy in progress.
+		- A KILL still leaves the file, as it does for `install.bash`, since no trap runs then.
+	- Branch: nov20-2026112019472699
+	- Commit: `457e7bb`
+	- Test case: none with an ID (2026102508462883). `dogfood-install-check.bash REPO [REV]`, in the private tools folder, now 10 cases. The 3 "stopped after ..." cases and the `fRunTmpGone` call check fail on `HEAD` before the fix, and all 10 pass after.
+	- Swept: both callers in `fStageDogfood` go through `fInstallAtomic`. The release set's sums temp is removed at the next run's start, and green-tree's list temp in the git folder has a fixed name that the next run overwrites. The demo gif's temp copy beside the tracked gif is the same gap, filed as 2026112019541396.
+	- Verified: `dogfood-install-check.bash` both ways, shellcheck, and `--backlog-run-quick`.
+	- Acceptance signoff: Self-closed: the stop cases fail before and pass after, and nothing a person sees changed.
+	- Closed: 20261120-195500
+
+- The dogfood copy moves the binary into a folder when its name in the synced `linux/bin` is a link to one.
+	- ID: 2026112017341780
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261120-173417
+	- Opened by: sweep for 2026111918562703
+	- Related IDs: 2026111918562703
+	- Origin: Plausible, read only. The same rename onto a name that 2026111918562703 fixed in `install.bash`.
+	- Probable fix [Bug]: `mv -fT` in `fInstallAtomic` in `cicd/cicd.bash`, or skip a name that leads to a folder.
+	- Reproduced [Bug]: Yes. A link to a folder at the name, and a real folder too, each gave "OK: installed" with the file moved inside the folder. So did a link made after the check.
+	- Actual cause [Bug]: `fInstallAtomic` renamed with `mv -f`, which moves the file into a folder, or a link to one, at the name. Nothing checked for a folder.
+	- Actual fix [Bug]: A folder, or a link to one, at the name is refused with a warning, and the dogfood stage fails at its end, as for any copy that failed. The rename is `mv -fT`, so a link to a folder made after the check is replaced, not moved into.
+	- Decisions:
+		- Refused rather than replaced, as `install.bash` does since 2026111918562703. A real folder is refused too, since it had the same bug.
+	- Branch: nov20-2026112017341780
+	- Commit: `0248f77`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `dogfood-install-check.bash REPO [REV]`, new in the private tools folder, 6 cases. The folder, link to a folder and late link cases fail on the code before, and all 6 pass after.
+	- Swept: every other rename onto a name in `cicd/`, `utility/` and `tests/`. The dogfood runner copies go through the same function. green-tree's list, the gif rotation, the gif, the flamegraph and the release set are renamed inside folders the run owns. The launcher copies into a new dated name in its pool.
+	- Verified: `dogfood-install-check.bash` both ways, shellcheck, and `--backlog-run-quick`.
+	- Acceptance signoff: Self-closed: a folder or a link to one gets the same refusal as in `install.bash`, pinned by a check that fails before and passes after.
+	- Closed: 20261120-180320
+
+- On a kernel before 5.6, a scan reads the old folder's files under the new path when a kept folder is replaced mid-scan, and exits 0 where openat2 exits 4.
+	- ID: 2026111918562704
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 5
+	- Origin: `123ba47`, 2026111914041556's fix. A regression from round nov19. Confirmed, with openat2 refused through seccomp.
+	- Steps to reproduce [Bug]:
+		- Scan a tree, then start `--verify` with 1 worker. While it's busy in `d`, move `d` out of the root and move another `d` in, whose `sub/g` has new bytes at the same size and time.
+		- With openat2: exit 4, `b3-db-mismatch 1`. Without: exit 0, the moved-out files are read, and the row for `d/sub/g` gets the old file's inode.
+	- Incorrect behavior [Bug]: `step_by_step` trusts any open that succeeds through a kept folder.
+	- Expected behavior [Bug]: Both open paths give the same answer. 2026111914041556 accepted only that a moved-out folder stays readable.
+	- Probable fix [Bug]: Keep the listed inode in `Job`, and when an open through a kept folder gives another inode, open again from the root.
+	- Sweep: `list_dir` and snapdiff's opens through kept folders.
+	- Related IDs: 2026111914041556, 2026111918562705
+	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r1/run.bash DIR fallback|openat2`.
+	- Reproduced [Bug]: Yes, with the build from `e9ee596` and openat2 refused: exit 0, files 1102, and the row got the old inode. openat2 gave exit 4, files 2.
+	- Actual cause [Bug]: `step_by_step` used a kept folder without checking its path still led to it, so a folder moved out of the root was read through for every file listed in it, and for a deeper file under the new path.
+	- Actual fix [Bug]: Before a kept folder is used, a stat of its path from the root has to give the same device and inode it had. Otherwise the open starts from the root. A failure through it is still tried again from the root, since it can move after the check.
+	- Decisions:
+		- The kept folder is checked by its path. The filed fix, a check of the file's listed inode, still reads the old file when the walk listed it before the swap, and reads every moved-out file listed before the move. The path check gives the same answer as openat2 either way, and covers `list_dir` and snapdiff with no change to their calls.
+		- This ends 2026111914041556's first decision, that a kept folder is used as it is. The newer item asks for both ways to agree, and a moved-out folder that stays readable was only tolerated there. A `Check:` entry has the cost.
+		- The stat follows a symlink above the kept folder, so a folder moved out and linked back in from above is still read through. Whoever can do that could put the files inside the root, as 2026111914041556 said.
+	- Branch: nov20-2026111918562704
+	- Commit: `074f99a`
+	- Test case: `dfjx2` (`beneath::tests::a_kept_folder_moved_out_isnt_read_through`): a kept folder moved out and another put in its place, with a file only the old one has and one in both.
+	- Verified:
+		- `dfjx2` fails with the path check taken out, and passes with it.
+		- The repro with openat2 refused: exit 4, files 2, `b3-db-mismatch 1`, the same as openat2 on both builds.
+		- `tests/integration.bash` passed under the seccomp filter on ext4, 208 checks, so every scan there took the fallback.
+	- Note: Rescans of 20,000 files in 2,000 folders with openat2 refused took 0.48 s of user plus sys CPU before and 0.53 s after, 6 paired rounds at load 10. With openat2 it was 0.39 s. Unverified on a real kernel before 5.6.
+	- Swept: `Worker::stat`, `Worker::open`, `Walker::list_dir`, and snapdiff's `stat_beneath` and `open_read` all open through `Root::open_at`, so the one check covers them. The other `beneath::openat` calls are the database's and the log's folders, opened by a path a person gave.
+	- Acceptance signoff: Self-closed: the repro fails before and passes after, and the test fails without the check.
+	- Closed: 20261120-181607
+
+- On a kernel before 5.6, a file that's mounted over after the walk queued it is read and gets attributes, on NTFS too.
+	- ID: 2026111918562705
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 6
+	- Origin: `9120949`, the fallback. New ground. Confirmed, with an NTFS image through ntfs-3g in a user namespace.
+	- Steps to reproduce [Bug]:
+		- While the worker is held, bind-mount a file from an NTFS image over a queued file.
+		- Without openat2: the NTFS file gets `user.blake3.*`. With openat2 it's skipped.
+	- Incorrect behavior [Bug]: `beneath.rs`'s comment says the walk checks each folder's device, but `Worker::stat` and `Worker::open` don't check a file's device against the root's.
+	- Expected behavior [Bug]: Nothing is written to NTFS, APFS or HFS+, and both open paths agree.
+	- Probable fix [Bug]: Treat `md.dev() != job.root.dev` as moved in `stat` and `open`, which matches `RESOLVE_NO_XDEV`.
+	- Sweep: snapdiff's opens through `open_at`.
+	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r5/inner.bash DIR fallback|openat2`, under `unshare -rm --map-auto`.
+	- Related IDs: 2026111918562704
+	- Reproduced [Bug]: Yes, with the build from `e9ee596` and openat2 refused: files 2, xattr set 2, and the NTFS file got `user.blake3.b64u`.
+	- Actual cause [Bug]: `step_by_step` checked the device of each folder on the way, but not of what it opened last. openat2's `RESOLVE_NO_XDEV` refuses a mount there too.
+	- Actual fix [Bug]: `step_by_step` refuses what it opened last when it's on another device than the root, as openat2 does, so the file counts as moved and is skipped.
+	- Decisions:
+		- The check is in `beneath::Root`, not in `Worker::stat` and `Worker::open` as filed, so the walk's folder opens and snapdiff get it too, and no caller can miss it. It's one more fstat per open, on the pre-5.6 path only.
+		- A btrfs subvolume that isn't mounted is refused too when it's the last part, where openat2 opens it. The walk skips a folder on another device either way, and snapdiff only compares files.
+		- A bind mount from the same filesystem keeps its device, so it's still missed, as code review 20261028 decided against. This item is about another filesystem, where attributes could be written.
+	- Branch: nov20-2026111918562704
+	- Commit: `074f99a`
+	- Test case: `ddy92` (`beneath::tests::another_filesystem_is_not_entered`), which now also wants a mount on the last part refused without openat2.
+		- 2026-11-20: `ddy92` asserted the step by step open of `/dev/shm` could succeed with another device. It now asserts it's refused as moved, as with openat2. The `shm/x` case is unchanged.
+	- Verified:
+		- `ddy92` fails with the check taken out, and passes with it.
+		- The repro with openat2 refused: files 1, xattr set 1, and no attribute on the NTFS file, the same as openat2.
+	- Note: Unverified on a real kernel before 5.6.
+	- Swept: as 2026111918562704. `list_dir`'s own device check stays, since openat2 doesn't see a btrfs subvolume that isn't a mount.
+	- Acceptance signoff: Self-closed: the repro fails before and passes after, and the test fails without the check.
+	- Closed: 20261120-181607
+
+- A root is opened again by path when its walk starts, so if a mount or a symlink now sits in its path, that other filesystem is scanned, and NTFS gets attributes.
+	- ID: 2026111918562706
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 7
+	- Origin: `9120949` and `25144d2`. Code review 20261110 saw a folder above a root swapped and decided against it. Confirmed, with an NTFS image mounted over a later root's parent while the first root was scanned.
+	- Against: code review 20261110's "Decided against: a folder above a root swapped after it was resolved." That call weighed whose choice the root is. It didn't weigh the rule that nothing is written to NTFS, since the walk's device isn't in `no_write_devs`.
+	- Decisions: `walk` refuses a root whose opened folder isn't the device and inode the plan resolved. It's a `dir-error` with exit 8, the same as a root that's gone after the plan. This narrows code review 20261110's call (answered 2026-11-20).
+		- The root is still the user's choice when the scan starts, and what's inside it can still change.
+		- A refusal was picked over only keeping attributes off NTFS. The plan's groups, threads, skips and percent were all worked out for the folder it resolved, so a scan of some other folder is wrong in more ways than the attributes.
+		- A root missing from the plan's ids matches no folder, so it's refused too.
+		- `names_above`, `inside_any` and `git_tree_above` still go by path. They run next to the checked open, so only the moment between is left, the case code review 20261110 decided against.
+	- Incorrect behavior [Bug]: Exit 0, and `user.blake3.*` on a file inside the NTFS image.
+	- Expected behavior [Bug]: The root is refused as a `dir-error`, or at least nothing is written to NTFS.
+	- Probable fix [Bug]: Keep each root's device and inode from the plan, and have `walk` refuse a root whose opened folder differs.
+	- Sweep: `names_above`, `inside_any`, `git_tree_above`, `bytes_under`, `hands_off` and `size_parts`, which all go by path.
+	- Related IDs: 2026111918562705
+	- Note: Repro is `private/claude_simple/tools/review-20261119/scan/r3/inner.bash DIR mount|symlink`, under `unshare -rm --map-auto`.
+		- Since 2026-11-20 it takes the binary from `B` and the folder with `gate.so` from `S`, built from `scan/bin/gate.c`.
+	- Reproduced [Bug]: Yes, with the walk's new check taken out: both modes exit 0, and the NTFS file gets `user.blake3.*`.
+	- Actual cause [Bug]: `walk` opened each root again by its path and used whatever folder it got. Nothing compared it with the folder the plan resolved, so a mount or link put in the path since sent the walk to another filesystem, whose device wasn't in `no_write_devs`.
+	- Actual fix [Bug]: `plan` keeps each root's device and inode. `walk` refuses a root whose opened folder differs, as a `dir-error` that says it's not the folder that was there when the scan began, and the size count counts 0 for it. design.md, "Reading files", says so.
+	- Branch: nov20-2026111918562706
+	- Commit: `b226adc`
+	- Test case: `dfjxp` (`scan::tests::a_root_thats_another_folder_since_the_plan_is_refused`): a link put above a root, then another folder put at its name, each refused and counted as 0.
+	- Verified:
+		- `dfjxp` fails with the check taken out, and passes with it.
+		- The repro in both modes: exit 8, `dir-error 1`, and no attribute on the NTFS file. Without the check, exit 0 and `user.blake3.b64u` on it.
+		- `--backlog-run-quick` passed in 2m 36s, its `miri` area in 53s, and `codeql-ours` in 2m 21s.
+	- Swept: `hands_off` and `size_parts` read each root by path right after the plan. A root that's changed by its walk is refused, so nothing is written under a stale `no_write_devs`, and only the percent can be off. `bytes_under` checks the root's id now too. snapdiff's `Root::open` takes the user's own paths, with no plan. The rest are under Decisions.
+	- Acceptance signoff: Self-closed: the repro fails before and passes after, and the test fails without the check.
+	- Closed: 20261120-184539
+
+- The `--log` file is read and gets attributes when a root reaches it under another name, such as a bind mount.
+	- ID: 2026111918562707
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 8
+	- Origin: `1565fc2`, 2026111019145405. The bind-mount class a third time, after 2026110720070507 and 2026111011092307. Confirmed in a user namespace.
+	- Steps to reproduce [Bug]:
+		- `mount --bind data mnt/b; tukfs-hash scan --root mnt/b --log data/scan.log`
+	- Incorrect behavior [Bug]: The database has a row for `mnt/b/scan.log`, and the log gets `user.blake3.*`.
+	- Expected behavior [Bug]: design.md says the scan skips its log.
+	- Probable fix [Bug]: Keep the log's device and inode, and skip a file with that id after `stat`.
+	- Related IDs: 2026110720070507, 2026111011092307
+	- Note: Repro is part (a) of `private/claude_simple/tools/review-20261119/scan/r4/inner.bash`.
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as integration check dfjye in a user namespace, with the build from before the fix: the database had a row for the log under the bind mount's name, and the log got `user.blake3.b64u`.
+	- Actual cause [Bug]: The scan left the log out only by its path, so a root that showed it under another name, as a bind mount, or a hard link to it, read it like any file.
+	- Actual fix [Bug]: `say::open_log` gives the log's device and inode, and a worker skips a file with that id right after its `stat`, before it's counted, read or given attributes. The size count for the percent leaves it out the same way. The path rule stays. design.md, "Runs and exit codes", says so.
+	- Decisions: The skip is in the worker's `stat`, as filed, rather than the walk's listing, since the listing's inode can differ from the file's on some filesystems, such as overlayfs.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyd` (`scan::tests::the_log_under_another_name_is_left_out`, unit, a hard link to the log), `dfjye` (integration step 25, a bind mount, in a user namespace, skipped on ZFS).
+	- Verified: `dfjye` fails against the build from before the fix and passes after, on ext4. `dfjyd` fails with the check taken out and passes with it. `--backlog-run-quick` passed in 2m 27s, its `miri` area in 52s, and `codeql-ours` in 2m 20s.
+	- Swept: `Worker::stat` is the only place a file is judged before it's read, and `bytes_under` the only other walk that counts files. `excluded` keeps the path rule. The database's own files are still left out by name in their folder, per 2026110719570617, which this didn't change.
+	- Acceptance signoff: Self-closed: the probable fix, tests fail before and pass after.
+	- Closed: 20261120-190540
+
+- A scan that fails during planning writes nothing to its `--log`, and the log isn't made.
+	- ID: 2026111918562708
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 9
+	- Origin: `38fa34e`. A regression: 2026111700232501's fix moved `open_log` after `plan`, which undid 2026111700232502 in the same release. Confirmed.
+	- Steps to reproduce [Bug]:
+		- `tukfs-hash scan --root afile --log L`, or `--root /dev/shm`. Both exit 1, and L isn't made.
+	- Incorrect behavior [Bug]: "not a folder", "not a local disk", "no mount found" and a failed `zpool list` never reach the log.
+	- Expected behavior [Bug]: 2026111700232502: a failed scan's reason goes to the log.
+	- Probable fix [Bug]: Read the mount table once before `plan`, open the log with it, and pass the table into `plan`.
+	- Related IDs: 2026111700232501, 2026111700232502
+	- Note: 2 fixes in one release undid each other, so the fix needs a test for each case together.
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as integration check dfjyg, with the build from before the fix: `--root` a file with `--log` exited 1 and made no log.
+	- Actual cause [Bug]: `scan::run` opened the log after `plan`, to use the mount table `plan` read, so an error in `plan` returned before there was a log.
+	- Actual fix [Bug]: `scan::run` reads the mount table once, opens the log with it, and then passes the table to `plan`, which no longer reads it or hands it back. The `plan` command reads it for itself. design.md, "Runs and exit codes", says so.
+	- Decisions: A failed read of the mount table itself still comes before the log, since the log's hands-off check needs the table. It's on stderr.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyg` (integration step 35, a root that's a file), with `dfdmk` (NTFS log refused) and `dfdmm` ("nothing to scan" in the log) in the same run, for the 2 fixes this undid.
+	- Verified: `dfjyg` fails against the build from before the fix and passes after. `dfdmk`, `dfdmm` and `dehzd` (the mount table read once) still pass. `--backlog-run-quick` passed.
+	- Swept: `scan::plan` has 2 callers, `scan::run` and the `plan` command in `main.rs`, and both pass a table now. Nothing else reads `Plan.mounts`, which is gone.
+	- Acceptance signoff: Self-closed: the probable fix, the test fails before and passes after.
+	- Closed: 20261120-190540
+
+- On a terminal, the scan's summary cuts the events line, so the event kinds late in the list don't show.
+	- ID: 2026111918562709
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 10
+	- Origin: `1565fc2`, 2026111019145405. New ground. Confirmed in an 80-column pty.
+	- Steps to reproduce [Bug]:
+		- A scan with 3 mismatches, a `dir-error` and an `open-error` shows `... b3-xattr-mism~` at 80 columns, while the log has every kind.
+	- Incorrect behavior [Bug]: `Fit::Break` breaks only at " | ", and the kinds are joined with ", ". Kinds sort by name, so `read-error`, which sets exit 4, is among the first cut.
+	- Expected behavior [Bug]: design.md says every count in the summary matters.
+	- Probable fix [Bug]: Let `Break` break at ", " too, or join the kinds with " | ".
+	- Related IDs: 2026111019145405
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as unit test dfjyx with the old fitting: at 80 columns the events line came out as one row ending `b2b-rmlint-mism~`.
+	- Actual cause [Bug]: `say::fitted` broke a line only at " | ", and the events line has none, so the whole list was one part, cut at the width.
+	- Actual fix [Bug]: A part too long for a row of its own is broken at its ", " marks too, each row but the last ending with its comma, and the rest indented. A part that fits a row still moves whole. design.md, "Runs and exit codes", and `--help` say so.
+	- Decisions: Break at ", " rather than join the kinds with " | ", so the stored summary, the log and piped output don't change.
+	- Branch: nov20-2026111918562709
+	- Commit: `dce4351`
+	- Test case: `dfjyx` (`every_kind_in_a_long_events_line_shows`), with `df4xk` (`a_line_fits_its_terminal`) unchanged.
+	- Verified: `dfjyx` fails with the old fitting and passes after, every kind whole from 42 to 119 columns. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
+	- Swept: `Fit::Break` is used only for the summary in `scan::run`. The other ", " lists the scan prints are on stderr, which isn't cut.
+	- Acceptance signoff: Self-closed: the probable fix, the test fails before and passes after.
+	- Closed: 20261120-192308
+
+- The scan's root lines print names as they are: bytes that aren't UTF-8 become U+FFFD, and a newline splits a root over 2 lines, on the terminal and in the log.
+	- ID: 2026111918562710
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 11
+	- Origin: `f05c368`. 2026101406340924's sweep noted these lines and never filed them. Since `--log` they reach the log too. Confirmed.
+	- Incorrect behavior [Bug]: `scan.rs` prints roots and "skipping root" lines with `display()`. `plan` uses `show_path`, which prints `\xff` and `\x0a` for them.
+	- Expected behavior [Bug]: README says names are escaped, and design.md says each root takes one line.
+	- Probable fix [Bug]: Use `show_path` for the root lines and the `dropped` and "inside" strings.
+	- Sweep: every `display()` that reaches stdout or the log.
+	- Related IDs: 2026101406340924
+	- Closed reason: Done
+	- Reproduced [Bug]: Yes, as integration checks dfjyy and dfjyz, with the build from before the fix: a root named `caf\xe9` printed as `caf` and U+FFFD, and a newline split the root and "skipping root" lines.
+	- Actual cause [Bug]: The root lines and `plan`'s dropped and "inside" strings used `display()`, which 2026101406340924 left in `scan.rs`.
+	- Actual fix [Bug]: They use `show_path`, and so does every error text with a path in `scan.rs`, `db.rs`, `mounts.rs` and `util::canonical_name`, since a scan's errors reach the log too. The `plan` command's "skip" lines are escaped with them. design.md, "Runs and exit codes", says so.
+	- Decisions: Error text with a path is escaped too, which the sweep of 2026101406340924 had left alone, since `--log` now records it.
+	- Branch: nov20-2026111918562709
+	- Commit: `dce4351`
+	- Test case: integration `dfjyy` (a root named with a newline, and one that isn't UTF-8, on their lines) and `dfjyz` (the "skipping root ... inside" line). The non-UTF-8 root is skipped on ZFS.
+	- Verified: `dfjyy` and `dfjyz` fail against the build from before the fix on ext4, and pass after on ext4 and ZFS, in `--backlog-run-quick`.
+	- Swept: every `display()` in `src/`. Left: `profiling.rs`, built only with the `profiling` feature, and test code in `snapdiff.rs`, `soak.rs`, `testutil.rs` and the test modules.
+	- Acceptance signoff: Self-closed: the probable fix, the tests fail before and pass after.
+	- Closed: 20261120-192308
+
+- Under sudo, the database is opened by path after its folder was checked, so a swap in between could have root's SQLite make files elsewhere.
+	- ID: 2026111918562711
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 12
+	- Origin: `63957eb`, 2026111011092301's fix. Not seen before. Plausible, from reading.
+	- Incorrect behavior [Bug]: `Held::open` gives SQLite the path after `open_dir` checked the folder by fd. A root-owned database folder whose parent another user can write could be swapped in between.
+	- Expected behavior [Bug]: The database and its files are made in the folder that was checked.
+	- Probable fix [Bug]: Open through `/proc/self/fd/<folder fd>/<name>`.
+	- Related IDs: 2026111011092301
+	- Reproduced [Bug]: Yes, as a test, not as root: with the folder moved after `Held::take_as` checked it and another put at its name, `Held::open` made the database in the new one. The open is the same code under sudo.
+	- Actual cause [Bug]: SQLite takes only a path, and `Held::open` and the walks' lookups gave it the database's path by name, which can lead to another folder once the check is done.
+	- Actual fix [Bug]: The database is opened by the path that `/proc/self/fd/<folder fd>` reads now, from the fd `Held` keeps. That's for `scan`, `accept` and `prune`, and for each walk's lookup connection. The walk's id for the database folder comes from that fd too. design.md, "Database", says so.
+	- Decisions:
+		- SQLite isn't given `/proc/self/fd/<fd>/<name>` as filed. It reads that link back as a path anyway, and with `SQLITE_OPEN_NOFOLLOW` it refuses it as a link. Reading the link here keeps `NOFOLLOW`, and SQLite gets the path it would have used.
+		- SQLite still goes by that path for files it makes later, such as the `-journal` when the run leaves WAL mode. A swap in the moment after the link is read, or during the run, still reaches those. Closing that needs a SQLite VFS that opens by fd, which costs more than a Low item that's only plausible.
+	- Branch: nov20-2026111918562706
+	- Commit: `b226adc`
+	- Test case: `dfjxq` (`scan::tests::the_database_opens_in_the_checked_folder`), and a new case in `ddy8f` (`a_group_with_no_workers_ends`) whose lookups open through a moved folder.
+	- Verified:
+		- `dfjxq` and `ddy8f`'s new case fail with the open by name put back, and pass after.
+		- Given `/proc/self/fd/<fd>/t.sqlite` with `NOFOLLOW`, `dfjxq` fails with "unable to open database file". The system SQLite 3.46.1, given it without `NOFOLLOW`, made the file in the moved folder.
+		- `sudo-folder-standin.bash`, `sudo-links-standin.bash`, `fail-handback-standin.bash` and `sudo-log-standin.bash` passed all 54 checks as uid 0 in a user namespace.
+		- The gates as in 2026111918562706.
+	- Swept: every open of the database while `Held` has it, which is `Held::open` and `run_group`'s lookups. `runs`, `report` and `gone` open read only with no checked folder, and make nothing. `say::open_log` and `is_db_file` still find the database's names by path, and only refuse a log there.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the test fails before the fix and passes after. A real sudo run on b23 that fails reopens it.
+	- Closed: 20261120-184539
+
+- A TERM or HUP to cicd.bash's own PID during publish doesn't stop the publisher, which commits and pushes before the run exits 143.
+	- ID: 2026111918562712
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 13
+	- Origin: `1282504`. Not seen before as a stop. Confirmed with a stand-in publisher in a scratch clone.
+	- Against: code review 20261110's "Decided against: publish stays in the foreground, per 2026102814341436." That call weighed the wait, and didn't weigh a commit and push after a stop.
+	- Decisions: The publisher runs through `fBg` when the run already has its commit message, and stays in the foreground only when git's editor is needed. This narrows 2026102814341436's foreground list (answered 2026-11-20).
+		- A stop takes the local tag off only when nothing was pushed.
+		- A run with no message still waits for the publisher on a stop, since the editor needs the terminal. `--help` should say so.
+		- Pushed means the branch's upstream ref moved after publish started. A push cut off by the stop after the git host took it, but before git moved that ref, reads as not pushed, and the tag comes off. The next run tags again.
+		- When the tag stays, the stop prints the command that uploads the release by hand.
+	- Incorrect behavior [Bug]: Bash runs the trap only once the foreground child exits. On `main` the run then takes the local tag off after `main` was pushed.
+	- Expected behavior [Bug]: A stop before the commit commits nothing, as 2026111011092310 gives the publisher's own PID.
+	- Probable fix [Bug]: Run the publisher through `fBg` when it has a message, and keep the foreground only for the editor case.
+	- Related IDs: 2026111011092310, 2026102814341436
+	- Note: Repro is `private/claude_simple/tools/review-20261119/cicd/term-during-publish.bash`.
+	- Reproduced [Bug]: Yes, on `main` in a scratch clone, with a stand-in publisher that sends TERM to the run's PID. On the code before, it went on to commit and push, and when it had pushed the tag came off anyway.
+	- Actual cause [Bug]: The publisher ran in the foreground, so the run's TERM trap waited for it to finish. `fTagUndo` took the tag off on any stop before the upload, pushed or not.
+	- Actual fix [Bug]: With a message the publisher runs through `fBg`, so a stop ends it where it is. With no message it stays in the foreground. `fTagUndo` leaves the tag on once publish has pushed. `--help` and design.md, "Build and release", say both.
+	- Branch: nov20-2026112017341780
+	- Commit: `0248f77`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `release-upload-check.bash REPO`, 3 new "TERM during publish" cases: with a message before the commit, with a message after the push, and with no message. All 3 fail on the code before and pass after.
+	- Swept: the other steps cicd.bash runs in the foreground are format and sync, which are short (2026102814341436). The upload already runs through `fBg`. The real publisher runs through `fBg` in `publish-check.bash`'s runs with a message.
+	- Verified: `release-upload-check.bash` passes every case, and `publish-check.bash` passes. rar exits 6 with no prompt when it can't read a file and its stdin is /dev/null, as under `fBg`. shellcheck and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: the calls were answered on 2026-11-20, and the check fails before and passes after.
+	- Closed: 20261120-180320
+
+- 2 cicd runs under different temp roots that start in the same second get the same run name, and one's cleanup can remove the other's live containers.
+	- ID: 2026111918562713
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 14
+	- Origin: the container labels in `ctr-image.bash`, 2026-10-25. Plausible, from reading.
+	- Incorrect behavior [Bug]: The run name's `_NNN` is unique only within one temp root. The private check scripts use their own `HOST_TEMP`. `fCtrsGone` runs `docker rm -f` by label.
+	- Expected behavior [Bug]: A run removes only its own containers.
+	- Probable fix [Bug]: Add the PID to the label and the container names.
+	- Reproduced [Bug]: Pinned, not reproduced with 2 live runs. On the code before, the end listed the run's containers by project and folder name only, and a container's name had nothing else, so 2 runs with one folder name would also collide on names.
+	- Actual cause [Bug]: The run folder's name is unique only in one temp root, and the labels and names had nothing else to tell 2 runs apart.
+	- Actual fix [Bug]: Every container and image gets a `dev.pid` label with the run's PID, and the container name has `_p<PID>` after the folder name. The end removes only containers with both the run's folder name and PID. The run on the frozen copy takes both from the outer run.
+	- Decisions:
+		- The PID is a label of its own, and `dev.run` stays the folder name, as the CICD style guide gives it. The stale sweep still finds a container's folder by `dev.run` alone, and is unchanged.
+	- Branch: nov20-2026112017341780
+	- Commit: `0248f77`
+	- Test case: none with an ID, since private checks stay out of the pipeline (2026102508462883). `temp-ctr-check.bash REPO stub`: the `dev.pid` label, the name with `_p<PID>`, the end's filter by PID, and the `--keep-temp` line. 4 fail on the code before and all pass after.
+		- 2026-11-20: Its name, label, filter and `--keep-temp` asserts take the PID now, which the item asked for. The rest of each is as it was.
+	- Swept: every `dev.run` and `TUKFS_RUN_NAME` in `cicd/`, `tests/` and the private tools. `mem-cap-check.bash` sets its own run name and filters by `dev.run` alone, which still matches. `tests/integration.bash` only checks that the name is set.
+	- Verified: `temp-ctr-check.bash` stub, stale and image pass. shellcheck and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: the run's containers have its PID, pinned by checks that fail before and pass after.
+	- Closed: 20261120-180320
+
+- A btrfs subvolume that isn't a mount point gets its percent from the whole filesystem, so a finished scan ends at "~0%".
+	- ID: 2026111918562714
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 15
+	- Origin: `831dbfd`, 2026111011092313. Confirmed under `/tmp`: a subvolume with 1 MB ends `~0% of 552.2 GiB`, and a folder with the same file `~100% of 976.6 KiB`.
+	- Against: 2026111011092313's call that a subvolume top counts as whole. That call had `/home` from `/@home` in mind, a mounted subvolume. It didn't weigh nested ones such as snapper snapshots.
+	- Decisions: A btrfs subvolume's top counts as whole only when it's also its mount's point. A nested one is a folder root, and gets its percent from the counting walk. This narrows 2026111011092313's call (answered 2026-11-20).
+		- A mounted subvolume such as `/home` from `/@home` keeps its percent against the whole volume's use, as 2026110407135700 answered.
+	- Expected behavior [Bug]: design.md counts folder roots because used space would read near 0.
+	- Probable fix [Bug]: Take the inode-256 branch only when the root is also its mount's point, which keeps `/home` from `/@home`.
+	- Related IDs: 2026111011092313
+	- Reproduced [Bug]: Yes, under `/tmp` with the build from before: a subvolume with 1 MB ended `~0% of 555.1 GiB`, and a folder with the same file `~100% of 976.6 KiB`.
+	- Actual cause [Bug]: `mounts::shows_whole` took any folder with inode 256 on btrfs as whole, whether or not it was its mount's point.
+	- Actual fix [Bug]: `shows_whole` takes the inode-256 case only at a mount's point, so an unmounted subvolume is counted as a folder. design.md, "Runs and exit codes", says so.
+	- Branch: nov20-2026111918562714
+	- Commit: `86955aa`
+	- Test case: `df4j6` (unit, the mount table), and `dfjzd` in `tests/integration.bash`: the subvolume root of step 27 ends `~100% of 6 B`. Both fail before the fix, `df4j6` at its unmounted subvolume case and `dfjzd` with `~0% of 555.1 GiB`, and pass after.
+		- 2026-11-20: `df4j6` asserted `/home/u` with inode 256 counts as whole. It now asserts it doesn't, per the Decisions row, and a nested subvolume mounted at its own point still does. The other cases are unchanged.
+	- Swept: `size_parts` is the only caller of `shows_whole`, and nothing else reads inode 256 for the percent.
+	- Verified: The repro gives `~100%` for the subvolume, alone and inside another root. `cicd/cicd.bash --backlog-run-quick` passed, with `dfjzd` on ext4 and ZFS, and so did `--backlog-run-quick miri`.
+	- Acceptance signoff: Self-closed: the Decisions row as answered, pinned by tests that fail before and pass after.
+	- Closed: 20261120-193359
+
+- Each `--log` line is written in 2 writes, so 2 scans sharing one log can mix their lines.
+	- ID: 2026111918562715
+	- Type: Bug
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 16
+	- Origin: `1565fc2`. The split write is confirmed with strace. A mixed line wasn't seen, so that part is Plausible.
+	- Probable fix [Bug]: Build the line and its newline in one buffer and write it once. `O_APPEND` then keeps each line whole.
+	- Closed reason: Done
+	- Reproduced [Bug]: The split write, yes, as unit test dfjyb with the old `writeln!` put back. A mixed line wasn't tried.
+	- Actual cause [Bug]: `writeln!` on an unbuffered `File` writes the text and the newline in 2 calls, so another writer's line can come between them.
+	- Actual fix [Bug]: Each log line is built with its newline and written with one `write_all`. A line on stderr from `say::err` is written the same way.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyb` (`say::tests::a_log_line_is_one_write`).
+	- Verified: `dfjyb` fails with the 2-write form put back and passes after. An strace of a scan with `--log` shows one write per line, newline included. `--backlog-run-quick` passed.
+	- Swept: `say::to_log` and `say::err` are the scan's only unbuffered line writes. `say::out` goes through stdout's line buffer. The `out!` and `err!` macros in `main.rs`, for the other commands, weren't changed.
+	- Acceptance signoff: Self-closed: the probable fix, the test fails before and passes after.
+	- Closed: 20261120-190540
+
+- `install.bash` says "nothing to do" when the installed file has the right bytes but isn't executable.
+	- ID: 2026111918562716
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 17
+	- Origin: `f249afd`. Confirmed: a copy at mode 644 stays at 644, and the run exits 0.
+	- Probable fix [Bug]: Take the early exit only when the file is also executable.
+	- Reproduced [Bug]: Yes, with install-check's new cases: "nothing to do" at exit 0, and the file left at 644.
+	- Actual cause [Bug]: The early exit looked at the bytes only.
+	- Actual fix [Bug]: It exits early only when the file can also be run. Otherwise the plan says "Replaces: the same build, but it isn't executable", and the file is put in again at 0755.
+	- Decisions:
+		- Put in again in full, rather than a `chmod` in place. Every replace takes one path, through the same download check and rename, and it's only a download more.
+		- `-x` asks whether the one running it can run the file. Under `--target system` through sudo, a root file the user can't run counts as not executable too, and is put in again at 0755.
+	- Branch: nov20-2026111918562703
+	- Commit: `ef2ed39`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "not executable" (5). 3 of them fail on the code before and all pass after.
+	- Swept: that early exit is the only one after the plan is worked out.
+	- Verified: `install-check.bash` passes 114 of 114, and `--backlog-run-quick` passed.
+	- Acceptance signoff: Self-closed: the item's probable fix, pinned by checks that fail before and pass after.
+	- Closed: 20261120-173417
+
+- A stop between the install and the rename leaves `.tukfs-hash.new.<pid>` in the target folder, owned by root under `--target system`.
+	- ID: 2026111918562717
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 18
+	- Origin: `f249afd`. Confirmed with a stand-in `mv` that sends TERM to the script.
+	- Incorrect behavior [Bug]: The EXIT trap cleans only the work folder. A Ctrl+C at a sudo password prompt for the rename leaves the file.
+	- Probable fix [Bug]: Have the trap remove the staged file once it's set, through `fAsTarget`.
+	- Reproduced [Bug]: Yes, with the stand-in `mv`, for both targets. The new copy was left in each.
+	- Actual cause [Bug]: Only the failure paths of the copy and the rename removed the new copy. A signal skipped them, and the EXIT trap didn't know the name.
+	- Actual fix [Bug]: The EXIT trap removes the new copy once it's named, through sudo for the system target. When that fails too, it prints the name and the `rm` to run. The 2 failure paths now leave it to the trap.
+	- Decisions:
+		- The trap's sudo can ask for the password again. Asking beats leaving a root-owned file, and a second Ctrl+C there gets the note with the command.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "system, stopped ..." (5), "user, stopped ..." (3) and "rename fails ..." (3). The 2 "no new copy left" cases, "removed through sudo" and "says so" fail on the code before, and all pass after.
+	- Swept: the copy, trial and rename steps all exit through the trap. The twin in the dogfood stage's `fInstallAtomic` is filed as 2026112019472699.
+	- Stand-in: the system target runs in a user and mount namespace, with the fake root bound over `/usr/local/bin` and the sudo stand-in. A real sudo prompt wasn't run. One that leaves the file reopens this.
+	- Acceptance signoff: Self-closed per memory.md's close policy, on the stand-ins.
+	- Closed: 20261120-194733
+
+- `install.bash` says a folder isn't on PATH when HOME ends in a slash, and fails when `CDPATH` is set and TMPDIR is relative.
+	- ID: 2026111918562718
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 19
+	- Origin: `f249afd`. Confirmed: `HOME=/home/u/` gives "/home/u//.local/bin isn't on PATH". With `CDPATH` the `cd` prints the path, so mktemp gets 2 lines.
+	- Probable fix [Bug]: Drop trailing slashes from HOME, and use `CDPATH= cd --`.
+	- Reproduced [Bug]: Yes, both, on the code before.
+	- Actual cause [Bug]: The PATH note compared folder names as text, and the install path was built from HOME as given. `cd` with `CDPATH` set prints the folder it went to.
+	- Actual fix [Bug]: Trailing slashes come off HOME. The PATH note goes by `-ef` on each PATH entry, so a trailing slash, a double slash or a link to the folder all count, and so does the "comes first on PATH" note. The `cd` is `CDPATH='' cd --`.
+	- Decisions:
+		- `-ef` rather than only trimming HOME, since a profile that builds PATH from a HOME with a slash gives `/home/u//.local/bin`, which a trimmed name doesn't match.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "HOME/ ..." (3), "PATH entry ..." (3) and "CDPATH ..." (3). 6 of them fail on the code before, and all pass after.
+	- Swept: the one `cd` in `install.bash`, and every use of HOME, which is only the install path and the root check.
+	- Acceptance signoff: Self-closed: both cases reproduced, and their checks fail before and pass after.
+	- Closed: 20261120-194733
+
+- `sudo bash install.bash` without `--target system` can install into the user's `~/.local/bin` as root and leave it owned by root.
+	- ID: 2026111918562719
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 20
+	- Origin: `f249afd`. Plausible, from reading: it needs a sudo that keeps HOME, as older Ubuntu did.
+	- Probable fix [Bug]: As root with `SUDO_USER` set and a HOME that isn't root's, refuse the user target and point to `--target system`.
+	- Reproduced [Bug]: With a stand-in. As root in a user namespace with HOME at a folder owned by someone else, the old code went on to fetch the release list. A real sudo that keeps HOME wasn't run.
+	- Actual cause [Bug]: The user target took HOME as given, whoever was running it.
+	- Actual fix [Bug]: As root, the user target is refused when HOME is there and isn't root's, before anything is fetched. The message says to run it without sudo, or with `--target system`.
+	- Decisions:
+		- It goes by who owns HOME, not by `SUDO_USER`. That covers `sudo -E` and `su -m` too, and a root whose HOME is its own still installs.
+		- A HOME that isn't there isn't refused, since nothing of anyone else's is in it.
+	- Branch: nov20-2026111918562703
+	- Commit: `ef2ed39`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` cases "root, ..." (7), as root in a user namespace, where the real root's `/usr` belongs to nobody. 3 of them fail on the code before and all pass after.
+	- Stand-in: root in a user namespace in place of sudo. It refused HOME at `/usr`, installed with HOME at a folder of its own, and didn't refuse `--target system`. The refusal gives the same message as root under Bash 3.2.57.
+	- Swept: `id -u` is now read once, for this check and the sudo one.
+	- Note: Not run: a real sudo that keeps HOME. One that fails reopens this.
+	- Acceptance signoff: Self-closed per memory.md's close policy, on the root stand-in.
+	- Closed: 20261120-173417
 
 - Containers kept by --keep-temp, or left by a killed run, stay after the sweep takes their run folder.
 	- ID: 2026111713584936
@@ -4669,6 +4968,143 @@
 	- Test case: The suite itself. Verified: `setfattr -v 0sAB-cd` fails and the quoted form stores it as is; the suite passes.
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
+
+- Keep snapdiff `--zfs-diff` memory bounded when the list has many deleted files.
+	- ID: 2026111918562722
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 23
+	- Origin: `f6f4e7a`, 2026110715441806, which measured only `M` lines. Confirmed: about 110 bytes per `-` line, 111 MB for 1M and 222 MB for 2M, against 2.5 MB for 1M `M` lines.
+	- Against: 2026110715441806 keeps the `-` and `+` names to the end. Its goal was memory that doesn't grow with the list, which a mass delete breaks.
+	- Decisions: A `-` name is kept only when `--new` has something by that name. This narrows 2026110715441806's call to the names that can pair (answered 2026-11-20).
+		- A `+` name gets the same rule against `--old`, since a mass create fills the `added` set the same way. That's from reading the code, and wasn't measured.
+		- Which files get compared stays the same. A name with both a `-` and a `+` line is in both snapshots, so neither check drops it.
+		- The memory check gets a case with many `-` and `+` lines.
+		- 2026-11-20: Only a name that isn't there at all is dropped. A symlink or mount on the way, or another error, keeps it, so the compare still counts it as missing or not checked, as before.
+		- 2026-11-20: The check is an `O_PATH` open beneath the other side, the same open snapdiff's stat uses, once per `-` or `+` line.
+	- Requirements  [Feature]:
+		- Keep a `-` name only when `--new` has something by that name, so memory grows with replaced files only.
+	- Related IDs: 2026110715441806
+	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/zfs-minus-mem.bash BIN DIR N`.
+	- Actual effort: Low
+	- Branch: nov20-2026111918562722
+	- Test case: `dfk0k` (`snapdiff::tests::zfs_diff_keeps_only_names_that_can_pair`): only names the other side has are held, a name through a symlink is held, and only the replaced file is compared. It failed with the check taken out, holding `gone`, and passes after. `dfk0m` in `tests/integration.bash`: 100,000 `-` and 100,000 `+` lines naming nothing on the other side take under 1 MB more peak RSS than 1 line. It failed 2 of 2 on the beta.2 build, at about 20 MB against 2.3 MB, and passes 3 of 3 after.
+	- Verified:
+		- 1M `-` lines went from 111 MB peak RSS to 2.5 MB, and from about 3.97 s to 0.88 s of user plus system CPU, at load 5 to 10.
+		- `cicd/cicd.bash --backlog-run-quick` passed, `dfk0m` on ext4 and ZFS, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
+	- Swept: `ChangeList` has the only `removed` and `added` sets. find-new and lists keep no names, and the files waiting on the inode walk are bounded by 2026111011092305. `df0pq-run.bash` runs `dfk0m` too, since it's in the same block.
+	- Acceptance signoff: Self-closed: the call was answered 2026-11-20, and the tests fail before and pass after.
+	- Closed: 20261120-201928
+
+- Warn once on stderr when the `--log` can't be written, such as on a full disk.
+	- ID: 2026111918562723
+	- Type: Enhancement
+	- Status: Closed
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 24
+	- Origin: `1565fc2`. Confirmed on a full 8k tmpfs: exit 0, an empty log, and no word.
+	- Note: Code review 20261110 decided `out!` may drop write errors on stdout. A log is the record someone asked for, so it's weighed apart.
+	- Closed reason: Done
+	- Progress log: 2026-11-20: The first log line that can't be written puts `warning: can't write to --log PATH: ERROR, so it's missing lines` on stderr. Later failures say nothing. design.md, "Runs and exit codes", says so.
+	- Decisions: The exit code doesn't change. The scan's own results are in the database and on stdout, and a full disk under the log isn't a fault in what was scanned. The warning goes only to stderr, since the log can't take it.
+	- Branch: nov20-2026111918562707
+	- Commit: `76f4190`
+	- Test case: `dfjyc` (`say::tests::a_log_that_cant_be_written_is_said_once`), `dfjyf` (integration step 30, a log on a full 8k tmpfs, in a user namespace, skipped on ZFS).
+	- Verified: `dfjyf` fails against the build from before (exit 0, no warning) and passes after, on ext4. `dfjyc` fails with the warning taken out and passes after. `--backlog-run-quick` passed, and so did `codeql-ours`.
+	- Acceptance signoff: Self-closed per memory.md's close policy: the test fails before and passes after. The warning's wording is the only part left to taste.
+	- Closed: 20261120-190540
+
+- Refuse a `--log` that is the database or one of its own files.
+	- ID: 2026111918562724
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 25
+	- Origin: `1565fc2`. Confirmed: `--log db.sqlite` writes text after the last page, `.lock` writes into the lock file, and `-wal` is deleted by SQLite at the end of the run, log and all.
+	- Requirements  [Feature]:
+		- Match by device and inode as well as by name, the way the scan already leaves out the database's files.
+	- Related IDs: 2026111918562707, 2026111918562702
+	- Progress log:
+		- `say::open_log` takes the `--db` path. Before the log is opened, it refuses the database's own names in the database's folder, with the folder matched by device and inode, so a bind mount of it should be caught too. That part is unverified, since the tests make no bind mount. After, it refuses a log that was already there and has the device and inode of one of those files, such as a hard link. The message is "is one of the database's files; refused".
+		- The names are in `scan::OWN_SUFFIXES`, which the scan's own skip of those files now shares.
+	- Decisions:
+		- A `--db` that can't be resolved isn't checked here, so the run still fails at the database with its reason in the log (dfdmm).
+	- Swept: `scan::excluded`, the only other place that matches the database's names, now goes through the same `own_name`.
+	- Test case: `dfjv8` (`a_log_that_is_the_database_is_refused`): the database, its lock, `-wal`, `-shm` and `-journal`, a hard link to the database and to the lock, and a `-wal` through a linked folder, with names that only start with the database's still allowed.
+	- Verified: `dfjv8` failed on the code before and passes after. A real scan with `--log` at each of the 4 names and at a hard link exits 1 with nothing written, and a log named `t.sqlite.log` beside it works. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
+	- Branch: nov20-2026111918562702
+	- Commit: 9215ed4
+	- Acceptance signoff: Self-closed: the requirement is met, and the test fails before and passes after.
+	- Closed: 20261120-172424
+
+- Wrap `install.bash` in a function called on its last line, so a cut-off one-liner download runs nothing.
+	- ID: 2026111918562725
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 26
+	- Origin: `f249afd`. Confirmed: of 3,869 cut points, 876 exit 0 with nothing installed, 31 leave the temp folder, and 3 leave `.tukfs-hash.new.*` in `~/.local/bin`. No cut skipped the checksum.
+	- Note: Repro is `private/claude_simple/tools/review-20261119/install/install/cut-sweep.bash INST STEP`.
+	- Decisions:
+		- Everything that runs is in `fMain`, called by `fMain "$@"`. Above it are only settings and function definitions. The History comment stays below the call, per the house layout, so the call is the last line of code rather than of the file.
+		- A cut inside the call line that drops only `"$@"` runs with no options. That asks first, or stops when there's no terminal, so nothing changes without a yes.
+	- Branch: nov20-2026111918562717
+	- Commit: `2d06dbf`
+	- Test case: none with an ID (2026102508462883). `install-check.bash` "cut-off ..." (3): 568 cuts, at each line end, every 64 bytes and each byte around the call. None leaves anything, none before the call fetches, and the whole file installs. The code before fails it, having no call line.
+	- Verified: the installer passes a plain run, a second run, HOME with a slash, a stop before the rename, `CDPATH`, and a cut file under Bash 3.2.57.
+	- Acceptance signoff: Self-closed: the sweep passes, and the change is the one the title asks for.
+	- Closed: 20261120-194733
+
+- Make the style guide's Bash rules say they're for new scripts, since several tracked scripts differ.
+	- ID: 2026111918562726
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 27
+	- Origin: `project/style-guide_code.md`, 2026102808215637, closed 2026-11-19. Confirmed by reading.
+	- Note: `tests/integration.bash` and `git-auto-msg.bash` use `set -euo pipefail`, `box-side.bash` uses `-Euo`, the launcher uses `-eu`, and integration.bash has `name() {` functions and a `Usage:` header. Renaming them was decided against before.
+	- Related IDs: 2026102808215637
+	- Fixed: The style guide's Bash section opens by saying its rules are for new scripts, and names the scripts that differ.
+	- Branch: nov20-2026111918562726
+	- Test case: none, since it's docs only.
+	- Verified: the markdown check and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: docs only, and the change is the one the title asks for.
+	- Closed: 20261120-203500
+
+- Join the comment blocks that are still wrapped mid-sentence, per the line length directive of 2026-11-19.
+	- ID: 2026111918562727
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261119-185627
+	- Opened by: code review 20261119, item 28
+	- Origin: `2a5f505` "comment wraps" missed them. Directive of 2026-11-19. Confirmed by reading.
+	- Note: `snapdiff.rs`'s SAFETY comment near `frozen_at` and the one near line 1054, `cicd.bash` near lines 196, 745 and 1972, `config.bash` near line 214, and the comments in `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` and `deny.toml`.
+	- Fixed: The wrapped comment blocks in `snapdiff.rs`, `cicd.bash` (the History list included), `config.bash`, `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` and `deny.toml` are joined, one sentence or bullet per line. The words are the same.
+	- Decisions:
+		- `cicd.bash`'s usage header, which `--help` prints, and the History lists of the other scripts keep their wraps, since they weren't named.
+	- Branch: nov20-2026111918562726
+	- Test case: none, since it's comments only. The words before and after match.
+	- Verified: rustfmt check and `--backlog-run-quick` pass.
+	- Acceptance signoff: Self-closed: comments only.
+	- Closed: 20261120-203500
 
 - On a kernel before 5.6, every folder and file the scan opens is reached one folder at a time from the root, about 1.4 us per level.
 	- ID: 2026111914041556

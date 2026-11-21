@@ -452,13 +452,26 @@ with open(d + "/long", "w") as f:
 		f.write(name + "\n")
 ' "${mem}"
 # Exit status and peak KB. GNU time puts a line before them on a non-zero exit.
-peak() { /usr/bin/time -o "${mem}/peak" -f '%x %M' "${bin}" snapdiff --old "${mem}/old" --new "${mem}/new" --list "${1}" > /dev/null 2>&1 || true; tail -n 1 "${mem}/peak" 2> /dev/null; }
+peak() { /usr/bin/time -o "${mem}/peak" -f '%x %M' "${bin}" snapdiff --old "${mem}/old" --new "${mem}/new" "${@}" > /dev/null 2>&1 || true; tail -n 1 "${mem}/peak" 2> /dev/null; }
 if [[ -x /usr/bin/time ]] && /usr/bin/time -o "${mem}/peak" -f '%M' true 2> /dev/null && [[ "$(cat "${mem}/peak")" =~ ^[0-9]+$ ]]; then
 	rcShort='' kbShort='' rcLong='' kbLong=''
-	read -r rcShort kbShort < <(peak "${mem}/short") || true
-	read -r rcLong kbLong < <(peak "${mem}/long") || true
+	read -r rcShort kbShort < <(peak --list "${mem}/short") || true
+	read -r rcLong kbLong < <(peak --list "${mem}/long") || true
 	st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 1024 )) && st=0
 	expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 1 MB more" "${st}"
+	# A mass delete or create in zfs diff: - and + names wait for their other half only when the other side has that name, so these 200,000 are dropped as read. Each one kept took about 110 bytes.
+	printf 'M\t/zfsmem/kept\n' > "${mem}/zshort"
+	python3 -I -c '
+import sys
+with open(sys.argv[1], "wb") as f:
+	for i in range(100000):
+		f.write(b"-\t/zfsmem/deleted/build/object-%09d.o\n+\t/zfsmem/made/build/object-%09d.o\n" % (i, i))
+' "${mem}/zlong"
+	rcZShort='' kbZShort='' rcZLong='' kbZLong=''
+	read -r rcZShort kbZShort < <(peak --mount /zfsmem --zfs-diff "${mem}/zshort") || true
+	read -r rcZLong kbZLong < <(peak --mount /zfsmem --zfs-diff "${mem}/zlong") || true
+	st=1; [[ "${rcZShort} ${rcZLong}" == "0 0" && "${kbZShort}" =~ ^[0-9]+$ && "${kbZLong}" =~ ^[0-9]+$ ]] && (( kbZLong - kbZShort < 1024 )) && st=0
+	expect dfk0m "a mass delete in zfs diff costs no more memory" "100,000 - and 100,000 + lines: exit ${rcZLong}, ${kbZLong} KB, against ${kbZShort} KB for 1, want under 1 MB more" "${st}"
 	# Only the runs a line names are kept, so a file that differs all through costs no more than one with a byte changed. 4 MiB with 1 byte in 8 changed is 524,288 runs, which took 8 MB more when all were kept.
 	python3 -I -c '
 import os, sys
@@ -479,12 +492,13 @@ for name, data in (("whole", whole), ("one", one)):
 ' "${mem}"
 	printf 'one\n' > "${mem}/one"; printf 'whole\n' > "${mem}/whole"
 	rcOne='' kbOne='' rcWhole='' kbWhole=''
-	read -r rcOne kbOne < <(peak "${mem}/one") || true
-	read -r rcWhole kbWhole < <(peak "${mem}/whole") || true
+	read -r rcOne kbOne < <(peak --list "${mem}/one") || true
+	read -r rcWhole kbWhole < <(peak --list "${mem}/whole") || true
 	st=1; [[ "${rcOne} ${rcWhole}" == "4 4" && "${kbOne}" =~ ^[0-9]+$ && "${kbWhole}" =~ ^[0-9]+$ ]] && (( kbWhole - kbOne < 1024 )) && st=0
 	expect df4rj "a file that differs all through costs no more memory" "524,288 runs: exit ${rcWhole}, ${kbWhole} KB, against ${kbOne} KB for 1, want under 1 MB more" "${st}"
 else
 	skip df0pq "a long list costs no more memory (no GNU time at /usr/bin/time)"
+	skip dfk0m "a mass delete in zfs diff costs no more memory (no GNU time at /usr/bin/time)"
 	skip df4rj "a file that differs all through costs no more memory (no GNU time at /usr/bin/time)"
 fi
 
@@ -510,6 +524,15 @@ fFlipByte "${rt}/${tab}" 100 1
 "${bin}" scan --db "${work}/db/rt.sqlite" --root "${rt}" --no-xattrs --since "${tomorrow}" --progress 3600 > /dev/null 2>&1 || true
 "${bin}" report --db "${work}/db/rt.sqlite" > "${work}/report2.txt" || true
 check ddy6f "report escapes names" "$(grep -c "^b3-db-mismatch"$'\t'"${rt}/t\\\\x09ab"$'\t' "${work}/report2.txt")" 1
+# A newline split a root over 2 lines, and a byte that isn't UTF-8 printed as U+FFFD (2026111918562710).
+nl="${work}/$(printf 'r\nl')"; mkdir -p "${nl}/in"; printf 'x' > "${nl}/f"
+roots=(--root "${nl}" --root "${nl}/in"); shown=("${work}/r\\x0al")
+if [[ "${odd}" == 1 ]]; then
+	mkdir -p "${work}/$(printf 'caf\xe9')"; roots+=(--root "${work}/$(printf 'caf\xe9')"); shown+=("${work}/caf\\xe9")
+fi
+"${bin}" scan --db "${work}/db/nl.sqlite" "${roots[@]}" --no-xattrs --progress 3600 > "${work}/nl-out.txt" 2> "${work}/nl-err.txt" || true
+check dfjyy "a scan escapes its roots' names" "$(grep $'^\t' "${work}/nl-out.txt" | LC_ALL=C sort)" "$(printf '\t%s\n' "${shown[@]}" | LC_ALL=C sort)"
+check dfjyz "a scan escapes a dropped root's name" "$(grep -c '^skipping root ' "${work}/nl-err.txt") $(grep -cxF "skipping root ${shown[0]}/in: inside ${shown[0]}" "${work}/nl-err.txt")" "1 1"
 
 # 11. Each name of a hard-linked file is held to its own row, with no
 # attributes to fall back on.
@@ -865,6 +888,7 @@ fi
 # --no-xattr and --exclude given by the mount's name still apply, also to a
 # root under it (2026110720070507). A root that's the bind mount is still
 # under the folders above its source, a git work tree too (2026111011092307).
+# A --log that a root shows under another name isn't read (2026111918562707).
 cat > "${ns}/bind.bash" << 'EOF2'
 cd "${1}" && mkdir -p c/tree/sub c/tree/s2 c/tree/b c/bind c/out c/ob || exit 1
 for f in 1 2 3 4; do printf '%s\n' "${f}" > "c/tree/sub/f${f}"; done
@@ -888,6 +912,9 @@ escan g1 "${2}" --root g/mnt/ex --exclude g/ex --no-xattrs > g1.got
 escan g2 "${2}" --root g/mnt/nx --no-xattr g/nx > g2.got
 escan g3 "${2}" --root g/mnt/repo --root g/mnt/plain > g3.got
 cat e3.out g1.out | grep -c '^skipping root .*: inside --exclude ' > eg.skips
+mkdir -p l/data l/mnt && printf 'l\n' > l/data/f && mount --bind l/data l/mnt || exit 1
+rc=0; "${2}" scan --db l.sqlite --root l/mnt --log l/data/scan.log --progress 3600 > l.out 2>&1 || rc=$?
+echo "${rc}" > l.got
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/bind.bash" "${ns}" "${bin}" 2> /dev/null || true
@@ -902,6 +929,7 @@ if [[ "${nsfs}" == zfs ]]; then
 	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (ZFS pools aren't seen from a user namespace)"
 	skip df4ja "root that's a bind of a folder in a git work tree (ZFS pools aren't seen from a user namespace)"
 	skip df4m4 "root under an --exclude folder by another name named as skipped (ZFS pools aren't seen from a user namespace)"
+	skip dfjye "--log under a bind mount's name not read (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df0qc "bind mount of a folder inside another root read once" "$(cat "${ns}/c.got")" "0 files 7 hashed 7"
 	check df0qd "bind mounts inside another root named as skipped" "$(cat "${ns}/c.skips")" 2
@@ -915,6 +943,7 @@ elif [[ -e "${ns}/bind.mounted" ]]; then
 	check df4j9 "root that's a bind of a folder in a --no-xattr folder" "$(cat "${ns}/g2.got") $(xget "${gt}/nx/src/f" user.blake3.b64u | wc -c)" "0 files 1 0"
 	check df4ja "root that's a bind of a folder in a git work tree" "$(cat "${ns}/g3.got") $(xget "${gt}/repo/src/f" user.blake3.b64u | wc -c) $(xget "${gt}/plain/src/f" user.blake3.b64u | wc -c)" "0 files 2 0 43"
 	check df4m4 "root under an --exclude folder by another name named as skipped" "$(cat "${ns}/eg.skips")" 2
+	check dfjye "--log under a bind mount's name not read" "$(cat "${ns}/l.got") $(sqlite3 "${ns}/l.sqlite" 'SELECT group_concat(path) FROM paths') $(xget "${ns}/l/data/scan.log" user.blake3.b64u)" "0 ${ns}/l/mnt/f "
 else
 	skip df0qc "bind mount of a folder inside another root read once (no user namespace here)"
 	skip df0qd "bind mounts inside another root named as skipped (no user namespace here)"
@@ -925,6 +954,7 @@ else
 	skip df4j9 "root that's a bind of a folder in a --no-xattr folder (no user namespace here)"
 	skip df4ja "root that's a bind of a folder in a git work tree (no user namespace here)"
 	skip df4m4 "root under an --exclude folder by another name named as skipped (no user namespace here)"
+	skip dfjye "--log under a bind mount's name not read (no user namespace here)"
 fi
 
 # 26. A root that can't be resolved stops the scan before it starts, with the
@@ -960,10 +990,13 @@ if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/p/
 	printf 'b\n' > "${bt}/p/sv/f2"; printf 'c\n' > "${bt}/p/sv/f3"
 	rc=0; "${bin}" scan --db "${bt}/t.sqlite" --root "${bt}/p" --root "${bt}/p/sv" --progress 3600 > "${bt}/out.txt" 2>&1 || rc=$?
 	check des5x "btrfs subvolume inside another root" "${rc} $(grep -o 'hashed [0-9]*' "${bt}/out.txt" | head -1 || true)" "0 hashed 3"
+	# A subvolume that isn't a mount point is counted as a folder, rather than measured against the whole filesystem (2026111918562714).
+	check dfjzd "unmounted btrfs subvolume's percent done" "$(grep -oE '[|] ~[0-9]+% of [^|]+$' "${bt}/out.txt" | tail -1 || true)" "| ~100% of 6 B"
 	# rm --one-file-system leaves a subvolume behind, so it goes first.
 	rm -f -- "${bt}/p/sv/f2" "${bt}/p/sv/f3"; rmdir -- "${bt}/p/sv" || true
 else
 	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
+	skip dfjzd "unmounted btrfs subvolume's percent done (not on btrfs, or no btrfs tool)"
 fi
 # A file born after a read-only --old was taken can't be in it, so snapdiff counts it new as it's read, rather than holding it for the inode walk. The renamed one still waits, so it comes last (2026111011092305).
 if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/live" > /dev/null 2>&1; then
@@ -985,6 +1018,29 @@ if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/li
 	rm -f -- "${bt}/live/kept" "${bt}/live/fresh" "${bt}/live/moved"; rmdir -- "${bt}/live" || true
 else
 	skip df4qf "find-new: new files counted, not held (not on btrfs, or no btrfs tool)"
+fi
+# A read-only --old that was made writable, written to, and set back can have files born after it was taken, so its time isn't trusted. Renamed and changed at the same size and time, the file is still found by inode and flagged (2026111918562701).
+if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/src" > /dev/null 2>&1; then
+	printf 's\n' > "${bt}/src/seed"
+	if btrfs subvolume snapshot -r "${bt}/src" "${bt}/o2" > /dev/null 2>&1 && btrfs property set -ts "${bt}/o2" ro false > /dev/null 2>&1; then
+		sleep 0.1
+		printf 'AAAA' > "${bt}/o2/x"; touch -d '2020-01-01 00:00:00' "${bt}/o2/x"
+		btrfs property set -ts "${bt}/o2" ro true > /dev/null 2>&1
+		btrfs subvolume snapshot "${bt}/o2" "${bt}/n2" > /dev/null 2>&1
+		mv -- "${bt}/n2/x" "${bt}/n2/y"
+		printf 'BBBB' | dd of="${bt}/n2/y" conv=notrunc status=none; touch -d '2020-01-01 00:00:00' "${bt}/n2/y"
+		printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags INLINE y\n' "$(stat -c %i "${bt}/n2/y")" > "${bt}/find-new2"
+		rc=0; "${bin}" snapdiff --old "${bt}/o2" --new "${bt}/n2" --find-new "${bt}/find-new2" > "${bt}/sd2.txt" 2> "${bt}/sd2-err.txt" || rc=$?
+		check dfjtv "find-new: --old written to while writable, its time not trusted" "${rc} $(cut -f1,2 "${bt}/sd2.txt" | tr '\n\t' '  ')" "4 content-changed-same-mtime y "
+		rm -f -- "${bt}/n2/seed" "${bt}/n2/y"; rmdir -- "${bt}/n2" || true
+	else
+		skip dfjtv "find-new: --old written to while writable, its time not trusted (no read-only snapshot)"
+	fi
+	btrfs property set -ts "${bt}/o2" ro false > /dev/null 2>&1 || true
+	rm -f -- "${bt}/o2/seed" "${bt}/o2/x"; rmdir -- "${bt}/o2" 2> /dev/null || true
+	rm -f -- "${bt}/src/seed"; rmdir -- "${bt}/src" || true
+else
+	skip dfjtv "find-new: --old written to while writable, its time not trusted (not on btrfs, or no btrfs tool)"
 fi
 
 # 28. Beside a database inside the root, only its own 5 names are left out,
@@ -1020,7 +1076,8 @@ fi
 # as step 23. 8k fails before a page is written, 96k partway through making
 # the tables. The marker goes once the tmpfs is mounted, before the scan, as
 # in steps 23 and 25, so a first scan that leaves no file fails here rather
-# than skipping as if there were no user namespace (2026111011092324).
+# than skipping as if there were no user namespace (2026111011092324). A
+# --log on a full disk is named on stderr, once.
 cat > "${ns}/full.bash" << 'EOF2'
 cd "${1}" && mkdir -p full fr && printf 'x\n' > fr/f || exit 1
 for sz in 8k 96k; do
@@ -1031,12 +1088,19 @@ for sz in 8k 96k; do
 	if [[ -e full/t.sqlite ]]; then cp full/t.sqlite "full-${sz}.sqlite" || exit 1; fi
 	umount full || exit 1
 done
+# A log on it says once that it can't be written (2026111918562723).
+mount -t tmpfs -o size=8k none full || exit 1
+head -c 1M /dev/zero > full/fill 2> /dev/null
+rc=0; "${2}" scan --db full-log.sqlite --root fr --progress 3600 --log full/scan.log > /dev/null 2> full-log.err || rc=$?
+echo "${rc} $(grep -c "^warning: can't write to --log .*/full/scan.log: " full-log.err)" > full-log.got
+umount full || exit 1
 EOF2
 if [[ "${nsfs}" != zfs ]]; then
 	unshare --user --map-root-user --mount bash "${ns}/full.bash" "${ns}" "${bin}" 2> /dev/null || true
 fi
 if [[ "${nsfs}" == zfs ]]; then
 	skip df1qb "database left by a full disk taken as new (ZFS pools aren't seen from a user namespace)"
+	skip dfjyf "--log on a full disk said once (ZFS pools aren't seen from a user namespace)"
 elif [[ -e "${ns}/full.mounted" ]]; then
 	fullGot=''
 	for sz in 8k 96k; do
@@ -1046,8 +1110,10 @@ elif [[ -e "${ns}/full.mounted" ]]; then
 		fullGot+="${firstRc:-none} ${rc} "
 	done
 	check df1qb "database left by a full disk taken as new" "${fullGot}" "1 0 1 0 "
+	check dfjyf "--log on a full disk said once" "$(cat "${ns}/full-log.got" 2> /dev/null)" "0 1"
 else
 	skip df1qb "database left by a full disk taken as new (no user namespace here)"
+	skip dfjyf "--log on a full disk said once (no user namespace here)"
 fi
 
 # 31. accept of a name no scan has a row for says so, since a scan may know
@@ -1203,6 +1269,9 @@ check df4xn "--log: the scan's lines in full, and the log not read" "${rc} $(cmp
 # A scan that stops on an error has the reason in its log too.
 rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --exclude "${lg}/tree" --log "${lg}/why.log" > /dev/null 2>&1 || rc=$?
 check dfdmm "--log: a refused scan's reason is in the log" "${rc} $(grep -cxF 'tukfs-hash: nothing to scan' "${lg}/why.log" || true)" "1 1"
+# So does one that fails in planning, which once came before the log was made (2026111918562708).
+rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree/f" --log "${lg}/plan.log" > /dev/null 2>&1 || rc=$?
+check dfjyg "--log: a scan that fails in planning has its reason in the log" "${rc} $(grep -cxF "tukfs-hash: ${lg}/tree/f: not a folder" "${lg}/plan.log" 2> /dev/null || true)" "1 1"
 
 # 36. A second Ctrl+C ends the scan at once, with 130, as README and --help
 # say. The run is left marked running, and the next scan marks it killed. The
@@ -1316,3 +1385,6 @@ fi
 ##		  before the second INT.
 ##		- 20261119: A stale folder the sweep can't remove no longer ends the
 ##		  run, and a report or setup scan that fails gets its FAIL line.
+##		- 20261120: A scan escapes the names of its roots, and of a root it drops.
+##		- 20261120: An unmounted btrfs subvolume root is counted as a folder for
+##		  its percent done.

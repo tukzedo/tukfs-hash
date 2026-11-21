@@ -14,9 +14,7 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 signal-hook = "0.3"
 # The soak test's heap counter, and nothing else. See src/soak.rs.
 dhat = { version = "0.3", optional = true }
-# The cicd profiler's sampler, in-process since perf can't record on b23. Its
-# flamegraph writer is inferno, which is CDDL-1.0, so a build with this never
-# leaves the box. See src/profiling.rs.
+# The cicd profiler's sampler, in-process since perf can't record on b23. Its flamegraph writer is inferno, which is CDDL-1.0, so a build with this never leaves the box. See src/profiling.rs.
 pprof = { version = "0.14", default-features = false, features = ["flamegraph"], optional = true }
 
 [features]
@@ -26,8 +24,7 @@ soak = ["dep:dhat"]
 profiling = ["dep:pprof"]
 
 [profile.release]
-# opt-level stays at 3. "z" made it 36% smaller but cost 7% to 23% more CPU
-# on a rescan (2026101916404105).
+# opt-level stays at 3. "z" made it 36% smaller but cost 7% to 23% more CPU on a rescan (2026101916404105).
 lto = true
 codegen-units = 1
 strip = true
@@ -43,13 +40,11 @@ debug = "limited"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# Stat values are stored as SQLite's i64, and rmlint keeps its time as a float,
-# so these casts are on purpose.
+# Stat values are stored as SQLite's i64, and rmlint keeps its time as a float, so these casts are on purpose.
 cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
 cast_precision_loss = "allow"
 cast_sign_loss = "allow"
-# A leak in safe Rust is mostly mem::forget, and every unsafe block says why
-# it's sound.
+# A leak in safe Rust is mostly mem::forget, and every unsafe block says why it's sound.
 mem_forget = "warn"
 undocumented_unsafe_blocks = "warn"
