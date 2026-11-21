@@ -64,7 +64,7 @@
 - snapdiff `--find-new` calls a renamed, damaged file "only in --new" and exits 0 when `--old` was made writable, written to, and made read-only again.
 	- ID: 2026111918562701
 	- Type: Bug
-	- Status: Queued
+	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Target version: 1.0.0-beta.3
 	- Opened: 20261119-185627
@@ -80,6 +80,19 @@
 	- Sweep: `born_since_old` is the only place the time is trusted.
 	- Related IDs: 2026111011092305, 2026111700232503
 	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/ro-later.bash BIN DIR`, under `/tmp` (btrfs), no root. A wrong answer at exit 0, so the tree isn't release-ready until it's fixed.
+	- Reproduced [Bug]: Yes, with the review's repro: "new y only in --new", exit 0.
+	- Actual cause [Bug]: `frozen_at` checked only the read-only flag and the received UUID. Setting a snapshot writable and back leaves both as they were, so files added in between looked born after it.
+	- Actual fix [Bug]: The snapshot's time is unknown when its `ctransid` is later than its `otransid`, so its new-looking files wait for the inode walk. design.md, Snapshot diffs, says so.
+	- Decisions:
+		- `ctransid > otransid` is the test, as the item proposed. On this box's kernel, making a file, an `O_TMPFILE`, a folder or a link, and a `touch`, each moved `ctransid` past `otransid` on a toggled snapshot. Toggling alone, an in-place overwrite and an append didn't. Those can't make a birth time, so trust stays for them.
+		- A rename or delete there moved it too, so it also costs the trust, though it adds nothing new. That's the safe side, and a walk is all it costs.
+	- Branch: nov20-2026111918562701
+	- Test case: `dfjtt` (`snapdiff::tests::a_snapshot_changed_since_it_was_taken_has_no_time`), and `dfjtv` in `tests/integration.bash` on real btrfs snapshots: the review's case gives `content-changed-same-mtime y` and exit 4. Both fail before the fix, `dfjtt` with `Some(..)` where `None` is wanted and `dfjtv` with exit 0 and no line, and pass after.
+	- Swept: `frozen_at` is the only reader of the subvolume info, and `born_since_old` the only place its time is used. `df4qf`, over a snapshot never made writable, still skips the walk.
+	- Verified: The repro gives exit 4 and `content-changed-same-mtime`. `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri`.
+	- Acceptance signoff: Self-closed: the item's expected behavior, pinned by tests that fail before and pass after.
+	- Closed reason: Done
+	- Closed: 20261120-170804
 
 - `--log` opens whatever is at the name: a FIFO hangs the scan, and under sudo root appends to another user's file in a sticky folder such as `/tmp`.
 	- ID: 2026111918562702

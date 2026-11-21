@@ -430,7 +430,10 @@ struct SubvolInfo {
 	_uuid: [u8; 16],
 	_parent_uuid: [u8; 16],
 	received_uuid: [u8; 16],
-	_transids: [u64; 4],
+	ctransid: u64,
+	otransid: u64,
+	_stransid: u64,
+	_rtransid: u64,
 	_ctime: BtrfsTime,
 	otime: BtrfsTime,
 	_stime: BtrfsTime,
@@ -442,7 +445,7 @@ const _: () = assert!(mem::size_of::<SubvolInfo>() == 504);
 // The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for making snapshots.
 const BTRFS_ROOT_SUBVOL_RDONLY: u64 = 1;
 
-// When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root. Nothing born after that is in it. A received one is left out, since its files are born after it.
+// When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root.
 fn frozen_at(root: &Root) -> Option<SystemTime> {
 	let mut info = mem::MaybeUninit::<SubvolInfo>::zeroed();
 	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by
@@ -454,7 +457,12 @@ fn frozen_at(root: &Root) -> Option<SystemTime> {
 	}
 	// SAFETY: all zeros is a valid SubvolInfo, and the kernel filled it in.
 	let info = unsafe { info.assume_init() };
-	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] {
+	taken_at(&info)
+}
+
+// Nothing born after the snapshot was taken is in it, if it stayed read-only. A received one is left out, since its files are born after it. One made writable for a while may have had files added. Making an inode moves ctransid past otransid, as does any change to a name or to an inode's times. A write of bytes alone doesn't, and can't change a birth time.
+fn taken_at(info: &SubvolInfo) -> Option<SystemTime> {
+	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] || info.ctransid > info.otransid {
 		return None;
 	}
 	let otime = &info.otime;
@@ -1030,6 +1038,40 @@ transid marker was 12\n";
 		// Not known, or taken after, and both wait for it, to the same end.
 		assert_eq!(found_in(None), (2, 1, 1, 0));
 		assert_eq!(found_in(Some(born + Duration::from_secs(60))), (2, 1, 1, 0));
+	}
+
+	#[test]
+	fn a_snapshot_changed_since_it_was_taken_has_no_time() {
+		let _id = test_id("dfjtt");
+		let info = |flags, received: u8, ctransid, otransid| SubvolInfo {
+			_treeid: 257,
+			_name: [0; 256],
+			_parent_id: 5,
+			_dirid: 256,
+			_generation: 0,
+			flags,
+			_uuid: [0; 16],
+			_parent_uuid: [0; 16],
+			received_uuid: [received; 16],
+			ctransid,
+			otransid,
+			_stransid: 0,
+			_rtransid: 0,
+			_ctime: BtrfsTime { sec: 0, nsec: 0 },
+			otime: BtrfsTime { sec: 1_700_000_000, nsec: 5 },
+			_stime: BtrfsTime { sec: 0, nsec: 0 },
+			_rtime: BtrfsTime { sec: 0, nsec: 0 },
+			_reserved: [0; 8],
+		};
+		let taken = UNIX_EPOCH.checked_add(Duration::new(1_700_000_000, 5));
+		// Its last change was before or in the transaction that took it.
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 90, 100)), taken);
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 100, 100)), taken);
+		// Made writable, changed, and read-only again.
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 101, 100)), None);
+		// Writable, or received.
+		assert_eq!(taken_at(&info(0, 0, 90, 100)), None);
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 1, 90, 100)), None);
 	}
 
 	#[test]

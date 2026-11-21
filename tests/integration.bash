@@ -986,6 +986,29 @@ if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/li
 else
 	skip df4qf "find-new: new files counted, not held (not on btrfs, or no btrfs tool)"
 fi
+# A read-only --old that was made writable, written to, and set back can have files born after it was taken, so its time isn't trusted. Renamed and changed at the same size and time, the file is still found by inode and flagged (2026111918562701).
+if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/src" > /dev/null 2>&1; then
+	printf 's\n' > "${bt}/src/seed"
+	if btrfs subvolume snapshot -r "${bt}/src" "${bt}/o2" > /dev/null 2>&1 && btrfs property set -ts "${bt}/o2" ro false > /dev/null 2>&1; then
+		sleep 0.1
+		printf 'AAAA' > "${bt}/o2/x"; touch -d '2020-01-01 00:00:00' "${bt}/o2/x"
+		btrfs property set -ts "${bt}/o2" ro true > /dev/null 2>&1
+		btrfs subvolume snapshot "${bt}/o2" "${bt}/n2" > /dev/null 2>&1
+		mv -- "${bt}/n2/x" "${bt}/n2/y"
+		printf 'BBBB' | dd of="${bt}/n2/y" conv=notrunc status=none; touch -d '2020-01-01 00:00:00' "${bt}/n2/y"
+		printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags INLINE y\n' "$(stat -c %i "${bt}/n2/y")" > "${bt}/find-new2"
+		rc=0; "${bin}" snapdiff --old "${bt}/o2" --new "${bt}/n2" --find-new "${bt}/find-new2" > "${bt}/sd2.txt" 2> "${bt}/sd2-err.txt" || rc=$?
+		check dfjtv "find-new: --old written to while writable, its time not trusted" "${rc} $(cut -f1,2 "${bt}/sd2.txt" | tr '\n\t' '  ')" "4 content-changed-same-mtime y "
+		rm -f -- "${bt}/n2/seed" "${bt}/n2/y"; rmdir -- "${bt}/n2" || true
+	else
+		skip dfjtv "find-new: --old written to while writable, its time not trusted (no read-only snapshot)"
+	fi
+	btrfs property set -ts "${bt}/o2" ro false > /dev/null 2>&1 || true
+	rm -f -- "${bt}/o2/seed" "${bt}/o2/x"; rmdir -- "${bt}/o2" 2> /dev/null || true
+	rm -f -- "${bt}/src/seed"; rmdir -- "${bt}/src" || true
+else
+	skip dfjtv "find-new: --old written to while writable, its time not trusted (not on btrfs, or no btrfs tool)"
+fi
 
 # 28. Beside a database inside the root, only its own 5 names are left out,
 # not every name that starts with it (2026102814341408). A root below a
