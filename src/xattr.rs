@@ -8,7 +8,7 @@ use std::ffi::CStr;
 use std::io;
 use std::os::fd::RawFd;
 
-/// The blake3 set this writes, matching nemo-anywhere's names.
+/// The blake3 set that a scan writes, under nemo-anywhere's names.
 pub const B3_DIGEST: &CStr = c"user.blake3.b64u";
 pub const B3_BYTES: &CStr = c"user.blake3.bytes";
 pub const B3_MTIME: &CStr = c"user.blake3.mtime";
@@ -53,7 +53,7 @@ pub fn fset(fd: RawFd, name: &CStr, value: &[u8]) -> io::Result<()> {
 	if r == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
-/// A name that isn't there is already gone.
+/// Removes an attribute. A name that isn't there counts as removed.
 pub fn fremove(fd: RawFd, name: &CStr) -> io::Result<()> {
 	// SAFETY: name is NUL-terminated.
 	if unsafe { libc::fremovexattr(fd, name.as_ptr()) } == 0 {
@@ -90,7 +90,7 @@ pub fn write_rmlint(fd: RawFd, b2b: &[u8; 64], mtime_s: f64) -> io::Result<()> {
 	fset(fd, RM_B2B_MTIME, g17(mtime_s).as_bytes())
 }
 
-/// For a file taken as good with a different blake2b. rmlint reads it again once these are gone. The checksum goes first, since it's useless alone.
+/// Removes rmlint's set from a file that was taken as good with a different blake2b, so rmlint reads the file again. The checksum goes first, since the time is useless alone.
 pub fn remove_rmlint(fd: RawFd) -> io::Result<()> {
 	fremove(fd, RM_B2B_CKSUM)?;
 	fremove(fd, RM_B2B_MTIME)
@@ -133,7 +133,7 @@ fn inode_text(dev: u64, ino: u64, digest: &[u8; 32]) -> String {
 }
 
 impl OnFile {
-	/// A missing or unsupported attribute reads as absent. Any other error is returned, since taking it for no set would get the set written over unseen. Nothing here is trusted until its size and time are checked against the file.
+	/// A missing or unsupported attribute reads as absent. Any other error is returned, since treating it as a missing set would let the set be written over without any warning. Nothing here is trusted until its size and time are checked against the file.
 	pub fn read(fd: RawFd) -> io::Result<OnFile> {
 		let get = |n: &CStr| fget(fd, n).map_err(|e| io::Error::new(e.kind(), format!("can't read {}: {e}", n.to_string_lossy())));
 		let b3 = text_of(get(B3_DIGEST)?).and_then(|t| b64u_decode(&t)).and_then(|d| d.try_into().ok());
@@ -151,19 +151,19 @@ impl OnFile {
 		Ok(of)
 	}
 
-	/// The blake3 on the file still describes it.
+	/// The blake3 on the file, when its size and time still match.
 	pub fn b3_current(&self, bytes: i64, mtime_us: i64) -> Option<[u8; 32]> {
 		(self.b3_bytes == Some(bytes) && self.b3_mtime_us == Some(mtime_us)).then_some(self.b3).flatten()
 	}
 
-	/// Good enough to skip reading: current, read by us from this very inode, and dated between the cutoff and now. A copy made with `cp -a` or `rsync -aX` brings the set along but is on another inode. Returns the digest and its date.
+	/// Returns the digest and its date when they're good enough to skip a read. The set has to be current, read by us from this very inode, and dated between the cutoff and now. A copy made with `cp -a` or `rsync -aX` brings the set along but is on another inode.
 	pub fn b3_fresh(&self, bytes: i64, mtime_us: i64, dev: u64, ino: u64, cutoff_us: i64, now_us: i64) -> Option<([u8; 32], i64)> {
 		let digest = self.b3_current(bytes, mtime_us)?;
 		let date = self.b3_date_us?;
 		(self.b3_inode == Some((dev, ino, digest)) && (cutoff_us..=now_us).contains(&date)).then_some((digest, date))
 	}
 
-	/// rmlint keeps no size, so the time is all there is to go on.
+	/// rmlint doesn't store a size, so the time is all there is to go on.
 	pub fn b2b_current(&self, mtime_s: f64) -> Option<[u8; 64]> {
 		let stored = self.b2b_mtime_s?;
 		((stored - mtime_s).abs() < 1e-5).then_some(self.b2b).flatten()

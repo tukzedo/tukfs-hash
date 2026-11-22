@@ -59,12 +59,12 @@ files+=("${sums}")
 remote="$(git config --get "branch.${branch}.remote" || echo origin)"
 commit="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")" || fDie "no tag ${tag} here"
 tagObj="$(git rev-parse "refs/tags/${tag}")"
-fGitRemote fetch --quiet "${remote}" "refs/heads/${branch}" || fDie "could not fetch ${branch} from ${remote}"
+fGitRemote fetch --quiet "${remote}" "refs/heads/${branch}" || fDie "couldn't fetch ${branch} from ${remote}"
 git merge-base --is-ancestor "${commit}" FETCH_HEAD || fDie "${tag} (${commit:0:12}) isn't on ${remote}'s ${branch} yet. Push ${branch} first."
 
-out="$(fGitRemote ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "could not list the tags on ${remote}"
+out="$(fGitRemote ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "couldn't list the tags on ${remote}"
 if [[ -z "${out}" ]]; then
-	fGitRemote push --quiet "${remote}" "refs/tags/${tag}" || fDie "could not push ${tag} to ${remote}"
+	fGitRemote push --quiet "${remote}" "refs/tags/${tag}" || fDie "couldn't push ${tag} to ${remote}"
 	echo "pushed tag ${tag} (${commit:0:12}) to ${remote}"
 elif [[ "${out%%[[:space:]]*}" != "${tagObj}" ]]; then
 	fDie "${remote} has another ${tag}. Bump the version, or sort the tag out by hand."
@@ -75,7 +75,7 @@ declare -A hostSize=()
 if have="$(fGh release view "${tag}" --json assets --jq '.assets[] | "\(.name)\t\(.size)"' 2>/dev/null)"; then
 	if [[ -n "${have}" ]]; then while IFS=$'\t' read -r name size; do hostSize["${name}"]="${size}"; done <<< "${have}"; fi
 	if [[ -n "${hostSize["${sums}"]:-}" ]]; then
-		hostSums="$(fGh release download "${tag}" --pattern "${sums}" --output -)" || fDie "could not read ${sums} from release ${tag}"
+		hostSums="$(fGh release download "${tag}" --pattern "${sums}" --output -)" || fDie "couldn't read ${sums} from release ${tag}"
 		[[ "${hostSums}" == "$(< "${setDir}/${sums}")" ]] || fDie "release ${tag} has other files than this set. Bump the version."
 	fi
 	declare -a missing=()
@@ -84,7 +84,7 @@ if have="$(fGh release view "${tag}" --json assets --jq '.assets[] | "\(.name)\t
 		[[ "${hostSize["${name}"]}" == "$(stat -c %s -- "${setDir}/${name}")" ]] || fDie "release ${tag} has another ${name}. Bump the version."
 	done
 	if ((${#missing[@]} == 0)); then echo "release ${tag} already has all ${#files[@]} files"; exit 0; fi
-	fGh release upload "${tag}" "${missing[@]}" || fDie "could not upload to release ${tag}"
+	fGh release upload "${tag}" "${missing[@]}" || fDie "couldn't upload to release ${tag}"
 	echo "uploaded ${#missing[@]} file(s) to release ${tag}, which had the rest"
 	exit 0
 fi
@@ -99,7 +99,7 @@ kind=()
 if [[ "${ver}" == *-* ]]; then kind=(--prerelease); fi
 declare -a paths=()
 for name in "${files[@]}"; do paths+=("${setDir}/${name}"); done
-fGh release create "${tag}" --verify-tag --title "${tag}" --notes "${notes}" ${kind[@]+"${kind[@]}"} "${paths[@]}" || fDie "could not make release ${tag}"
+fGh release create "${tag}" --verify-tag --title "${tag}" --notes "${notes}" ${kind[@]+"${kind[@]}"} "${paths[@]}" || fDie "couldn't make release ${tag}"
 echo "made release ${tag} with ${#files[@]} files"
 
 

@@ -22,7 +22,7 @@
 ##	      temp dir in the backlog runs and merge gate. Without the image, the
 ##	      native one alone, on the host, with the box's glibc
 ##	   7. other hosts (the unit tests and the integration test on a box of
-##	      each other arch, on stage 6's build of it, held through the host
+##	      each other arch, on stage 6's build of it, taken with the host
 ##	      lock and put back as it was found. A box that isn't there is a SKIP)
 ##	   8. dogfood (the native release build, and the dogfood runner)
 ##	   9. demo gif (a scenario run against the release build, drawn as a
@@ -32,9 +32,9 @@
 ##	      release v<version>, through utility/release-upload.bash. The run
 ##	      tags HEAD v<version> before it builds, when it isn't yet, and takes
 ##	      the tag off again if it stops before this stage, unless publish
-##	      has pushed by then. A skip, or a set
-##	      that isn't a release build, stops the run before publish, and
-##	      no release image leaves this stage out of the plan)
+##	      has pushed by then. A skip, or a set that isn't a release build,
+##	      stops the run before publish. Without the release image, this
+##	      stage is left out of the plan)
 ##	   Only the stages that run are numbered and counted, so "Step 2 of 5"
 ##	   is the second of 5 in this run. The plan at the start lists the ones
 ##	   off, with the flag or reason. Each step opens with a timed "Starting"
@@ -60,7 +60,7 @@
 ##	                       --gate is another name for it
 ##	   --backlog-run-full  what a backlog round runs at its end: every check
 ##	                       of a run with no options. The release set and the
-##	                       gif are made in the temp dir and go nowhere
+##	                       gif are made in the temp dir and aren't copied out
 ##	   --merge-gate        the same checks, which the pre-push hook runs on a
 ##	                       push to main. --ci is another name for it
 ##	   --list              print the plan the other options make, and the
@@ -104,12 +104,12 @@
 ##	   --no-publish        skip the backup + publish, and the release upload,
 ##	                       which needs the commit pushed
 ##	   --no-upload         skip the release upload, and the tag it makes
-##	   --no-freeze         run stages 2-7 in the checkout, not in a copy
+##	   --no-freeze         run stages 2-7 in the checkout rather than a copy
 ##	   -h, --help          show this help
 ##	- An area named with the --no- option that takes its step out, and a plan
 ##	  with no steps at all, are refused rather than run as nothing.
 ##	- With none of -q, -y, -m or --no-publish, the run asks once at the start
-##	  for the commit message. Blank opens git's editor at publish, and Ctrl+C
+##	  for the commit message. A blank one opens git's editor at publish, and Ctrl+C
 ##	  stops the whole run. A stop during publish ends the publisher where it
 ##	  is, so it doesn't go on to commit and push. With a blank message the
 ##	  stop waits for the publisher to finish instead, since the editor
@@ -135,21 +135,21 @@
 ##	  once the release checks pass (utility/green-tree.bash), and the pre-push
 ##	  hook lets a push of that tree through without running the gate again.
 ##	  --quick, --backlog-run-quick, any --no- option that drops a check, a
-##	  missing tool and a missing test root each keep a run from recording.
+##	  missing tool, and a missing test root each stop a run from recording.
 ##	- Each run works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or
 ##	  under config.bash's RUN_TMP_ROOT when HOST_TEMP isn't set, then
 ##	  TMPDIR, with TMPDIR, TEMP and TMP pointed into it, so what a failed
 ##	  test leaves goes with it. It has the run's PID in run.pid. It's
-##	  removed at the end, even when the run fails or is stopped, and only by
-##	  fSafeRm, and so are the run's containers, by their dev.run label, the
-##	  dir's name, and dev.pid, the run's PID. A
+##	  removed at the end by fSafeRm alone, even when the run fails or is
+##	  stopped. The run's containers are removed too, found by their dev.run
+##	  label, which is the dir's name, and dev.pid, which is the run's PID. A
 ##	  stop kills the running ones first. Each run also removes this
 ##	  project's run dirs whose run is gone, such as a killed run's.
 ##	  --keep-temp keeps the dir and the containers, and says where, and the
 ##	  sweep leaves a kept dir for 2 days.
 ##	- Stages 2-7 run from a copy of the tree taken after the format stage,
 ##	  uncommitted work included, so a merge, checkout or edit during a run
-##	  can't reach them. The copy sits in the run's temp dir.
+##	  can't change them. The copy is in the run's temp dir.
 ##	- Reuse: copy the cicd/ directory into another project and edit config.bash.
 
 ##	History: At bottom of script.
@@ -198,7 +198,7 @@ QUIET_FLAG=""
 # shellcheck source=config.bash
 source "${here}/config.bash"
 
-## Set for the run a run starts on its frozen copy: TUKFS_RUN_PART=build runs stages 2-7 only. It records no tree, since the gif comes after it, in the run that started it. The pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then what gets copied, with nothing uncommitted.
+## A run sets these for the run it starts on its frozen copy. TUKFS_RUN_PART=build runs stages 2-7 only, and records no tree, since the gif comes after it in the outer run. The pre-push hook sets TUKFS_GATE_REV to the commit being pushed, which is then what gets copied, with nothing uncommitted.
 ## TUKFS_STEP_PLAN is the outer run's step numbers, so the copy's steps count on from its.
 ## TUKFS_CHECKOUT is the checkout the copy came from, for what's beside it.
 run_part="${TUKFS_RUN_PART:-}"; gate_rev="${TUKFS_GATE_REV:-}"; plan_given="${TUKFS_STEP_PLAN:-}"
@@ -297,7 +297,7 @@ for _step in "${LEAKCHECK_STEPS[@]}"; do
 	_byLength+=("${_step#*|}")
 done
 LEAKCHECK_STEPS=("${_byLength[@]}")
-## The release builds and the leak checks fall back to the host on this, as they do when docker doesn't answer.
+## The release builds and the leak checks fall back to the host when this is set, as they do when docker doesn't respond.
 if ((no_container)); then export TUKFS_NO_CONTAINER=1; fi
 if ((keep_temp)); then export TUKFS_KEEP_TEMP=1; fi
 if [[ -n "${mode}" ]]; then
@@ -313,11 +313,11 @@ if ((gate_mode)); then
 	FMT_CMD=()
 	DOGFOOD_ENABLE=0; GIT_PUBLISH=(); UPLOAD_ENABLE=0
 	fOffWhy "${mode_flag}" sync dogfood publish upload
-	## The gif is drawn, as a check, but goes nowhere the tree or the private dir would see it. A rotate dir under a parent that isn't there is a note.
+	## The gif is drawn as a check, but isn't copied anywhere the tree or the private dir would see it. A rotate dir under a parent that isn't there is a note.
 	gif_to_tmp=1
 	if [[ "${mode}" == bq ]]; then
 		GIF_ENABLE=0; fOffWhy "${mode_flag}" gif
-		## Only what's named, when anything is. Each name is an area in config.bash, and a leak area keeps the leak checks its text is in.
+		## Only what's named, when anything is. Each name is an area in config.bash, and a leak area runs the leak checks that contain its text.
 		_known=" "; _leakKept=(); _leakOwn=(); declare -A _keptSet=()
 		for _a in "${BACKLOG_AREAS[@]}"; do _known+="${_a%%|*} "; done
 		## The step each area runs in, so an area named with the --no- option that takes that step out is refused. off_why has only the options given so far.
@@ -372,7 +372,7 @@ else
 	gif_to_tmp=0
 	FMT_CHECK_CMD=()
 fi
-## The check scripts read it too, since they only report an exit code: under it a missing tool fails, and a check the box can't run at all, with no image, goes on the skip list (2026102814341405). Outside it, every skip of theirs goes on the skip list, through TUKFS_GATE_SKIPS (2026111918562700).
+## The check scripts read TUKFS_GATE_STRICT too, since they only report an exit code. Under it a missing tool fails, and a check the box can't run at all, with no image, goes on the skip list (2026102814341405). Outside it, every skip of theirs goes on the skip list, through TUKFS_GATE_SKIPS (2026111918562700).
 if ((gate_strict)); then export TUKFS_GATE_STRICT=1; else unset TUKFS_GATE_STRICT; fi
 ## The run that froze the tree formatted the checkout first.
 if [[ "${run_part}" == build ]]; then FMT_CMD=(); fi
@@ -499,7 +499,7 @@ install_tmp=""
 fInstallTmpGone(){
 	[[ -n "${install_tmp}" ]] || return 0
 	if rm -f -- "${install_tmp}" 2>/dev/null; then install_tmp=""; return 0; fi
-	printf '[ could not remove %s; rm -f -- "%s" ]\n' "${install_tmp}" "${install_tmp}" >&2
+	printf '[ couldn'\''t remove %s; rm -f -- "%s" ]\n' "${install_tmp}" "${install_tmp}" >&2
 	install_tmp=""
 	return 1
 }
@@ -513,14 +513,14 @@ fInstallAtomic(){   ## fInstallAtomic SRC DEST_DIR NAME MODE
 	fi
 	## Named before the copy starts, since a stop's trap runs between any 2 commands below.
 	install_tmp="${tmp}"
-	## -T, so a link to a folder that turned up since the check is replaced, not moved into.
+	## -T, so a link to a folder that turned up since the check is replaced rather than moved into.
 	if cp -f -- "${src}" "${tmp}" && chmod "${mode}" -- "${tmp}" && mv -fT -- "${tmp}" "${dir}/${name}"; then
 		install_tmp=""
 		fEcho "OK: installed ${dir}/${name}"
 		return 0
 	fi
 	fInstallTmpGone || true
-	fEcho "WARNING: could not install ${dir}/${name}"
+	fEcho "WARNING: couldn't install ${dir}/${name}"
 	return 1
 }
 
@@ -565,7 +565,7 @@ fSafeRm(){   ## fSafeRm PATH TOKEN
 	## A test that failed can leave a dir it made read-only.
 	if ! fRmMarksLast "${p}" 2>/dev/null; then
 		chmod -R u+rwX -- "${p}" 2>/dev/null || true
-		fRmMarksLast "${p}" 2>/dev/null || { printf 'cleanup: could not remove all of %s\n' "${p}" >&2; return 1; }
+		fRmMarksLast "${p}" 2>/dev/null || { printf 'cleanup: couldn'\''t remove all of %s\n' "${p}" >&2; return 1; }
 	fi
 }
 
@@ -580,19 +580,19 @@ made_dir=""
 fRunDirMake(){   ## fRunDirMake BASE
 	local base="" d="" t="" nnn="" n=1
 	base="$(realpath -e -- "$1")" || fDie "temp root isn't there: $1"
-	mkdir -p -- "${base}/tukfs-hash" || fDie "could not make ${base}/tukfs-hash"
+	mkdir -p -- "${base}/tukfs-hash" || fDie "couldn't make ${base}/tukfs-hash"
 	printf -v t '%(%Y%m%d-%H%M%S)T' -1
 	while :; do
 		printf -v nnn '%03d' "${n}"
 		d="${base}/tukfs-hash/${t}_${nnn}"
 		fSafePath "${d}" || fDie "can't make a temp dir under ${base} that the cleanup could remove"
 		mkdir -- "${d}" 2>/dev/null && break
-		[[ -e "${d}" ]] || fDie "could not make ${d}"
+		[[ -e "${d}" ]] || fDie "couldn't make ${d}"
 		n=$((n + 1)); ((n < 1000)) || fDie "no free temp dir name under ${base}/tukfs-hash"
 	done
 	run_dirs+=("${d}")
-	printf '%s\n' "${run_token}" > "${d}/${run_mark}" || fDie "could not mark ${d}"
-	printf '%s\n' "$$" > "${d}/run.pid" || fDie "could not write ${d}/run.pid"
+	printf '%s\n' "${run_token}" > "${d}/${run_mark}" || fDie "couldn't mark ${d}"
+	printf '%s\n' "$$" > "${d}/run.pid" || fDie "couldn't write ${d}/run.pid"
 	## Here too, so a kept run that's killed still waits.
 	if ((keep_temp)); then : > "${d}/${kept_mark}" || true; fi
 	made_dir="${d}"
@@ -617,7 +617,7 @@ fRunDirGone(){   ## fRunDirGone DIR
 	return 0
 }
 
-## The frozen copy sits in the run's temp dir. git takes it down first, so its record goes too; whatever git leaves goes with the temp dir.
+## The frozen copy is in the run's temp dir. git removes it first, so git's record of it goes too, and whatever git leaves is removed with the temp dir.
 frozen_root=""; frozen_tree=""
 fFrozenGone(){
 	local d="${frozen_root}"
@@ -625,7 +625,7 @@ fFrozenGone(){
 	frozen_root=""
 	[[ -n "${d}" ]] || return 0
 	fFrozenRemove "${root}" "${d}" && return 0
-	echo "cleanup: git could not remove the frozen copy at ${d}; it goes with the temp dir" >&2
+	echo "cleanup: git couldn't remove the frozen copy at ${d}; it's removed with the temp dir" >&2
 	return 0
 }
 
@@ -644,11 +644,11 @@ export TMPDIR="${run_tmp}" TEMP="${run_tmp}" TMP="${run_tmp}" HOST_TEMP="${run_t
 if ((! inner_run)) || [[ ! "${TUKFS_RUN_NAME:-}" =~ ^[0-9]{8}-[0-9]{6}_[0-9]{3}$ ]] || [[ ! "${TUKFS_RUN_PID:-}" =~ ^[0-9]+$ ]]; then export TUKFS_RUN_NAME="${run_tmp##*/}" TUKFS_RUN_PID="$$"; fi
 ## Every container a step starts leaves its ID here, so a stop of the run kills each one, however far down its client is.
 if ((! inner_run)); then
-	mkdir -- "${run_tmp}/cid" || fDie "could not make ${run_tmp}/cid"
+	mkdir -- "${run_tmp}/cid" || fDie "couldn't make ${run_tmp}/cid"
 	export TUKFS_CID_DIR="${run_tmp}/cid"
 	stop_cid_dir="${TUKFS_CID_DIR}"
 fi
-## The run on the frozen copy writes into its starter's, which records.
+## The run on the frozen copy writes into its starter's file, since the starter is the run that records the tree.
 gate_skips="${run_tmp}/gate-skips"
 if ((inner_run)) && [[ "${TUKFS_GATE_SKIPS:-}" == /* ]]; then gate_skips="${TUKFS_GATE_SKIPS}"; else : > "${gate_skips}"; fi
 export TUKFS_GATE_SKIPS="${gate_skips}"
@@ -784,7 +784,7 @@ fBuildStamp(){
 	## The gate builds the pushed commit as it is.
 	if [[ -z "${gate_rev}" ]]; then
 		head_tree="$(git -C "${root}" rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" || fDie "no tree for HEAD"
-		tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "could not read the tree being built"
+		tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "couldn't read the tree being built"
 		if [[ "${tree}" != "${head_tree}" ]]; then build_mark="-dirty"; fi
 	fi
 	commit_tags="$(git -C "${root}" tag --points-at "${gate_rev:-HEAD}" 2>/dev/null || true)"
@@ -810,12 +810,12 @@ fReleaseTag(){
 	if [[ -n "${at}" && "${at}" != "${head}" ]]; then fDie "${tag} is already on ${at:0:12}, not HEAD. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
 	## Even with the tag on HEAD here, since the upload only pushes this one, and refuses another of that name there.
 	remote="$(git -C "${root}" config --get "branch.${RELEASE_BRANCH}.remote" || echo origin)"
-	out="$(fGitRemote -C "${root}" ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "could not list the tags on ${remote}, to see if ${tag} is taken. Run with --no-upload to build without it."
+	out="$(fGitRemote -C "${root}" ls-remote --tags "${remote}" "refs/tags/${tag}")" || fDie "couldn't list the tags on ${remote}, to see if ${tag} is taken. Run with --no-upload to build without it."
 	out="$(awk -v r="refs/tags/${tag}" '$2 == r { print $1; exit }' <<< "${out}")"
-	if [[ -n "${at}" ]]; then obj="$(git -C "${root}" rev-parse "refs/tags/${tag}")" || fDie "could not read tag ${tag}"; fi
+	if [[ -n "${at}" ]]; then obj="$(git -C "${root}" rev-parse "refs/tags/${tag}")" || fDie "couldn't read tag ${tag}"; fi
 	if [[ -n "${out}" && -z "${obj}" ]]; then fDie "${remote} already has ${tag}. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
 	if [[ -n "${out}" && "${out}" != "${obj}" ]]; then fDie "${remote} has another ${tag} than the one on HEAD here. Bump the version in ${VERSION_MANIFEST}, or run with --no-upload."; fi
-	tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "could not read the checkout's tree"
+	tree="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "couldn't read the checkout's tree"
 	headTree="$(git -C "${root}" rev-parse 'HEAD^{tree}')" || fDie "no tree for HEAD"
 	if [[ "${tree}" != "${headTree}" ]]; then
 		mapfile -t changed < <(git -C "${root}" diff --name-only --no-renames "${headTree}" "${tree}")
@@ -823,7 +823,7 @@ fReleaseTag(){
 		fDie "the checkout has changes that aren't committed after the format stage, so its build can't be a release: ${changed[*]:0:10}${more}. Commit them, or run with --no-upload."
 	fi
 	[[ -z "${at}" ]] || return 0
-	git -C "${root}" tag -a -m "${tag}" "${tag}" HEAD || fDie "could not tag HEAD ${tag}"
+	git -C "${root}" tag -a -m "${tag}" "${tag}" HEAD || fDie "couldn't tag HEAD ${tag}"
 	tag_made="${tag}=$(git -C "${root}" rev-parse "refs/tags/${tag}")"
 	fEcho "tagged HEAD ${tag}; taken off again if the run stops before the upload"
 	fBuildStamp
@@ -942,7 +942,7 @@ if ((list_only || (! quiet && ! inner_run))); then
 		fEcho_Clean "Release upload .: (off, ${off_why[upload]:-off in config.bash})"
 	fi
 	fEcho_Clean "Frozen copy ....: $( ((freeze)) && echo 'stages 2-7 run from a copy taken after the format stage' || echo '(off)')"
-	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker answers, else the host; the build and tests in the release image')"
+	fEcho_Clean "Containers .....: $( ((no_container)) && echo '(off, --no-container; the steps that use one run on the host)' || echo 'where docker responds, else the host; the build and tests in the release image')"
 	fEcho_Clean "Sandbox ........: $( [[ -n "${TUKFS_NO_SANDBOX:-}" ]] && echo '(off, --no-sandbox; the test steps on the host can write anywhere)' || echo 'the test steps on the host write only to their own temp and build dirs')"
 	_rh=""; for _h in "${REMOTE_HOSTS[@]}"; do _t="${_h#*|}"; _rh+="${_h%%|*} (${_t%%|*}), "; done
 	if [[ -n "${step_no[remote]:-}" ]]; then _rh="${_rh%, }: the unit and integration tests, under the host lock"
@@ -971,7 +971,7 @@ fi
 fListIds(){
 	local ids where
 	local -a lines=()
-	ids="$("${TEST_ID_LIST_CMD[@]}" "$1")" || fDie "could not list the test IDs: ${TEST_ID_LIST_CMD[*]} $1"
+	ids="$("${TEST_ID_LIST_CMD[@]}" "$1")" || fDie "couldn't list the test IDs: ${TEST_ID_LIST_CMD[*]} $1"
 	[[ -z "${ids}" ]] || mapfile -t lines <<< "${ids}"
 	where="$(printf '%s; ' "${@:3}")"
 	fEcho_Clean "   ${2}, ${#lines[@]} IDs, in ${where%; }:"
@@ -1021,7 +1021,7 @@ fi
 ## --backlog-run-quick, which writes nothing, and not in the run on the frozen copy, whose output already goes through this one.
 if [[ "${mode}" != bq ]] && ((! inner_run)) && [[ -n "${LINT_LOG_DIR:-}" ]] && mkdir -p "${root}/${LINT_LOG_DIR}" 2>/dev/null; then
 	gfs_rotate "${root}/${LINT_LOG_DIR}" run log >/dev/null 2>&1 || true
-	## It has to outlive the stop, or the cleanup lines are lost. A Ctrl+C reaches the whole process group, so it ignores that too, and ends when the run closes its end. -p keeps it writing the log after a reader such as grep is gone, since the same stop takes that down too.
+	## The tee has to outlive the stop, or the cleanup lines are lost. A Ctrl+C goes to the whole process group, so tee ignores INT too, and ends when the run closes its end. -p keeps it writing the log after a reader such as grep is gone, since the same stop kills that reader too.
 	exec > >(trap '' INT TERM; exec tee -p "${root}/${LINT_LOG_DIR}/run_${stamp}.log") 2>&1
 	stop_keep+=("$!")
 fi
@@ -1065,12 +1065,12 @@ fStageSync(){
 	if [[ -z "${branch}" ]]; then
 		fEcho "WARNING: detached HEAD; nothing to sync"
 	elif [[ -z "${upstream}" ]]; then
-		fEcho "WARNING: ${branch} tracks no upstream; nothing to sync"
+		fEcho "WARNING: ${branch} doesn't track an upstream; nothing to sync"
 	elif ! out="$(fGitRemote -C "${root}" fetch --quiet 2>&1)"; then
 		fEcho_Clean "${out}"
 		fEcho "WARNING: fetch failed (offline?); going on with the local tree"
 	else
-		## Counts either side of the merge base, so diverged reads apart from behind. Only behind can fast-forward.
+		## Counts either side of the merge base, so diverged and behind can be told apart. Only behind can fast-forward.
 		read -r ahead behind < <(git -C "${root}" rev-list --left-right --count "HEAD...${upstream}")
 		if   ((ahead && behind)); then fDie "${branch} and ${upstream} have diverged (${ahead} local, ${behind} remote); reconcile by hand"
 		elif ((behind)); then
@@ -1240,7 +1240,7 @@ fStageLint(){
 		fEcho_Clean "${c%%|*}: ${c#*|}"
 		if fLintRun fLintEval "${c#*|}"; then fEcho "OK: ${c%%|*}"; else failed+=("${c%%|*}"); fi
 	done
-	## The content scrub lives with the private project files, so a clone without them skips it.
+	## The content scrub is in the private project folder, so a clone without that folder skips the scrub.
 	if [[ -x "${checkout}/../private/hooks/scrub.bash" ]]; then
 		fEcho_Clean "content scrub: ../private/hooks/scrub.bash"
 		if fLintRun "${checkout}/../private/hooks/scrub.bash" "${root}"; then fEcho "OK: content scrub"; else failed+=(scrub); fi
@@ -1266,7 +1266,7 @@ fRunIt(){   ## fRunIt LABEL ROOT
 	if [[ "${fsType}" != "${want}" ]]; then fEcho "WARNING: ${itRoot} is ${fsType:-unknown}, not ${label}"; echo "it-${label}" >> "${gate_skips}"; fi
 	if [[ -n "${it_btrfs}" ]]; then btRw=("${it_btrfs}/${APP_NAME}"); fi
 	fEcho_Clean "integration test on ${label}: HOST_TEMP=${real}${it_btrfs:+ TUKFS_IT_BTRFS=${it_btrfs}} ${RELEASE_NATIVE_BIN}, writing only to ${real}/${APP_NAME}${it_btrfs:+ and ${it_btrfs}/${APP_NAME}}"
-	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
+	mkdir -p -- "${real}/${APP_NAME}" || fDie "couldn't make ${real}/${APP_NAME}"
 	HOST_TEMP="${real}" TUKFS_IT_BTRFS="${it_btrfs}" fBg "${here}/utility/sandbox.bash" "${real}/${APP_NAME}" "${btRw[@]}" -- "${IT_CMD[@]}" "${root}/${RELEASE_NATIVE_BIN}" || rc=$?
 	((rc == 0)) || fDie "integration test failed on ${label} (exit ${rc})"
 	fEcho "OK: integration test on ${label}"
@@ -1280,7 +1280,7 @@ fItBtrfs(){
 	real="$(realpath -e -- "${IT_BTRFS}" 2>/dev/null)" || { fEcho_Clean "btrfs subvolume check (des5x): skips, since ${IT_BTRFS} isn't there"; return 0; }
 	fsType="$(stat -f -c %T -- "${real}" 2>/dev/null || true)"
 	[[ "${fsType}" == btrfs ]] || { fEcho_Clean "btrfs subvolume check (des5x): skips, since ${IT_BTRFS} is ${fsType:-unknown}, not btrfs"; return 0; }
-	mkdir -p -- "${real}/${APP_NAME}" || fDie "could not make ${real}/${APP_NAME}"
+	mkdir -p -- "${real}/${APP_NAME}" || fDie "couldn't make ${real}/${APP_NAME}"
 	it_btrfs="${real}"
 }
 
@@ -1363,7 +1363,7 @@ fStageProfile(){
 	fsType="$(stat -f -c %T -- "${work}" 2>/dev/null || true)"
 	if [[ "${fsType}" != ext2/ext3 ]]; then fEcho "WARNING: the profiler workload is on ${fsType:-unknown}, not ext4"; fi
 	export PROFILE_WORKLOAD="${work}" TUKFS_PROFILE_DIR="${work}/samples"
-	mkdir -- "${TUKFS_PROFILE_DIR}" || fDie "could not make ${TUKFS_PROFILE_DIR}"
+	mkdir -- "${TUKFS_PROFILE_DIR}" || fDie "couldn't make ${TUKFS_PROFILE_DIR}"
 	fEcho_Clean "workload: ${PROFILE_WORKLOAD_GEN}  (in ${work})"
 	fBg "${here}/utility/sandbox.bash" "${work}" "${run_tmp}" -- bash -c "${PROFILE_WORKLOAD_GEN}" || fDie "the profiler workload failed"
 	for step in "${PROFILE_TIMED[@]}"; do
@@ -1379,8 +1379,8 @@ fStageProfile(){
 
 	## Born "frequent". The rotation gives it another role, by the stamp.
 	profDir="${root}/${PROFILE_OUT_DIR}"
-	mkdir -p -- "${profDir}" || fDie "could not make ${PROFILE_OUT_DIR}"
-	mv -f -- "${svg}" "${profDir}/flame_${stamp}_frequent.svg" || fDie "could not move the flamegraph into ${PROFILE_OUT_DIR}"
+	mkdir -p -- "${profDir}" || fDie "couldn't make ${PROFILE_OUT_DIR}"
+	mv -f -- "${svg}" "${profDir}/flame_${stamp}_frequent.svg" || fDie "couldn't move the flamegraph into ${PROFILE_OUT_DIR}"
 	gfs_rotate "${profDir}" flame svg >/dev/null 2>&1 || true
 	latest="$(compgen -G "${profDir}/flame_${stamp}_*.svg" || true)"
 	latest="${latest%%$'\n'*}"
@@ -1435,12 +1435,12 @@ fStageRelease(){
 	[[ -n "${release_dir}" ]] || { fStepPass; return 0; }
 
 	release_stage="${TMPDIR}/release"; release_work="${TMPDIR}/release-work"
-	mkdir -- "${release_stage}" "${release_work}" || fDie "could not make the release stage dir"
+	mkdir -- "${release_stage}" "${release_work}" || fDie "couldn't make the release stage dir"
 	staged_osarchs=()
 	for t in "${built[@]}"; do
 		osarch="${t%%|*}"; n="${EXE_NAME}-${ver}-${osarch}"
 		fReleaseName "${n}" || fDie "${n}: not a release name; check the os-arch in config.bash"
-		cp -- "${root}/${t#*|}" "${release_stage}/${n}" || fDie "could not stage ${n}"
+		cp -- "${root}/${t#*|}" "${release_stage}/${n}" || fDie "couldn't stage ${n}"
 		chmod 0755 -- "${release_stage}/${n}"
 		if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then touch -d "@${SOURCE_DATE_EPOCH}" -- "${release_stage}/${n}"; fi
 		staged_osarchs+=("${osarch}")
@@ -1458,7 +1458,7 @@ fStageRelease(){
 	## The sums file goes first and comes back last, so a run stopped part way leaves no sums for a mixed set. Old files go by name, one at a time, so a dir that isn't the release set can't lose more than its release files.
 	artDir="${release_dir}"; artShown="${artDir#"${root}/"}"
 	sums="${EXE_NAME}-${ver}-sha256sums.txt"
-	mkdir -p -- "${artDir}" || fDie "could not make ${artShown}"
+	mkdir -p -- "${artDir}" || fDie "couldn't make ${artShown}"
 	rm -f -- "${artDir}/.${sums}.tmp"
 	for f in "${artDir}/${EXE_NAME}-"*sha256sums.txt; do
 		if [[ -f "${f}" && ! -L "${f}" ]] && fReleaseName "${f##*/}"; then rm -f -- "${f}"; fi
@@ -1466,20 +1466,20 @@ fStageRelease(){
 	for f in "${release_stage}"/*; do
 		n="${f##*/}"
 		fReleaseName "${n}" || fDie "the stage dir has ${n}, which isn't a release name"
-		mv -f -- "${f}" "${artDir}/${n}" || fDie "could not move ${n} into ${artShown}"
+		mv -f -- "${f}" "${artDir}/${n}" || fDie "couldn't move ${n} into ${artShown}"
 		names+=("${n}")
 	done
 	for f in "${artDir}/${EXE_NAME}-"*; do
 		if [[ -f "${f}" && ! -L "${f}" && " ${names[*]} " != *" ${f##*/} "* ]] && fReleaseName "${f##*/}"; then rm -f -- "${f}"; fi
 	done
-	( cd "${artDir}" && sha256sum -- "${names[@]}" > ".${sums}.tmp" && mv -f -- ".${sums}.tmp" "${sums}" ) || fDie "could not write ${sums}"
+	( cd "${artDir}" && sha256sum -- "${names[@]}" > ".${sums}.tmp" && mv -f -- ".${sums}.tmp" "${sums}" ) || fDie "couldn't write ${sums}"
 	fEcho_Clean "$(cd "${artDir}" && stat -c '%10s  %n' -- "${names[@]}" "${sums}")"
 	fEcho "OK: ${#names[@]} release file(s) and ${sums} in ${artShown}/"
 	if ((${#CROSS_TARGETS[@]} == 0)); then fEcho_Clean "note: no cross targets in this run, so the set is the native build alone"; fi
 	fStepPass
 }
 
-## Stage 7: the unit tests and the integration test on a box of each arch in REMOTE_HOSTS, on stage 6's build of it, through remote-tests.bash. A box that isn't there, or no build of its arch in this run, is a SKIP, and the run goes on. It keeps the tree from being recorded, as a missing test root does.
+## Stage 7: the unit tests and the integration test on a box of each arch in REMOTE_HOSTS, on stage 6's build of it, through remote-tests.bash. A box that isn't there, or no build of its arch in this run, is a SKIP, and the run goes on. A SKIP stops the tree from being recorded, as a missing test root does.
 fStageRemote(){
 	local h host osarch target bin rc why ran=0
 	local whyFile="${run_tmp}/remote-why"
@@ -1596,8 +1596,8 @@ fStagePublish(){
 	## Again here, since --no-sync skips the check at the start.
 	if out="$(fLeftStash)"; then fDie "publish refused: an earlier run's stash is still in 'git stash list': ${out}. Pop or drop it, then run again. ${nothing}"; fi
 	[[ -n "${tested_tree}" ]] || fDie "publish refused: no record of the tree this run tested. ${nothing}"
-	now="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "publish refused: could not read the checkout's tree. ${nothing}"
-	out="$(git -C "${root}" diff --name-only --no-renames "${tested_tree}" "${now}")" || fDie "publish refused: could not compare the checkout with the tree tested. ${nothing}"
+	now="$("${here}/utility/green-tree.bash" tree "${root}")" || fDie "publish refused: couldn't read the checkout's tree. ${nothing}"
+	out="$(git -C "${root}" diff --name-only --no-renames "${tested_tree}" "${now}")" || fDie "publish refused: couldn't compare the checkout with the tree tested. ${nothing}"
 	if [[ -n "${out}" ]]; then mapfile -t changed < <(grep -vxF -- "${gif_wrote:-/}" <<< "${out}" || true); fi
 	if ((${#changed[@]})); then
 		fEcho_Clean "Changed in the checkout since the run took the tree it tested:"
@@ -1607,7 +1607,7 @@ fStagePublish(){
 	fi
 	if upstream="$(git -C "${root}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
 		out="$(fGitRemote -C "${root}" fetch --quiet 2>&1)" || { fEcho_Clean "${out}"; fDie "publish refused: fetch from ${upstream} failed. ${nothing}"; }
-		behind="$(git -C "${root}" rev-list --count "HEAD..${upstream}")" || fDie "publish refused: could not compare with ${upstream}. ${nothing}"
+		behind="$(git -C "${root}" rev-list --count "HEAD..${upstream}")" || fDie "publish refused: couldn't compare with ${upstream}. ${nothing}"
 		((behind == 0)) || fDie "publish refused: ${upstream} has ${behind} commit(s) this run didn't test. Run again to take them. ${nothing}"
 	fi
 	command -v rar >/dev/null 2>&1 || export GIT_BACKUP_AND_PUBLISH_NOBACKUP=1
@@ -1634,11 +1634,11 @@ fFreeze(){
 		## The pushed commit, as it is. Its builds go to their own target dir, so they don't replace the checkout's.
 		tree="$(git -C "${root}" rev-parse -q --verify "${gate_rev}^{tree}" 2>/dev/null)" || fDie "no such commit: ${gate_rev}"
 		frozen_root="${run_tmp}/tree"
-		fFrozenAdd "${root}" "${frozen_root}" "${gate_rev}" || { frozen_root=""; fDie "could not check ${gate_rev:0:12} out to gate it"; }
-		fFrozenLink "${root}" "${frozen_root}" target "${root}/${GATE_TARGET_DIR:-target-gate}" || fDie "could not link the gate's target dir"
+		fFrozenAdd "${root}" "${frozen_root}" "${gate_rev}" || { frozen_root=""; fDie "couldn't check ${gate_rev:0:12} out to gate it"; }
+		fFrozenLink "${root}" "${frozen_root}" target "${root}/${GATE_TARGET_DIR:-target-gate}" || fDie "couldn't link the gate's target dir"
 		frozen_tree="${tree}"
 		fSection "Frozen copy"
-		fEcho_Clean "stages 2-7 run from ${frozen_root}, holding ${gate_rev:0:12}, the commit being pushed"
+		fEcho_Clean "stages 2-7 run from ${frozen_root}, a copy of ${gate_rev:0:12}, the commit being pushed"
 		return 0
 	fi
 	if ! head="$(git -C "${root}" rev-parse -q --verify HEAD 2>/dev/null)" || ! tree="$("${here}/utility/green-tree.bash" tree "${root}" 2>/dev/null)"; then
@@ -1648,11 +1648,11 @@ fFreeze(){
 	frozen_root="${run_tmp}/tree"
 	if ! fFrozenAdd "${root}" "${frozen_root}" "${head}" "${tree}"; then
 		frozen_root=""
-		fEcho "WARNING: could not make a frozen copy; stages 2-7 run in the checkout"
+		fEcho "WARNING: couldn't make a frozen copy; stages 2-7 run in the checkout"
 		return 0
 	fi
 	for link in "${FROZEN_LINKS[@]}"; do
-		fFrozenLink "${root}" "${frozen_root}" "${link}" || fDie "could not link ${link} into the frozen copy"
+		fFrozenLink "${root}" "${frozen_root}" "${link}" || fDie "couldn't link ${link} into the frozen copy"
 	done
 	frozen_tree="${tree}"
 	mapfile -t changed < <(git -C "${root}" diff --name-status --no-renames "${head}" "${tree}")
@@ -1802,7 +1802,7 @@ fSweepKilled(){
 	return 0
 }
 
-## Stopped containers of ours whose run dir is gone and whose run started over 2 days ago: kept by --keep-temp, or left by a run killed outright. The sweep above takes the dir, and these went on forever without this.
+## Stopped containers of ours whose run dir is gone and whose run started over 2 days ago: kept by --keep-temp, or left by a run killed outright. The sweep above takes the dir, and without this the containers would be left forever.
 fCtrsStale(){   ## -> prints "COUNT KB"
 	local engine="${TUKFS_DOCKER:-docker}" out="" id="" run="" size="" r="" cutoff="" lost=0 kb=0
 	local -a ids=() szs=() limit=()
@@ -1968,6 +1968,6 @@ exit 0
 ##		- 2026-11-08: A step closes with a timed, numbered PASS, FAIL or SKIP line, in the same form as its Starting line.
 ##		- 2026-11-08: IT_BTRFS, a btrfs folder for the integration test's subvolume check, given to each run as TUKFS_IT_BTRFS.
 ##		- 2026-11-09: A memory cap with no swap, CICD_MEM_CAP, on every container, and the whole run in a user scope under it.
-##		- 2026-11-10: The release upload's refusals run before publish, and no release image leaves it out of the plan.
+##		- 2026-11-10: The release upload's refusals run before publish, and without the release image it's left out of the plan.
 ##		- 2026-11-10: The run folder sweeps check the owner, and that the marks are plain files, before they read them.
 ##		- 2026-11-20: The publisher runs in the background when the run has its message, so a stop ends it, and a stop after the push leaves the tag on. The dogfood copy refuses a folder, or a link to one, at the name. Containers get the run's PID too, so 2 temp roots can't share a run. A stop during the dogfood copy removes its temp copy.

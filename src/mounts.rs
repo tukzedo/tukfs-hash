@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Which disks are under which folder, so that no two workers read the same disk at once. 2 readers on one hard drive make it seek between them, and both go slower than one would alone.
+// Finds which disks are under which folder, so 2 workers never read the same disk at once. A hard drive with 2 readers seeks between them, and both go slower than one would alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -43,7 +43,7 @@ fn unescape(b: &[u8]) -> PathBuf {
 	PathBuf::from(OsString::from_vec(out))
 }
 
-/// Bytes, not text, since a mount point needn't be UTF-8 (2026102519331112).
+/// Takes bytes rather than text, since a mount point needn't be UTF-8 (2026102519331112).
 pub fn parse_mountinfo(text: &[u8]) -> Vec<Mount> {
 	let mut out = Vec::new();
 	for line in text.split(|&c| c == b'\n') {
@@ -88,11 +88,11 @@ pub fn read_mounts() -> Result<Vec<Mount>, String> {
 	Ok(visible(parse_mountinfo(&text)))
 }
 
-/// Only the mounts a path can reach. One mounted over another, or over a folder above it, hides it and all that's mounted on it (2026102814341407). Works from the table alone, so kernels without `STATX_MNT_ID` get it too.
+/// Returns only the mounts that some path gets to. A mount that's been mounted over, or that's on a folder a later mount hides, is dropped, along with everything mounted on it (2026102814341407). Only the table is read, so this works on kernels without `STATX_MNT_ID` too.
 pub fn visible(mounts: Vec<Mount>) -> Vec<Mount> {
 	let index: HashMap<u64, usize> = mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
 	let parent_of = |i: usize| index.get(&mounts[i].parent).copied().filter(|&p| p != i);
-	// Lookups by parent and point, so a table of thousands stays linear (2026110715441800).
+	// Lookups go by parent and point, so a table of thousands takes linear time (2026110715441800).
 	let mut at: HashMap<(u64, &Path), Vec<usize>> = HashMap::new();
 	for (i, m) in mounts.iter().enumerate() {
 		at.entry((m.parent, m.point.as_path())).or_default().push(i);
@@ -149,7 +149,7 @@ pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
 	best
 }
 
-/// The path in `outer`'s tree that's `inner`'s folder of the same filesystem, where a walk from `outer` gets to it and stops at no mount below it that a walk from `inner` doesn't (2026102814341414). A bind mount of a folder inside another root is the case. Only the table is read, so the caller still checks the device and inode.
+/// The path in `outer`'s tree that's `inner`'s folder of the same filesystem, where a walk from `outer` gets to it, and every mount below it that stops that walk also stops a walk from `inner` (2026102814341414). It's for a bind mount of a folder inside another root. Only the table is read, so the caller still checks the device and inode.
 pub fn seen_from(mounts: &[Mount], outer: &Path, inner: &Path) -> Option<PathBuf> {
 	let om = mount_for(mounts, outer)?;
 	let im = mount_for(mounts, inner)?;
@@ -167,7 +167,7 @@ pub fn seen_from(mounts: &[Mount], outer: &Path, inner: &Path) -> Option<PathBuf
 	below(&at).iter().all(|r| stops.iter().any(|s| r.starts_with(s))).then_some(at)
 }
 
-/// `path`'s folder in each mount of the same filesystem that shows a folder above the one `path`'s mount shows, with that mount's point. A bind mount of a subfolder is the case: the folders above it in its filesystem are only seen there (2026111011092307). The caller checks the device and inode.
+/// `path`'s folder in each mount of the same filesystem that shows a folder above the one `path`'s mount shows, with that mount's point. It's for a bind mount of a subfolder, since the folders above it in its filesystem are only seen through those wider mounts (2026111011092307). The caller checks the device and inode.
 pub fn wider_views(mounts: &[Mount], path: &Path) -> Vec<(PathBuf, PathBuf)> {
 	let Some(m) = mount_for(mounts, path) else {
 		return Vec::new();
@@ -291,7 +291,7 @@ fn backing_path(mut s: Vec<u8>) -> PathBuf {
 	PathBuf::from(OsString::from_vec(s))
 }
 
-/// The disks a mount's data sits on.
+/// The disks a mount's data is on.
 pub fn disks_for(m: &Mount, mounts: &[Mount]) -> Result<BTreeSet<String>, String> {
 	disks_under(m, mounts, 0)
 }
@@ -304,7 +304,7 @@ fn disks_under(m: &Mount, mounts: &[Mount], depth: u32) -> Result<BTreeSet<Strin
 			Some(k) if m.fstype == "btrfs" => btrfs_disks(&k, &mut out),
 			Some(k) => base_disks(&k, &mut out),
 			None if m.source.starts_with("/dev/") => {
-				return Err(format!("cannot resolve {}", m.source));
+				return Err(format!("can't resolve {}", m.source));
 			}
 			None => {
 				return Err(format!("{} is {} from {}, not a local disk", show_path(&m.point), m.fstype, m.source));
@@ -334,7 +334,7 @@ pub fn rotational(disk: &str) -> bool {
 	fs::read_to_string(format!("/sys/block/{disk}/queue/rotational")).is_ok_and(|s| s.trim() == "1")
 }
 
-/// One worker on anything with a hard drive in it, since one is all it takes to make the whole set wait on seeks. A few on flash.
+/// Gives one worker to anything with a hard drive in it, since one drive is enough to make the whole set wait on seeks, and a few to flash.
 pub fn default_threads(disks: &BTreeSet<String>) -> usize {
 	if disks.iter().any(|d| rotational(d)) {
 		1
@@ -391,7 +391,7 @@ pub fn mount_points(mounts: &[Mount]) -> BTreeMap<PathBuf, String> {
 	mounts.iter().map(|m| (m.point.clone(), m.fstype.clone())).collect()
 }
 
-/// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those get read and nothing more, no attributes and no database. A FUSE mount of a disk or an image file with no type of its own is ntfs-3g, exfat-fuse or the like: fuseblk for a block device, plain fuse for a file mounted by a user. fuseblk with a subtype shows as `fuseblk.<name>`.
+/// Linux's NTFS, APFS and HFS+ drivers aren't trusted to write. Those are only read, with no attributes or database written. A FUSE mount of a disk or an image file with no type of its own is ntfs-3g, exfat-fuse, or the like. It's fuseblk for a block device, and plain fuse for a file a user mounted. fuseblk with a subtype shows as `fuseblk.<name>`.
 pub fn hands_off(m: &Mount) -> bool {
 	let t = m.fstype.strip_prefix("fuse.").unwrap_or(&m.fstype);
 	match t {
@@ -535,7 +535,7 @@ mod tests {
 		let gone = "/dev/tukfs-hash-test-no-such-node";
 		assert_eq!(disks_for(&moved(gone, &real.dev), &all), Ok(want.clone()));
 		assert_eq!(disks_for(&moved("rootfs", &real.dev), &all), Ok(want));
-		assert_eq!(disks_for(&moved(gone, "0:0"), &all), Err(format!("cannot resolve {gone}")));
+		assert_eq!(disks_for(&moved(gone, "0:0"), &all), Err(format!("can't resolve {gone}")));
 		assert!(disks_for(&moved(gone, "../8:1"), &all).is_err());
 		assert!(disks_for(&moved("rootfs", "0:0"), &all).is_err_and(|e| e.ends_with("not a local disk")));
 	}
@@ -576,7 +576,7 @@ mod tests {
 	fn hidden_by_a_later_mount_above() {
 		let _id = test_id("des5h");
 		let ids = |text: &[u8]| visible(parse_mountinfo(text)).iter().map(|m| m.id).collect::<Vec<_>>();
-		// b on a/b, then a over the folder a: both hang off the root.
+		// b on a/b, then a over the folder a. Both hang off the root.
 		assert_eq!(
 			ids(b"1 1 0:1 / / rw - ext4 /dev/sda1 rw\n\
 				2 1 0:2 / /a/b rw - ext4 /dev/sdb1 rw\n\
@@ -596,7 +596,7 @@ mod tests {
 		);
 	}
 
-	// The filter as 2026102814341407 wrote it, which checks every sibling of each mount. Kept as the model the faster one has to match.
+	// The filter from 2026102814341407, which checks every sibling of each mount. It's kept as the model the faster one has to match.
 	fn visible_by_siblings(mounts: Vec<Mount>) -> Vec<Mount> {
 		let mut kids: HashMap<u64, Vec<usize>> = HashMap::new();
 		for (i, m) in mounts.iter().enumerate() {
@@ -880,7 +880,7 @@ mod tests {
 			let got = parse_mountinfo(&text);
 			let got: Vec<_> = got.iter().map(|m| ((m.id, m.parent), m.dev.clone(), m.root.clone(), m.point.clone(), m.fstype.as_str(), m.source.as_str())).collect();
 			assert_eq!(got, want, "{}", text.escape_ascii());
-			// Real lines gone bad: no panic, and no field runs past a space.
+			// Real lines that went bad don't panic, and no field runs past a space.
 			let bad = crate::testutil::mutate(r, &real);
 			let got = parse_mountinfo(&bad);
 			assert!(got.len() <= bad.split(|&c| c == b'\n').count());

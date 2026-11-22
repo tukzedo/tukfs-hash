@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// A scan's own lines. On a terminal none is longer than its width, and --log gets each in full. See design.md, Runs and exit codes.
+// A scan's own lines. On a terminal each one fits the width, and --log gets each in full. See design.md, Runs and exit codes.
 
 use crate::beneath;
 use crate::util::show_path;
@@ -30,11 +30,11 @@ const TAB: usize = 8;
 pub enum Fit {
 	/// Cut at the width, with `~` as the last column.
 	Cut,
-	/// Broken at each ` | ` that's needed, the rest indented by a tab, so nothing in it is lost. A part too long for a row of its own is broken at its `, ` marks too, and only an item still too long is cut.
+	/// Broken at each ` | ` that's needed, with the rest indented by a tab, so nothing in it is lost. A part too long for a row of its own is broken at its `, ` marks too, and only an item still too long is cut.
 	Break,
 }
 
-/// Appends every line from here on to `path`, and gives the log's device and inode, which the scan leaves out under any name (2026111918562707). Under sudo a log the scan makes is handed to that user, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926). Anything but a regular file is refused, and so is one of the database's files (2026111918562702, 2026111918562724).
+/// Appends every line from here on to `path`, and returns the log's device and inode, so the scan can leave the log out under any name (2026111918562707). Under sudo, a log the scan makes is handed to the user who ran sudo, as the database is, so their own scan can add to it. One that was already there keeps its owner (2026111019430926). Anything but a regular file is refused, and so is one of the database's files (2026111918562702, 2026111918562724).
 pub fn open_log(path: &Path, db: &Path, sudo: Option<(u32, u32)>, mounts: &[crate::mounts::Mount]) -> Result<(u64, u64), String> {
 	let failed = |e: String| format!("--log {e}");
 	let path = crate::util::canonical_name(path).map_err(failed)?;
@@ -69,7 +69,7 @@ pub fn open_log(path: &Path, db: &Path, sudo: Option<(u32, u32)>, mounts: &[crat
 	Ok(id)
 }
 
-// The file, and whether this made it. Under sudo, a link planted at the name would have root append to whatever it points at, so it's never followed.
+// Returns the file, and whether this call made it. Under sudo, a link planted at the name would have root append to whatever it points at, so it's never followed.
 // O_CREAT stays on the second try so the kernel's protected_regular and protected_fifos checks still apply, as they do to a shell's >>, and O_NONBLOCK keeps a FIFO from waiting for a reader (2026111918562702).
 fn open_append(dir: &File, name: &OsStr) -> io::Result<(File, bool)> {
 	let flags = libc::O_WRONLY | libc::O_APPEND | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CREAT;
@@ -84,7 +84,7 @@ fn open_append(dir: &File, name: &OsStr) -> io::Result<(File, bool)> {
 	Ok((f, made))
 }
 
-/// Each line of `text` on stdout, fitted to a terminal, and in full to the log.
+/// Prints each line of `text` on stdout, fitted to a terminal, and in full to the log.
 pub fn out(text: &str, fit: Fit) {
 	to_log(text);
 	let width = width(libc::STDOUT_FILENO, io::stdout().is_terminal());
@@ -96,13 +96,13 @@ pub fn out(text: &str, fit: Fit) {
 	}
 }
 
-/// A line on stderr, and in the log. It's never cut, since it says what went wrong.
+/// Prints a line on stderr, and in the log. It's never cut, since it says what went wrong.
 pub fn err(text: &str) {
 	to_log(text);
 	to_stderr(text);
 }
 
-// Unbuffered, so writeln! would be 2 writes, which 2 scans sharing a file through 2>> could mix.
+// stderr is unbuffered, so writeln! would make 2 writes, which 2 scans that share a file through 2>> could mix.
 fn to_stderr(text: &str) {
 	let _ = io::stderr().lock().write_all(line(text).as_bytes());
 }
@@ -114,7 +114,7 @@ fn line(text: &str) -> String {
 	l
 }
 
-// A line that can't be written is dropped, as stdout's are, but stderr says so once, since the log is the record that was asked for (2026111918562723).
+// A line that can't be written is dropped, as stdout's are, but a warning goes to stderr once, since the log is the record that was asked for (2026111918562723).
 fn to_log(text: &str) {
 	let Some(log) = LOG.get() else {
 		return;
@@ -126,7 +126,7 @@ fn to_log(text: &str) {
 }
 
 impl<W: Write> Log<W> {
-	// The text and its newline in one write, so O_APPEND keeps it whole when 2 scans share a log (2026111918562715). The warning to give, on the first that fails.
+	// The text and its newline in one write, so O_APPEND keeps it whole when 2 scans share a log (2026111918562715). Returns the warning to give, on the first write that fails.
 	fn put(&mut self, text: &str) -> Option<String> {
 		let e = self.to.write_all(line(text).as_bytes()).err()?;
 		if std::mem::replace(&mut self.warned, true) {
@@ -149,7 +149,7 @@ fn width(fd: RawFd, tty: bool) -> Option<usize> {
 	Some(usize::from(ws.ws_col))
 }
 
-// The column after c, a tab going to the next stop.
+// The column after c, where a tab goes to the next stop.
 fn step(n: usize, c: char) -> usize {
 	if c == '\t' { n / TAB * TAB + TAB } else { n + 1 }
 }
@@ -203,7 +203,7 @@ fn fitted(line: &str, width: Option<usize>, fit: Fit) -> Vec<String> {
 	rows.iter().map(|r| cut(r, width)).collect()
 }
 
-// A list such as the events line's kinds, too long for a row of its own, so the kinds late in it aren't cut off (2026111918562709). Each row but the last ends with its comma.
+// Breaks a list that's too long for a row of its own, such as the events line's kinds, so the kinds late in it aren't cut off (2026111918562709). Each row but the last ends with its comma.
 fn broken_at_commas(part: &str, lead: &str, width: usize, rows: &mut Vec<String>) {
 	let mut items = part.split(", ").peekable();
 	let mut row = lead.to_string();
@@ -305,7 +305,7 @@ mod tests {
 		assert!(!d.join("scan.log").exists());
 	}
 
-	// Only a log this made is handed over under sudo, so root's own file stays root's (2026111019430926).
+	// Only a log that open_append made is handed over under sudo, so root's own file stays root's (2026111019430926).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat")]
 	fn a_log_is_made_only_once() {
@@ -351,7 +351,7 @@ mod tests {
 		refused(Path::new("/dev/null"));
 	}
 
-	// Text after the database's last page, in its lock, or in a -wal that SQLite deletes (2026111918562724).
+	// A log there would put text after the database's last page, in its lock, or in a -wal that SQLite deletes (2026111918562724).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
 	fn a_log_that_is_the_database_is_refused() {
@@ -413,7 +413,7 @@ mod tests {
 		assert_eq!(l.to.got, [b"run 1 done\n".to_vec(), b"a\nb\n".to_vec()]);
 	}
 
-	// A full disk left the log empty, with no word (2026111918562723).
+	// A full disk left the log empty without a warning (2026111918562723).
 	#[test]
 	fn a_log_that_cant_be_written_is_said_once() {
 		let _id = test_id("dfjyc");

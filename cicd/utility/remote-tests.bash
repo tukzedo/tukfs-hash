@@ -2,12 +2,12 @@
 
 ##	Purpose:
 ##		The unit tests and the integration test on a test box of another arch,
-##		such as vmDebARM64, on the release build of it. The box is held through
+##		such as vmDebARM64, on the release build of it. The box is taken with
 ##		the host lock, and put back the way it was found, by the VM state
 ##		helper's wrap, REMOTE_VM_WRAP in config.bash. Its work folder goes under
 ##		the box's temp root, made and removed there by box-side.bash.
 ##		The test binaries come from release-build.bash bins, before the box is
-##		taken, so it isn't held through a container start.
+##		taken, so it isn't locked while a container starts.
 ##	Syntax:
 ##		remote-tests.bash HOST TARGET BINARY
 ##		REMOTE_LOCK_WAIT in config.bash is how long to wait for a box someone
@@ -33,11 +33,11 @@ sshTo=(ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o Se
 ## To TUKFS_SKIP_WHY where the caller gives one, which says it itself.
 fSkip(){ if [[ -n "${TUKFS_SKIP_WHY:-}" ]]; then printf '%s\n' "$*" > "${TUKFS_SKIP_WHY}"; else echo "SKIP: $*"; fi; exit 3; }
 
-## Under the wrap, which locks HOST and has it up. Leaves "reached" once ssh answers, "skip" with the reason when the box can't take the tests, and "rc" with how the tests went.
+## Under the wrap, which locks HOST and has it up. Leaves "reached" once ssh connects, "skip" with the reason when the box can't take the tests, and "rc" with how the tests went.
 fHeld(){   ## fHeld HOST STAGE_PARENT
 	local host="$1" st="$2" out="" dir="" rc=0
 	if ! "${sshTo[@]}" "${host}" true < /dev/null; then
-		echo "${host} is up but doesn't answer ssh" > "${st}/skip"; return 0
+		echo "${host} is up but doesn't respond to ssh" > "${st}/skip"; return 0
 	fi
 	: > "${st}/reached"
 	out="$("${sshTo[@]}" "${host}" bash -s -- make < "${st}/stage/box-side.bash")" || { echo "${host}: no work folder there" >&2; echo 1 > "${st}/rc"; return 1; }
@@ -50,7 +50,7 @@ fHeld(){   ## fHeld HOST STAGE_PARENT
 	if tar -C "${st}/stage" -cf - . | "${sshTo[@]}" "${host}" "tar -C '${dir}' -xf -"; then
 		fBg "${sshTo[@]}" "${host}" bash "${dir}/box-side.bash" test "${dir}" || rc=$?
 	else
-		echo "${host}: could not copy the tests over" >&2; rc=1
+		echo "${host}: couldn't copy the tests over" >&2; rc=1
 	fi
 	## test removes it itself. This is for when it never got that far.
 	"${sshTo[@]}" "${host}" bash -s -- gone "${dir}" < "${st}/stage/box-side.bash" > /dev/null 2>&1 || true
@@ -98,7 +98,7 @@ fBg "${wrap}" wrap "${host}" --wait "${REMOTE_LOCK_WAIT:-900}" --why "${APP_NAME
 if ((rc > 128)); then exit "${rc}"; fi
 if [[ -s "${scratch}/skip" ]]; then fSkip "$(< "${scratch}/skip")"; fi
 if [[ ! -e "${scratch}/reached" ]]; then
-	fSkip "${host} wasn't reached (exit ${rc}): held elsewhere past ${REMOTE_LOCK_WAIT:-900} s, a guest that doesn't start here, or no ssh"
+	fSkip "${host} wasn't reached (exit ${rc}): locked elsewhere past ${REMOTE_LOCK_WAIT:-900} s, a guest that doesn't start here, or no ssh"
 fi
 got=1; { read -r got < "${scratch}/rc"; } 2> /dev/null || true
 ## The wrap's own 1 on a pass means the box wasn't put back, which isn't the tests' fault.

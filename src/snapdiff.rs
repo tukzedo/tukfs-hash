@@ -28,7 +28,7 @@ pub enum Source {
 	List(PathBuf),
 }
 
-/// A file to compare, by its name in each snapshot. find-new gives the inode too, which finds the old copy after a rename.
+/// A file to compare, by its name in each snapshot. find-new gives the inode too, so the old copy can be found after a rename.
 #[derive(Debug, PartialEq)]
 pub struct Pair {
 	pub old: PathBuf,
@@ -174,7 +174,7 @@ struct ChangeList<'a, R> {
 	sides: Option<(&'a Root, &'a Root)>,
 	line: Vec<u8>,
 	line_no: usize,
-	// find-new prints a line per extent, a file's all together.
+	// find-new prints a line per extent, and a file's lines come together.
 	last_name: Vec<u8>,
 	removed: BTreeSet<PathBuf>,
 	added: BTreeSet<PathBuf>,
@@ -271,7 +271,7 @@ impl<R: BufRead> Iterator for ChangeList<'_, R> {
 	}
 }
 
-// A - name pairs only with a + by that name, so --new has to have something there, and a + name needs --old to. The rest would be kept to the end for nothing, which a mass delete makes millions of. Only a name that isn't there at all is dropped. A symlink or mount on the way, or any other error, keeps it, so it's still counted as missing or not checked when it's compared.
+// A - name pairs only with a + by that name, so --new has to have something there, and a + name needs --old to. Any other name would be kept to the end for nothing, and a mass delete gives millions of them. Only a name that isn't there at all is dropped. A symlink or mount on the way, or any other error, leaves the name in, so it's still counted as missing or not checked when it's compared.
 fn can_pair(other: Option<&Root>, rel: &Path) -> bool {
 	other.is_none_or(|root| !matches!(root.open_at(rel, libc::O_PATH), Err(e) if e.kind() == io::ErrorKind::NotFound))
 }
@@ -483,7 +483,7 @@ fn taken_at(info: &SubvolInfo) -> Option<SystemTime> {
 	UNIX_EPOCH.checked_add(Duration::new(otime.sec, otime.nsec))
 }
 
-// Old copies of renamed files, found by inode. Snapshots of one btrfs subvolume keep inode numbers, and the birth time rules out a number used again after a delete. One walk serves every file the pair needs.
+// Old copies of renamed files, found by inode. Snapshots of one btrfs subvolume keep inode numbers, and the birth time rules out a number used again after a delete. One walk finds the old copies of every file in `held`.
 fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held], tally: &mut Tally) {
 	let dev = old.dev;
 	let mut dirs = vec![old.path.clone()];
@@ -623,7 +623,7 @@ impl<'a> Checker<'a> {
 		self.settle(&name, old, (&pair.new, &new_md));
 	}
 
-	// A birth time later than now isn't trusted, as scan doesn't trust a date in the future, so that file waits for the walk.
+	// A birth time after the run started isn't trusted, as scan doesn't trust a date in the future. A file with one waits for the walk.
 	fn born_since_old(&self, md: &Metadata) -> bool {
 		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f && b <= self.now)
 	}
@@ -648,7 +648,7 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	// zfs diff names attributes kept as a folder, by xattr=dir or a set too big for sa, as "<xattrdir>" beneath their file. No path reaches them, and they aren't the file's bytes. A real folder by that name is found by stat before this is asked, and an owner that isn't there is still missing.
+	// zfs diff names attributes stored as a folder, by xattr=dir or a set too big for sa, as "<xattrdir>" beneath their file. No path opens them, and they aren't the file's bytes. A real folder by that name is found by stat before this is called, and a file with attributes that isn't there is still missing.
 	fn is_attribute(&self, rel: &Path) -> bool {
 		let Some(owner) = rel.ancestors().find(|a| a.file_name() == Some(OsStr::new("<xattrdir>"))).and_then(Path::parent) else {
 			return false;
@@ -759,7 +759,7 @@ fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: imp
 					err!("line {line_no} not understood: {}", escape_name(&text));
 				}
 			}
-			// The run fails, so the rest is only read to count them.
+			// The run fails, so the rest of the list is read only to count those lines.
 			Entry::Outside(line_no, text) => outside.get_or_insert((0, line_no, text)).0 += 1,
 			Entry::Pair(pair) => {
 				listed += 1;
@@ -919,7 +919,7 @@ mod tests {
 			fs::write(new.join(name), b"n").unwrap();
 		}
 		fs::create_dir(new.join("now_a_folder")).unwrap();
-		// Through a symlink it isn't in --new, but that's for the compare to count, as before.
+		// via_link/f isn't in --new through the symlink, but the compare counts that, as before.
 		fs::create_dir(new.join("real")).unwrap();
 		fs::write(new.join("real/f"), b"n").unwrap();
 		std::os::unix::fs::symlink("real", new.join("via_link")).unwrap();
@@ -1085,7 +1085,7 @@ transid marker was 12\n";
 		};
 		// Taken before both were made, so neither waits for the walk.
 		assert_eq!(found_in(Some(before)), (0, 1, 1, 0));
-		// Not known, or taken after, and both wait for it, to the same end.
+		// When the time isn't known, or is after both, both wait for the walk and come out the same.
 		assert_eq!(found_in(None), (2, 1, 1, 0));
 		assert_eq!(found_in(Some(born + Duration::from_secs(60))), (2, 1, 1, 0));
 	}
@@ -1202,7 +1202,7 @@ transid marker was 12\n";
 			fs::write(p, bytes).unwrap();
 			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
 		};
-		// Same size and time as the listed file, other bytes, so reaching it flags the file.
+		// It has the listed file's size and time with other bytes, so following the symlink to it flags the file.
 		put(&elsewhere.join("f"), b"ffff");
 		put(&new.join("in/f"), b"FFFF");
 		put(&old.join("out/f"), b"FFFF");
@@ -1256,7 +1256,7 @@ transid marker was 12\n";
 		// The attribute folders of a file, a folder and the dataset itself.
 		let attrs = ["M\t@/a", "M\t@/a/<xattrdir>", "M\t@/a/<xattrdir>/user.blake3.date", "-\t@/d/<xattrdir>/user.x", "+\t@/d/<xattrdir>/user.x", "M\tF\t@/<xattrdir>/user.y"];
 		assert_eq!(run_on(&attrs), 0);
-		// An owner that isn't there is still a missing file.
+		// A file that isn't there is still missing when only its attributes are listed.
 		assert_eq!(run_on(&["M\t@/a", "M\t@/gone/<xattrdir>/user.x"]), 8);
 		// A real folder by that name is compared like any other.
 		fs::create_dir(old.join("d/<xattrdir>")).unwrap();

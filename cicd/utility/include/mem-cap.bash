@@ -4,8 +4,7 @@
 
 ##	Purpose:
 ##		The memory cap for cicd.bash and every container it starts, so a
-##		runaway step dies alone, before the OOM killer reaches for the
-##		desktop. A step killed at the cap exits 137, and fails.
+##		runaway step dies alone, before the OOM killer picks the desktop. A step killed at the cap exits 137, and fails.
 ##			fMemCap           set mem_cap from CICD_MEM_CAP, a docker size
 ##			                  such as 24g, or none for no cap, which leaves
 ##			                  mem_cap empty. Unset or empty is the default,
@@ -76,7 +75,7 @@ fMemCtrArgs(){
 	return 0
 }
 
-## The containers are dockerd's children, outside the scope, so fMemCtrArgs caps them apart. OOMPolicy continue, so a step the kernel kills fails, and the run's cleanup still runs. systemd wants the suffix upper case.
+## The containers are dockerd's children, outside the scope, so fMemCtrArgs caps them separately. OOMPolicy continue, so a step the kernel kills fails, and the run's cleanup still runs. systemd wants the suffix upper case.
 fMemScope(){   ## fMemScope SCRIPT [ARG...]
 	local -a props=()
 	[[ -z "${TUKFS_MEM_SCOPE:-}" ]] || return 0

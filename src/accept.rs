@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Takes what the named files read as now as good. A mismatch keeps the old checksums, so without this a file changed on purpose, with its time put back, is reported on every run.
+// Takes the named files' current contents as good. A mismatch leaves the old checksums in place, so without this a file changed on purpose, with its time put back, is reported on every run.
 
 use crate::db::{self, Hashed, Kind, Msg, RunStatus};
 use crate::mounts::Mount;
@@ -102,7 +102,7 @@ fn one(conn: &mut Connection, run_id: i64, given: &Path, mounts: &[Mount], buf: 
 	let sums = read(buf)?;
 	let again = read(buf)?;
 	if again != sums {
-		return Err(format!("read as {}, then as {}. Nothing taken; check the RAM", b64u_encode(&sums.b3), b64u_encode(&again.b3)));
+		return Err(format!("read as {}, then as {}. Nothing was taken; check the RAM", b64u_encode(&sums.b3), b64u_encode(&again.b3)));
 	}
 
 	let pbytes = path.as_os_str().as_bytes();
@@ -168,7 +168,7 @@ fn one(conn: &mut Connection, run_id: i64, given: &Path, mounts: &[Mount], buf: 
 	out!("accepted\t{}\t{}", show_path(&path), b64u_encode(&sums.b3));
 	// The scan's row stays as it was, and goes on being reported.
 	if prior.is_none() {
-		out!("\tno scan has a record under this name; one may have it under another, such as through a bind mount");
+		out!("\tno scan has a record under this name; there may be one under another name, such as through a bind mount");
 	}
 	if before.nlink() > 1 {
 		out!("\t{} other name(s) for this file keep their own records; accept those too", before.nlink() - 1);

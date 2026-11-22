@@ -4,7 +4,7 @@
 ##		typed into a fake terminal the way a person types, mistakes and all,
 ##		then run for real against the release binary, so the output shown
 ##		can't go stale. 50 fps: the cursor eases between cells, and output
-##		scrolls smoothly once it reaches the bottom. The loop ends on a cut to
+##		scrolls smoothly once it gets to the bottom. The loop ends on a cut to
 ##		black. Pillow only, so nothing opens a window or needs a screen.
 ##		From convert-base-v2's gen-demo-gif.py, with shcl's expected exit codes.
 ##	Syntax: gen-demo-gif.py --scenario FILE --out FILE --bin PATH [--seed N] [--font NAME] [--quiet]
@@ -195,7 +195,7 @@ def optimize_gif(path: Path) -> str | None:
     except FileNotFoundError:
         return "no gifsicle"
     except OSError as e:
-        why = f"could not start: {e}"
+        why = f"couldn't start: {e}"
     except subprocess.TimeoutExpired:
         why = f"didn't finish in {GIFSICLE_TIMEOUT_S} s"
     else:
@@ -211,7 +211,7 @@ def optimize_gif(path: Path) -> str | None:
 
 
 def find_font(prefs: list[str], size: float) -> tuple[ImageFont.FreeTypeFont, str]:
-    ##	fc-match always answers with something, so the family has to match
+    ##	fc-match always returns something, so the family has to match
     ##	before it's taken. Plain "monospace" takes whatever it gets.
     for name in [*prefs, "monospace"]:
         try:
@@ -498,7 +498,7 @@ def remove_home(home: Path, token: str) -> None:
     except OSError:
         ok = False
     if not ok:
-        sys.stderr.write(f"gen-demo-gif: left {home}, it doesn't look like the one made here\n")
+        sys.stderr.write(f"gen-demo-gif: left {home}, since it doesn't look like the one made here\n")
         return
     shutil.rmtree(home)
 
@@ -739,8 +739,8 @@ class Movie:
     ##	Frames with their times. A frame the same as the one before makes that
     ##	one longer. Times round to whole 50 fps frames, with the rest added to
     ##	the next, so typing keeps its pace. Encoded 32 at a time, each batch
-    ##	behind the last frame of the one before, since held raw they ran to
-    ##	over a GB.
+    ##	behind the last frame of the one before, since the raw frames kept in
+    ##	memory came to over a GB.
     BATCH = 32
 
     def __init__(self) -> None:

@@ -83,7 +83,7 @@ The first scan reads every file and records it. Run the same scan again on a lat
 
 - It stops cleanly on Ctrl+C, and `--resume` picks up where it left off. A file that was read since the start of the day, or since the `--since` date, isn't read again. `--resume` only takes the newest scan, and only when that scan had the same roots and the same `--verify` setting, so 2 scripts that share one database can't finish each other's runs.
 
-- Progress lines and the summary show roughly how far each group has got, as a percent. A root that's a whole filesystem, or a mounted btrfs subvolume, is measured against the space used on its filesystem. A root that's a folder is counted by a walk beside the scan, and the percent shows once that count is in. It's a rough figure, since compression, reflinks, snapshots, and other subvolumes make the space used differ from what gets read.
+- Progress lines and the summary show roughly how far along each group is, as a percent. A root that's a whole filesystem, or a mounted btrfs subvolume, is measured against the space used on its filesystem. A root that's a folder is counted by a walk beside the scan, and the percent shows once that count is in. It's a rough figure, since compression, reflinks, snapshots, and other subvolumes make the space used differ from what gets read.
 
 - `scan --verify` is a quicker check between full runs. It reads again only the files that have a checksum stored at their current size and time, even ones that were read earlier that day, and it doesn't write any attributes. New and edited files aren't read until the next full scan.
 
@@ -103,7 +103,7 @@ The first scan reads every file and records it. Run the same scan again on a lat
 
 A reader trusts the checksum only when both the size and time match the file. The time is written after the checksum, and the inode is written last, so a write that stops part way is thrown away. An attribute that can't be read, such as on a disk error, is reported as `xattr-error`, and that file's attributes are left as they are.
 
-A file is skipped without being read only when `user.blake3.inode` matches the file's own device and inode, and the checksum next to it. A copy that's made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. A file is never skipped by attributes from before `user.blake3.inode` existed.
+The attributes let a scan skip a file without reading it only when `user.blake3.inode` matches the file's own device and inode and the checksum next to it, and `user.blake3.date` isn't older than the start of the day, or the `--since` date. A copy that's made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. A file is never skipped by attributes from before `user.blake3.inode` existed.
 
 With `--rmlint`, `user.rmlint.blake2b.cksum` and `user.rmlint.blake2b.mtime` are written the same way `rmlint --xattr` writes them, so rmlint can use them without reading the file. A current rmlint checksum that doesn't match is reported and left as it was. blake2b is slower than blake3, at about a CPU second per GB, and the difference only shows when the disk is faster than that.
 
@@ -122,7 +122,7 @@ tukfs-hash prune --db FILE
 tukfs-hash snapdiff --old DIR --new DIR (--zfs-diff FILE --mount DIR | --find-new FILE | --list FILE) [--all]
 ~~~
 
-`tukfs-hash --help` lists the options, and so does `-h` or `--help` after a command. Each command refuses an option that isn't shown for it, rather than ignoring it. `report` and `gone` list 200 lines unless `--limit` gives another number, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root so it can read every file. The database is handed back to the user who ran sudo when the run ends, and so is a `--log` file the scan makes. Each one's folder has to be that user's or root's.
+`tukfs-hash --help` lists the options, and so does `-h` or `--help` after a command. Each command refuses an option that isn't shown for it, rather than ignoring it. `report` and `gone` list 200 lines unless `--limit` gives another number, and say on stderr how many were left off. `snapdiff --all` also lists the files that didn't change. Run `scan` as root so it can read every file. The database is handed back to the user who ran sudo when the run ends, and a `--log` file the scan makes is handed back as soon as it's made. Each one's folder has to be that user's or root's.
 
 `accept` reads each file twice and takes its current contents as good. It's for a file that was changed on purpose and had its time put back, or one that was restored from a backup and checked by hand. It replaces the database record and any blake3 that's already on the file, and removes rmlint's blake2b if that no longer matches. On NTFS, APFS, or HFS+ only the database record changes, and from then on a scan there goes by that record rather than by any attributes still on the file. Each name of a hard-linked file has its own record, so name each one.
 

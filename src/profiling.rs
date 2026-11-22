@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The cicd profiler stage's sampler, only with --features profiling. It samples on SIGPROF in this process, since perf can't record on b23. A run with TUKFS_PROFILE_DIR set adds its stacks there under TUKFS_PROFILE_LABEL, then draws everything in the dir as one flamegraph, so a first scan and a rescan end up side by side. TUKFS_PROFILE_CHECK runs the attribution check instead of the command. See design.md, Profiling.
+// The cicd profiler stage's sampler, built only with --features profiling. It samples on SIGPROF in this process, since perf can't record on b23. A run with TUKFS_PROFILE_DIR set adds its stacks there under TUKFS_PROFILE_LABEL, then draws everything in the dir as one flamegraph, so a first scan and a rescan end up side by side. TUKFS_PROFILE_CHECK runs the attribution check instead of the command. See design.md, Profiling.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 
 // Under the kernel's 250 Hz tick, so each busy thread's samples keep up.
 const FREQ: i32 = 199;
-// Not libc. A scan's reads and attribute calls end there, and dropping those samples would leave the I/O out of the graph. The unwinder itself, the vdso and the loader stay out, since unwinding from inside them isn't safe.
+// libc isn't on the list, since a scan's reads and attribute calls end there, and dropping those samples would leave the I/O out of the graph. The unwinder itself, the vdso and the loader stay out, since unwinding from inside them isn't safe.
 const BLOCKLIST: [&str; 3] = ["libgcc", "vdso", "ld-linux"];
 
-/// pprof files a sample under the start address of each function on its stack, then names the whole bucket from the inline frames of whichever sample opened it. LTO folds most of a scan into a few functions, so one name took all of each. It asks libgcc for that start address through this symbol, and one defined in the binary wins over the shared library's, so answering with the address itself files each instruction on its own. From shcl's.
+/// pprof files a sample under the start address of each function on its stack, then names the whole bucket from the inline frames of whichever sample opened it. LTO folds most of a scan into a few functions, so one name got every sample in each. pprof asks libgcc for that start address through this symbol, and one defined in the binary wins over the shared library's, so returning the address itself files each instruction on its own. Copied from shcl's.
 #[unsafe(no_mangle)]
 pub extern "C" fn _Unwind_FindEnclosingFunction(pc: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
 	pc
@@ -109,7 +109,7 @@ fn asm_name(ip: usize) -> Option<&'static str> {
 	);
 	starts.sort_unstable();
 	let i = starts.partition_point(|s| s.0 <= ip).checked_sub(1)?;
-	// The last one's end isn't known, and none of them is 16 KB long.
+	// The last one's end isn't known, and each of them is under 16 KB.
 	let end = starts.get(i + 1).map_or(starts[i].0 + 16384, |s| s.0);
 	(ip < end).then_some(starts[i].1)
 }
@@ -118,7 +118,7 @@ fn asm_name(_: usize) -> Option<&'static str> {
 	None
 }
 
-// Everything in the dir, into flame.svg beside it. The subtitle has each run's user and system CPU against its wall time, which is where waiting on the disk shows, and how many samples were kept. flame-report.py reads it.
+// Draws everything in the dir into its flame.svg. The subtitle has each run's user and system CPU against its wall time, which is where waiting on the disk shows, and how many samples were kept. flame-report.py reads it.
 fn draw(dir: &Path) -> Result<(), String> {
 	let read = |name: &str| {
 		let p = dir.join(name);

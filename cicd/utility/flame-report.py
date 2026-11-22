@@ -126,7 +126,7 @@ def fParse(path: Path) -> tuple[int, list[Frame], str, float]:
         name = SAMPLES_RE.sub("", html.unescape(fm.group(1)))
         frames.append(Frame(name, x, y, w))
     if not total or not frames:
-        fSkip(f"could not parse a flamegraph out of {path}")
+        fSkip(f"couldn't parse a flamegraph out of {path}")
     if not text.rstrip().endswith("</svg>"):
         fSkip(f"{path} doesn't end in </svg>; cut off mid-write")
     ys = sorted({fr.y for fr in frames})
@@ -195,8 +195,8 @@ def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
     for fr in frames:
         name = fr.name
         byName.setdefault(name, []).append(fr)
-        ##	Once per stack: a recursive call, or one name inlined at 2 depths,
-        ##	sits inside itself and would be counted again.
+        ##	Once per stack. A recursive call, or one name inlined at 2 depths,
+        ##	is nested inside itself and would be counted again.
         up = parent(fr)
         while up and up.name != name:
             up = parent(up)
@@ -217,7 +217,7 @@ def fAnalyze(total: int, frames: list[Frame], step: float, top: int) -> None:
     def pct(v: float) -> str:
         return f"{v / total * 100:5.1f}%"
 
-    ##	The run's own steps sit right under the root, one per scan.
+    ##	The run's own steps are right under the root, one per scan.
     rootY = max(rows)
     steps = rows.get(rootY - step, [])
     if steps:
@@ -287,7 +287,7 @@ def main() -> None:
         path = a.dir / name
 
     ##	SEEN only when the marker names the newest graph exactly, and --file never
-    ##	moves it: a marker ahead of every graph would silence the gate for good.
+    ##	moves it. A marker ahead of every graph would silence the gate for good.
     marker = a.dir / SEEN_FILE
     if a.check and not a.force and not a.file:
         seen = ""
@@ -313,7 +313,7 @@ def main() -> None:
         try:
             marker.write_text(ts + "\n")
         except OSError as e:
-            sys.stderr.write(f"flame-report: could not write marker: {e}\n")
+            sys.stderr.write(f"flame-report: couldn't write marker: {e}\n")
 
 
 if __name__ == "__main__":

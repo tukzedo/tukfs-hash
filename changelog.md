@@ -26,7 +26,7 @@
 
 - snapdiff reads its change list as it goes, so a long list doesn't grow its memory. `--find-new` lists files in the change list's order.
 
-- SQLite 3.54.1, for RUSTSEC-2026-0459.
+- SQLite is updated to 3.54.1, for RUSTSEC-2026-0459.
 
 - A release run on `main` tags the commit and puts the release set on the git host.
 
@@ -48,7 +48,7 @@
 
 - A build with uncommitted changes shows `-dirty` after the build number, and is never shown as a release.
 
-- Release builds for x86_64 and arm64 Linux, each with a `.deb` and an `.rpm`, and a sha256 sums file, all named by version. 2 builds of one commit give the same bytes.
+- There are release builds for x86_64 and arm64 Linux, each with a `.deb` and an `.rpm`, and a sha256 sums file, all named by version. 2 builds of one commit give the same bytes.
 
 - `dogfood_tukfs-hash` runs the newest dogfood build, and keeps a few older ones.
 

@@ -8,10 +8,10 @@
 ##		- Says what it'll do and asks first, unless given --yes. When the same
 ##		  bytes are already in place it changes nothing, so it's safe to run
 ##		  again.
-##		- Bash 3.2 and up: no namerefs, mapfile, or associative arrays.
+##		- Runs on Bash 3.2 and up, so no namerefs, mapfile, or associative arrays.
 ##	Syntax:
 ##		bash <(curl -fsSL https://raw.githubusercontent.com/tukzedo/tukfs-hash/main/install.bash) [--help]
-##	Exit: 0 = installed or already in place, 1 = refused, failed or declined.
+##	Exit: 0 = installed or already in place, 1 = refused, failed, or declined.
 ##	History: At bottom of script.
 
 ##	Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
@@ -136,7 +136,7 @@ fMain(){
 
 	##	What to fetch, and where it goes.
 
-	[[ "$(uname -s)" == "Linux" ]] || fDie "${PROG} runs only on Linux, and this is $(uname -s)"
+	[[ "$(uname -s)" == "Linux" ]] || fDie "${PROG} runs only on Linux, but this is $(uname -s)"
 	cpu="$(uname -m)"
 	case "${cpu}" in
 		x86_64|amd64)  arch="x86_64" ;;
@@ -148,13 +148,13 @@ fMain(){
 	glibc=""
 	if command -v getconf >/dev/null 2>&1; then
 		glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
-		[[ "${glibc}" == "glibc "* ]] || fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, and this system doesn't use glibc"
+		[[ "${glibc}" == "glibc "* ]] || fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, but this system doesn't use glibc"
 		glibc="${glibc#glibc }"
-		## Checked as text before any arithmetic sees it.
+		## Checked as text first, since bash arithmetic runs a $(...) hidden in a value.
 		[[ "${glibc}" =~ ^([0-9]+)\.([0-9]+) ]] || fDie "can't read the glibc version '${glibc}'"
 		major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
 		if ((10#${major} < GLIBC_MAJOR || (10#${major} == GLIBC_MAJOR && 10#${minor} < GLIBC_MINOR))); then
-			fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, and this system has ${glibc}"
+			fDie "the builds need glibc ${GLIBC_MAJOR}.${GLIBC_MINOR} or newer, but this system has ${glibc}"
 		fi
 	fi
 
@@ -257,7 +257,7 @@ fMain(){
 		echo
 	fi
 
-	## No CDPATH, which would make cd print the folder, and a relative TMPDIR could match it.
+	## CDPATH is cleared, since with it set cd prints the folder, and a relative TMPDIR could resolve against it.
 	tmpRoot="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)" || fDie "there's no temp folder at ${TMPDIR:-/tmp}"
 	work="$(mktemp -d "${tmpRoot}/${PROG}-install.XXXXXX")" || fDie "couldn't make a work folder in ${tmpRoot}"
 	trap fWorkGone EXIT
@@ -281,7 +281,7 @@ fMain(){
 	newVer="$("${staged}" --version 2>&1)" || fDie "the download doesn't run on this system, so nothing was installed: ${newVer%%$'\n'*}"
 	newVer="${newVer%%$'\n'*}"
 
-	## -T so a link to a folder that turned up since the check gets replaced, not moved into.
+	## -T so a link to a folder that turned up since the check gets replaced rather than moved into.
 	fAsTarget mv -fT -- "${staged}" "${destPath}"               || fDie "couldn't put ${PROG} in place at ${destPath}"
 
 	echo

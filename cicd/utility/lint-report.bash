@@ -94,7 +94,7 @@ if [[ "${lastLine}" == *"CI/CD: done."* ]] || grep -qE '^\[ FAILED: |CICD ABORTE
 
 ## Before the body, so a caller that closes stdout early still records the look.
 if ((check)) && ((! noMark)) && ((finished)) && [[ -z "${file}" && "${ts}" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
-	printf '%s\n' "${ts}" > "${marker}" 2>/dev/null || echo "lint-report: could not write marker: ${marker}" >&2
+	printf '%s\n' "${ts}" > "${marker}" 2>/dev/null || echo "lint-report: couldn't write marker: ${marker}" >&2
 fi
 
 ## The backup's rar file list. A crate's absence_of_deprecated_warning.rs isn't a finding.

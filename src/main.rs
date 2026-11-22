@@ -42,7 +42,7 @@ const VERSION: &str = concat!("tukfs-hash v", env!("CARGO_PKG_VERSION"), env!("T
 const BUILD_MINUTES: &str = env!("TUKFS_HASH_BUILD_MINUTES");
 
 const USAGE: &str = "\
-tukfs-hash - checksum every file, remember it, and notice when one changes on its own
+tukfs-hash - checksum every file, store the checksums, and notice when a file changes on its own
 
 Usage:
 	tukfs-hash scan --db FILE --root DIR [--root DIR ...] [options]
@@ -59,24 +59,26 @@ command shows this help.
 
 scan options:
 	--exclude DIR       Don't go into DIR. Repeatable.
-	--no-xattr DIR      Checksum files under DIR, but leave no attributes on them. Repeatable.
-	--no-xattrs         Leave no attributes anywhere.
-	--rmlint            Take blake2b too for every file read, from the same read, and
-	                    keep it in the database. Where rmlint's own attributes are
-	                    missing or out of date, write them as `rmlint --xattr` would.
+	--no-xattr DIR      Checksum files under DIR, but don't write attributes to them. Repeatable.
+	--no-xattrs         Don't write attributes anywhere.
+	--rmlint            Also compute blake2b for every file read, in the same
+	                    read, and store it in the database. Where rmlint's own
+	                    attributes are missing or out of date, write them as
+	                    `rmlint --xattr` would.
 	--threads DIR=N     Workers for the disks under DIR. Default 1 with a hard drive, else 2, or 4 on NVMe.
 	--since YYYY-MM-DD  Skip files checksummed since then with the same size and time. Default today.
-	--resume            Continue the last scan, if it didn't finish, with its date.
-	                    Refused when its roots differ, or it was a --verify
-	                    and this isn't, or the other way round.
-	--verify            Only read files with a checksum stored at their size and
-	                    time, however recently, and compare. New and edited files
-	                    are left for the next full scan. Writes no attributes.
+	--resume            Continue the last scan with its date, if it didn't finish.
+	                    It's refused when the roots differ, or when one of the 2
+	                    runs is a --verify and the other isn't.
+	--verify            Read again only the files that have a checksum stored at
+	                    their size and time, even ones read earlier today, and
+	                    compare. New and edited files are left for the next full
+	                    scan. Attributes aren't written.
 	--progress SECS     Seconds between progress lines. Default 30.
 	--log FILE          Append every line the scan prints to FILE, in full. On a
-	                    terminal, a line too long for it is cut with a ~ at the
-	                    end, and a summary line is broken at its | marks, and a
-	                    long list in it at its commas.
+	                    terminal, a line that's too wide is cut short with a ~.
+	                    There, a summary line is broken at its | marks, and a
+	                    long list in one is broken at its commas.
 
 plan takes --threads as scan does, and shows the groups a scan would use.
 
@@ -84,39 +86,43 @@ report and gone options:
 	--run N             The run to show. report's default is the newest run of
 	                    any kind, accept runs included. gone's is the newest
 	                    finished scan.
-	--kind KIND         report only events of KIND.
-	--limit N           List at most N lines. Default 200. The counts are of
-	                    everything, and stderr says how many lines were left off.
+	--kind KIND         List only events of KIND.
+	--limit N           List at most N lines. Default 200. The counts include
+	                    everything, and a note on stderr says how many lines
+	                    were left off.
 
 snapdiff options:
 	--all               Also list files whose time moved, files that
 	                    compared the same, and files only in --new.
 
 A scan never crosses into another mount. Each root's mount is walked on its
-own, and roots on the same disks share workers so no disk is read by two at
-once. Ctrl+C stops after the files in hand; --resume picks up from there.
-A second Ctrl+C ends it at once, with exit 130. A root, or a path given to
---exclude or --no-xattr, that can't be resolved stops the scan before it
-starts. A root in an --exclude folder is skipped, and named.
+own, and roots on the same disks share workers, so a disk is never read by 2
+workers at once. Ctrl+C stops the scan cleanly, and --resume picks up where it
+left off. A second Ctrl+C ends it at once, with exit 130. If a root or an
+--exclude or --no-xattr path can't be resolved, the scan stops before it
+starts. A root inside an --exclude folder is skipped, and the scan says so.
 
 A file that reads differently from what was stored, at the same size and
-time, is read again with its cache dropped. If the second read matches, it's
-a cache-mismatch and only memory was wrong. If not, the stored checksums are
-left as they were, so every later scan reports it again.
+time, is read again with its cache dropped. If the second read matches what
+was stored, the event is a cache-mismatch, and only memory was wrong. If it
+doesn't, the stored checksums are left as they were, so every later scan
+reports the file again.
 
-accept reads each PATH twice and takes what it reads as now as good: for a
-file changed on purpose with its time put back, or one restored and checked
-by hand. It replaces the database record and any blake3 set on the file,
-removes rmlint's blake2b if it no longer matches, and logs an accepted event.
-Each name of a hard-linked file has its own record.
+accept reads each PATH twice and takes its current contents as good. It's for
+a file changed on purpose with its time put back, or one restored and checked
+by hand. It replaces the database record and any blake3 already on the file,
+removes rmlint's blake2b if that no longer matches, and logs an accepted
+event. Each name of a hard-linked file has its own record.
 
-gone lists names the newest finished scan, or run N, didn't see: under its
-roots, with no event of their own in that run, not under a folder it
-couldn't list, and not last seen by another run from a deeper root, which
-may be a mount the walk stops at. A folder left out with --exclude counts as
-not seen.
+gone takes the newest finished scan, or run N, and lists the names under its
+roots that the run didn't see. A name that had an event of its own in that
+run, or that's under a folder the run couldn't list, isn't counted. Neither
+is a name that another run last saw from a deeper root, since that root may
+be a mount the walk stops at. A folder left out with --exclude counts as not
+seen.
 
-prune removes contents no name points at any more. Each edit leaves one.
+prune removes the records of contents that don't have a name pointing at them
+any more. Every edit to a file leaves one behind.
 
 Attributes, as nemo-anywhere reads them:
 	user.blake3.b64u    checksum, base64url with no padding
@@ -126,22 +132,24 @@ Attributes, as nemo-anywhere reads them:
 	user.blake3.inode   device:inode:checksum of the file it was taken from
 rmlint's user.rmlint.blake2b.* are checked when present and current, and
 written with --rmlint.
-Files on NTFS, APFS or HFS+ are read but never get attributes, and the
-database can't go on one. Linux's drivers for them aren't trusted to write.
+Files on NTFS, APFS, or HFS+ are read but never get attributes, and the
+database can't be put on one, since Linux's drivers for them aren't trusted
+to write.
 
-snapdiff takes `zfs diff` output with or without -H, -t and -F, and compares
-M and R lines, and a path with both - and +. Lines outside --mount, and names
-that aren't relative, are refused. A file renamed between btrfs snapshots is
-found in --old by its inode.
+snapdiff takes `zfs diff` output with or without -H, -t, and -F. It compares
+M and R lines, and any path that has both a - line and a + line. It refuses
+lines outside --mount and names that aren't relative. A file renamed between
+btrfs snapshots is found in --old by its inode.
 
 Names that aren't plain text are printed with \\xHH escapes, and a backslash
 as \\\\.
 
 Exit codes: 0 fine, 1 error, 2 stopped, 4 mismatches or read errors found,
-8 some files or folders couldn't be checked, or input wasn't understood
-(snapdiff). 2, 4 and 8 add up, so 6 is a stop after a mismatch and 12 is both
-kinds found. A resumed scan counts what its earlier parts found too. accept
-exits 1 if any file wasn't taken. 130 is a scan ended by a second signal.
+8 some files or folders couldn't be checked, or some snapdiff input wasn't
+understood. The codes 2, 4, and 8 add up, so 6 is a stop after a mismatch,
+and 12 means both kinds were found. A resumed scan counts what its earlier
+parts found too. accept exits 1 if any file wasn't taken. A scan ended by a
+second signal exits 130.
 
 ";
 
@@ -281,7 +289,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 			}
 			"--since" => {
 				let v = take_text(&mut it, a)?;
-				since = Some(util::parse_date(&v).ok_or_else(|| format!("--since: {v} is not YYYY-MM-DD"))?);
+				since = Some(util::parse_date(&v).ok_or_else(|| format!("--since: {v} isn't YYYY-MM-DD"))?);
 			}
 			"--resume" => resume = true,
 			"--verify" => mode = scan::Mode::Verify,
@@ -393,7 +401,7 @@ fn real_main(argv: &[OsString]) -> Result<i32, String> {
 fn runs(db: &std::path::Path) -> Result<i32, String> {
 	let conn = db::open_ro(db)?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
-	// Until a newer version has opened it for writing.
+	// An older database has no verify column until a newer version opens it for writing.
 	let verify = if db::has_column(&conn, "runs", "verify").map_err(e)? { "verify" } else { "0" };
 	let mut st = conn.prepare(&format!("SELECT id, started_us, finished_us, cutoff_us, status, host, summary, {verify} FROM runs ORDER BY id")).map_err(e)?;
 	let rows = st
@@ -443,7 +451,7 @@ fn prune(db_arg: &std::path::Path) -> Result<i32, String> {
 	Ok(0)
 }
 
-// The ones that mean damage first.
+// Kinds that mean damage sort first.
 fn damage_first(k: db::Kind) -> u8 {
 	use db::Kind as K;
 	match k {

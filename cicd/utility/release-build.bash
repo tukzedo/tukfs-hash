@@ -32,7 +32,7 @@ set -Eeuo pipefail
 
 me="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${me}/include/leak-common.bash"
-## Not a leak check, so not held to a quarter.
+## Not a leak check, so not limited to a quarter.
 fCpuCap
 trap 'fStopDescendants; fScratchGone || true' EXIT
 

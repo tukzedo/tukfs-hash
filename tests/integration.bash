@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-##	Purpose: End to end, as a normal user, on a filesystem with user xattrs. No
-##		root, and no mounts but those of steps 23, 25 and 30, in a user
-##		namespace, so the rest of the mount rules are left to `plan` on a
-##		real box.
+##	Purpose: Tests tukfs-hash end to end as a normal user, on a filesystem
+##		with user xattrs. It needs no root. The only mounts are those of
+##		steps 23, 25, and 30, in a user namespace, so the rest of the mount
+##		rules are left to `plan` on a real box.
 ##	Usage: tests/integration.bash [--keep-temp] [BINARY]
 ##		Works in <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>, or under
 ##		TMPDIR when HOST_TEMP isn't set, so HOST_TEMP picks the filesystem.
@@ -42,10 +42,10 @@ fi
 token="$$-${RANDOM}${RANDOM}-${EPOCHREALTIME}"
 # A TERM to this shell alone leaves its children writing into the folder.
 source "${here}/cicd/utility/include/stop-descendants.bash"
-# A Ctrl+C reaches a running scan too, which stops and exits on its own, and with no trap bash would go on to the next step. A stop that comes between 2 command substitutions in one word makes bash 5.2 fail to parse the trap, and set -e then exits 2, which still cleans up.
+# A Ctrl+C goes to a running scan too, which stops and exits on its own, and without a trap bash would go on to the next step. A stop that comes between 2 command substitutions in one word makes bash 5.2 fail to parse the trap, and set -e then exits 2, which still cleans up.
 fStopOnSignals
 
-# Gives back what a step made unreadable and a stop or kill kept it from putting back, so the folder can be removed or looked at. find doesn't follow links.
+# Restores the permissions a step took away when a stop or kill kept it from putting them back, so the folder can be removed or looked at. find doesn't follow links.
 fUnlock() {
 	find "${1}" -xdev \( -type d ! -perm -u=rwx -exec chmod u+rwx {} + \) -o \( -type f ! -perm -u=r -exec chmod u+r {} + \) 2> /dev/null || true
 }
@@ -85,7 +85,7 @@ fSafeRm() {
 		rm -f -- "${p}/.test-kept" "${p}/run.pid" "${p}/.test-run" && rmdir -- "${p}"
 }
 
-# Ours, and its run gone, such as a killed one's. A kept one waits 2 days (2026102518150001). A folder with no marker of this script's, such as a cicd run's, or another user's, isn't ours. The marks are plain files before they're read, since a FIFO there would hang the read (2026111011092325).
+# Removes a folder of ours whose run is gone, such as a killed run's. A kept one waits 2 days (2026102518150001). A folder without this script's marker, such as a cicd run's or another user's, isn't ours. The marks are checked to be plain files before they're read, since a FIFO there would hang the read (2026111011092325).
 fSweep() {   ## fSweep BASE
 	local old='' pid='' got=''
 	mkdir -p -- "${1}"
@@ -108,7 +108,7 @@ fNewWork() {   ## fNewWork BASE OUT
 	printf -v stamp '%(%Y%m%d-%H%M%S)T' -1
 	printf -v out_nw '%s/%s_%03d' "${1}" "${stamp}" "${n}"
 	until mkdir -- "${out_nw}" 2> /dev/null; do
-		[[ -e "${out_nw}" ]] || { echo "could not make a work folder in ${1}" >&2; exit 2; }
+		[[ -e "${out_nw}" ]] || { echo "couldn't make a work folder in ${1}" >&2; exit 2; }
 		n=$((n + 1)); [[ "${n}" -lt 1000 ]] || { echo "no free work folder name in ${1}" >&2; exit 2; }
 		printf -v out_nw '%s/%s_%03d' "${1}" "${stamp}" "${n}"
 	done
@@ -203,7 +203,7 @@ wait_taken() {
 	return 1
 }
 
-# Varied names, sizes and dates.
+# Varied names, sizes, and dates.
 : > "${tree}/empty"
 printf 'hello\n' > "${tree}/small.txt"
 head -c 3000000 /dev/urandom > "${tree}/big.bin"
@@ -273,7 +273,7 @@ db_before="$(digest_of "${tree}/big.bin")"
 fFlipByte "${tree}/big.bin" 1048592 0x5A 16; fFlipByte "${tree}/rm.txt" 8 0x5A 16
 rc="$(scan --since "${tomorrow}")"
 check ddx0x "corruption exit code" "${rc}" 4
-# big.bin's hard link is held to its own records too.
+# big.bin's hard link is checked against its own records too.
 check ddx0y "xattr mismatch found" "$(q "SELECT group_concat(path, ' ') FROM (SELECT path FROM events WHERE kind = 'b3-xattr-mismatch' ORDER BY path)")" "${tree}/big.bin ${tree}/rm.txt ${tree}/sub dir/big-link.bin"
 check ddx0z "database mismatch found" "$(q "SELECT count(*) FROM events WHERE kind = 'b3-db-mismatch'")" 3
 check ddx10 "rmlint mismatch found" "$(q "SELECT group_concat(path) FROM events WHERE kind = 'b2b-rmlint-mismatch'")" "${tree}/rm.txt"
@@ -313,7 +313,7 @@ check dejdj "future read date: accepted" "${rc} $(scan --since "${tomorrow}")" "
 sleep 0.01
 printf 'edited\n' >> "${tree}/small.txt"
 rc="$(scan --since "${tomorrow}")"
-check ddx13 "edit is not corruption" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '${tree}/small.txt'")" 0
+check ddx13 "edit isn't corruption" "$(q "SELECT count(*) FROM events WHERE run_id = (SELECT max(id) FROM runs) AND path = '${tree}/small.txt'")" 0
 check ddx14 "edit updates the size attribute" "$(xget "${tree}/small.txt" user.blake3.bytes)" 13
 
 # 5. Stop part way, then resume. A damaged file in the top folder is read
@@ -335,7 +335,7 @@ rc=0; wait "${pid}" || rc=$?
 check ddx16 "stopped exit code, with the damage found" "${rc}" 6
 check ddx17 "run marked stopped" "$(q 'SELECT status FROM runs ORDER BY id DESC LIMIT 1')" stopped
 part="$(q "SELECT count(*) FROM paths WHERE path LIKE '%/many/%'")"
-st=0; [[ "${part}" =~ ^[0-9]+$ && "${part}" -lt 400 ]] || st=1; expect ddx18 "stopped before the end (${part} of 400)" "did not stop early (${part})" "${st}"
+st=0; [[ "${part}" =~ ^[0-9]+$ && "${part}" -lt 400 ]] || st=1; expect ddx18 "stopped before the end (${part} of 400)" "didn't stop early (${part})" "${st}"
 rc="$(scan --resume)"
 # The damage found before the stop still counts.
 check ddx19 "resume exit" "${rc}" 4
@@ -347,7 +347,7 @@ check ddx1d "resume reused the run" "$(q 'SELECT count(*) FROM runs')" "$((runs_
 skipped="$(grep -o 'skipped [0-9]*' "${work}/out.txt" | head -1 | cut -d' ' -f2 || true)"
 st=0; [[ "${skipped}" =~ ^[0-9]+$ && "${part}" =~ ^[0-9]+$ && "${skipped}" -ge "${part}" ]] || st=1; expect ddx1e "resume skipped what was done (${skipped})" "resume skipped ${skipped}, want at least ${part}" "${st}"
 check ddx1f "every path seen by the run" "$(q 'SELECT count(*) FROM paths WHERE seen_run != (SELECT max(id) FROM runs)')" 0
-# The same in a new database, where only the attributes know the damaged file and no row says the stopped part reached it (2026102814341415).
+# The same in a new database, where only the attributes record the damaged file and there's no row to show the stopped part read it (2026102814341415).
 "${bin}" scan --db "${work}/db/r5.sqlite" --root "${tree}" --since "${tomorrow}" --threads "${tree}=1" --progress 3600 > "${work}/stop.txt" 2>&1 &
 pid=$!
 st=0; { wait_started "${work}/stop.txt" && wait_reached "${pid}" "${tree}/many"; } || st=1
@@ -400,7 +400,7 @@ check ddy5f "each one is a mismatch" "$(sqlite3 "${work}/db/x3.sqlite" "SELECT g
 check ddy5g "the rest still skip" "$(grep -o 'hashed [0-9]*' "${work}/x.txt" | head -1)" "hashed 3"
 
 # 9. snapdiff refuses or reports input it can't use, rather than checking
-# nothing and exiting 0. Each case has a damaged file it should reach.
+# nothing and exiting 0. Each case has a damaged file that it should find.
 sd="${work}/sd"
 mkdir -p "${sd}/old" "${sd}/new" "${sd}/live"
 ln -s "${sd}/live" "${sd}/live-link"
@@ -435,7 +435,7 @@ ln "${sd}/old/d" "${sd}/old/before"
 ln "${sd}/old/d" "${sd}/new/after"
 printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE after\ntransid marker was 12\n' "$(stat -c %i "${sd}/new/after")" > "${sd}/renamed"
 check ddy6c "a renamed file found by inode" "$(sdiff --find-new "${sd}/renamed" --all) $(cut -f1,2 "${sd}/out.txt")" $'0 same\tafter'
-# A long list takes no more memory than a short one, since each file is compared as it's read. Peak RSS from GNU time, since a child forked from python3 keeps python's high-water mark of about 12 MB through the exec, and snapdiff takes about 2.5. 100,000 names, all different, every 10th a file on both sides, against 1 line. 10 bytes kept per line fails it.
+# A long list takes no more memory than a short one, since each file is compared as it's read. Peak RSS from GNU time, since a child forked from python3 keeps python's high-water mark of about 12 MB through the exec, and snapdiff takes about 2.5. The long list has 100,000 names, all different, with every 10th a file on both sides, and it's compared against 1 line. Keeping 10 bytes per line fails it.
 mem="${sd}/mem"; mkdir -p "${mem}/old" "${mem}/new"
 head -c 3000 /dev/urandom > "${mem}/old/kept"; cp -p "${mem}/old/kept" "${mem}/new/kept"
 printf 'kept\n' > "${mem}/short"
@@ -459,7 +459,7 @@ if [[ -x /usr/bin/time ]] && /usr/bin/time -o "${mem}/peak" -f '%M' true 2> /dev
 	read -r rcLong kbLong < <(peak --list "${mem}/long") || true
 	st=1; [[ "${rcShort} ${rcLong}" == "0 0" && "${kbShort}" =~ ^[0-9]+$ && "${kbLong}" =~ ^[0-9]+$ ]] && (( kbLong - kbShort < 1024 )) && st=0
 	expect df0pq "a long list costs no more memory" "100,000 lines: exit ${rcLong}, ${kbLong} KB, against ${kbShort} KB for 1, want under 1 MB more" "${st}"
-	# A mass delete or create in zfs diff: - and + names wait for their other half only when the other side has that name, so these 200,000 are dropped as read. Each one kept took about 110 bytes.
+	# In a mass delete or create in zfs diff, a - or + name waits for its other half only when the other side has that name, so these 200,000 are dropped as they're read. Each one kept took about 110 bytes.
 	printf 'M\t/zfsmem/kept\n' > "${mem}/zshort"
 	python3 -I -c '
 import sys
@@ -472,7 +472,7 @@ with open(sys.argv[1], "wb") as f:
 	read -r rcZLong kbZLong < <(peak --mount /zfsmem --zfs-diff "${mem}/zlong") || true
 	st=1; [[ "${rcZShort} ${rcZLong}" == "0 0" && "${kbZShort}" =~ ^[0-9]+$ && "${kbZLong}" =~ ^[0-9]+$ ]] && (( kbZLong - kbZShort < 1024 )) && st=0
 	expect dfk0m "a mass delete in zfs diff costs no more memory" "100,000 - and 100,000 + lines: exit ${rcZLong}, ${kbZLong} KB, against ${kbZShort} KB for 1, want under 1 MB more" "${st}"
-	# Only the runs a line names are kept, so a file that differs all through costs no more than one with a byte changed. 4 MiB with 1 byte in 8 changed is 524,288 runs, which took 8 MB more when all were kept.
+	# Only the runs a line names are kept, so a file that differs all through costs no more than one with a byte changed. A 4 MiB file with 1 byte in 8 changed has 524,288 runs, which took 8 MB more when all were kept.
 	python3 -I -c '
 import os, sys
 d = sys.argv[1]
@@ -505,7 +505,7 @@ fi
 # 10. Names that aren't plain text: arguments are taken, and output escapes
 # them so 2 names never print the same.
 rc=0; "${bin}" snapdiff --old "${sd}/$(printf 'x\xff')" --new "${sd}/new" --list "${sd}/abs" > /dev/null 2> "${sd}/err.txt" || rc=$?
-# ZFS with utf8only says EILSEQ rather than ENOENT.
+# ZFS with utf8only returns EILSEQ rather than ENOENT.
 check ddy6d "non-UTF-8 argument" "${rc} $(sed 's/: [^:]*$//' "${sd}/err.txt")" "1 tukfs-hash: ${sd}/x\\xff"
 tab="$(printf 't\tab')"
 head -c 3000 /dev/urandom > "${sd}/old/${tab}"; cp -p "${sd}/old/${tab}" "${sd}/new/${tab}"; fFlipByte "${sd}/new/${tab}" 100 1
@@ -534,8 +534,8 @@ fi
 check dfjyy "a scan escapes its roots' names" "$(grep $'^\t' "${work}/nl-out.txt" | LC_ALL=C sort)" "$(printf '\t%s\n' "${shown[@]}" | LC_ALL=C sort)"
 check dfjyz "a scan escapes a dropped root's name" "$(grep -c '^skipping root ' "${work}/nl-err.txt") $(grep -cxF "skipping root ${shown[0]}/in: inside ${shown[0]}" "${work}/nl-err.txt")" "1 1"
 
-# 11. Each name of a hard-linked file is held to its own row, with no
-# attributes to fall back on.
+# 11. Each name of a hard-linked file is checked against its own row, without
+# any attributes to fall back on.
 hl="${work}/hl"; mkdir -p "${hl}"
 head -c 50000 /dev/urandom > "${hl}/b_old"
 hscan() { local rc=0; "${bin}" scan --db "${work}/db/${1}.sqlite" --root "${hl}" --threads "${hl}=1" --progress 3600 "${@:2}" > "${work}/hl.txt" 2>&1 || rc=$?; echo "${rc}"; }
@@ -559,8 +559,8 @@ setfattr -n user.blake3.mtime -v "$(stat -c %.6Y "${hl}/b_old" | tr -d .)" "${hl
 ln "${hl}/b_old" "${hl}/a_new"
 check ddy74 "a fresh set from the other name" "$(hscan hl2) $(hq hl2 "SELECT group_concat(kind || ' ' || path) FROM events")" "4 b3-db-mismatch ${hl}/b_old"
 
-# 12. A row the database can't read is an error, not "no record", and is
-# left as it was.
+# 12. A row the database can't read is an error rather than "no record", and
+# it's left as it was.
 lk="${work}/lk"; mkdir -p "${lk}"
 printf 'one\n' > "${lk}/f"; printf 'two two\n' > "${lk}/g"
 "${bin}" scan --db "${work}/db/lk.sqlite" --root "${lk}" --no-xattrs --progress 3600 > /dev/null 2>&1 || true
@@ -614,8 +614,8 @@ rc=0; "${bin}" accept --db "${work}/db/rs.sqlite" "${rs}/x/f" > /dev/null 2>&1 |
 expect ddy7m "accept after a stopped scan" "accept failed" "${rc}"
 check ddy7n "resumed past an accept" "$(rscan --root "${rs}/x" --resume) $(rq "SELECT status FROM runs WHERE id = ${newest}")" "0 done"
 
-# 15. Something else with the database open doesn't cost the result. It stays
-# in WAL mode until a run finds it free.
+# 15. Another process with the database open doesn't change the result. The
+# database stays in WAL mode until a run finds it free.
 wl="${work}/wl"; mkdir -p "${wl}"; printf 'w\n' > "${wl}/f"
 wdb="${work}/db/wl.sqlite"
 wscan() { local rc=0; "${bin}" scan --db "${wdb}" --root "${wl}" --no-xattrs --progress 3600 "${@}" > "${work}/wl.txt" 2>&1 || rc=$?; echo "${rc}"; }
@@ -691,8 +691,8 @@ check ddy9x "verify: a full scan resumed as a verify refused" "$(vscan --verify 
 expect ddy9y "says why" "message: $(cat "${work}/vt.txt")" grep -q 'was a full scan' "${work}/vt.txt"
 check ddy9z "verify: runs says which" "$("${bin}" runs --db "${vdb}" | grep -c ', verify$')" 2
 
-# 18. gone lists names a finished scan didn't see, and only those it would
-# have reached.
+# 18. gone lists names a finished scan didn't see, and only those its walk
+# would have gone through.
 gd="${work}/gd"; mkdir -p "${gd}/a/sub" "${gd}/a/dlock" "${gd}/b"
 for f in a/keep a/del a/locked a/sub/deep a/dlock/f b/other; do printf '%s\n' "${f}" > "${gd}/${f}"; done
 gdb="${work}/db/gd.sqlite"
@@ -773,9 +773,10 @@ else
 fi
 
 # 21. --version gives the version, and the build number when the pipeline
-# stamped one, with its date unless it's a release. A tree that isn't the
-# commit's marks the number -dirty, and is never a release. That one line and
-# nothing else, so the x keeps a trailing blank line from being stripped.
+# stamped one, with its date unless it's a release. A build from a tree that
+# isn't the commit's has -dirty after the number, and is never a release. It
+# prints that one line and nothing else. The x keeps a trailing blank line
+# from being stripped.
 ver="$("${bin}" --version; echo x)"; ver="${ver%x}"
 st=0; [[ "${ver%%$'\n'*}" =~ ^tukfs-hash\ v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\ build\ [0-9a-hjkmnp-tv-z]+((-dirty)?\ \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?)?$ ]] || st=1
 expect deb0d "version line" "version line is [${ver%%$'\n'*}]" "${st}"
@@ -793,7 +794,7 @@ done
 check dee8e "help ends with a blank line" "${helpBad}" ""
 check des4v "help exit codes" "${helpRcs}" " [-h] 0 [--help] 0 [help] 0 [] 1"
 
-# After a command too. And a command refuses another's option by name, rather than leave out the filter it asked for (2026102814341425).
+# Help works after a command too. A command refuses another command's option by name, rather than leave out the filter that was asked for (2026102814341425).
 helpWant="$("${bin}" --help && echo x0)"
 check df1q4 "help after a command" "$("${bin}" scan --root "${tree}" --help && echo x0 || echo "x$?")|$("${bin}" accept --db "${db}" -h && echo x0 || echo "x$?")" "${helpWant}|${helpWant}"
 refused() { local rc=0 msg=''; msg="$("${bin}" "${@}" 2>&1 > /dev/null)" || rc=$?; echo "${rc} ${msg}"; }
@@ -856,7 +857,8 @@ done
 check df1qe "sudo prune, each link named" "${lnSaid}" 1111
 
 # 25. A mount that's been mounted over is gone from the walk's view, and so is
-# what's mounted on it (2026102814341407). In a user namespace, as step 23.
+# what's mounted on it (2026102814341407). It runs in a user namespace, as
+# step 23 does.
 # Under a whole mnt, sub is a folder like any other. A root under a tmpfs
 # that covers ext4 takes the tmpfs's type, so it's refused as no disk.
 cat > "${ns}/over.bash" << 'EOF2'
@@ -884,7 +886,7 @@ else
 	skip des5j "walk under a mount that's been mounted over (no user namespace here)"
 	skip des5k "root's type from the mount on top (no user namespace here)"
 fi
-# A bind mount of a folder inside another root is that root's folder, wherever it's mounted, so it isn't read twice (2026102814341414). One of a folder outside the roots is read. A database reached through such a mount still leaves out only its own names in the root's walk (2026110719570617), and
+# A bind mount of a folder inside another root is that root's folder, wherever it's mounted, so it isn't read twice (2026102814341414). A bind mount of a folder outside the roots is read. When the database is opened through such a mount, the root's walk still leaves out only the database's own names (2026110719570617).
 # --no-xattr and --exclude given by the mount's name still apply, also to a
 # root under it (2026110720070507). A root that's the bind mount is still
 # under the folders above its source, a git work tree too (2026111011092307).
@@ -966,7 +968,7 @@ rc=0; "${bin}" scan --db "${mr}/t.sqlite" --root "${mr}/t" --root "${mr}/t/nonex
 check des5v "scan with a missing root" "${rc}" 1
 mrDb=none; [[ -e "${mr}/t.sqlite" ]] && mrDb=made
 check des5w "missing root named, nothing scanned" "$(grep -cF "can't resolve root ${mr}/t/nonexist: No such file or directory (os error 2)" "${mr}/out.txt" || true) ${mrDb}" "1 none"
-# So does a mistyped --exclude or --no-xattr, which would read or write where it was told not to (2026111011092303). A root in or at an --exclude folder is named and dropped, and with no root left it's nothing to scan (2026111011092318).
+# So does a mistyped --exclude or --no-xattr, which would read or write where it was told not to (2026111011092303). A root in or at an --exclude folder is named and dropped, and when no root is left the scan stops with "nothing to scan" (2026111011092318).
 mkdir -p "${mr}/t/vm-images" "${mr}/t/ex/src" "${mr}/u"
 printf 'x\n' > "${mr}/t/vm-images/disk.img"; printf 'x\n' > "${mr}/t/ex/src/f"; printf 'u\n' > "${mr}/u/f"
 mscan() { local rc=0; "${bin}" scan --db "${mr}/${1}.sqlite" --progress 3600 "${@:2}" > "${mr}/${1}.txt" 2>&1 || rc=$?; local made=none; [[ -e "${mr}/${1}.sqlite" ]] && made=made; echo "${rc} ${made}"; }
@@ -981,8 +983,9 @@ got="$(mscan mo --root "${mr}/t/ex" --exclude "${mr}/t/ex" --no-xattrs)"
 check df4m8 "only root is an --exclude folder, nothing to scan" "${got} $(grep -cxF "skipping root ${mrc}/t/ex: same folder as --exclude ${mrc}/t/ex" "${mr}/mo.txt" || true) $(grep -c 'nothing to scan' "${mr}/mo.txt" || true)" "1 none 1 1"
 
 # 27. An unmounted btrfs subvolume given as a root is read on its own, though
-# it sits inside another root whose walk stops at it (2026102814341412). Only
-# on btrfs, so TUKFS_IT_BTRFS or HOST_TEMP picks it (2026110211132205).
+# it's inside another root whose walk stops at it (2026102814341412). It runs
+# only on btrfs, so TUKFS_IT_BTRFS or HOST_TEMP picks the filesystem
+# (2026110211132205).
 bt="${btWork:-${work}}/bt"
 mkdir -p "${bt}/p"
 printf 'a\n' > "${bt}/p/f1"
@@ -998,7 +1001,7 @@ else
 	skip des5x "btrfs subvolume inside another root (not on btrfs, or no btrfs tool)"
 	skip dfjzd "unmounted btrfs subvolume's percent done (not on btrfs, or no btrfs tool)"
 fi
-# A file born after a read-only --old was taken can't be in it, so snapdiff counts it new as it's read, rather than holding it for the inode walk. The renamed one still waits, so it comes last (2026111011092305).
+# A file born after a read-only --old was taken can't be in it, so snapdiff counts it new as it's read, rather than leaving it for the inode walk. The renamed one still waits, so it comes last (2026111011092305).
 if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/live" > /dev/null 2>&1; then
 	printf 'k\n' > "${bt}/live/kept"; printf 'r\n' > "${bt}/live/renamed"
 	if btrfs subvolume snapshot -r "${bt}/live" "${bt}/old" > /dev/null 2>&1; then
@@ -1009,15 +1012,15 @@ if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/li
 			printf 'inode %s file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE %s\n' "$(stat -c %i "${bt}/live/${f}")" "${f}"
 		done > "${bt}/find-new"
 		rc=0; "${bin}" snapdiff --old "${bt}/old" --new "${bt}/live" --find-new "${bt}/find-new" --all > "${bt}/sd.txt" 2> "${bt}/sd-err.txt" || rc=$?
-		check df4qf "find-new: new files counted, not held" "${rc} $(cut -f1,2 "${bt}/sd.txt" | tr '\n\t' '  ')$(grep -c ', 1 only in --new, 0 flagged, 0 missing,' "${bt}/sd-err.txt" || true)" "0 new fresh same kept same moved 1"
+		check df4qf "find-new: new files counted as they're read" "${rc} $(cut -f1,2 "${bt}/sd.txt" | tr '\n\t' '  ')$(grep -c ', 1 only in --new, 0 flagged, 0 missing,' "${bt}/sd-err.txt" || true)" "0 new fresh same kept same moved 1"
 		btrfs property set -ts "${bt}/old" ro false > /dev/null 2>&1 || true
 		rm -f -- "${bt}/old/kept" "${bt}/old/renamed"; rmdir -- "${bt}/old" || true
 	else
-		skip df4qf "find-new: new files counted, not held (no read-only snapshot)"
+		skip df4qf "find-new: new files counted as they're read (no read-only snapshot)"
 	fi
 	rm -f -- "${bt}/live/kept" "${bt}/live/fresh" "${bt}/live/moved"; rmdir -- "${bt}/live" || true
 else
-	skip df4qf "find-new: new files counted, not held (not on btrfs, or no btrfs tool)"
+	skip df4qf "find-new: new files counted as they're read (not on btrfs, or no btrfs tool)"
 fi
 # A read-only --old that was made writable, written to, and set back can have files born after it was taken, so its time isn't trusted. Renamed and changed at the same size and time, the file is still found by inode and flagged (2026111918562701).
 if [[ "$(stat -f -c %T "${bt}")" == btrfs ]] && btrfs subvolume create "${bt}/src" > /dev/null 2>&1; then
@@ -1044,7 +1047,7 @@ else
 fi
 
 # 28. Beside a database inside the root, only its own 5 names are left out,
-# not every name that starts with it (2026102814341408). A root below a
+# rather than every name that starts with it (2026102814341408). A root below a
 # folder with .git is in a git work tree, as the folder with .git is
 # (2026102814341413).
 dn="${work}/dn"; mkdir -p "${dn}/tree/tukdir" "${dn}/repo/.git" "${dn}/repo/src"
@@ -1057,8 +1060,8 @@ rc=0; "${bin}" scan --db "${dn}/g.sqlite" --root "${dn}/repo/src" --progress 360
 check des67 "root below a git folder: no attributes" "${rc} $(sqlite3 "${dn}/g.sqlite" 'SELECT count(*) FROM paths') $(xget "${dn}/repo/src/a.c" user.blake3.b64u)" "0 1 "
 
 # 29. The pipeline runs this in its sandbox, where only the folder that has
-# the work folders can be written, and docker's socket isn't there. Run by the
-# pipeline outside it, without --no-sandbox, is a failure. Home is an empty
+# the work folders can be written, and docker's socket isn't there. A run by
+# the pipeline outside it, without --no-sandbox, is a failure. Home is an empty
 # tmpfs in there, which is fine to write, and a scan refuses tmpfs, so a test
 # root is never on one.
 if [[ -n "${TUKFS_SANDBOX:-}" || ( -n "${TUKFS_RUN_NAME:-}" && -z "${TUKFS_NO_SANDBOX:-}" ) ]]; then
@@ -1073,9 +1076,9 @@ fi
 
 # 30. A first scan that fills the disk leaves a database the next run can
 # still use (2026102814341430). The tmpfs that fills is in a user namespace,
-# as step 23. 8k fails before a page is written, 96k partway through making
-# the tables. The marker goes once the tmpfs is mounted, before the scan, as
-# in steps 23 and 25, so a first scan that leaves no file fails here rather
+# as step 23. The 8k one fails before a page is written, and the 96k one
+# partway through making the tables. The marker is written once the tmpfs is
+# mounted, before the scan, as in steps 23 and 25, so a first scan that leaves no file fails here rather
 # than skipping as if there were no user namespace (2026111011092324). A
 # --log on a full disk is named on stderr, once.
 cat > "${ns}/full.bash" << 'EOF2'
@@ -1088,7 +1091,7 @@ for sz in 8k 96k; do
 	if [[ -e full/t.sqlite ]]; then cp full/t.sqlite "full-${sz}.sqlite" || exit 1; fi
 	umount full || exit 1
 done
-# A log on it says once that it can't be written (2026111918562723).
+# A --log on it gets one warning that it can't be written (2026111918562723).
 mount -t tmpfs -o size=8k none full || exit 1
 head -c 1M /dev/zero > full/fill 2> /dev/null
 rc=0; "${2}" scan --db full-log.sqlite --root fr --progress 3600 --log full/scan.log > /dev/null 2> full-log.err || rc=$?
@@ -1154,8 +1157,8 @@ else
 	check df1rk "an attribute that can't be written: reported, exit 0" "${rc} $(sqlite3 "${work}/db/ro.sqlite" "SELECT group_concat(kind || ' ' || path, ', ') FROM events")" "0 xattr-error ${ro}/f"
 fi
 
-# 33. A read error is news like a mismatch, so no skip passes the file until
-# it reads clean (design.md, Skipping, row db-read-error). A preloaded shim
+# 33. A read error counts like a mismatch, so the file isn't skipped until it
+# reads clean (design.md, Skipping, row db-read-error). A preloaded shim
 # fails the reads, since a real EIO needs a failing disk.
 er="${work}/er"; mkdir -p "${er}/tree"
 head -c 40000 /dev/urandom > "${er}/tree/bad"; printf 'fine\n' > "${er}/tree/good"
@@ -1185,7 +1188,7 @@ static int named(int fd, const char *env) {
 
 static int bad(int fd) { return named(fd, "EIO_NAME"); }
 
-// Step 36's: a read of HANG_NAME makes HANG_IN, then sits for up to 60 s, so
+// For step 36. A read of HANG_NAME makes HANG_IN, then waits up to 60 s, so
 // a stop can't finish under it.
 static void hang(int fd) {
 	const char *in = getenv("HANG_IN");
@@ -1195,7 +1198,7 @@ static void hang(int fd) {
 	for (int i = 0; i < 6000; i++) usleep(10000);
 }
 
-// Step 34's: every attribute of EIO_XATTR_NAME fails to read.
+// For step 34. Every attribute of EIO_XATTR_NAME fails to read.
 ssize_t fgetxattr(int fd, const char *name, void *value, size_t size) {
 	static ssize_t (*real)(int, const char *, void *, size_t);
 	if (!real) real = dlsym(RTLD_NEXT, "fgetxattr");
@@ -1238,9 +1241,9 @@ else
 	check df4er "read error: a clean read closes it" "$(erscan plain) $(erscan plain)" "0 0 hashed 1 0 0 hashed 0"
 fi
 
-# 34. An attribute that can't be read is an xattr-error, and the set it may
-# be is left alone rather than written over, by a scan or by accept. The same
-# shim fails the attribute reads of one file.
+# 34. An attribute that can't be read is an xattr-error, and the attribute set
+# it may belong to is left alone rather than written over, by a scan or by
+# accept. The same shim fails the attribute reads of one file.
 xe="${work}/xe"; mkdir -p "${xe}/tree"
 printf 'xattr eio\n' > "${xe}/tree/f"
 xedb="${work}/db/xe.sqlite"
@@ -1261,7 +1264,7 @@ else
 fi
 
 # 35. --log gets every line in full, and the log isn't read, though it's under
-# the root. Not a terminal here, so stdout has them in full too.
+# the root. stdout isn't a terminal here, so it has them in full too.
 lg="${work}/lg"; mkdir -p "${lg}/tree"
 printf 'log\n' > "${lg}/tree/f"
 rc=0; "${bin}" scan --db "${work}/db/lg.sqlite" --root "${lg}/tree" --progress 3600 --log="${lg}/tree/scan.log" > "${lg}/out.txt" 2>&1 || rc=$?
@@ -1327,8 +1330,8 @@ fi
 ##		- 20261024: A stop takes down what the test started before the work
 ##		  folder goes.
 ##		- 20261024: Step 5's files are synced before the scan.
-##		- 20261025: Step 5 stops the scan once it's past the top folder, not
-##		  after a fixed 0.1 s.
+##		- 20261025: Step 5 stops the scan once it's past the top folder, rather
+##		  than after a fixed 0.1 s.
 ##		- 20261025: Test IDs in Crockford base 32 minutes, and PASS, FAIL and
 ##		  SKIP lines with no "integration" in them.
 ##		- 20261025: The work folder is <HOST_TEMP>/tukfs-hash/<stamp>_<NNN>,
@@ -1362,7 +1365,7 @@ fi
 ##		- 20261108: TUKFS_IT_BTRFS gives step 27 a work folder on btrfs, and a
 ##		  subvolume a stop left behind is removed with its folder.
 ##		- 20261108: A bind mount of a folder inside another root, and a
-##		  database reached through one.
+##		  database opened through one.
 ##		- 20261108: Help after a command, and an option another command takes
 ##		  refused.
 ##		- 20261108: A database left by a first scan that filled the disk.

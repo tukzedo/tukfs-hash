@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The soak test: scan, change a file, scan again, then runs, report, gone and accept, in a loop in this process, with the heap at round 2N held to round N. Only with --features soak, since dhat then counts every allocation in the test binary and only one profiler can run at once. cicd/utility/soak.bash runs it alone. SQLite allocates through libc, which dhat doesn't see, so its own counter is held to the same margin.
+// The soak test: scan, change a file, scan again, then runs, report, gone and accept, in a loop in this process, with the heap at round 2N checked against round N. It's built only with --features soak, since dhat then counts every allocation in the test binary and only one profiler can run at once. cicd/utility/soak.bash runs it alone. SQLite allocates through libc, which dhat doesn't see, so its own counter is checked against the same margin.
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-// Round N is half of these. The first rounds fill what fills once, such as SQLite's globals and stdout's buffer, so it's N against 2N, never 0 against N.
+// Round N is half of these. The first rounds fill what fills once, such as SQLite's globals and stdout's buffer, so the check compares N against 2N, never 0 against N.
 const ROUNDS: usize = 20;
 // What either heap may grow by from round N to 2N, in bytes.
 const MARGIN: usize = 4096;
@@ -112,7 +112,7 @@ fn the_heap_holds_steady() {
 	// Past tomorrow's midnight, so every file is read again.
 	let tomorrow = local_midnight_us(now_us()) + 36 * 3_600_000_000;
 	for (i, row) in rows.iter_mut().enumerate() {
-		// An edit that changes the time, which is no event.
+		// An edit that changes the time, which isn't an event.
 		fs::write(&t.edited, i.to_string()).unwrap();
 		assert_eq!(scan(&t, None), 0, "round {}", i + 1);
 		flip(&t.flipped[0], i as u64 * 4096);

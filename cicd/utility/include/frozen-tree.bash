@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 ##	Purpose:
-##		A detached worktree that keeps one tree for as long as a run needs it, so
-##		a merge, a checkout or an edit in the checkout can't reach a build that
-##		reads it. Sourced by cicd.bash and the pre-push hook. It's locked while
-##		it exists, so a prune from any other tool passes over it, and it's taken
-##		down with `worktree remove`, never a prune, which is global and drops
-##		every worktree whose folder is away.
+##		A detached worktree with one tree in it for as long as a run needs it,
+##		so a merge, a checkout or an edit in the checkout can't change what a
+##		build reads. Sourced by cicd.bash and the pre-push hook. It's locked
+##		while it exists, so a prune from any other tool passes over it, and it's
+##		taken down with `worktree remove`, never a prune, which is global and
+##		drops every worktree whose folder is missing.
 ##	Functions:
 ##		fFrozenAdd REPO DEST REV [TREE]   DEST has REV, or TREE on top of REV
 ##		                                  when given (uncommitted work included)

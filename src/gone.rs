@@ -18,7 +18,7 @@ fn deepest<'a>(roots: &[&'a Path], p: &Path) -> Option<&'a Path> {
 	roots.iter().copied().filter(|r| p.starts_with(r)).max_by_key(|r| r.as_os_str().len())
 }
 
-// A scan stops at every mount, so a name that another run reached from a deeper root may sit on a filesystem this run never walked. Only a run at or below the root that last saw it would have reached it again. A run with no root list, such as accept's, can't say, so any root counts.
+// A scan stops at every mount, so a name that another run reached from a deeper root may be on a filesystem this run never walked. Only a run at or below the root that last saw it would have reached it again. With no root list to go by, as for an accept run, any root counts.
 fn reachable(now: &[&Path], last: Option<&[&Path]>, p: &Path) -> bool {
 	let Some(here) = deepest(now, p) else {
 		return false;
@@ -55,7 +55,7 @@ pub fn run(db_path: &Path, run: Option<i64>, limit: u64) -> Result<i32, String> 
 		return Err(run.map_or_else(|| none_yet.into(), |id| format!("no run {id}")));
 	};
 	if RunStatus::parse(&status) != Some(RunStatus::Done) {
-		return Err(format!("run {id} is {status}; only a finished scan says what's gone"));
+		return Err(format!("run {id} is {status}; gone needs a finished scan"));
 	}
 	let Some(roots) = roots else {
 		return Err(format!("run {id} is from an older version, which kept no root list"));
