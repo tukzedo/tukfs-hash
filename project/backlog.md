@@ -1098,6 +1098,7 @@
 	- Branch: nov20-2026111918562702
 	- Commit: 9215ed4
 	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
+	- Verified: 2026-11-22, a real sudo run on b23 of the dev build at `64ad2a7` passed all 13 log checks: a new log handed back, a log already there kept its owner, a FIFO and `/dev/null` refused at once, another user's file and FIFO in a sticky folder refused with nothing written, and each of the database's 5 names and a hard link to it refused, with the database intact after.
 	- Closed: 20261120-172424
 
 - `install.bash` prints "Installed" at exit 0 when the install path is a link to a folder, and replaces nothing.
@@ -3141,6 +3142,7 @@
 		- The gates as in 2026111918562706.
 	- Swept: every open of the database while `Held` has it, which is `Held::open` and `run_group`'s lookups. `runs`, `report` and `gone` open read only with no checked folder, and make nothing. `say::open_log` and `is_db_file` still find the database's names by path, and only refuse a log there.
 	- Acceptance signoff: Self-closed per memory.md's close policy: the test fails before the fix and passes after. A real sudo run on b23 that fails reopens it.
+	- Verified: 2026-11-22, a real sudo run on b23 of the dev build at `64ad2a7` passed all 16 folder checks, 8 on ext4 and the same 8 with the database on ZFS: 2 scans, accept and prune in the user's folder handed back in rollback mode, the user's own scan after, root's folder, a link to the user's own folder, and a link to another user's folder refused with nothing made.
 	- Closed: 20261120-184539
 
 - A TERM or HUP to cicd.bash's own PID during publish doesn't stop the publisher, which commits and pushes before the run exits 143.
@@ -3349,6 +3351,7 @@
 	- Swept: `id -u` is now read once, for this check and the sudo one.
 	- Note: Not run: a real sudo that keeps HOME. One that fails reopens this.
 	- Acceptance signoff: Self-closed per memory.md's close policy, on the root stand-in.
+	- Verified: 2026-11-22, a run on b23 as real root through sudo, with the installer from `64ad2a7`, passed all 5 checks: HOME at a folder of the user's was refused before any download, with a trailing slash too, and nothing was made. HOME at root's own folder and `--target system` went on to the download, and `/usr/local/bin` was left as it was.
 	- Closed: 20261120-173417
 
 - Containers kept by --keep-temp, or left by a killed run, stay after the sweep takes their run folder.
