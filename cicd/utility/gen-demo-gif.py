@@ -447,7 +447,7 @@ def token_re(word: str) -> re.Pattern[str]:
 
 def near_re(word: str) -> re.Pattern[str]:
     ##	For the leak check: the word next to anything but a letter or digit,
-    ##	such as b23-old or b23_snap, which token_re leaves alone. It can catch
+    ##	such as <host>-old or <host>_snap, which token_re leaves alone. It can catch
     ##	one inside a checksum too, but a failed render beats a leaked name.
     return re.compile(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])")
 

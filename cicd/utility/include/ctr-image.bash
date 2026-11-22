@@ -41,7 +41,7 @@
 ##		A build keeps the new tag and the one before it, once the new one has
 ##		passed its probe, and then removes any <none> image of ours. Docker's build
 ##		cache is left to the daemon's own gc, since every project shares it.
-##		b23 sets that in /etc/docker/daemon.json, under builder.gc.
+##		The dev box sets that in /etc/docker/daemon.json, under builder.gc.
 ##		From shcl's cicd/utility/include/ctr-image.bash.
 ##	History: At bottom of script.
 

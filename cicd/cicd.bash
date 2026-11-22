@@ -48,8 +48,8 @@
 ##	                       the leak checks but the fast ones, the profiler
 ##	                       and demo gif
 ##	   --long              everything a run with no options does, and the
-##	                       leak checks that take hours, of which there are
-##	                       none yet. Also --slow. Not with --quick
+##	                       long checks, which for now is an hour of fuzz
+##	                       tests. Also --slow. Not with --quick
 ##	   The next 3 never sync, dogfood, publish, commit, push, install, rewrite
 ##	   a tracked file, or prompt. The format stage only checks, and a missing
 ##	   tool fails the run.

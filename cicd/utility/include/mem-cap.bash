@@ -23,7 +23,7 @@
 ##			                  already in it. Returns, having done nothing,
 ##			                  for none, or where there's no user systemd or
 ##			                  no choom, as on a bare CI runner or another OS.
-##		No step needs more than the default. The peaks on b23 to 2026-11-08,
+##		No step needs more than the default. The peaks on the dev box to 2026-11-08,
 ##		page cache included, were CodeQL 15.1 GB, ASan 2.0 GB, Miri 1.6 GB
 ##		and the tests 1.5 GB.
 ##		TUKFS_MEMINFO reads another file in place of /proc/meminfo, for a test.

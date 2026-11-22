@@ -33,7 +33,7 @@ BUILD_ENV_NAME="TUKFS_HASH_BUILD"
 BUILD_RELEASE_ENV_NAME="TUKFS_HASH_RELEASE"
 BUILD_DIRTY_ENV_NAME="TUKFS_HASH_DIRTY"
 
-## Each run's temp dir is <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>. This is where it goes when HOST_TEMP isn't set, then TMPDIR, then /tmp. b23's /tmp is btrfs on LUKS, and slow to fsync under load (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
+## Each run's temp dir is <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>. This is where it goes when HOST_TEMP isn't set, then TMPDIR, then /tmp. The dev box's /tmp is btrfs on LUKS, and slow to fsync under load (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
 RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
 ## Tool pins. The engine warns, without failing, when a tool has drifted. "name|version|command": the version has to show up in the command's output.

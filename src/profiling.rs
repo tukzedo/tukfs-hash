@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// The cicd profiler stage's sampler, built only with --features profiling. It samples on SIGPROF in this process, since perf can't record on b23. A run with TUKFS_PROFILE_DIR set adds its stacks there under TUKFS_PROFILE_LABEL, then draws everything in the dir as one flamegraph, so a first scan and a rescan end up side by side. TUKFS_PROFILE_CHECK runs the attribution check instead of the command. See design.md, Profiling.
+// The cicd profiler stage's sampler, built only with --features profiling. It samples on SIGPROF in this process, since perf can't record on the dev box. A run with TUKFS_PROFILE_DIR set adds its stacks there under TUKFS_PROFILE_LABEL, then draws everything in the dir as one flamegraph, so a first scan and a rescan end up side by side. TUKFS_PROFILE_CHECK runs the attribution check instead of the command. See design.md, Profiling.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
