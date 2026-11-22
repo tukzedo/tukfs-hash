@@ -102,7 +102,7 @@ fn heap() -> Heap {
 }
 
 #[test]
-fn the_heap_holds_steady() {
+fn heap_stays_steady() {
 	let _id = test_id("deb4t");
 	let out = std::env::var_os("TUKFS_SOAK_OUT").map_or_else(std::env::temp_dir, PathBuf::from);
 	let t = tree();

@@ -252,7 +252,7 @@ mod tests {
 
 	// The events line has no ` | `, so at 80 columns it was cut after its second kind, and read-error, which sets exit 4, sorts early among the rest (2026111918562709).
 	#[test]
-	fn every_kind_in_a_long_events_line_shows() {
+	fn long_events_line_shows_all() {
 		let _id = test_id("dfjyx");
 		let kinds = ["b3-db-mismatch 3", "b3-xattr-mismatch 3", "b2b-rmlint-mismatch 3", "dir-error 1", "open-error 1", "read-error 2", "unstable 1"];
 		let line = format!("events in the whole run: {}", kinds.join(", "));
@@ -277,7 +277,7 @@ mod tests {
 	// Under sudo the scan is root's, and the name the user's (2026111019145405).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't make links")]
-	fn a_link_at_the_log_is_refused() {
+	fn log_link_refused() {
 		let _id = test_id("df4xq");
 		let d = crate::testutil::scratch("say_log_link");
 		std::os::unix::fs::symlink(d.join("elsewhere"), d.join("scan.log")).unwrap();
@@ -320,7 +320,7 @@ mod tests {
 	// Under sudo a log folder that's neither the user's nor root's is refused before the log is made, as the database's is.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
-	fn a_log_folder_not_the_users_is_refused() {
+	fn log_folder_owner_checked() {
 		let _id = test_id("df4y4");
 		let d = crate::testutil::scratch("say_log_folder");
 		let me = std::fs::metadata(&*d).unwrap();
@@ -333,7 +333,7 @@ mod tests {
 	// A FIFO with no reader hung the scan in open(), and one with a reader took the log (2026111918562702).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't make a FIFO")]
-	fn a_log_that_isnt_a_regular_file_is_refused() {
+	fn log_not_regular_refused() {
 		let _id = test_id("dfjv7");
 		let d = crate::testutil::scratch("say_log_fifo");
 		let fifo = d.join("scan.log");
@@ -354,7 +354,7 @@ mod tests {
 	// A log there would put text after the database's last page, in its lock, or in a -wal that SQLite deletes (2026111918562724).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
-	fn a_log_that_is_the_database_is_refused() {
+	fn log_at_db_refused() {
 		let _id = test_id("dfjv8");
 		let d = crate::testutil::scratch("say_log_db");
 		let db = d.join("t.sqlite");
@@ -415,7 +415,7 @@ mod tests {
 
 	// A full disk left the log empty without a warning (2026111918562723).
 	#[test]
-	fn a_log_that_cant_be_written_is_said_once() {
+	fn log_write_fail_warns_once() {
 		let _id = test_id("dfjyc");
 		let mut l = test_log(Some(libc::ENOSPC));
 		let first = l.put("a").unwrap();

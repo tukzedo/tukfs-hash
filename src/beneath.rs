@@ -321,7 +321,7 @@ mod tests {
 	// A folder swapped for a symlink after it was listed.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_symlink_on_the_way_is_not_followed() {
+	fn symlink_on_way_refused() {
 		let _id = test_id("ddy91");
 		let d = scratch("beneath_symlink");
 		let (root, outside) = (d.join("root"), d.join("outside"));
@@ -403,7 +403,7 @@ mod tests {
 	// Without openat2, a kept folder moved out of the root and another put in its place, as openat2 sees it.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_kept_folder_moved_out_isnt_read_through() {
+	fn moved_kept_folder_refused() {
 		let _id = test_id("dfjx2");
 		let d = scratch("beneath_moved_out");
 		let (root, outside) = (d.join("root"), d.join("outside"));

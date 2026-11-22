@@ -281,7 +281,7 @@ mod tests {
 
 	// A failed test's folder is removed, along with a read-only one inside it.
 	#[test]
-	fn a_scratch_folder_goes_on_a_panic() {
+	fn scratch_removed_on_panic() {
 		let _id = test_id("debap");
 		let (tx, rx) = std::sync::mpsc::channel();
 		let failed = std::thread::spawn(move || {
@@ -342,7 +342,7 @@ mod tests {
 	// Of these, only the old folder of a pid that's gone is removed.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't start a process")]
-	fn only_a_dead_runs_old_folders_are_swept() {
+	fn sweep_dead_runs_only() {
 		let _id = test_id("debaq");
 		let d = scratch("testutil_sweep");
 		let mut child = std::process::Command::new("true").spawn().unwrap();

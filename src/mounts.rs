@@ -524,7 +524,7 @@ mod tests {
 	// No initramfs, so `/` comes from `/dev/root`, which isn't there (2026111011092321).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no sysfs")]
-	fn a_missing_source_falls_back_to_the_device_number() {
+	fn missing_source_uses_dev_number() {
 		let _id = test_id("df4jh");
 		let all = read_mounts().unwrap();
 		let Some(real) = all.iter().find(|m| m.fstype != "btrfs" && m.source.starts_with("/dev/") && kname_of(&m.source).is_some() && Path::new("/sys/dev/block").join(&m.dev).exists()) else {
@@ -734,7 +734,7 @@ mod tests {
 	}
 
 	#[test]
-	fn a_bind_mounts_folder_where_more_is_shown() {
+	fn wider_views_of_a_bind() {
 		let _id = test_id("df4j5");
 		let views = |extra: &str, path: &str| {
 			let text = [BIND, extra.as_bytes()].concat();
@@ -757,7 +757,7 @@ mod tests {
 	}
 
 	#[test]
-	fn only_a_filesystems_top_shows_all_of_it() {
+	fn shows_whole_only_at_top() {
 		let _id = test_id("df4j6");
 		let btrfs = "7 1 0:27 /@home /home rw - btrfs /dev/sde1 rw\n\
 			8 1 0:27 /@home/u/dir /t/bd rw - btrfs /dev/sde1 rw\n\

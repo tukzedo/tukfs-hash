@@ -1964,7 +1964,7 @@ mod tests {
 	}
 
 	#[test]
-	fn a_second_read_tells_cache_from_disk() {
+	fn reread_cache_or_disk() {
 		let _id = test_id("ddy6j");
 		let p = prior(1);
 		let r = refs(Some(1), Some(&p));
@@ -2137,7 +2137,7 @@ mod tests {
 
 	// A worker that panics holding a lock poisons it. The claim it drops in the unwind, the name waiting on that claim and the reason must all get through, or the run aborts, hangs, or isn't marked failed.
 	#[test]
-	fn a_poisoned_lock_is_still_a_fault() {
+	fn poisoned_lock_fault() {
 		let _id = test_id("deawa");
 		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
 		let (dtx, drx) = std::sync::mpsc::channel();
@@ -2225,7 +2225,7 @@ mod tests {
 
 	// The mount table is empty here, as it would be for a filesystem mounted after the scan started. /dev/shm is its own mount on most boxes.
 	#[test]
-	fn the_walk_stays_on_the_root_device() {
+	fn walk_one_device() {
 		let _id = test_id("ddy94");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
@@ -2252,7 +2252,7 @@ mod tests {
 	// A root that's another folder since the plan, through a link put above it or a folder put at its name, is refused rather than read, and isn't counted. A mount over it is the same case to the walk (2026111918562706).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn a_root_thats_another_folder_since_the_plan_is_refused() {
+	fn swapped_root_refused() {
 		let _id = test_id("dfjxp");
 		let d = scratch("scan_rootswap");
 		let d = fs::canonicalize(&*d).unwrap();
@@ -2295,7 +2295,7 @@ mod tests {
 	// The walk looks each file up, a batch to a transaction, and a file whose row can't be read is the only one skipped (2026102810135573).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn the_walk_hands_each_job_its_row() {
+	fn walk_job_rows() {
 		let _id = test_id("dej6m");
 		let d = scratch("scan_walkrows");
 		let tree = fs::canonicalize(&*d).unwrap().join("tree");
@@ -2343,7 +2343,7 @@ mod tests {
 	}
 
 	#[test]
-	fn only_the_databases_own_names_are_left_out() {
+	fn db_own_names() {
 		let _id = test_id("des63");
 		let (sh, _rx) = test_shared(PathBuf::from("/x/tree/tuk"));
 		let out = |name: &str| excluded(&sh, &Path::new("/x/tree").join(name), true);
@@ -2385,7 +2385,7 @@ mod tests {
 	// --exclude and --no-xattr folders are known by device and inode too, so a walk that gets to one under another name, as through a bind mount, still leaves it out or marks it, and so does a root inside one.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn excluded_and_no_xattr_folders_under_another_name() {
+	fn excludes_by_inode() {
 		let _id = test_id("df1ng");
 		let d = scratch("scan_exclids");
 		let tree = fs::canonicalize(&*d).unwrap().join("tree");
@@ -2446,7 +2446,7 @@ mod tests {
 	// The log is known by device and inode, so it isn't read or recorded under another name, such as through a bind mount or a hard link (2026111918562707).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn the_log_under_another_name_is_left_out() {
+	fn log_by_inode() {
 		let _id = test_id("dfjyd");
 		let d = scratch("scan_logid");
 		fs::write(d.join("scan.log"), "line\n").unwrap();
@@ -2475,7 +2475,7 @@ mod tests {
 	// A root in or at an --exclude folder is dropped before the run, and a group left with no roots goes with it (2026111011092318).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't stat real folders")]
-	fn roots_in_an_excluded_folder_are_dropped() {
+	fn excluded_roots_dropped() {
 		let _id = test_id("df4m3");
 		let d = scratch("scan_dropex");
 		let d = fs::canonicalize(&*d).unwrap();
@@ -2497,7 +2497,7 @@ mod tests {
 	// design.md, Attributes: none in a git work tree, however deep the root.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn a_root_below_a_git_folder_is_in_git() {
+	fn root_below_git() {
 		let _id = test_id("des64");
 		let d = scratch("scan_gitabove");
 		let d = fs::canonicalize(&*d).unwrap();
@@ -2678,7 +2678,7 @@ mod tests {
 	// A folder inside a filesystem would show the whole filesystem's share.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
-	fn only_a_whole_filesystem_has_a_size() {
+	fn whole_fs_size() {
 		let _id = test_id("df1pk");
 		let d = scratch("scan_fs_used");
 		let m = mounts::read_mounts().unwrap();
@@ -2699,7 +2699,7 @@ mod tests {
 	// A bind mount of a folder from another filesystem is a folder too, though its parent is on another device (2026111011092313).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
-	fn a_bind_mount_of_a_folder_has_no_size() {
+	fn bind_folder_no_size() {
 		let _id = test_id("df4jb");
 		let table = |root: &str| mounts::parse_mountinfo(format!("1 0 8:1 {root} / rw - ext4 /dev/sda1 rw").as_bytes());
 		let top = [PathBuf::from("/")];
@@ -2710,7 +2710,7 @@ mod tests {
 	// The count follows the walk's rules, so a folder scan ends near 100 (2026111019145393).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't list folders")]
-	fn a_folder_is_counted_as_the_walk_reads_it() {
+	fn count_follows_walk() {
 		let _id = test_id("df4x4");
 		let d = scratch("scan_count");
 		fs::create_dir_all(d.join("sub/deep")).unwrap();
@@ -2754,7 +2754,7 @@ mod tests {
 	// Row `resume-seen`, with no row at the file's size and time to say so.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_reported_miss_is_not_read_again() {
+	fn reported_miss_skipped() {
 		let _id = test_id("des7n");
 		let d = scratch("scan_resume_seen");
 		fs::write(d.join("a"), "damaged").unwrap();
@@ -2794,7 +2794,7 @@ mod tests {
 	// Row `link-writing`. After an edit the claimant is part way through its set, which still has the old checksum and inode value with the new size and time. A read between those writes would see the mix.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
-	fn a_half_written_set_is_not_read() {
+	fn half_written_set() {
 		let _id = test_id("des6h");
 		let d = scratch("scan_link_writing");
 		fs::write(d.join("a"), "edited").unwrap();
@@ -2842,7 +2842,7 @@ mod tests {
 	// Whichever read of the mount table fails, no run is left running, and a run reads it once (backlog ...852).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_lost_mount_table_leaves_no_run_running() {
+	fn mount_table_lost() {
 		let _id = test_id("dehzd");
 		let d = scratch("scan_mountfail");
 		let root = d.join("r");
@@ -2883,7 +2883,7 @@ mod tests {
 	// A panic in the database writer still closes the run (backlog ...002).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_writer_panic_leaves_no_run_running() {
+	fn writer_panic_closes_run() {
 		let _id = test_id("dehzq");
 		let d = scratch("scan_writerpanic");
 		let root = d.join("r");
@@ -2924,7 +2924,7 @@ mod tests {
 	// A scan that fails after taking the lock still ends in rollback mode, on a database it found and on one it made (backlog 2026111011092306).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_refused_resume_ends_in_rollback_mode() {
+	fn refused_resume_rollback() {
 		let _id = test_id("df4he");
 		let d = scratch("scan_refusedresume");
 		let root = d.join("r");
@@ -3050,7 +3050,7 @@ mod tests {
 	// Under sudo a folder that's neither the user's nor root's is refused before anything is made (2026111011092301).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
-	fn a_folder_not_the_users_is_refused() {
+	fn sudo_folder_refused() {
 		let _id = test_id("df4kp");
 		let d = scratch("scan_sudo_folder");
 		let db = d.join("t.sqlite");
@@ -3084,7 +3084,7 @@ mod tests {
 	// The hand-back goes to the folder that was checked, even after another folder is moved in at its name.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no chown")]
-	fn the_hand_back_stays_in_the_checked_folder() {
+	fn hand_back_checked_folder() {
 		let _id = test_id("df4kr");
 		// SAFETY: geteuid only reads.
 		if unsafe { libc::geteuid() } == 0 {
@@ -3107,7 +3107,7 @@ mod tests {
 	// The database and its WAL files are opened in the checked folder too (2026111918562711).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn the_database_opens_in_the_checked_folder() {
+	fn db_checked_folder() {
 		let _id = test_id("dfjxq");
 		let d = scratch("scan_db_folder_moved");
 		fs::create_dir(d.join("a")).unwrap();
@@ -3126,7 +3126,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn nothing_written_on_a_hands_off_device() {
+	fn hands_off_no_writes() {
 		let _id = test_id("ddyas");
 		let d = scratch("scan_handsoff");
 		fs::write(d.join("a"), "win").unwrap();
@@ -3154,7 +3154,7 @@ mod tests {
 
 	// accept can't update a set on a hands-off device, so the row it took has the say there (2026102814341432). Without a row the set still counts.
 	#[test]
-	fn the_row_decides_on_a_hands_off_device() {
+	fn hands_off_row_decides() {
 		let _id = test_id("df1r9");
 		let read = Sums { b3: [1; 32], b2b: Some([8; 64]) };
 		let names = |r: &Refs| -> Vec<&str> { r.misses(&read).iter().map(|m| m.0.name()).collect() };
@@ -3172,7 +3172,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
-	fn an_accepted_file_on_a_hands_off_device_is_clean() {
+	fn hands_off_accept_is_clean() {
 		let _id = test_id("df1ra");
 		let d = scratch("scan_handsoff_accepted");
 		fs::write(d.join("f"), "fixed").unwrap();
@@ -3381,7 +3381,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn resume_takes_only_the_statuses_it_knows() {
+	fn resume_known_statuses() {
 		let _id = test_id("deaw0");
 		for s in ["stopped", "failed", "running", "killed"] {
 			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);

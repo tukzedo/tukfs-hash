@@ -272,7 +272,7 @@ mod tests {
 	}
 
 	#[test]
-	fn b3_fresh_needs_our_inode_and_a_sane_date() {
+	fn b3_fresh_inode_and_date() {
 		let _id = test_id("ddy59");
 		let of = OnFile {
 			b3: Some([1; 32]),

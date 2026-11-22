@@ -906,7 +906,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn zfs_diff_keeps_only_names_that_can_pair() {
+	fn zfs_diff_unpairable_dropped() {
 		let _id = test_id("dfk0k");
 		let dir = scratch("snapdiff_canpair");
 		let (old, new) = (dir.join("old"), dir.join("new"));
@@ -1005,7 +1005,7 @@ transid marker was 12\n";
 	}
 
 	#[test]
-	fn buffers_carry_nothing_between_pairs() {
+	fn buffers_reset_between_pairs() {
 		let _id = test_id("dej04");
 		let dir = scratch("snapdiff_bufs");
 		let mut bufs = CompareBufs::default();
@@ -1091,7 +1091,7 @@ transid marker was 12\n";
 	}
 
 	#[test]
-	fn a_snapshot_changed_since_it_was_taken_has_no_time() {
+	fn changed_snapshot_no_time() {
 		let _id = test_id("dfjtt");
 		let info = |flags, received: u8, ctransid, otransid| SubvolInfo {
 			_treeid: 257,
@@ -1126,7 +1126,7 @@ transid marker was 12\n";
 
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_birth_time_from_the_future_waits_for_the_walk() {
+	fn future_birth_waits() {
 		let _id = test_id("dfe66");
 		let dir = scratch("snapdiff_clock");
 		let (old, new) = (dir.join("old"), dir.join("new"));

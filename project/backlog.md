@@ -59,7 +59,7 @@
 		- README, help text and design.md list the new name.
 	- Branch: xattrskip
 	- Commit: `ab22859`
-	- Test case: Step 8 of `tests/integration.bash`: a `cp -a` copy, a set with no inode name, and a future date are each read again and reported. Unit test `b3_fresh_needs_our_inode_and_a_sane_date`.
+	- Test case: Step 8 of `tests/integration.bash`: a `cp -a` copy, a set with no inode name, and a future date are each read again and reported. Unit test `b3_fresh_inode_and_date`.
 	- Verified: Step 8 failed 4 checks before the fix and passes after, on ext4 and ZFS. Dropping the date bound or the inode match each turns it red again. Unit tests, clippy and rustfmt pass.
 	- Swept: The skip at `one_file` is the only place the xattr date is trusted. The mismatch check and the `only_date` write use the size and time alone, which is right for a compare. The DB skip already checks the inode.
 	- Acceptance signoff: Self-closed: fits the decision. The checksum in the new name also catches the nemo-anywhere case, which the decision didn't mention, at no cost. Tests fail before and pass after.
@@ -150,7 +150,7 @@
 		- README, help text and design.md describe both.
 	- Branch: keepgood
 	- Commit: `eb111ff`
-	- Test case: Step 3 of `tests/integration.bash`: the digests stay, a second run reports all 7 events again, `accept` takes 3 files and drops rmlint's stale sum, and the run after is clean. Unit tests `a_match_is_not_read_again`, `a_second_read_tells_cache_from_disk` and `each_record_is_checked` test the cache-only verdict, which can't be made without root.
+	- Test case: Step 3 of `tests/integration.bash`: the digests stay, a second run reports all 7 events again, `accept` takes 3 files and drops rmlint's stale sum, and the run after is clean. Unit tests `a_match_is_not_read_again`, `reread_cache_or_disk` and `each_record_is_checked` test the cache-only verdict, which can't be made without root.
 	- Verified: Step 3 failed 8 checks against the old build and passes after, on ext4 and ZFS. Unit tests, clippy, rustfmt and shellcheck pass.
 	- Swept: Every place that sends `Hashed` or writes xattrs in `one_file`: the xattr skip, the hard-link `Done` path and the normal path. `snapdiff` reads without dropping the cache. A scribble there can only add a false flag rather than hide a change, so it was left alone.
 	- Acceptance signoff: Self-closed: per the decisions. `cache-mismatch` exiting 4 errs on the safe side, since a memory fault is still a fault. Tests fail before and pass after.
@@ -1003,7 +1003,7 @@
 		- `accept` notes "attributes left alone" in its event, and leaves rmlint's sum too.
 		- README, help text and design.md say so.
 	- Branch: ntfs
-	- Test case: `mounts::tests::no_writes_on_ntfs_or_mac_disks` and `scan::tests::nothing_written_on_a_hands_off_device`.
+	- Test case: `mounts::tests::no_writes_on_ntfs_or_mac_disks` and `scan::tests::hands_off_no_writes`.
 	- Verified: The scan test fails with the device check taken out. On an NTFS image mounted with ntfs-3g, a database there was refused and `accept` left the attributes alone, where the old build wrote both. A root on b23's read-only fuseblk mount shows the note. Unit tests, clippy, rustfmt and the integration test on ext4 and ZFS pass.
 	- Note: There's no APFS or HFS+ driver here, so those rely on the type list test.
 	- Acceptance signoff: Self-closed: the requirement as given, tested.
@@ -1061,7 +1061,7 @@
 		- `ctransid > otransid` is the test, as the item proposed. On this box's kernel, making a file, an `O_TMPFILE`, a folder or a link, and a `touch`, each moved `ctransid` past `otransid` on a toggled snapshot. Toggling alone, an in-place overwrite and an append didn't. Those can't make a birth time, so trust stays for them.
 		- A rename or delete there moved it too, so it also costs the trust, though it adds nothing new. That's the safe side, and a walk is all it costs.
 	- Branch: nov20-2026111918562701
-	- Test case: `dfjtt` (`snapdiff::tests::a_snapshot_changed_since_it_was_taken_has_no_time`), and `dfjtv` in `tests/integration.bash` on real btrfs snapshots: the review's case gives `content-changed-same-mtime y` and exit 4. Both fail before the fix, `dfjtt` with `Some(..)` where `None` is wanted and `dfjtv` with exit 0 and no line, and pass after.
+	- Test case: `dfjtt` (`snapdiff::tests::changed_snapshot_no_time`), and `dfjtv` in `tests/integration.bash` on real btrfs snapshots: the review's case gives `content-changed-same-mtime y` and exit 4. Both fail before the fix, `dfjtt` with `Some(..)` where `None` is wanted and `dfjtv` with exit 0 and no line, and pass after.
 	- Swept: `frozen_at` is the only reader of the subvolume info, and `born_since_old` the only place its time is used. `df4qf`, over a snapshot never made writable, still skips the walk.
 	- Verified: The repro gives exit 4 and `content-changed-same-mtime`. `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri`.
 	- Acceptance signoff: Self-closed: the item's expected behavior, pinned by tests that fail before and pass after.
@@ -1094,7 +1094,7 @@
 		- A user's own scan is now refused another user's file in a sticky folder, as their shell's `>>` is, since `protected_regular` applies to every user.
 		- A log removed between the 2 opens is made by the second one and isn't handed over under sudo. It's a race only the user can cause, and the log is then root's, as an older build left it.
 	- Swept: every open for writing in `src`. `scan::lock` and `hand_over` already use `O_NONBLOCK` and check the type. The rest are in tests, the soak tests, or the profiler's own folder.
-	- Test case: `dfjv7` (`a_log_that_isnt_a_regular_file_is_refused`): a FIFO with no reader, one with a reader, and `/dev/null`. The sudo case is `sticky-log-standin.bash`.
+	- Test case: `dfjv7` (`log_not_regular_refused`): a FIFO with no reader, one with a reader, and `/dev/null`. The sudo case is `sticky-log-standin.bash`.
 	- Verified: `dfjv7` timed out on the code before and passes after. With `fifo-log.bash`, the old build hung through one INT, and the new one exits 1 at once. With `sticky-log-standin.bash`, as uid 0 in a user namespace, the old build exited 0 and wrote 378 bytes to the other user's file, and the new one exits 1 with EACCES, as the plain `>>` does, and the file stays empty. Its FIFO case went from killed at the timeout to exit 1. `sudo-log-standin.bash` passes 8 of 8. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
 	- Branch: nov20-2026111918562702
 	- Commit: 9215ed4
@@ -1308,7 +1308,7 @@
 	- Actual cause [Bug]: `scan::excluded` left out every name in the database's folder that started with its name.
 	- Actual fix [Bug]: It matches only the database's name and that name plus `-wal`, `-shm`, `-journal` or `.lock`. design.md, "Database", says so.
 	- Branch: round-20261102
-	- Test case: des63 (`only_the_databases_own_names_are_left_out`), and des65 and des66 in step 28 of `tests/integration.bash`. Without the fix des63 failed and des65 got "0 0".
+	- Test case: des63 (`db_own_names`), and des65 and des66 in step 28 of `tests/integration.bash`. Without the fix des63 failed and des65 got "0 0".
 	- Swept: `scan::excluded` is the only place the walk leaves a name out by the database's name. `hand_over` and `lock` already use exact names, and `gone` has no name rule of its own.
 	- Closed: 20261102-112339
 
@@ -1452,7 +1452,7 @@
 		- `scan::lock` takes the mount table, so `prune` reads it itself.
 	- Swept: every `read_mounts` and `lock` caller, in `scan.rs`, `accept.rs` and `main.rs`. Between `begin()` and `finish()` only a writer thread panic can still return early.
 	- Branch: round-20261028
-	- Test case: `dehzd`, `scan::tests::a_lost_mount_table_leaves_no_run_running`. It fails each mount read in turn and checks no run is left running. It failed before the fix and passes after. A container that can't plan a real root skips it.
+	- Test case: `dehzd`, `scan::tests::mount_table_lost`. It fails each mount read in turn and checks no run is left running. It failed before the fix and passes after. A container that can't plan a real root skips it.
 	- Closed: 20261028-092033
 
 - The integration test stops with no FAIL line when 2 of its checks find nothing.
@@ -1785,7 +1785,7 @@
 		- 2026-11-10: 2026111019145393 is Done, and 2026111019145405 waits on UAT for the look.
 		- 20261110: children 2026111019145405 wait on UAT, and the rest are closed
 		- 2026-11-17: Both children are Done.
-	- Test case: its children's tests. For 2026111019145393 they're `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`. For 2026111019145405 they're `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), and integration `df4xn`.
+	- Test case: its children's tests. For 2026111019145393 they're `df4x4` (`count_follows_walk`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`. For 2026111019145405 they're `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`log_link_refused`), and integration `df4xn`.
 	- Acceptance signoff: Self-closed: every requirement checks out on a pty and in the log, per 2026111019145405, and all 7 test IDs passed in the 2 full runs of 2026-11-11.
 	- Closed: 20261117-001500
 
@@ -1823,7 +1823,7 @@
 		- The width is asked for each line, so a resized window is followed. A char counts as one column, and a tab to the next stop of 8.
 		- The demo pipes its output, so it isn't cut, and the gif changes only by 2026111019145393's percent.
 	- Swept: every `out!` and `err!` in `scan.rs` outside its tests, and every `Opts` built, in `main.rs`, `soak.rs` and 3 tests.
-	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`a_link_at_the_log_is_refused`), integration `df4xn`.
+	- Test case: `df4xk` (`a_line_fits_its_terminal`), `df4xq` (`log_link_refused`), integration `df4xn`.
 	- Acceptance signoff: Self-closed: the requirements are measurable, and a pty check at 80 and 200 columns met each one. The look follows the Decisions row.
 	- Closed: 20261117-001500
 
@@ -1851,7 +1851,7 @@
 		- Each name of a hard link counts its share, as a skipped one does, so the done part and the total match.
 		- The total keeps its `~`, since files change under a scan.
 	- Swept: every `Group` built, in `groups` and 2 tests, and every reader of its size. Nothing outside `scan.rs` reads it.
-	- Test case: `df4x4` (`a_folder_is_counted_as_the_walk_reads_it`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.
+	- Test case: `df4x4` (`count_follows_walk`), `df4x5` (`a_stop_ends_the_count`), and integration `df4x7` and `df4x8`.
 	- Acceptance signoff: Self-closed under the 2026-10-14 rule. It reverses 2026110407135700's no percent for a folder, as this item's parent asks, so a `Check:` entry in questions.md gives the options.
 	- Closed: 20261110-192856
 
@@ -2018,14 +2018,14 @@
 		- Progress and summary lines end with `| ~N% of SIZE` against the used space of the group's filesystems, from `statvfs`. Files skipped unread count by size, a hard link's names by their share.
 		- Verified: Unit tests, clippy, the quick gate's unit and integration areas on ext4 and ZFS, and Miri pass. The lint area fails only on a scrub hit in 2026110715441803's `Actual fix` row, which isn't part of this item.
 		- Verified: `skips_count_toward_the_percent` goes red with the skipped sizes left out.
-		- It wasn't run on a real mount root, since one can't be made without root here. `only_a_whole_filesystem_has_a_size` reads `/`.
+		- It wasn't run on a real mount root, since one can't be made without root here. `whole_fs_size` reads `/`.
 		- Swept: every `skip_*` counter site, which are the 2 `db-fresh` paths, `skip_unknown` and `skip_xattr`. The hard link `Done` path adds nothing, since the read counted it.
 	- Decisions:
 		- Done counts files skipped unread as well as bytes hashed, so a resumed run's percent goes on from the stopped one's, which is what the second requirement needs. It departs from the wording "bytes hashed".
 		- The total is the filesystems' used space, once per device, per the note. A group with a root that's a folder inside its filesystem gets no percent, since the rest of the filesystem would keep it near 0.
 		- It goes at the end of the line, so the demo's summary line map still matches. The demo's root is a folder, so the gif is unchanged.
 		- It stops at 100, since compression can make the bytes read outrun the space used.
-	- Test case: `df1ph` (`skips_count_toward_the_percent`), `df1pj` (`the_percent_needs_a_size`), `df1pk` (`only_a_whole_filesystem_has_a_size`).
+	- Test case: `df1ph` (`skips_count_toward_the_percent`), `df1pj` (`the_percent_needs_a_size`), `df1pk` (`whole_fs_size`).
 	- Acceptance signoff: Self-closed under the 2026-10-14 rule. A `Check:` entry in questions.md gives the folder rule and the other options.
 	- Closed: 20261108-124211
 
@@ -2189,7 +2189,7 @@
 		- `run()` makes one `CompareBufs` and passes it to every `compare`. It's a type of its own rather than 2 slices, so the 2 buffers can't differ in length.
 	- Swept: `compare` has one caller in `run()` and one in the tests. `accept` already reuses its buffer, and `read_sums` takes the caller's.
 	- Branch: round-20261028
-	- Test case: `dej04` (`snapdiff::tests::buffers_carry_nothing_between_pairs`) runs one set of buffers over 4 pairs, and the first pair leaves 5,000 bytes behind. `ddx01` reuses them too.
+	- Test case: `dej04` (`snapdiff::tests::buffers_reset_between_pairs`) runs one set of buffers over 4 pairs, and the first pair leaves 5,000 bytes behind. `ddx01` reuses them too.
 	- Verified: `cicd/cicd.bash --backlog-run-quick fmt build lint unit it` passed.
 	- Verified: On 2026-10-28, `cicd/cicd.bash --backlog-run-full` passed on `603c897`, and dej04 passed under asan, tsan, and Miri in the Tests step.
 	- Closed: 20261028-105331
@@ -2633,10 +2633,10 @@
 	- Progress log:
 		- `RunStatus` is in db.rs beside `Kind`, with its stored text, and goes to SQL as that text. scan, accept, gone, and `runs` use it.
 		- `pick_resume` parses the status and matches every variant, without a catch-all. A status it can't parse is refused as before.
-		- Verified: `resume_takes_only_the_statuses_it_knows` passes on the old code and the new. The gates passed as in 2026101916404103.
+		- Verified: `resume_known_statuses` passes on the old code and the new. The gates passed as in 2026101916404103.
 		- Verified: With `killed` stored as another text, the round-trip and resume tests go red.
 		- Swept: Status literals in SQL and comparisons in src were changed. `RunStatus::text`, tests, and accept's "stopped", which is a read failure's text, were left.
-	- Test case: `db::tests::run_statuses_are_the_stored_ones` and `scan::tests::resume_takes_only_the_statuses_it_knows`.
+	- Test case: `db::tests::run_statuses_are_the_stored_ones` and `scan::tests::resume_known_statuses`.
 	- Closed: 20261023-075214
 
 - Clippy's pedantic lints aren't on, and the code has 69 pedantic warnings.
@@ -2915,7 +2915,7 @@
 		- 2026-11-21: The `Check:` entry is answered (a), as done. A folder restored from a backup during a scan has the same sizes and times with other bytes, which is what this tool is for, and the old way passed it at exit 0. That counts for more than a tenth of a rescan's CPU on kernels before 5.6. The filed fix still read the old file in one order of events, and no kept folder at all was 70% over openat2, where this is 35%. The linked-back case stays, since it reads only the files the walk listed, on the same filesystem, and closing it would need the full walk. design.md, "Reading files", names it.
 	- Branch: nov20-2026111918562704
 	- Commit: `074f99a`
-	- Test case: `dfjx2` (`beneath::tests::a_kept_folder_moved_out_isnt_read_through`) moves a kept folder out and puts another in its place, with a file only the old one has and one in both.
+	- Test case: `dfjx2` (`beneath::tests::moved_kept_folder_refused`) moves a kept folder out and puts another in its place, with a file only the old one has and one in both.
 	- Verified:
 		- `dfjx2` fails with the path check taken out, and passes with it.
 		- The repro with openat2 refused gives exit 4, files 2, and `b3-db-mismatch 1`, the same as openat2 on both builds.
@@ -2991,7 +2991,7 @@
 	- Actual fix [Bug]: `plan` keeps each root's device and inode. `walk` refuses a root whose opened folder differs, as a `dir-error` that says it's not the folder that was there when the scan began, and the size count counts 0 for it. design.md, "Reading files", says so.
 	- Branch: nov20-2026111918562706
 	- Commit: `b226adc`
-	- Test case: `dfjxp` (`scan::tests::a_root_thats_another_folder_since_the_plan_is_refused`) puts a link above a root, then another folder at its name, and checks that each is refused and counted as 0.
+	- Test case: `dfjxp` (`scan::tests::swapped_root_refused`) puts a link above a root, then another folder at its name, and checks that each is refused and counted as 0.
 	- Verified:
 		- `dfjxp` fails with the check taken out, and passes with it.
 		- The repro in both modes gives exit 8 and `dir-error 1`, without any attribute on the NTFS file. Without the check, it gives exit 0 and `user.blake3.b64u` on the file.
@@ -3023,7 +3023,7 @@
 	- Decisions: The skip is in the worker's `stat`, as filed, rather than the walk's listing, since the listing's inode can differ from the file's on some filesystems, such as overlayfs.
 	- Branch: nov20-2026111918562707
 	- Commit: `76f4190`
-	- Test case: `dfjyd` (`scan::tests::the_log_under_another_name_is_left_out`, unit, a hard link to the log), `dfjye` (integration step 25, a bind mount, in a user namespace, skipped on ZFS).
+	- Test case: `dfjyd` (`scan::tests::log_by_inode`, unit, a hard link to the log), `dfjye` (integration step 25, a bind mount, in a user namespace, skipped on ZFS).
 	- Verified: `dfjye` fails against the build from before the fix and passes after, on ext4. `dfjyd` fails with the check taken out and passes with it. `--backlog-run-quick` passed in 2m 27s, its `miri` area in 52s, and `codeql-ours` in 2m 20s.
 	- Swept: `Worker::stat` is the only place a file is judged before it's read, and `bytes_under` the only other walk that counts files. `excluded` still has the path rule. The database's own files are still left out by name in their folder, per 2026110719570617, which this didn't change.
 	- Acceptance signoff: Self-closed: The fix is the probable fix, and the tests fail before and pass after.
@@ -3080,7 +3080,7 @@
 	- Decisions: The fix breaks at ", " rather than joining the kinds with " | ", so the stored summary, the log, and piped output don't change.
 	- Branch: nov20-2026111918562709
 	- Commit: `dce4351`
-	- Test case: `dfjyx` (`every_kind_in_a_long_events_line_shows`), with `df4xk` (`a_line_fits_its_terminal`) unchanged.
+	- Test case: `dfjyx` (`long_events_line_shows_all`), with `df4xk` (`a_line_fits_its_terminal`) unchanged.
 	- Verified: `dfjyx` fails with the old fitting and passes after, with every kind whole from 42 to 119 columns. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
 	- Swept: `Fit::Break` is used only for the summary in `scan::run`. The other ", " lists the scan prints are on stderr, which isn't cut.
 	- Acceptance signoff: Self-closed: The fix is the probable fix, and the test fails before and passes after.
@@ -3135,7 +3135,7 @@
 		- SQLite still goes by that path for files it makes later, such as the `-journal` when the run leaves WAL mode. A swap in the moment after the link is read, or during the run, still affects those. Closing that needs a SQLite VFS that opens by fd, which costs more than a Low item that's only plausible.
 	- Branch: nov20-2026111918562706
 	- Commit: `b226adc`
-	- Test case: `dfjxq` (`scan::tests::the_database_opens_in_the_checked_folder`), and a new case in `ddy8f` (`a_group_with_no_workers_ends`) whose lookups open through a moved folder.
+	- Test case: `dfjxq` (`scan::tests::db_checked_folder`), and a new case in `ddy8f` (`a_group_with_no_workers_ends`) whose lookups open through a moved folder.
 	- Verified:
 		- `dfjxq` and `ddy8f`'s new case fail with the open by name put back, and pass after.
 		- Given `/proc/self/fd/<fd>/t.sqlite` with `NOFOLLOW`, `dfjxq` fails with "unable to open database file". The system SQLite 3.46.1, given it without `NOFOLLOW`, made the file in the moved folder.
@@ -3396,7 +3396,7 @@
 		- The current time is taken once when the run starts rather than per file. A file born during the run then waits for the walk, which is the safe side and lets the test set the time.
 		- Once the clock catches up with the birth time, the file is trusted again. Nothing on disk tells a clock that was ahead from a file born after the snapshot. design.md says so.
 	- Branch: nov17-2026111700232503
-	- Test case: `dfe66` (`snapdiff::tests::a_birth_time_from_the_future_waits_for_the_walk`). It fails before the fix, `(0, 1, 0, 0)` where `(1, 0, 1, 0)` is wanted, and passes after.
+	- Test case: `dfe66` (`snapdiff::tests::future_birth_waits`). It fails before the fix, `(0, 1, 0, 0)` where `(1, 0, 1, 0)` is wanted, and passes after.
 	- Swept: `born_since_old` is the only place a birth time is trusted to skip the walk. `find_by_inode` only checks that 2 birth times are equal.
 	- Verified: `cicd/cicd.bash --backlog-run-quick` passed, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
 	- Acceptance signoff: Self-closed: The fix gives the item's expected behavior, pinned by a test that fails before and passes after.
@@ -3487,7 +3487,7 @@
 		- The guard owns the connection, and the scan lends it to the writer thread and puts it back. The writer already hands it back after a panic, so only a failed join loses it, and the hand-back still runs then.
 	- Swept: Every caller of `lock`, `open_rw`, `close_rw`, and `give_back` outside the tests was checked. Only `scan::run`, `accept::run`, and `prune` write the database. `runs`, `report`, and `gone` open it read only.
 	- Branch: round-20261110
-	- Test case: `df4he` (`scan::tests::a_refused_resume_ends_in_rollback_mode`) runs a refused `--resume` on a database it found and on one it made. It failed with the close taken out of the guard, and passes with it. The hand-back as root is `fail-handback-standin.bash` in the private tools folder, which failed 6 of 7 checks on the old build and passes all 7 after, with `sudo-links-standin.bash` still passing.
+	- Test case: `df4he` (`scan::tests::refused_resume_rollback`) runs a refused `--resume` on a database it found and on one it made. It failed with the close taken out of the guard, and passes with it. The hand-back as root is `fail-handback-standin.bash` in the private tools folder, which failed 6 of 7 checks on the old build and passes all 7 after, with `sudo-links-standin.bash` still passing.
 	- Closed: 20261110-131002
 	- Verified: On 2026-11-10, a real sudo run on b23 of the dev build at a720ad6 passed all 7 failure checks. A refused --resume on a finished and on a new database left rollback mode with both files handed back, the user's own accept and scan then ran, and prune and accept on a newer schema still handed back.
 
@@ -4104,7 +4104,7 @@
 	- Decisions:
 		- Stop where the device changes, which is how git stops looking by default. That also stops at a btrfs subvolume, the same as git. git doesn't find a `.git` past a mount point unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, so it doesn't count here either.
 	- Branch: round-20261102
-	- Test case: des64 (`a_root_below_a_git_folder_is_in_git`), and des67 in step 28 of `tests/integration.bash`. Without the fix both failed, des67 with the full attribute set.
+	- Test case: des64 (`root_below_git`), and des67 in step 28 of `tests/integration.bash`. Without the fix both failed, des67 with the full attribute set.
 	- Swept: The walk is the only place that writes a new set. `accept` only replaces a set already there, so it adds none in a git tree.
 	- Closed: 20261102-112339
 
@@ -4132,7 +4132,7 @@
 		- `cache-mismatch` isn't loaded, since it ends in a clean read that writes a row.
 	- Actual fix [Bug]: `judged_already` skips a path an earlier part reported a mismatch for when its ctime is from before the run began, with or without a row. design.md, "Skipping", says so under the table.
 	- Branch: round-20261102
-	- Test case: des7k and des7m in step 5 of `tests/integration.bash`, a stop and resume over a new database. Unit tests des7n `a_reported_miss_is_not_read_again`, which also covers a row at an older size, and des7p `run_misses_are_this_runs`. des7m and des7n failed before the fix and pass after.
+	- Test case: des7k and des7m in step 5 of `tests/integration.bash`, a stop and resume over a new database. Unit tests des7n `reported_miss_skipped`, which also covers a row at an older size, and des7p `run_misses_are_this_runs`. des7m and des7n failed before the fix and pass after.
 	- Swept: `judged_already` and `skip_unread`, the only skips. The `link-done` path calls `keep` with its own name's row, so each name is judged by its own events. `--verify` resumes go through the same check.
 	- Closed: 20261102-120951
 	- Note: On 2026-11-02, des7n failed under Miri on openat2 in the full run. It's now marked to skip Miri, as the other walk tests are.
@@ -4499,7 +4499,7 @@
 		- The catch is in `db::writer`, so its signature and its callers stay as they were. A panic inside a batch rolls its transaction back as it unwinds.
 	- Swept: `accept` writes its run row as `accept` and never as running, and has no writer thread. Worker and group panics were already caught.
 	- Branch: round-20261028
-	- Test case: `dehzq`, `scan::tests::a_writer_panic_leaves_no_run_running`. It failed before the fix and passes after.
+	- Test case: `dehzq`, `scan::tests::writer_panic_closes_run`. It failed before the fix and passes after.
 	- Closed: 20261028-092936
 
 - Lock and ownership errors on the database are misreported or dropped.
@@ -4693,7 +4693,7 @@
 		- The first folder a run makes also clears what killed runs left, once it's a day old and its pid is gone. Only a strict name right under that folder goes, and only when it isn't a link, its real path matches, the user running the tests owns it, and it doesn't cross into another filesystem.
 	- Progress log:
 		- 2026-10-23: Verified: a run killed part way left 7 folders. The next run left them alone, and once they were a day old the one after removed them all. A failed test's folder went with a read-only folder inside it, and a young one, a live pid's, a link and a name the tests didn't make were all left.
-	- Test case: `testutil::tests::a_scratch_folder_goes_on_a_panic` and `testutil::tests::only_a_dead_runs_old_folders_are_swept`.
+	- Test case: `testutil::tests::scratch_removed_on_panic` and `testutil::tests::sweep_dead_runs_only`.
 	- Note: 16 had piled up by 2026-10-23. A cicd run's own temp dir will catch them, but a bare `cargo test` won't. Folders made before this change, directly in TMPDIR, aren't swept.
 	- Branch: cicd
 	- Closed: 20261023-155700
@@ -4854,9 +4854,9 @@
 		- Loop mounts are unchanged. Each root is compared with its own device, and grouping still comes from the disks under the backing file.
 	- Branch: walkfix
 	- Commit: 9120949
-	- Test case: `beneath::tests::a_symlink_on_the_way_is_not_followed`, `beneath::tests::another_filesystem_is_not_entered`, `scan::tests::a_swapped_folder_is_not_followed` and `scan::tests::the_walk_stays_on_the_root_device`.
+	- Test case: `beneath::tests::symlink_on_way_refused`, `beneath::tests::another_filesystem_is_not_entered`, `scan::tests::a_swapped_folder_is_not_followed` and `scan::tests::walk_one_device`.
 	- Verified:
-		- `a_swapped_folder_is_not_followed` fails with the old open, and `the_walk_stays_on_the_root_device` fails with the device check and the mount rule taken out. Both pass with them.
+		- `a_swapped_folder_is_not_followed` fails with the old open, and `walk_one_device` fails with the device check and the mount rule taken out. Both pass with them.
 		- With a btrfs subvolume and a tmpfs mounted mid-scan, the old build recorded files in both, and this one in neither.
 		- The `beneath` tests run both the `openat2` and the one folder at a time paths.
 		- Unit tests, clippy, and the integration test on ext4 and ZFS pass.
@@ -5001,7 +5001,7 @@
 	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/zfs-minus-mem.bash BIN DIR N`.
 	- Actual effort: Low
 	- Branch: nov20-2026111918562722
-	- Test case: `dfk0k` (`snapdiff::tests::zfs_diff_keeps_only_names_that_can_pair`) checks that only names the other side has are kept, a name through a symlink is kept, and only the replaced file is compared. It failed with the check taken out, since it kept `gone`, and passes after. `dfk0m` in `tests/integration.bash` checks that 100,000 `-` and 100,000 `+` lines naming nothing on the other side take under 1 MB more peak RSS than 1 line. It failed 2 of 2 on the beta.2 build, at about 20 MB against 2.3 MB, and passes 3 of 3 after.
+	- Test case: `dfk0k` (`snapdiff::tests::zfs_diff_unpairable_dropped`) checks that only names the other side has are kept, a name through a symlink is kept, and only the replaced file is compared. It failed with the check taken out, since it kept `gone`, and passes after. `dfk0m` in `tests/integration.bash` checks that 100,000 `-` and 100,000 `+` lines naming nothing on the other side take under 1 MB more peak RSS than 1 line. It failed 2 of 2 on the beta.2 build, at about 20 MB against 2.3 MB, and passes 3 of 3 after.
 	- Verified:
 		- 1M `-` lines went from 111 MB peak RSS to 2.5 MB, and from about 3.97 s to 0.88 s of user plus system CPU, at load 5 to 10.
 		- `cicd/cicd.bash --backlog-run-quick` passed, `dfk0m` on ext4 and ZFS, and so did `--backlog-run-quick miri` and `--backlog-run-quick codeql-ours`.
@@ -5024,7 +5024,7 @@
 	- Decisions: The exit code doesn't change. The scan's own results are in the database and on stdout, and a full disk under the log isn't a fault in what was scanned. The warning goes only to stderr, since the log can't take it.
 	- Branch: nov20-2026111918562707
 	- Commit: `76f4190`
-	- Test case: `dfjyc` (`say::tests::a_log_that_cant_be_written_is_said_once`), `dfjyf` (integration step 30, a log on a full 8k tmpfs, in a user namespace, skipped on ZFS).
+	- Test case: `dfjyc` (`say::tests::log_write_fail_warns_once`), `dfjyf` (integration step 30, a log on a full 8k tmpfs, in a user namespace, skipped on ZFS).
 	- Verified: `dfjyf` fails against the build from before (exit 0, no warning) and passes after, on ext4. `dfjyc` fails with the warning taken out and passes after. `--backlog-run-quick` passed, and so did `codeql-ours`.
 	- Acceptance signoff: Self-closed per memory.md's close policy: the test fails before and passes after. The warning's wording is the only part left to taste.
 	- Closed: 20261120-190540
@@ -5048,7 +5048,7 @@
 	- Decisions:
 		- A `--db` that can't be resolved isn't checked here, so the run still fails at the database with its reason in the log (dfdmm).
 	- Swept: `scan::excluded`, the only other place that matches the database's names, now goes through the same `own_name`.
-	- Test case: `dfjv8` (`a_log_that_is_the_database_is_refused`) tries the database, its lock, `-wal`, `-shm` and `-journal`, a hard link to the database and to the lock, and a `-wal` through a linked folder, and checks that names that only start with the database's are still allowed.
+	- Test case: `dfjv8` (`log_at_db_refused`) tries the database, its lock, `-wal`, `-shm` and `-journal`, a hard link to the database and to the lock, and a `-wal` through a linked folder, and checks that names that only start with the database's are still allowed.
 	- Verified: `dfjv8` failed on the code before and passes after. A real scan with `--log` at each of the 4 names and at a hard link exits 1 with nothing written, and a log named `t.sqlite.log` beside it works. `--backlog-run-quick` passed, and so did its `miri` and `codeql-ours` areas.
 	- Branch: nov20-2026111918562702
 	- Commit: 9215ed4
@@ -5272,7 +5272,7 @@
 		- A link at the log's name now reads "is a symbolic link; refused", as the lock's does.
 	- Swept: every caller of `open_log` (only `scan::run`) and of `open_dir` (`Held::take_as` and 5 tests). Only `scan` takes `--log`.
 	- Branch: round-20261111
-	- Test case: `df4y3` (`a_log_is_made_only_once`), `df4y4` (`a_log_folder_not_the_users_is_refused`), with `df4xq` and integration `df4xn` still passing. The root case is `sudo-log-standin.bash` in the private tools folder, which failed 4 of 8 checks on the build before and passes all 8.
+	- Test case: `df4y3` (`a_log_is_made_only_once`), `df4y4` (`log_folder_owner_checked`), with `df4xq` and integration `df4xn` still passing. The root case is `sudo-log-standin.bash` in the private tools folder, which failed 4 of 8 checks on the build before and passes all 8.
 	- Verified: `--backlog-run-quick` passed, ext4 and ZFS integration included, and so did its `miri` and `codeql-ours` areas. As uid 0 in a user namespace with SUDO_UID set, a new log in the user's or root's folder was the user's, an old one kept its owner and was added to, a link at the folder to another user's folder and a link at the name were refused with nothing made, and a `sudo -u` style run gave no warning.
 	- Acceptance signoff: Self-closed per memory.md's close policy. The root case passed as uid 0 in a user namespace. A real sudo run on b23 that fails reopens it.
 	- Closed: 20261110-195616
@@ -5690,7 +5690,7 @@
 		- `Refs` knows the file is on a hands-off device. There a row at the file's size and time means only `b3-db-mismatch` can be reported. The ok counts count only a set that agreed.
 		- design.md, "Attributes", and README.md's `accept` paragraph say so.
 	- Branch: round-20261108b
-	- Test case: `df1r9` (`the_row_decides_on_a_hands_off_device`), `df1ra` (`an_accepted_file_on_a_hands_off_device_is_clean`).
+	- Test case: `df1r9` (`hands_off_row_decides`), `df1ra` (`hands_off_accept_is_clean`).
 	- Verified: `df1ra` fails with the new rule turned off and passes with it. `--backlog-run-quick` passed, all areas, and `--backlog-run-quick miri`.
 	- Swept: `Refs::new` has the one caller, `one_file`, so the link and cache paths go through it too. `write_attrs` and `accept`'s `hands_off_at` call already skip these devices. `snapdiff` compares snapshots, which are never hands-off.
 	- Acceptance signoff: Self-closed under the 2026-10-14 rule.
@@ -5930,7 +5930,7 @@
 		- A name that could skip by its attributes now waits while another name of the inode is being read. Those names share one set, so that's rare.
 		- The test doesn't pause between writes, since the bad view comes from a read that spans the writes and no pause on the writer's side forces it. It puts that view on the file while the test has the claim, and checks the other name records the new checksum.
 	- Branch: round-20261102
-	- Test case: des6h, `scan::tests::a_half_written_set_is_not_read`.
+	- Test case: des6h, `scan::tests::half_written_set`.
 	- Verified:
 		- des6h failed before the fix, with the old checksum recorded for the new content, and passes after.
 		- Unit tests (92), clippy, and `--backlog-run-quick`, the integration test on ext4 and ZFS included.
@@ -6147,7 +6147,7 @@
 	- Decisions:
 		- Each batch gets a short transaction, rather than a query per folder or a long-held transaction. It needs no new table or index, and it ends before the batch waits on the queue, so checkpoints aren't held back. A resumed run reads rows the stopped run committed, which every batch sees.
 		- `a_group_with_no_workers_ends` got its no workers from each worker failing to open a missing database. It now asks for 0 workers outright, and the missing database case expects the walk's 1 fault in place of 2.
-	- Test case: dej6m, `the_walk_hands_each_job_its_row`, and `lookup_error_is_not_no_row` tests `db::lookup_each`.
+	- Test case: dej6m, `walk_job_rows`, and `lookup_error_is_not_no_row` tests `db::lookup_each`.
 	- Closed: 20261028-132000
 
 - Lint configs don't enforce all of the style rules.
@@ -6884,7 +6884,7 @@
 		- Swept: every `.lock()` and `Condvar::wait` in `src`, tests included. Only `scan.rs` has a Mutex.
 	- Decisions:
 		- Every lock uses `unwrap_or_else(PoisonError::into_inner)` rather than a reason per unwrap. Nothing panics inside these locks short of a bug, and the data they guard stays usable. A half-done link map entry only costs a reread, and the job queue and fault list don't have any invariant across a push or recv.
-	- Test case: `scan::tests::a_poisoned_lock_is_still_a_fault`.
+	- Test case: `scan::tests::poisoned_lock_fault`.
 	- Closed: 20261023-080609
 
 - Every skipped file updates its database row by path.
@@ -6946,7 +6946,7 @@
 		- `Opts` has 3 bools now, within the lint's limit, so its `struct_excessive_bools` allow is gone.
 		- Verified: the clippy gate passes without the allow, and the integration test's verify steps pass on ext4 and ZFS.
 		- Swept: every `verify` field and argument in src. The `--verify` flag and the `runs.verify` column stay.
-	- Test case: the integration test's `verify:` steps, and `resume_takes_only_the_statuses_it_knows`, which passes a mode.
+	- Test case: the integration test's `verify:` steps, and `resume_known_statuses`, which passes a mode.
 	- Closed: 20261023-075214
 
 - `hex` and `escape_name` allocate a new string for every byte.

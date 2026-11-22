@@ -795,7 +795,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn a_bad_event_drops_the_rest_for_good() {
+	fn bad_event_drops_rest() {
 		let _id = test_id("df1pa");
 		let (_dir, p) = temp_db("evfail");
 		let conn = open_rw(&p).unwrap();

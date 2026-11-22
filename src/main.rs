@@ -543,7 +543,7 @@ mod tests {
 	}
 
 	#[test]
-	fn a_flag_for_another_command_is_refused() {
+	fn foreign_flag_refused() {
 		let _id = test_id("df1q2");
 		for (cmd, flag) in [("gone", "--root"), ("report", "--since"), ("accept", "--rmlint"), ("runs", "--limit"), ("plan", "--exclude"), ("prune", "--run"), ("scan", "--all"), ("snapdiff", "--db")] {
 			assert_eq!(real_main(&argv(&[cmd, flag, "x"])), Err(format!("{cmd} doesn't take {flag}; see --help")));
