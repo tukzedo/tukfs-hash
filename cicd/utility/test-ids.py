@@ -244,7 +244,7 @@ def fScan() -> tuple[list[Found], list[str]]:
     have = {f.tid for f in found}
     for tid, file, line_no in skips:
         if tid not in have:
-            bad.append(f"{file}:{line_no}: skip {tid} is no check's ID")
+            bad.append(f"{file}:{line_no}: skip {tid} isn't any check's ID")
     return found, bad
 
 

@@ -33,7 +33,7 @@ BUILD_ENV_NAME="TUKFS_HASH_BUILD"
 BUILD_RELEASE_ENV_NAME="TUKFS_HASH_RELEASE"
 BUILD_DIRTY_ENV_NAME="TUKFS_HASH_DIRTY"
 
-## Each run's temp dir is <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>. This is where it goes when HOST_TEMP isn't set, then TMPDIR, then /tmp. b23's /tmp is btrfs on LUKS, and slow to fsync under load (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
+## Each run's temp dir is <HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>. This is where it goes when HOST_TEMP isn't set, then TMPDIR, then /tmp. The dev box's /tmp is btrfs on LUKS, and slow to fsync under load (2026102409041302). TUKFS_CICD_RUN_TMP overrides it.
 RUN_TMP_ROOT="${TUKFS_CICD_RUN_TMP:-/mnt/ext/wip2/wip/tmp}"
 
 ## Tool pins. The engine warns, without failing, when a tool has drifted. "name|version|command": the version has to show up in the command's output.
@@ -100,7 +100,7 @@ IT_BTRFS="${TUKFS_CICD_IT_BTRFS-/tmp}"
 LEAKCHECK_STEPS=(
 	## Known advisories for every crate in Cargo.lock. On the host, since it fetches RustSec's database. Offline is a noted skip. 1 to 3 s.
 	'fast|cicd/utility/advisories.bash'
-	## The main actions 20 times over in one process, with the heap at round 20 held to round 10. The table goes in cicd/artifacts/soak/. On the host, since a scan needs the real disks. 23 to 51 s.
+	## The main actions 20 times over in one process, with the heap at round 20 checked against round 10. The table goes in cicd/artifacts/soak/. On the host, since a scan needs the real disks. 23 to 51 s.
 	'fast|cicd/utility/soak.bash'
 	## The unit tests under ASan and LSan, then TSan, then Miri, each in a build dir of its own under target/leakcheck. ASan and TSan 10 to 59 s, and 7.5 min for a cold build dir. Miri 42 s to 1.5 min.
 	'fast|cicd/utility/sanitize-rust.bash --asan'
@@ -140,7 +140,7 @@ PROFILE_TIMED=(
 RELEASE_NATIVE_CMD=(cargo build --release --locked)
 RELEASE_NATIVE_BIN="target/release/${EXE_NAME}"
 
-## Stages 2 to 4 build and test in the release image below where docker answers, into a target dir of their own, else on the host with a note. The integration test and the soak stay on the host, since they scan the real disks. Every test step on the host runs in utility/sandbox.bash, which can write only to the folders it's given.
+## Stages 2 to 4 build and test in the release image below where docker responds, into a target dir of their own, else on the host with a note. The integration test and the soak stay on the host, since they scan the real disks. Every test step on the host runs in utility/sandbox.bash, which can write only to the folders it's given.
 TESTS_CTR_TARGET_DIR="${root}/target/ctr"
 TESTS_CTR_NATIVE_BIN="target/ctr/release/${EXE_NAME}"
 
@@ -195,7 +195,7 @@ DOGFOOD_RUNNERS=(
 )
 
 ## Stage 9: demo gif, eval'd. cicd/demo/scenario.toml runs against the native release build from stage 6, in a home in the run's temp dir, and gen-demo-gif.py draws it. Each gif is GFS-rotated into GIF_ROTATE_DIR, in the private dir beside the checkout, unless it's the same as the newest there, and copied to GIF_OUT when it differs.
-## No Pillow or font warns and passes. --quick and --backlog-run-quick leave it out, and the merge gate and --backlog-run-full draw it into the temp dir.
+## Without Pillow or a font, it warns and passes. --quick and --backlog-run-quick leave it out, and the merge gate and --backlog-run-full draw it into the temp dir.
 GIF_ENABLE=1
 GIF_SCENARIO="cicd/demo/scenario.toml"
 GIF_OUT="assets/demo.gif"
@@ -203,7 +203,7 @@ GIF_ROTATE_DIR="${root}/../private/demo/gif"
 GIF_CMD='cicd/utility/demo-gif.bash "${release_dir}/${EXE_NAME}-$(fVersion)-${RELEASE_NATIVE_OSARCH}" "${GIF_SCENARIO}" "${GIF_OUT}" "${GIF_ROTATE_DIR}" "${stamp}"'
 
 ## --backlog-run-quick AREA...: only the areas named run. "name|leak text|what".
-## A leak area keeps each leak check its text is in, and one whose text starts with + runs that text as a leak check of its own, which no other run has. With no area named it's fmt, build, lint, unit and it.
+## A leak area runs each leak check that contains its text, and one whose text starts with + runs that text as a leak check of its own, which no other run has. With no area named it's fmt, build, lint, unit and it.
 BACKLOG_AREAS=(
 	"fmt||the format check"
 	"build||the debug build"

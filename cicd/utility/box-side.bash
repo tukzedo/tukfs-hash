@@ -83,7 +83,7 @@ fMake(){
 		n=$((n + 1)); ((n < 1000)) || { echo "box-side: no free run folder in ${base}" >&2; return 2; }
 		printf -v d '%s/%s_%03d' "${base}" "${stamp}" "${n}"
 	done
-	if ! : > "${d}/${mark}"; then rmdir -- "${d}" 2> /dev/null; echo "box-side: could not mark ${d}" >&2; return 2; fi
+	if ! : > "${d}/${mark}"; then rmdir -- "${d}" 2> /dev/null; echo "box-side: couldn't mark ${d}" >&2; return 2; fi
 	echo "$$" > "${d}/run.pid"
 	echo "dir=${d}"
 }

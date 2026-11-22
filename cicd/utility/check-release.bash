@@ -2,7 +2,7 @@
 
 ##	Purpose:
 ##		- Checks over the release builds in the stage dir, before any of them
-##		  reach the artifact dir. Each mode fails on the first thing wrong.
+##		  are moved to the artifact dir. Each mode fails on the first thing wrong.
 ##		- version: the binary's --version first line is
 ##		  "NAME vVERSION build BUILD", and unless RELEASE is 1, then " (DATE)",
 ##		  the build's day where the binary runs. That's checked in 2 zones a

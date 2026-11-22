@@ -14,9 +14,9 @@
 ##		the host too.
 ##			fLeakInImage NAME SCRIPT RW [ARG...]
 ##			                    run SCRIPT ARG... in the leak check image and
-##			                    exit with its exit, when docker answers and
-##			                    the image can be set up. Otherwise back, with
-##			                    a one-line note, to run on the host. RW is
+##			                    exit with its exit, when docker responds and
+##			                    the image can be set up. Otherwise return,
+##			                    with a one-line note, to run on the host. RW is
 ##			                    the dirs it writes, joined by ':'. Nothing in
 ##			                    the image itself, or with TUKFS_NO_IMAGE set.
 ##			                    leak_host_note=0 leaves the note to the

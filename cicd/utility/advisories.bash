@@ -3,13 +3,13 @@
 ##	Purpose:
 ##		Known advisories for the crates Cargo.lock names: vulnerable, unsound
 ##		and unmaintained ones, by RustSec's database, through cargo-deny and
-##		deny.toml. Any of them fails. It covers third-party code only, which
+##		deny.toml. Any of them fails. It checks third-party code only, which
 ##		is the point. On the host, since it fetches the database, and the leak
 ##		check image has no network.
-##		The fetch and the check are apart, so a database that can't be had is
-##		told from a finding. That's a noted skip, which goes on the run's
-##		skip list so it doesn't record its tree, or a failure with
-##		TUKFS_GATE_STRICT set, as the check-only modes do.
+##		The fetch and the check run apart, so a database that can't be fetched
+##		is told apart from a finding. A failed fetch is a noted skip, which goes
+##		on the run's skip list so the run doesn't record its tree. With
+##		TUKFS_GATE_STRICT set, as the check-only modes have it, it's a failure.
 ##	Syntax:
 ##		advisories.bash
 ##	Exit: 0 = clean or skipped, 1 = an advisory, or a failure under strict, 2 = can't run.

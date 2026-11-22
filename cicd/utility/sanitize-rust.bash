@@ -6,8 +6,8 @@
 ##		target/leakcheck. The plain cargo test proves the output; these prove
 ##		the memory behind it.
 ##		- --asan: AddressSanitizer and LeakSanitizer. std is built too
-##		  (-Zbuild-std), and the target is named, or the flags would reach the
-##		  build scripts. clang builds the bundled SQLite with the same
+##		  (-Zbuild-std), and the target is named, or the flags would apply to
+##		  the build scripts too. clang builds the bundled SQLite with the same
 ##		  sanitizer, with its lookaside and page cache pools off so each block
 ##		  is a malloc of its own, and its objects have to show the
 ##		  instrumentation. LSan reports at exit, so a leak fails the whole
@@ -18,7 +18,7 @@
 ##		  Miri also fails on memory still allocated when a test ends. A test
 ##		  that calls what Miri can't run has #[cfg_attr(miri, ignore = "why")],
 ##		  and the count of those is printed.
-##		Runs in the leak check image when docker answers, else on the host,
+##		Runs in the leak check image when docker responds, else on the host,
 ##		with a note.
 ##		From shcl's cicd/utility/sanitize-rust.bash.
 ##	Syntax:
@@ -159,4 +159,4 @@ esac
 ##		- 2026-11-02: The build's own LIBSQLITE3_FLAGS go first.
 ##		- 2026-11-02: On the host, in the test sandbox.
 ##		- 2026-11-08: The missing nightly is found before the sandbox, so its
-##		  skip reaches the run's list.
+##		  skip is written to the run's list.

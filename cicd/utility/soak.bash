@@ -42,7 +42,7 @@ rm -f -- "${art}/dhat-heap.json" "${art}/soak.txt"
 rc=0
 env -u RUSTFLAGS TMPDIR="${scratch}/tmp" TUKFS_SOAK_OUT="${art}" \
 	cargo test -j "${CPU_CAP}" --locked --features soak --target-dir "${LEAK_DIR}/soak" \
-	-- --exact soak::the_heap_holds_steady --test-threads 1 --nocapture >"${scratch}/soak.log" 2>&1 || rc=$?
+	-- --exact soak::heap_stays_steady --test-threads 1 --nocapture >"${scratch}/soak.log" 2>&1 || rc=$?
 if ((rc != 0)); then
 	grep -E -A 4 'panicked|^test result|^error' "${scratch}/soak.log" || tail -n 40 "${scratch}/soak.log"
 	if [[ -f "${art}/soak.txt" ]]; then cat "${art}/soak.txt"; fi

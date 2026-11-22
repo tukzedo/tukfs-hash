@@ -35,7 +35,7 @@ fList(){
 	echo "${common}/tukfs-hash-green-trees"
 }
 
-## A scratch index seeded from HEAD rather than copied from the real one, so every file is hashed from disk: a copied index would keep assume-unchanged and skip-worktree bits, and a file with one would be tested as it sits on disk and committed as the index has it.
+## A scratch index seeded from HEAD rather than copied from the real one, so every file is hashed from disk. A copied index would keep assume-unchanged and skip-worktree bits, and a file with one would be tested as it is on disk but committed as the index has it.
 fTree(){
 	local tree
 	scratchIdx="$(mktemp -u)"
@@ -56,7 +56,7 @@ case "${cmd}" in
 	record)
 		now="$(fTree)" || exit 2
 		if [[ "${now}" != "$3" ]]; then
-			echo "green-tree: the files changed during the run, so it is not recorded" >&2
+			echo "green-tree: the files changed during the run, so the tree isn't recorded" >&2
 			exit 1
 		fi
 		list="$(fList)"

@@ -81,7 +81,7 @@ fGen(){
 		[[ -d "${d}" ]] || mkdir -p -- "${d}"
 		fRand; specs+=("${d}/${names[i % ${#names[@]}]} ${i}.txt:$(( 1024 + seed % 261120 ))")
 	done
-	printf '%s\n' "${specs[@]}" | fFiles || fDie "could not write the big files"
+	printf '%s\n' "${specs[@]}" | fFiles || fDie "couldn't write the big files"
 	## Many small files, which is where the walk, the database and the attributes cost the most per byte. Written here, since a process each would take longer than the scan.
 	for ((i = 0; i < 2000; i++)); do
 		d="mail/$((i % 12))/cur"

@@ -152,14 +152,14 @@ fn pick_resume(conn: &rusqlite::Connection, roots: &[u8], mode: Mode) -> Result<
 	match known {
 		RunStatus::Stopped | RunStatus::Failed | RunStatus::Running | RunStatus::Killed => {}
 		RunStatus::Done => {
-			return Err(format!("--resume: the last scan, run {id}, finished. Start a new one without --resume."));
+			return Err(format!("--resume: run {id} was the last scan, and it finished. Start a new one without --resume."));
 		}
 		RunStatus::Accept => {
 			return Err(format!("--resume: run {id} is {status}; can't resume it"));
 		}
 	}
 	let Some(was) = was else {
-		return Err(format!("--resume: run {id} is from an older version, which kept no root list. Start a new one without --resume."));
+		return Err(format!("--resume: run {id} is from an older version that didn't save its roots. Start a new one without --resume."));
 	};
 	if was != roots {
 		return Err(format!("--resume: run {id} was over other roots ({}). Resume it with the same roots, or start a new one without --resume.", roots_diff(&was, roots)));
@@ -356,7 +356,7 @@ pub struct Plan {
 	pub ids: HashMap<PathBuf, (u64, u64)>,
 }
 
-/// Roots that resolve to the same place, or whose folder another root's walk reaches, are dropped, so nothing is read twice. Bind mounts are the usual cause here.
+/// Roots that resolve to the same place, or whose folder another root's walk gets to, are dropped, so nothing is read twice. Bind mounts are the usual cause here.
 pub fn plan(roots: &[PathBuf], threads: &[(PathBuf, usize)], mounts: &[mounts::Mount]) -> Result<Plan, String> {
 	let mut dropped = Vec::new();
 	let mut unresolved = Vec::new();
@@ -610,10 +610,10 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 	for d in &dropped {
 		say::err(&format!("skipping root {d}"));
 	}
-	// A mistyped root would leave a whole tree unread under a run that looks fine, and a mistyped --exclude or --no-xattr reads or writes where it was told not to, so nothing starts (2026102814341406, 2026111011092303).
+	// A mistyped root would leave a whole tree unread under a run that looks fine, and a mistyped --exclude or --no-xattr would have the scan read or write where it was told not to, so nothing starts (2026102814341406, 2026111011092303).
 	let mut bad: Vec<String> = unresolved.iter().map(|(r, e)| format!("root {}: {e}", show_path(r))).collect();
 	let mut excludes = resolve_each("--exclude", &o.excludes, &mut bad);
-	// It changes as the scan reads it.
+	// The log changes as the scan reads it.
 	excludes.extend(o.log.as_deref().and_then(|l| fs::canonicalize(l).ok()));
 	let no_xattr = resolve_each("--no-xattr", &o.no_xattr, &mut bad);
 	if !bad.is_empty() {
@@ -671,7 +671,7 @@ pub fn run(o: &Opts, stop: &Arc<AtomicBool>) -> Result<i32, String> {
 		mounts,
 		root_ids,
 		no_write_devs: hands_off.values().map(|h| h.dev).collect(),
-		// A quick check leaves ctimes alone.
+		// --verify leaves ctimes alone.
 		write_xattrs: o.write_xattrs && o.mode == Mode::Full,
 		rmlint: o.rmlint,
 		mode: o.mode,
@@ -916,7 +916,7 @@ struct Part<'a> {
 
 fn finish(conn: rusqlite::Connection, p: &Part, mut why: Vec<String>, stopped: bool, mut held: Held) -> Result<i32, String> {
 	let run_id = p.run_id;
-	// The stored summary keeps every part's lines; the output shows this part's. The events line is the whole run's either way.
+	// The stored summary has every part's lines; the output shows this part's. The events line is the whole run's either way.
 	let mut part = String::new();
 	for g in p.groups {
 		let _ = writeln!(part, "{}: {}", g.name, g.line());
@@ -955,7 +955,7 @@ fn finish(conn: rusqlite::Connection, p: &Part, mut why: Vec<String>, stopped: b
 	if stopped {
 		say::out("Continue it with the same command plus --resume.", Fit::Cut);
 	}
-	// 2 adds to the others, so a stop says what was found before it.
+	// The stop's 2 is added to the others, so the exit code still shows what was found before the stop.
 	Ok(exit_bits(counts.as_deref().unwrap_or_default()) | if stopped { 2 } else { 0 })
 }
 
@@ -967,7 +967,7 @@ impl Drop for DoneOnDrop<'_> {
 	}
 }
 
-// A panic is a fault rather than a hang: it stops the run and marks it failed.
+// A panic is a fault rather than a hang, so it stops the run and marks it failed.
 fn guarded(sh: &Shared, who: &str, f: impl FnOnce()) {
 	if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
 		sh.faults.add(&sh.stop, format!("{who} panicked"));
@@ -1174,7 +1174,7 @@ fn walk(root: &Path, want: (u64, u64), sh: &Shared, stats: &Stats, look: &rusqli
 	if inside_any(&names, &sh.exclude_ids) {
 		return;
 	}
-	// A root gone since the plan wasn't read either. Nor is one that's another folder now, as when a mount or a link has gone into its path, since its group, skips and attributes were all worked out for the one the plan found (2026111918562706).
+	// A root that's gone since the plan isn't read. Neither is one that's another folder now, as when a mount or a link has gone into its path, since its group, skips and attributes were all worked out for the folder the plan found (2026111918562706).
 	let opened = Root::open(root).and_then(|r| if (r.dev, r.ino) == want { Ok(r) } else { Err(io::Error::other("not the folder that was here when the scan began")) });
 	let root = match opened {
 		Ok(r) => Arc::new(r),
@@ -1250,7 +1250,7 @@ impl Walker<'_> {
 		let mut files: Vec<(u64, PathBuf)> = Vec::new();
 		let mut subdirs = Vec::new();
 		for (seen, ent) in list.enumerate() {
-			// The rest of the folder goes unread after an error. An EIO in a damaged folder block is the case.
+			// The rest of the folder goes unread after an error, such as an EIO in a damaged folder block.
 			let ent = match ent {
 				Ok(ent) => ent,
 				Err(e) => {
@@ -1498,7 +1498,7 @@ pub enum ReadFail {
 
 /// `O_DIRECT` wants the buffer, offset and length on the device's block size.
 const DIRECT_ALIGN: usize = 4096;
-// Below this a plain read and its drops cost less CPU than going direct. Timed even at about 128 KiB on ext4 (2026111914312959).
+// Below this a plain read and its drops cost less CPU than going direct. On ext4 the 2 cost about the same at 128 KiB (2026111914312959).
 const DIRECT_MIN: u64 = 128 << 10;
 
 /// Turns `O_DIRECT` on or off for an open fd. False if the filesystem won't.
@@ -1522,7 +1522,7 @@ pub fn read_sums(file: &File, before: &fs::Metadata, want_b2b: bool, buf: &mut [
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
 		libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
 	}
-	// Reading around the page cache costs a fraction of filling it and then dropping it again (2026102316421705). Where the filesystem won't, or balks mid-file, or the file is small, it's a plain read and the drops above and below do it.
+	// Reading around the page cache costs a fraction of filling it and then dropping it again (2026102316421705). Where the filesystem won't, or balks mid-file, or the file is small, it's a plain read, and the drops above and below clear its cached pages.
 	let lead = buf.as_ptr().align_offset(DIRECT_ALIGN).min(buf.len());
 	let aligned_len = (buf.len() - lead) & !(DIRECT_ALIGN - 1);
 	let mut direct = !cfg!(miri) && aligned_len > 0 && before.len() >= DIRECT_MIN && set_direct(fd, true);
@@ -1595,7 +1595,7 @@ struct Refs<'a> {
 	xattr_date: Option<i64>,
 	b2b: Option<[u8; 64]>,
 	db: Option<&'a Prior>,
-	// On a hands-off device nothing can update a set, so where the row has a say, it's the only one. design.md, "Attributes".
+	// On a hands-off device nothing can update a set, so where the row has a say, it's the only one. See design.md, Attributes.
 	row_decides: bool,
 }
 
@@ -1748,7 +1748,7 @@ impl<'a> Worker<'a> {
 
 	fn stat(&self, job: &Job, rel: &Path) -> Option<fs::Metadata> {
 		let md = match job.root.open_at(rel, libc::O_PATH).and_then(|f| f.metadata()) {
-			// It changes as it's read, and writing attributes to it would move its ctime under whoever else appends (2026111918562707).
+			// The --log changes as it's read, and writing attributes to it would move its ctime under whoever else appends (2026111918562707).
 			Ok(m) if self.sh.log_id == Some((m.dev(), m.ino())) => return None,
 			Ok(m) if m.file_type().is_file() => m,
 			Ok(_) => return None,
@@ -1834,7 +1834,7 @@ impl<'a> Worker<'a> {
 		true
 	}
 
-	// Sums to record, with this name's claim on the inode still to fill. None once the file is dealt with: a failed read, a mismatch, or another name's read.
+	// Sums to record, with this name's claim on the inode still to fill. None once the file is dealt with, as after a failed read, a mismatch, or another name's read.
 	fn read_judged(&mut self, job: &Job, prior: Option<&Prior>, refs: &Refs, file: &File, before: &fs::Metadata, link: Option<Claim<'a>>) -> Option<(Sums, Option<ClaimGuard<'a>>)> {
 		let (sh, st, path) = (self.sh, &self.g.stats, &job.path);
 		let (bytes, mt) = (before.len() as i64, mtime_us(before));
@@ -1964,14 +1964,14 @@ mod tests {
 	}
 
 	#[test]
-	fn a_second_read_tells_cache_from_disk() {
+	fn reread_cache_or_disk() {
 		let _id = test_id("ddy6j");
 		let p = prior(1);
 		let r = refs(Some(1), Some(&p));
-		// Right the second time: only the first read was bad.
+		// Right the second time, so only the first read was bad.
 		let v = judge(&r, sums(2), || Ok(sums(1))).unwrap();
 		assert!(matches!(v, Verdict::CacheOnly { first, second } if first == sums(2) && second == sums(1)));
-		// Wrong both times: on disk.
+		// Wrong both times, so it's on disk.
 		let v = judge(&r, sums(2), || Ok(sums(2))).unwrap();
 		let Verdict::Changed { sums: s, misses, note } = v else { panic!("{v:?}") };
 		assert_eq!(s, sums(2));
@@ -1989,7 +1989,7 @@ mod tests {
 	fn each_record_is_checked() {
 		let _id = test_id("ddy6k");
 		let p = prior(1);
-		// The database agrees, the attribute doesn't.
+		// The database agrees, but the attribute doesn't.
 		let r = refs(Some(2), Some(&p));
 		let kinds: Vec<_> = r.misses(&sums(1)).iter().map(|m| m.0.name()).collect();
 		assert_eq!(kinds, ["b3-xattr-mismatch"]);
@@ -2046,7 +2046,7 @@ mod tests {
 		(sh, rx)
 	}
 
-	// More files than the job queue has room for, and no worker to take them. Workers stopped opening the database in 2026102810135573, so a missing one now stops the walk alone, and no workers is asked for outright.
+	// More files than the job queue has room for, and no worker to take them. Since 2026102810135573 the workers don't open the database, so a missing one stops only the walk, and the test asks for 0 workers outright.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_group_with_no_workers_ends() {
@@ -2137,7 +2137,7 @@ mod tests {
 
 	// A worker that panics holding a lock poisons it. The claim it drops in the unwind, the name waiting on that claim and the reason must all get through, or the run aborts, hangs, or isn't marked failed.
 	#[test]
-	fn a_poisoned_lock_is_still_a_fault() {
+	fn poisoned_lock_fault() {
 		let _id = test_id("deawa");
 		let (sh, _rx) = test_shared(PathBuf::from("/nowhere"));
 		let (dtx, drx) = std::sync::mpsc::channel();
@@ -2225,7 +2225,7 @@ mod tests {
 
 	// The mount table is empty here, as it would be for a filesystem mounted after the scan started. /dev/shm is its own mount on most boxes.
 	#[test]
-	fn the_walk_stays_on_the_root_device() {
+	fn walk_one_device() {
 		let _id = test_id("ddy94");
 		let (Ok(dev), Ok(shm)) = (fs::metadata("/dev"), fs::metadata("/dev/shm")) else {
 			return;
@@ -2252,7 +2252,7 @@ mod tests {
 	// A root that's another folder since the plan, through a link put above it or a folder put at its name, is refused rather than read, and isn't counted. A mount over it is the same case to the walk (2026111918562706).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn a_root_thats_another_folder_since_the_plan_is_refused() {
+	fn swapped_root_refused() {
 		let _id = test_id("dfjxp");
 		let d = scratch("scan_rootswap");
 		let d = fs::canonicalize(&*d).unwrap();
@@ -2292,10 +2292,10 @@ mod tests {
 		refused("another folder at its name");
 	}
 
-	// The walk looks each file up, a batch to a transaction, and a row it can't read skips that file alone (2026102810135573).
+	// The walk looks each file up, a batch to a transaction, and a file whose row can't be read is the only one skipped (2026102810135573).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn the_walk_hands_each_job_its_row() {
+	fn walk_job_rows() {
 		let _id = test_id("dej6m");
 		let d = scratch("scan_walkrows");
 		let tree = fs::canonicalize(&*d).unwrap().join("tree");
@@ -2343,7 +2343,7 @@ mod tests {
 	}
 
 	#[test]
-	fn only_the_databases_own_names_are_left_out() {
+	fn db_own_names() {
 		let _id = test_id("des63");
 		let (sh, _rx) = test_shared(PathBuf::from("/x/tree/tuk"));
 		let out = |name: &str| excluded(&sh, &Path::new("/x/tree").join(name), true);
@@ -2356,7 +2356,7 @@ mod tests {
 		assert!(!excluded(&sh, Path::new("/x/tree/sub/tuk"), false), "another folder");
 	}
 
-	// The database's folder is known by device and inode, so a walk that reaches it under another name, as through a bind mount, leaves its names out there too, and a same name elsewhere is read.
+	// The database's folder is known by device and inode, so a walk that gets to it under another name, as through a bind mount, leaves its names out there too, and the same names elsewhere are read.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn the_database_folder_under_another_name() {
@@ -2382,10 +2382,10 @@ mod tests {
 		assert_eq!(jobs, want);
 	}
 
-	// --exclude and --no-xattr know their folders by device and inode too, so a walk that reaches one under another name, as through a bind mount, still leaves it out or marks it, and so does a root inside one.
+	// --exclude and --no-xattr folders are known by device and inode too, so a walk that gets to one under another name, as through a bind mount, still leaves it out or marks it, and so does a root inside one.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn excluded_and_no_xattr_folders_under_another_name() {
+	fn excludes_by_inode() {
 		let _id = test_id("df1ng");
 		let d = scratch("scan_exclids");
 		let tree = fs::canonicalize(&*d).unwrap().join("tree");
@@ -2443,10 +2443,10 @@ mod tests {
 		assert_eq!(b3("given"), None);
 	}
 
-	// The log is known by device and inode, so a root that shows it under another name, as a bind mount does, doesn't read it or record it (2026111918562707).
+	// The log is known by device and inode, so it isn't read or recorded under another name, such as through a bind mount or a hard link (2026111918562707).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn the_log_under_another_name_is_left_out() {
+	fn log_by_inode() {
 		let _id = test_id("dfjyd");
 		let d = scratch("scan_logid");
 		fs::write(d.join("scan.log"), "line\n").unwrap();
@@ -2475,7 +2475,7 @@ mod tests {
 	// A root in or at an --exclude folder is dropped before the run, and a group left with no roots goes with it (2026111011092318).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't stat real folders")]
-	fn roots_in_an_excluded_folder_are_dropped() {
+	fn excluded_roots_dropped() {
 		let _id = test_id("df4m3");
 		let d = scratch("scan_dropex");
 		let d = fs::canonicalize(&*d).unwrap();
@@ -2497,7 +2497,7 @@ mod tests {
 	// design.md, Attributes: none in a git work tree, however deep the root.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn a_root_below_a_git_folder_is_in_git() {
+	fn root_below_git() {
 		let _id = test_id("des64");
 		let d = scratch("scan_gitabove");
 		let d = fs::canonicalize(&*d).unwrap();
@@ -2526,7 +2526,7 @@ mod tests {
 		}
 	}
 
-	// A root that's a bind mount of a subfolder: the folders above its source count too (2026111011092307). The table says `wide` shows the whole filesystem, and links there stand in for the binds' sources.
+	// For a root that's a bind mount of a subfolder, the folders above its source count too (2026111011092307). The table says `wide` shows the whole filesystem, and links there stand in for the binds' sources.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn a_bind_mounts_source_folders_count() {
@@ -2678,7 +2678,7 @@ mod tests {
 	// A folder inside a filesystem would show the whole filesystem's share.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
-	fn only_a_whole_filesystem_has_a_size() {
+	fn whole_fs_size() {
 		let _id = test_id("df1pk");
 		let d = scratch("scan_fs_used");
 		let m = mounts::read_mounts().unwrap();
@@ -2699,7 +2699,7 @@ mod tests {
 	// A bind mount of a folder from another filesystem is a folder too, though its parent is on another device (2026111011092313).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no statvfs")]
-	fn a_bind_mount_of_a_folder_has_no_size() {
+	fn bind_folder_no_size() {
 		let _id = test_id("df4jb");
 		let table = |root: &str| mounts::parse_mountinfo(format!("1 0 8:1 {root} / rw - ext4 /dev/sda1 rw").as_bytes());
 		let top = [PathBuf::from("/")];
@@ -2710,7 +2710,7 @@ mod tests {
 	// The count follows the walk's rules, so a folder scan ends near 100 (2026111019145393).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't list folders")]
-	fn a_folder_is_counted_as_the_walk_reads_it() {
+	fn count_follows_walk() {
 		let _id = test_id("df4x4");
 		let d = scratch("scan_count");
 		fs::create_dir_all(d.join("sub/deep")).unwrap();
@@ -2754,7 +2754,7 @@ mod tests {
 	// Row `resume-seen`, with no row at the file's size and time to say so.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_reported_miss_is_not_read_again() {
+	fn reported_miss_skipped() {
 		let _id = test_id("des7n");
 		let d = scratch("scan_resume_seen");
 		fs::write(d.join("a"), "damaged").unwrap();
@@ -2791,10 +2791,10 @@ mod tests {
 		drain.join().unwrap();
 	}
 
-	// Row `link-writing`. The claimant is part way through its set after an edit: the old checksum and inode value, the new size and time. A read across those writes sees that.
+	// Row `link-writing`. After an edit the claimant is part way through its set, which still has the old checksum and inode value with the new size and time. A read between those writes would see the mix.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
-	fn a_half_written_set_is_not_read() {
+	fn half_written_set() {
 		let _id = test_id("des6h");
 		let d = scratch("scan_link_writing");
 		fs::write(d.join("a"), "edited").unwrap();
@@ -2842,7 +2842,7 @@ mod tests {
 	// Whichever read of the mount table fails, no run is left running, and a run reads it once (backlog ...852).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_lost_mount_table_leaves_no_run_running() {
+	fn mount_table_lost() {
 		let _id = test_id("dehzd");
 		let d = scratch("scan_mountfail");
 		let root = d.join("r");
@@ -2883,7 +2883,7 @@ mod tests {
 	// A panic in the database writer still closes the run (backlog ...002).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_writer_panic_leaves_no_run_running() {
+	fn writer_panic_closes_run() {
 		let _id = test_id("dehzq");
 		let d = scratch("scan_writerpanic");
 		let root = d.join("r");
@@ -2924,7 +2924,7 @@ mod tests {
 	// A scan that fails after taking the lock still ends in rollback mode, on a database it found and on one it made (backlog 2026111011092306).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_refused_resume_ends_in_rollback_mode() {
+	fn refused_resume_rollback() {
 		let _id = test_id("df4he");
 		let d = scratch("scan_refusedresume");
 		let root = d.join("r");
@@ -2959,7 +2959,7 @@ mod tests {
 		}
 	}
 
-	// Progress counts a file as it's read, not all at the end (backlog ...779).
+	// Progress counts a file as it's read, rather than all at the end (backlog ...779).
 	#[test]
 	#[cfg_attr(miri, ignore = "4096 reads")]
 	fn bytes_count_as_they_are_read() {
@@ -3029,7 +3029,7 @@ mod tests {
 		assert_eq!(failed, [db.clone(), lock_path(&db)]);
 	}
 
-	// A link at a name is named, not followed (2026102814341403).
+	// A link at a name is named rather than followed (2026102814341403).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no chown")]
 	fn a_link_is_not_handed_over() {
@@ -3050,7 +3050,7 @@ mod tests {
 	// Under sudo a folder that's neither the user's nor root's is refused before anything is made (2026111011092301).
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no O_PATH")]
-	fn a_folder_not_the_users_is_refused() {
+	fn sudo_folder_refused() {
 		let _id = test_id("df4kp");
 		let d = scratch("scan_sudo_folder");
 		let db = d.join("t.sqlite");
@@ -3084,7 +3084,7 @@ mod tests {
 	// The hand-back goes to the folder that was checked, even after another folder is moved in at its name.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no chown")]
-	fn the_hand_back_stays_in_the_checked_folder() {
+	fn hand_back_checked_folder() {
 		let _id = test_id("df4kr");
 		// SAFETY: geteuid only reads.
 		if unsafe { libc::geteuid() } == 0 {
@@ -3099,15 +3099,15 @@ mod tests {
 		fs::rename(d.join("a"), d.join("b")).unwrap();
 		fs::create_dir(d.join("a")).unwrap();
 		fs::write(&db, "").unwrap();
-		// Uid 0 fails for each file there, which names them.
+		// Handing to uid 0 fails for each file there, so hand_over names them.
 		let failed: Vec<PathBuf> = hand_over(&held.dir, &db, 0, 0).into_iter().map(|f| f.0).collect();
 		assert_eq!(failed, [lock_path(&db)]);
 	}
 
-	// So is the database itself, and its WAL files (2026111918562711).
+	// The database and its WAL files are opened in the checked folder too (2026111918562711).
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn the_database_opens_in_the_checked_folder() {
+	fn db_checked_folder() {
 		let _id = test_id("dfjxq");
 		let d = scratch("scan_db_folder_moved");
 		fs::create_dir(d.join("a")).unwrap();
@@ -3126,7 +3126,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn nothing_written_on_a_hands_off_device() {
+	fn hands_off_no_writes() {
 		let _id = test_id("ddyas");
 		let d = scratch("scan_handsoff");
 		fs::write(d.join("a"), "win").unwrap();
@@ -3154,7 +3154,7 @@ mod tests {
 
 	// accept can't update a set on a hands-off device, so the row it took has the say there (2026102814341432). Without a row the set still counts.
 	#[test]
-	fn the_row_decides_on_a_hands_off_device() {
+	fn hands_off_row_decides() {
 		let _id = test_id("df1r9");
 		let read = Sums { b3: [1; 32], b2b: Some([8; 64]) };
 		let names = |r: &Refs| -> Vec<&str> { r.misses(&read).iter().map(|m| m.0.name()).collect() };
@@ -3172,7 +3172,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri can't set xattrs")]
-	fn an_accepted_file_on_a_hands_off_device_is_clean() {
+	fn hands_off_accept_is_clean() {
 		let _id = test_id("df1ra");
 		let d = scratch("scan_handsoff_accepted");
 		fs::write(d.join("f"), "fixed").unwrap();
@@ -3317,7 +3317,7 @@ mod tests {
 	}
 
 	#[test]
-	#[cfg_attr(miri, ignore = "O_DIRECT isn't modelled, and 1 MB reads")]
+	#[cfg_attr(miri, ignore = "O_DIRECT isn't modeled, and 1 MB reads")]
 	fn direct_reads_hash_every_byte() {
 		let _id = test_id("debte");
 		let d = scratch("scan_direct_reads");
@@ -3357,7 +3357,7 @@ mod tests {
 		}
 		assert_eq!(m.entries.len(), LINKS_KEPT);
 		assert!(!m.entries.contains_key(&(1, 9)) && m.entries.contains_key(&(1, 10)));
-		// Counted down and filled again: the stale key doesn't grow the queue.
+		// A key counted down and filled again doesn't grow the queue.
 		for _ in 0..5 {
 			m.count_down((1, 10));
 		}
@@ -3381,7 +3381,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn resume_takes_only_the_statuses_it_knows() {
+	fn resume_known_statuses() {
 		let _id = test_id("deaw0");
 		for s in ["stopped", "failed", "running", "killed"] {
 			let r = pick_resume(&runs_with(s), b"/a", Mode::Full);

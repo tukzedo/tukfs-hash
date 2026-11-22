@@ -128,7 +128,7 @@ pub fn path_text(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> 
 	path_at(r, idx).map(crate::util::escape_name)
 }
 
-/// SQLite sets itself up on first use with plain reads and writes, which race when 2 threads get there at once. So once, here, before any connection. The PRNG is seeded too, since the first open of a file sets its pid the same way.
+/// SQLite sets itself up on first use with plain reads and writes, which race when 2 threads get there at once. So it's set up once, here, before any connection is opened. The PRNG is seeded too, since the first open of a file sets its pid the same way.
 pub fn init() {
 	static ONCE: std::sync::Once = std::sync::Once::new();
 	ONCE.call_once(|| {
@@ -142,7 +142,7 @@ pub fn init() {
 	});
 }
 
-/// SQLite refuses a link at any of these names with only "unable to open database file", and at `-wal` or `-shm` not until the first write, so it's named first. The lock file says the same in `scan::lock`.
+/// SQLite refuses a link at any of these names with only "unable to open database file", and at `-wal` or `-shm` not until the first write, so the link is named here first. `scan::lock` does the same for the lock file.
 fn refuse_links(path: &Path, suffixes: &[&str]) -> Result<(), String> {
 	for sfx in suffixes {
 		let mut s = path.as_os_str().to_owned();
@@ -168,7 +168,7 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 	let e = |e: rusqlite::Error| format!("{}: {e}", show_path(path));
 	conn.busy_timeout(Duration::from_secs(30)).map_err(e)?;
 	vet(&conn, path)?;
-	// Empty, such as the 0-byte file a full disk left on a first run, is new. One transaction, so a failed first run leaves it empty again rather than half made.
+	// An empty file, such as the 0-byte one a full disk left on a first run, is taken as new. The tables go in one transaction, so a failed first run leaves it empty again rather than half made.
 	if no_tables(&conn).map_err(e)? {
 		conn.pragma_update(None, "page_size", PAGE_SIZE).map_err(e)?;
 		let tx = conn.transaction().map_err(e)?;
@@ -181,7 +181,7 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		return Err(format!("{}: damaged ({check}). Left as is; restore it from a snapshot.", show_path(path)));
 	}
 	let schema: Option<i64> = conn.query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| r.get(0)).optional().map_err(e)?;
-	// 2 added runs.roots, for --resume. Older runs have none, and can't be resumed. 3 added runs.verify, so a resume keeps the run's mode. 4 renamed b2 to b2b, so it reads as blake2b.
+	// Version 2 added runs.roots, for --resume. Older runs have none, and can't be resumed. Version 3 added runs.verify, so a resume uses the run's mode. Version 4 renamed b2 to b2b, so it reads as blake2b.
 	let step = match schema {
 		Some(1) => Some(("ALTER TABLE runs ADD COLUMN roots BLOB;", 2)),
 		Some(2) => Some(("ALTER TABLE runs ADD COLUMN verify INTEGER NOT NULL DEFAULT 0;", 3)),
@@ -202,7 +202,7 @@ pub fn open_rw(path: &Path) -> Result<Connection, String> {
 		return Err(format!("{}: tables are version {had}, this program knows {SCHEMA}", show_path(path)));
 	}
 	conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(())).map_err(e)?;
-	// A power cut can lose the last second of rows, and the next run hashes those files again. Not worth an fsync per batch.
+	// A power cut can lose the last second of rows, and the next run hashes those files again. That isn't worth an fsync per batch.
 	conn.pragma_update(None, "synchronous", "NORMAL").map_err(e)?;
 	conn.pragma_update(None, "cache_size", -65536).map_err(e)?;
 	Ok(conn)
@@ -213,7 +213,7 @@ pub fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Res
 	conn.query_row("SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2", [table, column], |r| r.get::<_, i64>(0)).map(|n| n > 0)
 }
 
-/// Contents no name points at any more. Every edit leaves one behind.
+/// Deletes contents that no name points at any more. Every edit leaves one behind.
 pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 	conn.execute("DELETE FROM files WHERE NOT EXISTS (SELECT 1 FROM paths WHERE paths.file_id = files.id)", [])
 }
@@ -283,7 +283,7 @@ pub fn lookup_each(conn: &Connection, paths: &[&[u8]]) -> Vec<Result<Option<Prio
 		Ok((txn, mut st)) => {
 			let found = paths.iter().map(|p| lookup(&mut st, p).map_err(|e| e.to_string())).collect();
 			drop(st);
-			// Only read, so nothing is lost if the end fails.
+			// Nothing was written, so a failed finish loses nothing.
 			_ = txn.finish();
 			found
 		}
@@ -301,7 +301,7 @@ pub fn open_misses(conn: &Connection) -> Result<HashSet<Vec<u8>>, String> {
 	)
 }
 
-/// Paths an earlier part of this run reported a mismatch or read error for. A path with no row at its size and time has nothing else to say it was reached. See design.md, "Skipping", row `resume-seen`.
+/// Paths an earlier part of this run reported a mismatch or read error for. A path with no row at its size and time has nothing else to show the run got to it. See design.md, "Skipping", row `resume-seen`.
 pub fn run_misses(conn: &Connection, run_id: i64) -> Result<HashSet<Vec<u8>>, String> {
 	miss_paths(conn, "SELECT DISTINCT path FROM events WHERE kind IN (KINDS) AND run_id = ?", Some(run_id))
 }
@@ -394,7 +394,7 @@ impl Kind {
 		Kind::ALL.into_iter().find(|k| k.name() == name)
 	}
 
-	/// 4 is something flagged, 8 is something left unchecked. Unstable files are live ones, like a running VM's disk, and would set 8 on every run. A failed attribute write comes after the check. Only accept writes accepted, and it isn't a scan's to count.
+	/// Bit 4 means something was flagged, and 8 means something was left unchecked. Unstable files are live ones, like a running VM's disk, and would set 8 on every run. A failed attribute write comes after the check. Only `accept` writes `accepted`, and a scan doesn't count it.
 	pub fn exit_bits(self) -> i32 {
 		match self {
 			Kind::XattrMismatch | Kind::RmlintMismatch | Kind::DbMismatch | Kind::CacheMismatch | Kind::ReadError => 4,
@@ -780,7 +780,7 @@ mod tests {
 		tx.send(hashed(b"/x/a", 1)).unwrap();
 		tx.send(ev(b"/x/b")).unwrap();
 		std::thread::sleep(Duration::from_millis(1500));
-		// After the failure: rows are dropped, events still kept.
+		// After the failure, rows are dropped and events are still kept.
 		tx.send(hashed(b"/x/c", 2)).unwrap();
 		tx.send(ev(b"/x/d")).unwrap();
 		drop(tx);
@@ -795,7 +795,7 @@ mod tests {
 
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
-	fn a_bad_event_drops_the_rest_for_good() {
+	fn bad_event_drops_rest() {
 		let _id = test_id("df1pa");
 		let (_dir, p) = temp_db("evfail");
 		let conn = open_rw(&p).unwrap();
@@ -871,7 +871,7 @@ mod tests {
 		close_rw(conn).unwrap();
 	}
 
-	// design.md, "Skipping", rows `db-mismatch`, `db-read-error` and `db-unchecked`: open until a later good read.
+	// A path stays open until a later good read. See design.md, "Skipping", rows `db-mismatch`, `db-read-error` and `db-unchecked`.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn open_misses_are_the_unread_ones() {
@@ -948,7 +948,7 @@ mod tests {
 		let (_dir, p) = temp_db("schema1");
 		close_rw(open_rw(&p).unwrap()).unwrap();
 		let c = Connection::open(&p).unwrap();
-		// Was only roots dropped. Schema 1 had neither column.
+		// This used to drop only roots, but schema 1 had neither column.
 		c.execute_batch(
 			"ALTER TABLE runs DROP COLUMN roots;
 			ALTER TABLE runs DROP COLUMN verify;
@@ -1032,7 +1032,7 @@ mod tests {
 		close_rw(conn).unwrap();
 	}
 
-	// .cargo/config.toml's LIBSQLITE3_FLAGS reached the build.
+	// The build used the LIBSQLITE3_FLAGS in .cargo/config.toml.
 	#[test]
 	#[cfg_attr(miri, ignore = "SQLite is C, which Miri can't run")]
 	fn sqlite_is_built_lean() {

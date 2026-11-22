@@ -33,7 +33,7 @@ The pipeline's format and lint steps check most code style, so the formatter and
 
 - Stick to ASCII in source. The `©` in copyright lines is fine, and so is text about unicode itself. Write `-` for a dash and `->` for an arrow.
 
-- Start each file with its copyright and license lines, under the shebang if there is one. The forms differ, so copy them from a file of the same kind:
+- Put the copyright and license lines at the top of each file, under the shebang if there is one, or after the `##` header in a script. The forms differ, so copy them from a file of the same kind:
 	- Rust and `tests/integration.bash` are GPL-2.0-only, like the program.
 	- The pipeline scripts under `cicd/`, `install.bash`, and the dogfood runner under `utility/` are MIT, with an `SPDX-License-Identifier` line.
 	- PowerShell files use `Copyright (C) <year> t00mietum`, in ASCII and without an ID.
@@ -81,7 +81,7 @@ The pipeline's format and lint steps check most code style, so the formatter and
 
 - A bug fix should come with a test that fails before the fix and passes after it, when one can be written.
 
-- Tests only write inside their own folder under `tukfs-hash/` in the temp folder. Unit tests get one from `scratch()` in `src/testutil.rs`, under `TMPDIR`. The integration test makes its own under `HOST_TEMP`, or under `TMPDIR` if `HOST_TEMP` isn't set. The pipeline runs both in a sandbox that won't let them write anywhere else.
+- Tests only write inside their own folder under `tukfs-hash/` in the temp folder. Unit tests get one from `scratch()` in `src/testutil.rs`, under `TMPDIR`. The integration test makes its own under `HOST_TEMP`, or under `TMPDIR` if `HOST_TEMP` isn't set. The pipeline runs both in a sandbox or a container, which won't let them write anywhere else.
 
 ## Bash
 

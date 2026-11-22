@@ -5,10 +5,10 @@
 ##		  release binary into the run's temp dir. The gif is GFS-rotated into
 ##		  ROTATE_DIR, unless it's the same as the newest one there, and copied
 ##		  to OUT when it's different than what's there.
-##		- No python3, Pillow or monospace font is a warning and exit 0, so the
-##		  run goes on without recording its tree or uploading, or a failure
-##		  with TUKFS_GATE_STRICT set. A step that exits wrong, or output with
-##		  anything personal in it, fails.
+##		- A missing python3, Pillow or monospace font is a warning and exit 0,
+##		  so the run goes on but doesn't record its tree or upload. With
+##		  TUKFS_GATE_STRICT set, it's a failure. A step that exits wrong, or
+##		  output with anything personal in it, fails.
 ##		- ROTATE_DIR is resolved before anything goes in it, and has to end
 ##		  in /demo/gif with no link inside the private dir. Nothing is written
 ##		  anywhere else but OUT and TMPDIR, and nothing is removed here but by
@@ -77,19 +77,19 @@ else
 					echo "demo-gif: ${d} is a link or not a dir" >&2; exit 1
 				fi
 			done
-			mkdir -p -- "${privReal}/demo/gif" || { echo "demo-gif: could not make ${privReal}/demo/gif" >&2; exit 1; }
+			mkdir -p -- "${privReal}/demo/gif" || { echo "demo-gif: couldn't make ${privReal}/demo/gif" >&2; exit 1; }
 			rotReal="$(realpath -e -- "${privReal}/demo/gif")"
 			[[ "${rotReal}" == "${privReal}/demo/gif" ]] || { echo "demo-gif: ${privReal}/demo/gif resolves to ${rotReal}" >&2; exit 1; }
 			;;
 	esac
 fi
 
-## Both copies go through a temp name and a rename, so a stop never leaves a half gif under a real name. The signals are trapped so a stop still gets to the EXIT trap, which takes the temp copy. Only from here, so a stop during the render doesn't wait for it.
+## Both copies go through a temp name and a rename, so a stop never leaves a half gif under a real name. The signals are trapped so a stop still gets to the EXIT trap, which removes the temp copy. Only from here, so a stop during the render doesn't wait for it.
 gifTmp=""
 fTmpGone(){
 	trap '' INT TERM HUP
 	[[ -n "${gifTmp}" ]] || return 0
-	rm -f -- "${gifTmp}" 2>/dev/null || printf 'demo-gif: could not remove %s; rm -f -- "%s"\n' "${gifTmp}" "${gifTmp}" >&2
+	rm -f -- "${gifTmp}" 2>/dev/null || printf 'demo-gif: couldn'\''t remove %s; rm -f -- "%s"\n' "${gifTmp}" "${gifTmp}" >&2
 	gifTmp=""
 }
 fCopyAtomic(){   ## fCopyAtomic SRC DEST TMP

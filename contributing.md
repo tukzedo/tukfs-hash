@@ -30,7 +30,7 @@ Bug reports, questions, and pull requests are all welcome. This file says how ea
 
 - Run `cicd/cicd.bash --backlog-run-quick` before sending the pull request. It runs the format check, the build, every linter, and the tests. It doesn't change any tracked file, and it doesn't publish or install anything. A pull request isn't merged until it passes.
 
-- A change in what the program does, or in what it writes to disk, updates README.md and design.md in the same pull request. Anything new that's written to a file or a filesystem should be called out in the pull request text, since this tool is run on data that people can't afford to lose.
+- A change in what the program does, or in what it writes to disk, needs README.md and design.md updated in the same pull request. Anything new that's written to a file or a filesystem should be called out in the pull request text, since this tool is run on data that people can't afford to lose.
 
 - Keep a pull request to one change where you can. Commit messages are short and say what changed.
 

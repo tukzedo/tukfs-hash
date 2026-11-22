@@ -12,7 +12,7 @@ pub fn now_us() -> i64 {
 	SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64)
 }
 
-/// The folder resolved and the name left alone, so a symlink stays a symlink. A scan stores names that way, walking down from a resolved root.
+/// Resolves the folder and leaves the name alone, so a symlink stays a symlink. A scan walks down from a resolved root, so it stores names the same way.
 pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
 	let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
 	let dir = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", show_path(parent)))?;
@@ -91,7 +91,7 @@ pub fn unhex(s: &[u8]) -> Option<Vec<u8>> {
 	s.chunks(2).map(|p| Some(val(p[0])? << 4 | val(p[1])?)).collect()
 }
 
-/// Values in xattrs may end in NUL (rmlint) or a newline (setfattr by hand).
+/// Trims trailing NULs and white space from an xattr value. rmlint ends one with a NUL, and setfattr by hand can leave a newline.
 pub fn trim_value(v: &[u8]) -> &[u8] {
 	let end = v.iter().rposition(|&c| c != 0 && !c.is_ascii_whitespace()).map_or(0, |i| i + 1);
 	&v[..end]
@@ -155,7 +155,7 @@ pub fn human_bytes(n: u64) -> String {
 	if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
 }
 
-/// A name as text that maps back to its bytes, so 2 names never print the same: a backslash doubled, and control characters and bytes that aren't UTF-8 as \xHH. Tabs and newlines get escaped too, which keeps tab-separated output in its columns.
+/// A name as text that maps back to its bytes, so 2 names never print the same. A backslash is doubled, and control characters and bytes that aren't UTF-8 are written as \xHH. Tabs and newlines are control characters too, so tab-separated output stays in its columns.
 pub fn escape_name(b: &[u8]) -> String {
 	let mut out = String::with_capacity(b.len());
 	let hex_byte = |out: &mut String, byte: u8| {

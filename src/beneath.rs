@@ -1,7 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Opening what the walk found, from the root's own folder, without following a symlink or crossing onto another filesystem anywhere on the way. The scan runs as root, and a folder swapped for a symlink after it was listed would otherwise send it somewhere else to read files and set attributes.
+// Opens what the walk found, from the root's own folder, without following a symlink or crossing onto another filesystem anywhere on the way. The scan runs as root, and a folder swapped for a symlink after it was listed would otherwise send it somewhere else to read files and set attributes.
 
 use crate::util::cpath;
 use std::ffi::{CStr, CString, OsStr, OsString};
@@ -46,7 +46,7 @@ struct OpenHow {
 	resolve: u64,
 }
 
-/// Not where the walk saw it: gone, swapped for a symlink or a file, or under a mount made since. Nothing was there to check.
+/// Whether an open failed because the name isn't where the walk saw it any more. It's gone, swapped for a symlink or a file, or under a mount made since, so there was nothing there to check.
 pub fn moved(e: &io::Error) -> bool {
 	e.kind() == io::ErrorKind::NotFound || matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR | libc::EXDEV))
 }
@@ -138,7 +138,7 @@ impl Root {
 		retry(|| unsafe { libc::syscall(libc::SYS_openat2, self.dir.as_raw_fd(), c.as_ptr(), &raw const how, std::mem::size_of::<OpenHow>()) })
 	}
 
-	// The same rules one folder at a time.
+	// Applies the same rules one folder at a time.
 	fn step_by_step(&self, rel: &Path, flags: libc::c_int) -> io::Result<File> {
 		let mut parts = Vec::new();
 		for c in rel.components() {
@@ -149,7 +149,7 @@ impl Root {
 			}
 		}
 		let (last, above) = parts.split_last().map_or((OsStr::new("."), &[][..]), |(l, a)| (*l, a));
-		// A kept folder moved out of the root, or replaced, would open what used to be there. One stat of its whole path is much cheaper than a walk.
+		// Opening from a kept folder that was moved out of the root, or replaced, would open what used to be there. One stat of its whole path is much cheaper than a walk.
 		if let Some(near) = self.recall(above).filter(|n| lstat_at(self.dir.as_raw_fd(), &n.at).is_ok_and(|st| (st.st_dev, st.st_ino) == n.id)) {
 			// It can still move between the check and the open, so a failure from it is tried again from the root.
 			if let Ok(f) = self.descend(Some(near), above, last, flags) {
@@ -159,7 +159,7 @@ impl Root {
 		self.descend(None, above, last, flags)
 	}
 
-	// Opens the folders in above past the ones near already has open, then last in the deepest.
+	// Opens each folder that `above` names and `near` doesn't already have open, then opens `last` in the deepest one.
 	fn descend(&self, near: Option<Near>, above: &[&OsStr], last: &OsStr, flags: libc::c_int) -> io::Result<File> {
 		let (mut names, mut held, mut at) = near.map_or((Vec::new(), None, None), |n| (n.above, Some((n.dir, n.id)), Some(n.at)));
 		for name in &above[names.len()..] {
@@ -187,7 +187,7 @@ impl Root {
 		Ok(f)
 	}
 
-	// Takes this thread's folder when it's above or one of the folders above.
+	// Takes this thread's kept folder when it's the folder that `above` names, or one of the folders on that path.
 	fn recall(&self, above: &[&OsStr]) -> Option<Near> {
 		let me = thread::current().id();
 		let mut near = self.near.lock().unwrap_or_else(PoisonError::into_inner);
@@ -274,7 +274,7 @@ impl Iterator for List {
 
 	fn next(&mut self) -> Option<io::Result<Entry>> {
 		loop {
-			// readdir says "the end" and "an error" both with null.
+			// readdir returns null both at the end and on an error.
 			// SAFETY: errno is per thread, and any value may be stored in it.
 			unsafe { *libc::__errno_location() = 0 };
 			// SAFETY: dir is open, and &mut self keeps other readers off it.
@@ -321,7 +321,7 @@ mod tests {
 	// A folder swapped for a symlink after it was listed.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_symlink_on_the_way_is_not_followed() {
+	fn symlink_on_way_refused() {
 		let _id = test_id("ddy91");
 		let d = scratch("beneath_symlink");
 		let (root, outside) = (d.join("root"), d.join("outside"));
@@ -403,7 +403,7 @@ mod tests {
 	// Without openat2, a kept folder moved out of the root and another put in its place, as openat2 sees it.
 	#[test]
 	#[cfg_attr(miri, ignore = "Miri has no openat2")]
-	fn a_kept_folder_moved_out_isnt_read_through() {
+	fn moved_kept_folder_refused() {
 		let _id = test_id("dfjx2");
 		let d = scratch("beneath_moved_out");
 		let (root, outside) = (d.join("root"), d.join("outside"));
