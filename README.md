@@ -6,9 +6,9 @@
 <!-- TOC ignore:true -->
 # tukfs-hash
 
-[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)](license.md) [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
+[![Latest release](https://img.shields.io/github/v/release/tukzedo/tukfs-hash?include_prereleases&sort=semver)](https://github.com/tukzedo/tukfs-hash/releases) [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)](license.md) [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
 
-tukfs-hash checksums every file on a Linux box, remembers what each one read as, and reports when a file's contents changed while its size and modified time didn't. That kind of change is what bad RAM, a bad cable, or a filesystem bug leaves behind. A normal edit always moves the time.
+tukfs-hash checksums every file on a Linux box, keeps a record of each checksum, and reports when a file's contents changed while its size and modified time didn't. That kind of change is what bad RAM, a bad cable, or a filesystem bug leaves behind. A normal edit always moves the time.
 
 It's a utility under [tukfs](https://github.com/tukzedo/tukfs), which is part of [tukzedo](https://github.com/tukzedo/tukzedo-linux). Its database is also the start of tukfs's own, which will use the checksums to find duplicate files.
 
@@ -103,7 +103,7 @@ The first scan reads every file and records it. Run the same scan again on a lat
 
 A reader trusts the checksum only when both the size and time match the file. The time is written after the checksum, and the inode is written last, so a write that stops part way is thrown away. An attribute that can't be read, such as on a disk error, is reported as `xattr-error`, and that file's attributes are left as they are.
 
-The attributes let a scan skip a file without reading it only when `user.blake3.inode` matches the file's own device and inode and the checksum next to it, and `user.blake3.date` isn't older than the start of the day, or the `--since` date. A copy that's made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. A file is never skipped by attributes from before `user.blake3.inode` existed.
+The attributes let a scan skip a file without reading it only when `user.blake3.inode` matches the file's own device and inode and the checksum next to it, and `user.blake3.date` falls between the start of the day, or the `--since` date, and now. A copy that's made with `cp -a` or `rsync -aX` brings the attributes along, so it gets read and compared. A file is never skipped by attributes from before `user.blake3.inode` existed.
 
 With `--rmlint`, `user.rmlint.blake2b.cksum` and `user.rmlint.blake2b.mtime` are written the same way `rmlint --xattr` writes them, so rmlint can use them without reading the file. A current rmlint checksum that doesn't match is reported and left as it was. blake2b is slower than blake3, at about a CPU second per GB, and the difference only shows when the disk is faster than that.
 
@@ -144,7 +144,7 @@ Names that aren't plain text are printed with `\xHH` escapes, and a backslash is
 
 ## Installation
 
-Release builds are on the [releases page](https://github.com/tukzedo/tukfs-hash/releases). The newest is 1.0.0-beta.2. Both releases so far are marked as pre-releases. Each release has a binary for x86_64 Linux and one for arm64, a `.deb` and an `.rpm` of each, and a sha256 sums file. They need glibc 2.28 or newer, so they run on RHEL 8, Debian 10, Ubuntu 18.10, and anything newer.
+Release builds are on the [releases page](https://github.com/tukzedo/tukfs-hash/releases). Every release so far is marked as a pre-release. Each one has a binary for x86_64 Linux and one for arm64, a `.deb` and an `.rpm` of each, and a sha256 sums file. They need glibc 2.28 or newer, so they run on RHEL 8, Debian 10, Ubuntu 18.10, and anything newer.
 
 ### Packages and installers
 
@@ -165,7 +165,7 @@ The packages put it at `/usr/bin/tukfs-hash`.
 bash <(curl -fsSL https://raw.githubusercontent.com/tukzedo/tukfs-hash/main/install.bash)
 ~~~
 
-It picks the build for the CPU, checks it against the release's sums file, and says what it'll do before it asks to go ahead. The defaults are sane, and `--help` lists the options. While there's no stable release, it takes the newest pre-release. Running it again is safe, and changes nothing when that build is already in place.
+It picks the build for the CPU, checks it against the release's sums file, and says what it'll do before it asks to go ahead. By default it installs for the user, and `--target system` installs for everyone through sudo. `--help` lists the rest. While there's no stable release, it takes the newest pre-release. Running it again is safe, and changes nothing when that build is already in place.
 
 | Install for | Path
 | :---        | :---
@@ -204,9 +204,21 @@ tests/integration.bash
 
 The integration test needs `sqlite3`, `getfattr`, `setfattr`, `b2sum`, and `python3`, and a `HOST_TEMP`, or else a `TMPDIR`, on a filesystem with user xattrs. It works in a folder of its own under `tukfs-hash/` there, and `--keep-temp` leaves that folder in place. Its btrfs subvolume check runs only on btrfs, so a btrfs folder for it can be given in `TUKFS_IT_BTRFS`.
 
-`rust-toolchain.toml` pins the Rust toolchain, and only rustup's `cargo` reads it. `cicd/cicd.bash` runs the whole local pipeline. It formats, builds, lints, and tests, then makes release builds for x86_64 and arm64 Linux with a `.deb` and an `.rpm` of each, and then runs dogfood, draws the demo gif above, and publishes. On `main` it also uploads the release set to the git host as release `v<version>`, and tags the commit first if it isn't tagged yet. The release builds run in a Debian 10 image under docker, so each one needs only glibc 2.28 or newer. The test steps that run on the box, such as the integration test, run in a bubblewrap sandbox where they can write only to their own temp and build folders, so the pipeline needs `bwrap`. `--no-sandbox` runs them without it. Without docker, or with `--no-container`, only the x86_64 build is made, on the box, and it needs the box's glibc. Where an arm64 Linux test VM is set up, the arm64 build's unit and integration tests also run there. A VM that isn't there is skipped, and `--no-remote` skips it on purpose. The gif needs Pillow, and is skipped without it. `cicd/cicd.bash --merge-gate` runs every check without publishing anything, and the pre-push hook runs it on pushes to `main` after `git config core.hooksPath cicd/hooks`. It's skipped on pushes that only change docs. `--help` lists the rest.
+`cicd/cicd.bash` runs the whole local pipeline, adn its `--help` lists the options.
 
-A full run also runs the leak and memory checks. Those are the tests under ASan, TSan, and Miri on the nightly that `cicd/tool-pins.env` names, a heap soak of repeated scans, fuzz tests of the parsers, CodeQL over every crate, and `cargo deny check advisories`. The sanitizers, Miri, and CodeQL run in a docker image that's built from `cicd/container/` the first time, which takes a few minutes and about 4 GB. Without docker they use the host's nightly, and CodeQL is skipped. `--quick` keeps the ones that take under a minute, and any that take hours run only with `--long`. `--no-leakcheck` leaves them all out, and `--no-codeql` leaves out only CodeQL.
+- It formats, builds, lints, and tests, then makes release builds for x86_64 and arm64 Linux, with a `.deb` and an `.rpm` of each. After that it runs dogfood, draws the demo gif above, and publishes. On `main` it also uploads the release set to the git host as release `v<version>`, and tags the commit first if it isn't tagged yet.
+
+- The release builds run in a Debian 10 image under docker, so they need only glibc 2.28 or newer. Without docker, or with `--no-container`, only the x86_64 build is made, on the box, and it needs the box's glibc.
+
+- The test steps that run on the box, such as the integration test, run in a bubblewrap sandbox where they can write only to their own temp and build folders. `--no-sandbox` runs them without it.
+
+- Where an arm64 Linux test VM is set up, the arm64 build's unit and integration tests run there too. A VM that isn't there is skipped, and `--no-remote` skips it on purpose.
+
+- `--merge-gate` runs every check without publishing anything. The pre-push hook runs it on pushes to `main` after `git config core.hooksPath cicd/hooks`, and skips pushes that only change docs.
+
+- A full run also runs the leak and memory checks. They're the tests under ASan, TSan, and Miri on the nightly that `cicd/tool-pins.env` names, a heap soak of repeated scans, fuzz tests of the parsers, CodeQL over every crate, and `cargo deny check advisories`.
+	- The sanitizers, Miri, and CodeQL run in a docker image that's built from `cicd/container/` the first time, which takes a few minutes and about 4 GB. Without docker they use the host's nightly, and CodeQL is skipped.
+	- `--quick` keeps only the ones that take under a minute, and the hour of fuzz tests runs only with `--long`. `--no-leakcheck` leaves them all out, and `--no-codeql` leaves out only CodeQL.
 
 ## Contributing
 

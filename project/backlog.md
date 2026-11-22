@@ -2073,7 +2073,7 @@
 		- 2026-11-08: Verified: peak RSS for a 100,000-line list went from 67.6 MB to 11.5 MB, against about 11.1 MB for a 1-line list either way. A list of 200,000 zfs diff lines that name no files went from 33.9 MB to 11.4 MB.
 	- Decisions:
 		- The list is read a line at a time, and each file compared as it's read. Only zfs diff's `-` and `+` names and the files waiting on the inode walk are kept to the end.
-		- find-new output is in the list's own order, by inode, with the walk's files last. It was sorted by name, which took the whole list. design.md says why. It's filed as a Check.
+		- find-new output is in the list's own order, by inode, with the walk's files last. It was sorted by name, which took the whole list. design.md says why, and also it's filed as a Check.
 		- find-new's line per extent is dropped when it follows one for the same name, as btrfs prints them, rather than by a set of every name.
 		- A refused line now stops the run where it's met, still exit 1, after what was already printed. Lines outside `--mount` are still all counted for the message.
 	- Branch: round-20261108
@@ -2445,6 +2445,7 @@
 	- Branch: glibc-gate
 	- Test case: `cicd-flags-check.bash REPO`, in the private tools folder, checks the docs-only skip and the gate on `main`, as the hook has worked since 2026102416215930 changed which branch it gates. It isn't in CI, since it clones the repo and stubs the engine.
 	- Closed: 20261023-194500
+	- Note: 2026102416215930 later made the hook gate pushes to `main` only, which reverses the "No gate on a push to `main`" requirement here.
 
 - Build a full cicd pipeline, per the directives' "CICD process" section.
 	- ID: 2026102309501600
@@ -2714,7 +2715,7 @@
 		- It costs about a CPU second per GB per worker. On a 2 GB file read from disk the wall time didn't change.
 	- Branch: rmlint
 	- Test case: `rmlint_set_only_with_the_flag`, `rmlint_time_text`, `rmlint_set_reads_back`, and integration section 20, which compares the bytes with what rmlint itself writes when it's installed.
-	- Verified: Section 20 passed on ext4 and ZFS. The flag test failed with the write taken out, and again with blake2b not asked for. The byte comparison failed without the NUL.
+	- Verified: Section 20 passed on ext4 and ZFS. The flag test failed wiht the write taken out, and again with blake2b not asked for. The byte comparison failed without the NUL.
 	- Acceptance signoff: Self-closed: The change does what was asked, and it's tested.
 	- Closed: 20261019-121018
 
@@ -3876,7 +3877,7 @@
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-184601
-	- Opened by:
+	- Opened by: round-20261108
 	- Progress log:
 		- The worker on 2026110218175401 found these on 2026-11-08. They fail the same way on a clone of dev without that change.
 		- build-mark-check.bash runs git tag v1.0.0-beta.1 in a clone that already has that tag since the beta.1 release.
@@ -3953,7 +3954,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261107-154418
 	- Opened by: style and performance review 20261107, item 2
-	- Origin: `a17da2f`, before the last review. Item 2026102416215931 used the short form, since it was filed before the guide had the bracketed one. Confirmed.
+	- Origin: `a17da2f`, before the last review. Item 2026102416215931 used the short form, and the reason is because it was filed before the guide had the bracketed one. Confirmed.
 	- Steps to reproduce [Bug]: Any cicd run, such as today's lint log `run_20261107-095317.log`, line 5.
 	- Incorrect behavior [Bug]: The lines are `PASS Format`, `FAIL <step>`, and `SKIP <step>`, without a time or step count. A bare `PASS <name>` also looks like the test lines in the same log.
 	- Expected behavior [Bug]: Each step closes with the CICD style guide's close line, in the same form as the open line above it.
@@ -7113,6 +7114,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Note: Path text was about 2/3 of a 48 MB test database of 200k paths. A table of folders would roughly halve it, but it needs a schema change. Build one only if database size or cache pressure shows up.
+	- Target version: None while it's deferred.
 
 - The private cicd and dogfood checks don't run in the pipeline and don't have test IDs.
 	- ID: 2026102508462883
