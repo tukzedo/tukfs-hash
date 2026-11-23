@@ -703,7 +703,7 @@
 	- Opened by: 2026102416215926
 	- Parent ID: 2026102416215926
 	- Related IDs: 2026102318460622
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- From the parent: a missing docker falls back to the host with one line, and never fails a run. `release-build.bash` exits 2 without the release image now, so the run fails.
 		- A host build needs the box's glibc, 2.39 on b23, so the release check `no build needs a glibc newer than GLIBC_FLOOR` would fail it. b23 has the arm64 Rust target, but no arm64 cross gcc or qemu-user.
@@ -733,7 +733,7 @@
 	- Opened by: CICD reset
 	- Prereq IDs: 2026102416215930
 		- It needs `--no-remote` from the flags item.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- The arm64 unit tests and the integration test also run on the arm64 Linux test VM in the default run. The qemu run in the release image stays as the quick check.
 		- The VM is held through the shared host lock for as long as it's used, and put back the way it was found through the VM state helper.
@@ -772,7 +772,7 @@
 	- Prereq IDs: 2026102416215930
 		- It needs `--keep-temp` from the flags item.
 	- Related IDs: 2026102416215926
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- Every container, image, and volume gets `dev.project=tukfs-hash` and `dev.run=<run folder name>`, and containers are named `tukfs-hash-<run folder name>-<step>`. Now the only label is the image name.
 		- At the end of a run, on failure and Ctrl+C too, the run's containers are removed by their `dev.run` label. The kill by container ID on a stop stays.
@@ -807,7 +807,7 @@
 	- Prereq IDs: 2026102416215930
 		- It needs `--no-container` from the flags item.
 	- Related IDs: 2026102318460622
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- It overrides design.md "Build and release", where the tests stage and the gate build on the box so the gate needs no docker.
 		- Build and run the tests in the pinned image by default, the merge gate included. Steps that need the real disks, such as the soak, stay on the host.
@@ -840,7 +840,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- Half the logical CPUs, or a quarter when the 1-minute load is over half the CPU count, checked at the start and before each step. Now it's always half.
 		- The leak checks, sanitizer builds, and soak use a quarter, busy or not.
@@ -873,7 +873,7 @@
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
 	- Related IDs: 2026102318460623, 2026102309501601, 2026102507222620
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- It overrides 2026102318460623 and design.md "Build and release", where the pre-push hook gates `dev` and leaves `main` alone, and the gate settings in the private notes.
 		- Add `--long`, keeping `--slow` as another name, plus `--backlog-run-quick [<area>...]`, `--backlog-run-full`, `--merge-gate`, `--no-container`, `--no-remote`, `--keep-temp`, and `--list`. `--help` lists the areas.
@@ -909,7 +909,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- Step lines in the shared form, such as `[ 20261024-162159.42: Step 1 of 9; Starting Format ]`, closed by `PASS Format` or `FAIL Format`. Now they have no hundredths, and read `Format ...` and `PASS: Step 1 of 9; Format.`
 		- The total counts only the steps that run, and the first section lists the ones turned off, with the flag or reason. Now it's always 9.
@@ -940,7 +940,7 @@
 	- Prereq IDs: 2026102416215933
 		- New tests should get the new IDs.
 	- Related IDs: 2026102508462883
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- 12 Done items have no `Test case` row, mostly the cicd ones. Each gets its regression test's ID, or a few words on why there's none. The list is in the private notes.
 		- Add the missing tests where one could exist and would make sense.
@@ -965,7 +965,7 @@
 	- Opened: 20261024-162159
 	- Opened by: CICD reset
 	- Related IDs: 2026102309501606
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- It overrides 2026102309501606, which gave every test a base 62 ID in seconds.
 		- Convert every ID once, from the same times, to whole minutes since 2000-01-01 UTC in lower-case Crockford base 32. 2 that come out the same take the next free minute. `test-ids.py` and its check follow.
@@ -1721,7 +1721,7 @@
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 22
 	- Origin: `f249afd`. Confirmed with a noexec tmpfs at TMPDIR in a user namespace.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Try the staged copy in the target folder, which is written anyway, before the rename.
 		- Or name the noexec temp folder as a likely cause and suggest TMPDIR.
 	- Decisions:
@@ -2155,7 +2155,7 @@
 	- Opened: 20261028-143414
 	- Opened by: code review 20261028, item 16
 	- Origin: `1282504`. Plausible, read only.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Before publishing, compare the checkout's tree with the frozen one, and refuse when they differ or the pull brought in commits.
 	- Note: The publisher pulls, then adds everything the checkout has by then, another session's edits included. A push to `dev` isn't gated.
 	- Note: The publisher is the shcl copy. The check belongs in `fStagePublish` in `cicd/cicd.bash`, so shcl needn't change.
@@ -2254,7 +2254,7 @@
 	- Opened by: CICD reset
 	- Prereq IDs: 2026102416215930
 		- It needs `--long` from the flags item.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- It overrides design.md "Leak and memory checks", where `--quick` doesn't run any leak checks without `--leakcheck`.
 		- Split the leak checks into 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
@@ -2277,7 +2277,7 @@
 	- Parent ID: 2026102416215935
 	- Prereq IDs: 2026102517244901
 		- Where in the run the fuzz tests go, and at what length, follows the leak check lengths.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Add fuzz tests for the parsers, such as the mount table, snapshot diff output, and dates, on a time budget from an env var.
 	- Progress log:
 		- 2026-10-25: There are unit tests named `fuzz_*` beside each parser, for the mount table, `zfs diff`, find-new and list input, `--since` dates, and the base64url, hex, and inode xattr values. A generator for each format builds input with odd bytes in it, and the parse has to come out as built. Real samples such as `/proc/self/mountinfo` are cut, bit-flipped, and spliced. They have to parse without a panic into output that checks out. Each test also checks its generator still makes every kind of line.
@@ -2309,7 +2309,7 @@
 	- Opened by: CICD reset
 	- Prereq IDs: 2026102416215930
 		- It needs `--keep-temp` from the flags item.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Sweeping override, 2026-10-24: this supersedes any earlier decision on this project that conflicts with it.
 		- The guarded removal is already in every script. What's left is the folder scheme.
 		- Each run's folder is `<HOST_TEMP>/tukfs-hash/<YYYYmmDD-HHMMSS>_<NNN>/`, made with a plain `mkdir` and a counter, with `HOST_TEMP` from the environment. `RUN_TMP_ROOT` can stay as its default here.
@@ -2346,7 +2346,7 @@
 	- Opened: 20261025-172449
 	- Opened by: split from 2026102416215935
 	- Parent ID: 2026102416215935
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Split the leak checks into 3 lengths by measured time. Fast ones run in every run, `--quick` included, and ones that take hours only in `--long`.
 		- It overrides design.md "Leak and memory checks", where `--quick` doesn't run any leak checks without `--leakcheck`.
 	- Progress log:
@@ -2373,7 +2373,7 @@
 	- Parent ID: 2026102416215930
 	- Prereq IDs: 2026102416215933
 		- The IDs change to base 32 there, and `test-ids.py` has no command that lists them yet.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Make `--list` print the steps and test IDs that the other flags given would run, without running anything. When this was filed, it printed only the steps.
 	- Progress log:
 		- 2026-10-25: `test-ids.py list [unit|it]` prints each test's ID and name as its status line has them. A unit test's name is libtest's path for it, the same 67 libtest lists. The soak test is behind its feature, so it's in neither.
@@ -2397,7 +2397,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-200931
 	- Opened by: request
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- For non-release builds, include " (YYYY-mm-DD)" after the build number.
 		- Report the date as the local date of whoever views the version.
 	- Progress log:
@@ -2416,7 +2416,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-184606
 	- Opened by: answer on the cicd decisions
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Build both release targets in a pinned container with an old glibc, so the floor is low and doesn't move with the box.
 		- Run each release build in that container, arm64 included.
 		- A release check fails a build whose floor is above the set one.
@@ -2436,7 +2436,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-184606
 	- Opened by: answer on the cicd decisions
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- No gate on a push to `main`, since what goes there already passed it on `dev`.
 		- A push that changes only docs skips the gate, on `dev` too.
 	- Progress log:
@@ -2456,7 +2456,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Build `cicd/cicd.bash` from shcl's engine and its `config.bash`, with sister scripts copied in rather than called.
 		- Target Linux only, on x86_64 and arm64, since the tool reads Linux xattrs, mounts, and snapshots.
 		- Feature branches merge into `dev`. A `dev` to `main` merge is a release.
@@ -2481,7 +2481,7 @@
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
 	- Prereq IDs: 2026102309501601
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Make x86_64 and arm64 release builds, `.deb` and `.rpm` packages, and a sha256 sums file, all named by version.
 		- Builds of one commit give the same bytes.
 		- Add a dogfood install, plus a `dogfood_tukfs-hash` script and its launchers.
@@ -2507,7 +2507,7 @@
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
 	- Prereq IDs: 2026102309501601
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Draw a flamegraph of a scan from an in-process sampler, since `perf` can't record on b23, and rotate it into `cicd/artifacts/profiling/`.
 		- Add `cicd/utility/flame-report.py`, with `--check` for session start.
 	- Progress log:
@@ -2533,7 +2533,7 @@
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
 	- Prereq IDs: 2026102309501603
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Draw a fake-terminal gif of a scan and a flagged file from an editable `cicd/demo/script.txt`, and put it at the top of README.md.
 	- Progress log:
 		- 2026-10-23: The stage, `cicd/utility/gen-demo-gif.py`, the scenario and its script are in, and the gif is at the top of README.md. It shows a scan, a byte changed in one file with its time put back, a `--verify` scan that exits 4, and the report naming the file.
@@ -2554,7 +2554,7 @@
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Each Rust and integration test gets a base 62 ID from its first commit time.
 	- Progress log:
 		- 2026-10-23: There are 213 tests with IDs, which are 66 Rust tests and 147 integration checks. Each one's status line shows its ID, and libtest's own per-test lines are left out of the run's output. The 2 rmlint checks print a skip line with their IDs when rmlint isn't there.
@@ -2574,7 +2574,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Time a `--rmlint` scan on b23's NVMe group against one without it, to see if it's CPU-bound.
 		- If it is, try `blake2b_simd`, which has an AVX2 path. The digest has to stay the same byte for byte, which integration step 20 checks against rmlint.
 	- Note: One worker hashed cached data at about 1.5 GB/s for blake3 alone, and about 0.5 GB/s with blake2b added. The `blake2` crate doesn't have a SIMD path on stable Rust. On hard drive groups the difference won't show.
@@ -2598,7 +2598,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Related IDs: 2026101916404104
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- `Msg::Event` takes a `Kind` rather than a `&str`. `Kind` moves to `db.rs`.
 		- Add `Kind::Accepted`. When this was filed, `accept.rs` wrote "accepted" and "xattr-error" by hand.
 		- `gone.rs` matches "dir-error", and `report` in `main.rs` matches "%mismatch" and "read-error" in its SQL. Those come from `Kind` too.
@@ -2626,7 +2626,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Related IDs: 2026101916404103
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Add a `RunStatus` enum for running, stopped, failed, done, killed, and accept, with its stored text.
 		- `pick_resume` in `scan.rs` matches it without a catch-all arm. A status the program doesn't know is still refused.
 	- Note: The stored text stays as it is.
@@ -2649,7 +2649,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Related IDs: 2026101916404110
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Turn on `pedantic` in a `[lints.clippy]` table in `Cargo.toml`, so the existing `-D warnings` gate enforces it.
 		- Fix the mechanical ones, about 30.
 		- Allow the cast lints, with a reason. Stat values are stored as SQLite's `i64`, and rmlint keeps its time as a float.
@@ -2679,7 +2679,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Related IDs: 2026101916404105
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Set `lto = true`, `codegen-units = 1`, and `strip = true` in `[profile.release]`.
 		- Keep `panic = "unwind"`, with a comment. `guarded()` in `scan.rs` catches a worker's panic so the run is marked failed and keeps its events. With abort, the run is left as running.
 	- Note: When this was filed, the binary was 3.43 MB, and 3.02 MB with these, at the same speed. Numbers are in details.md.
@@ -2700,7 +2700,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
 	- Opened: 20261019-115500
 	- Opened by: request
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- A flag to take blake2b for every file it reads, and write `user.rmlint.*` and the database.
 		- The b23 scan wrapper passes it.
 	- Decisions:
@@ -2744,7 +2744,7 @@
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
 	- Prereq IDs: 2026102309501601
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Run AddressSanitizer and LeakSanitizer, ThreadSanitizer, and Miri on a pinned nightly.
 		- Scan the dependencies for known advisories.
 		- Run CodeQL over the vendored tree, and a soak test of repeated scans.
@@ -2769,7 +2769,7 @@
 	- Opened: 20261023-095016
 	- Opened by: round settings answer
 	- Parent ID: 2026102309501600
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Add remote sync, format, debug build, lint, tests, publish, and cleanup stages, with the flags the directives list.
 		- Run `--gate` as a pre-push hook through `core.hooksPath`.
 		- Rotate lint output into `cicd/artifacts/lint/`, with a `--check` that prints only what's new.
@@ -4996,7 +4996,7 @@
 		- The memory check gets a case with many `-` and `+` lines.
 		- 2026-11-20: Only a name that isn't there at all is dropped. A name with a symlink or mount on the way, or another error, is kept, so the compare still counts it as missing or not checked, as before.
 		- 2026-11-20: The check is an `O_PATH` open beneath the other side, the same open snapdiff's stat uses, once per `-` or `+` line.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Keep a `-` name only when `--new` has something by that name, so memory grows with replaced files only.
 	- Related IDs: 2026110715441806
 	- Note: Repro is `private/claude_simple/tools/review-20261119/snapdiff/zfs-minus-mem.bash BIN DIR N`.
@@ -5040,7 +5040,7 @@
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 25
 	- Origin: `1565fc2`. Confirmed. `--log db.sqlite` writes text after the last page, `.lock` writes into the lock file, and `-wal` is deleted by SQLite at the end of the run, log and all.
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Match by device and inode as well as by name, the way the scan already leaves out the database's files.
 	- Related IDs: 2026111918562707, 2026111918562702
 	- Progress log:
@@ -6529,7 +6529,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-155500
 	- Opened by: user
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- All help-related flags other than `--version` end with a blank line before the prompt returns.
 	- Progress log:
 		- 2026-10-25: `-h`, `--help`, `help` and the bare command all print the help with one blank line at the end.
@@ -6552,7 +6552,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-155500
 	- Opened by: user
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- No copyright line, and no blank lines.
 	- Progress log:
 		- 2026-10-25: `--version` prints the version line alone. The changelog says so.
@@ -6576,7 +6576,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261025-070924
 	- Opened by: round-20261025
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Several `Test case` rows give a check script's path under the private notes folder, by name. Say "in the private tools folder" instead, the way 2026102416215929 does.
 	- Estimated effort: Low
 	- Progress log:
@@ -6635,7 +6635,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Use one `fFlipByte FILE OFFSET MASK` in place of `flip`, `flip1` and the inline copy in step 6.
 	- Actual effort: Low
 	- Progress log:
@@ -6692,7 +6692,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Remove the old checks in steps 1, 3 and 5. Keep a one-line why where it explains the current check.
 	- Actual effort: Low
 	- Progress log:
@@ -6724,7 +6724,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Helpers such as `ok`, `check`, `xget` and `wait_started` become `fCamelCase`, and variables camelCase.
 		- Every expansion is braced.
 	- Against: Committed names stay as they are. A rename is worth it only with a bigger rewrite of the script. Bracing has no such limit.
@@ -6745,7 +6745,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- The exit trap checks for something the run left, such as a marker file, before `rm -rf`.
 	- Actual effort: Low
 	- Progress log:
@@ -6767,7 +6767,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261023-083032
 	- Opened by: round review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Set `rust-version = "1.88"` in `[package]`, since edition 2024's let-chains need 1.88.
 	- Actual effort: Low
 	- Progress log:
@@ -6786,7 +6786,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Restructure where it's cheap, and comment the rest.
 	- Note: The clones are in `need_db` in `main.rs`, `unlisted` in `gone.rs`, `group_roots` in `mounts.rs`, and `Pair::same` and the mount list in `snapdiff.rs`. All run once at setup. `Arc` clones don't count.
 	- Actual effort: Low
@@ -6827,7 +6827,7 @@
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
 	- Related IDs: 2026101916404102, 2026102308220558
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Split `one_file` into skipping, reading and judging, and writing attributes. It also takes 7 arguments.
 		- Split `scan::run` into setup, the progress loop, and the finish.
 		- Split `real_main`, `snapdiff::run`, `gone::run` and `accept::one` as they're next touched.
@@ -6851,7 +6851,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Move to edition 2024 and collapse the nested `if let` in `mounts.rs`, `scan.rs` and `snapdiff.rs`.
 	- Note: 2024 changes when temporaries in a block's last expression are dropped. The lock guards in `Links` need a look.
 	- Actual effort: Low
@@ -6873,7 +6873,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- `Links` and the job queue in `scan.rs` use `lock().unwrap()`, and `Faults` uses `if let Ok`. Pick one: `unwrap_or_else(PoisonError::into_inner)` everywhere, or a one-line reason.
 	- Note: `ClaimGuard::drop` runs while a panic unwinds, where a second panic aborts.
 	- Actual effort: Low
@@ -6896,7 +6896,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- `LOOKUP` returns the row id. `Msg::Seen` takes the id, and the writer updates by it, so no path is copied per file.
 	- Note: 200k updates took 0.55 s by path and 0.37 s by id. The writer wasn't the slow part of a 200k-file rescan, so this pays off only with several groups running at once.
 	- Actual effort: Low
@@ -6938,7 +6938,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Use a mode enum in place of `verify`.
 	- Note: `Opts` has 4 bools, which pedantic flags.
 	- Actual effort: Low
@@ -6958,7 +6958,7 @@
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
 	- Opened: 20261019-164041
 	- Opened by: style and performance review
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Write each byte into the output string with `write!`, or from a table.
 	- Note: `--rmlint` calls `hex` for every rmlint checksum it writes, 64 bytes each. This also clears 2 pedantic warnings.
 	- Actual effort: Low
@@ -7125,7 +7125,7 @@
 	- Opened: 20261025-084628
 	- Opened by: 2026102416215932
 	- Related IDs: 2026102416215932
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Under the directives, each Done item's regression test belongs in CI. The private tools folder has 8 checks for cicd and dogfood items, and none runs in a pipeline run or has a test ID.
 		- `dogfood-check.bash` and `report-check.bash` need no clone, docker or root. They take about 20 s and 2 s.
 	- Closed: 20261025
@@ -7223,7 +7223,7 @@
 	- Opened: 20261023-082205
 	- Opened by: split from 2026101916404110
 	- Parent ID: 2026101916404110
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Split each one as it's next touched, and drop its `too_many_lines` allow, which names this item.
 	- Test case: the existing unit and integration suites, since a split changes no behavior.
 	- Closed: 20261026-193507
@@ -7479,7 +7479,7 @@ Template:
 	- Target OS:
 	- Test environment:
 	- Version and build:
-	- Requirements  [Feature]:
+	- Requirements [Feature]:
 		- Hierarchical bulleted list.
 	- Steps to reproduce [Bug]:
 		- …
@@ -7489,6 +7489,7 @@ Template:
 	- Possible cause [Bug]:
 	- Actual cause [Bug]:
 		- …
+	- Probable fix [Bug]:
 	- Estimated effort: [High|Avg|Low]
 	- Actual effort: [High|Avg|Low]
 	- Progress log:
