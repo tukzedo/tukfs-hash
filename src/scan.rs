@@ -500,7 +500,7 @@ pub struct Held {
 	sudo: Option<(u32, u32)>,
 	conn: Option<rusqlite::Connection>,
 	// Let go only after drop() has handed the files back.
-	_lock: File,
+	lock: File,
 }
 
 impl Held {
@@ -512,7 +512,7 @@ impl Held {
 	fn take_as(db: &Path, mounts: &[mounts::Mount], sudo: Option<(u32, u32)>) -> Result<Self, String> {
 		let dir = open_dir("database", db, sudo)?;
 		Ok(Self {
-			_lock: lock(&dir, db, mounts)?,
+			lock: lock(&dir, db, mounts)?,
 			dir,
 			db: db.to_path_buf(),
 			sudo,
@@ -553,6 +553,9 @@ impl Drop for Held {
 			say::err(&format!("warning: {} is left in WAL mode ({x}). Something else likely has it open. The next run puts it back.", show_path(&self.db)));
 		}
 		self.give_back();
+		// A child forked elsewhere and not yet exec'd shares the lock, so closing this fd alone can leave it held.
+		// SAFETY: lock is open until this struct is gone.
+		unsafe { libc::flock(self.lock.as_raw_fd(), libc::LOCK_UN) };
 	}
 }
 
@@ -2990,6 +2993,22 @@ mod tests {
 		assert!(matches!(r, Err(ReadFail::Stopped)), "not stopped part way");
 		// Only what was read, the stopped part included.
 		assert!(counted.load(Relaxed) < len);
+	}
+
+	// A child forked by another thread has a copy of the lock's fd until it execs, so a dropped Held still lets go of the lock.
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no flock")]
+	fn a_dropped_lock_is_free_while_copied() {
+		let _id = test_id("dfrg2");
+		let d = scratch("scan_lockcopy");
+		let db = d.join("t.sqlite");
+		let mounts = mounts::read_mounts().unwrap();
+		let held = Held::take_as(&db, &mounts, None).unwrap();
+		// Stands in for the child's copy.
+		let copy = held.lock.try_clone().unwrap();
+		drop(held);
+		Held::take_as(&db, &mounts, None).unwrap();
+		drop(copy);
 	}
 
 	// Only a lock held elsewhere reads as another scan (backlog ...819).

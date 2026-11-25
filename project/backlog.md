@@ -1035,6 +1035,22 @@
 	- Acceptance signoff: Self-closed after the root run.
 	- Closed: 20261015-130151
 
+- `scan::tests::mount_table_lost` failed in a run with "is locked; another scan is using this database".
+	- ID: 2026112417451092
+	- Type: Bug
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
+	- Target version: 1.0.0-beta.3
+	- Opened: 20261124-174510
+	- Opened by: gate run
+	- Reproduced [Bug]: Yes. A loop of 3000 lock takes and drops, beside a thread that starts processes, failed 90 times.
+	- Actual cause [Bug]:
+		- A process started by another thread has a copy of the lock file's fd until it execs. Dropping `Held` closed only our fd, so the lock stayed taken for that moment, and the next scan on the same database was refused.
+	- Actual fix [Bug]: `Held` lets go of the lock itself when dropped. The same loop then failed 0 times.
+	- Test case: dfrg2, which fails without the fix.
+	- Closed: 20261124-174510
+
 - snapdiff `--find-new` calls a renamed, damaged file "only in --new" and exits 0 when `--old` was made writable, written to, and made read-only again.
 	- ID: 2026111918562701
 	- Type: Bug
