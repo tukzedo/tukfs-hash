@@ -4,7 +4,7 @@
 ##		typed into a fake terminal the way a person types, mistakes and all,
 ##		then run for real against the release binary, so the output shown
 ##		can't go stale. 50 fps: the cursor eases between cells, and output
-##		scrolls smoothly once it reaches the bottom. The loop ends on a cut to
+##		scrolls smoothly once it gets to the bottom. The loop ends on a cut to
 ##		black. Pillow only, so nothing opens a window or needs a screen.
 ##		From convert-base-v2's gen-demo-gif.py, with shcl's expected exit codes.
 ##	Syntax: gen-demo-gif.py --scenario FILE --out FILE --bin PATH [--seed N] [--font NAME] [--quiet]
@@ -195,7 +195,7 @@ def optimize_gif(path: Path) -> str | None:
     except FileNotFoundError:
         return "no gifsicle"
     except OSError as e:
-        why = f"could not start: {e}"
+        why = f"couldn't start: {e}"
     except subprocess.TimeoutExpired:
         why = f"didn't finish in {GIFSICLE_TIMEOUT_S} s"
     else:
@@ -211,7 +211,7 @@ def optimize_gif(path: Path) -> str | None:
 
 
 def find_font(prefs: list[str], size: float) -> tuple[ImageFont.FreeTypeFont, str]:
-    ##	fc-match always answers with something, so the family has to match
+    ##	fc-match always returns something, so the family has to match
     ##	before it's taken. Plain "monospace" takes whatever it gets.
     for name in [*prefs, "monospace"]:
         try:
@@ -447,7 +447,7 @@ def token_re(word: str) -> re.Pattern[str]:
 
 def near_re(word: str) -> re.Pattern[str]:
     ##	For the leak check: the word next to anything but a letter or digit,
-    ##	such as b23-old or b23_snap, which token_re leaves alone. It can catch
+    ##	such as <host>-old or <host>_snap, which token_re leaves alone. It can catch
     ##	one inside a checksum too, but a failed render beats a leaked name.
     return re.compile(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])")
 
@@ -494,20 +494,11 @@ def remove_home(home: Path, token: str) -> None:
     base = Path(tempfile.gettempdir()).resolve()
     try:
         got = (home / HOME_MARK).read_text().strip()
-        ok = (
-            home.is_absolute()
-            and home.parent == base
-            and re.fullmatch(r"gen-demo-gif\.[A-Za-z0-9_]{6,}", home.name) is not None
-            and not home.is_symlink()
-            and home.resolve() == home
-            and home.stat().st_uid == os.getuid()
-            and str(home) not in ("/", "/tmp", os.environ.get("HOME", "/"))
-            and got == token
-        )
+        ok = home.is_absolute() and home.parent == base and re.fullmatch(r"gen-demo-gif\.[A-Za-z0-9_]{6,}", home.name) is not None and not home.is_symlink() and home.resolve() == home and home.stat().st_uid == os.getuid() and str(home) not in ("/", "/tmp", os.environ.get("HOME", "/")) and got == token
     except OSError:
         ok = False
     if not ok:
-        sys.stderr.write(f"gen-demo-gif: left {home}, it doesn't look like the one made here\n")
+        sys.stderr.write(f"gen-demo-gif: left {home}, since it doesn't look like the one made here\n")
         return
     shutil.rmtree(home)
 
@@ -601,6 +592,7 @@ class Screen:
         self.typed_key = "fg"  # dim while a note is typed
         self.scroll = 0.0  # px
         self._live: tuple[str, str, list[list[Span]]] | None = None
+        self.chrome = self.draw_chrome()
 
     def put(self, spans: list[Span]) -> None:
         self.lines.append(spans)
@@ -648,7 +640,8 @@ class Screen:
         x = self.font.getlength("".join(t for t, _ in live[-1]))
         return x, (len(self.lines) + len(live) - 1) * self.lh - self.scroll
 
-    def render(self, cursor: tuple[float, float] | None, colors: dict[str, Rgb]) -> Image.Image:
+    def draw_chrome(self) -> Image.Image:
+        ##	The window around the view, the same in every frame.
         img = Image.new("RGB", (CANVAS_W, CANVAS_H), THEME["outer"])
         d = ImageDraw.Draw(img)
         x0 = y0 = MARGIN
@@ -664,6 +657,10 @@ class Screen:
             font=self.font,
             fill=THEME["titletxt"],
         )
+        return img
+
+    def render(self, cursor: tuple[float, float] | None, colors: dict[str, Rgb]) -> Image.Image:
+        img = self.chrome.copy()
 
         ##	A layer the size of the view, so lines part way out clip at its edges.
         layer = Image.new("RGB", (self.view_w, self.view_h), THEME["bg"])
@@ -742,8 +739,8 @@ class Movie:
     ##	Frames with their times. A frame the same as the one before makes that
     ##	one longer. Times round to whole 50 fps frames, with the rest added to
     ##	the next, so typing keeps its pace. Encoded 32 at a time, each batch
-    ##	behind the last frame of the one before, since held raw they ran to
-    ##	over a GB.
+    ##	behind the last frame of the one before, since the raw frames kept in
+    ##	memory came to over a GB.
     BATCH = 32
 
     def __init__(self) -> None:
@@ -776,9 +773,7 @@ class Movie:
             frames = [self._lead, *frames]
             durs = [self.durs[self._done - 1], *durs]
         buf = io.BytesIO()
-        frames[0].save(
-            buf, format="GIF", save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=False
-        )
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=False)
         gif = buf.getvalue()
         cut = after_first_image(gif) if self._lead is not None else 0
         self._gif.append(gif[cut:-1])  # one trailer, at the end
@@ -1021,11 +1016,7 @@ def main() -> None:
     if not args.quiet:
         secs = sum(delays) / 1000.0
         kb = out_path.stat().st_size // 1024
-        print(
-            f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB"
-            f"{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, "
-            f"{scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}"
-        )
+        print(f"gen-demo-gif: {len(delays)} frames, {secs:.1f} s loop, 50 fps, {kb} KiB{f' ({why_big}, so bigger)' if why_big else ''}, font {font_name}, {scr.cols}x{scr.rows} cells, shown as {ident.user}@{ident.host}")
 
 
 if __name__ == "__main__":

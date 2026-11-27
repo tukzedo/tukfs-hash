@@ -6,8 +6,8 @@
 ##		target/leakcheck. The plain cargo test proves the output; these prove
 ##		the memory behind it.
 ##		- --asan: AddressSanitizer and LeakSanitizer. std is built too
-##		  (-Zbuild-std), and the target is named, or the flags would reach the
-##		  build scripts. clang builds the bundled SQLite with the same
+##		  (-Zbuild-std), and the target is named, or the flags would apply to
+##		  the build scripts too. clang builds the bundled SQLite with the same
 ##		  sanitizer, with its lookaside and page cache pools off so each block
 ##		  is a malloc of its own, and its objects have to show the
 ##		  instrumentation. LSan reports at exit, so a leak fails the whole
@@ -18,7 +18,7 @@
 ##		  Miri also fails on memory still allocated when a test ends. A test
 ##		  that calls what Miri can't run has #[cfg_attr(miri, ignore = "why")],
 ##		  and the count of those is printed.
-##		Runs in the leak check image when docker answers, else on the host,
+##		Runs in the leak check image when docker responds, else on the host,
 ##		with a note.
 ##		From shcl's cicd/utility/sanitize-rust.bash.
 ##	Syntax:
@@ -50,9 +50,7 @@ esac
 start="${SECONDS}"
 fLeakInImage "sanitize-rust ${mode}" "${me}/sanitize-rust.bash" "${LEAK_DIR}" "$@"
 
-## Asking cargo through rustup would install a missing toolchain on the
-## spot, so the list says whether it's here. Checked before the sandbox,
-## which can't write the run's skip list.
+## Asking cargo through rustup would install a missing toolchain on the spot, so the list says whether it's here. Checked before the sandbox, which can't write the run's skip list.
 toolchains="$(rustup toolchain list 2>/dev/null || true)"
 if ! grep -q -- "^${PIN_NIGHTLY}-" <<<"${toolchains}"; then
 	((in_image)) && { echo "sanitize-rust: the leak check image has no ${PIN_NIGHTLY}" >&2; exit 2; }
@@ -65,12 +63,10 @@ fScratchMake "${mode}" || exit 2
 mkdir -p -- "${scratch}/tmp" "${LEAK_DIR}"
 export TMPDIR="${scratch}/tmp"
 
-## The suite's own pass lines were shown by the tests stage, so only what
-## failed, and what a sanitizer or Miri said.
+## The suite's own pass lines were shown by the tests stage, so only what failed, and what a sanitizer or Miri said.
 fShow(){ grep -vE '^test .+ \.\.\. (ok|ignored.*)$|^ +(Compiling|Finished|Running) ' "$1" || true; }
 
-## The SQLite build has to be one of the the sanitizer's, or its C goes unchecked.
-## nm -u lists the runtime calls the instrumentation added.
+## The SQLite build has to be one of the sanitizer's, or its C goes unchecked. nm -u lists the runtime calls the instrumentation added.
 fInstrumented(){   ## fInstrumented DIR SAN
 	local lib="" syms=""
 	lib="$(find "$1" -name libsqlite3.a -path '*libsqlite3-sys*' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1)"
@@ -91,9 +87,7 @@ fSanitizer(){   ## fSanitizer address|thread
 	## LLVM's runtime prints bare addresses unless it finds a symbolizer.
 	for sym in llvm-symbolizer llvm-symbolizer-{24..14}; do command -v "${sym}" >/dev/null 2>&1 && break; done
 	sym="$(command -v "${sym}" 2>/dev/null || true)"
-	## exitcode 77 is no exit a test binary uses, so a report can't pass for
-	## a test's own failure. The suppressions file is loaded even though
-	## it's empty, so a planted leak shows it hides nothing of ours.
+	## exitcode 77 is no exit a test binary uses, so a report can't pass for a test's own failure. The suppressions file is loaded even though it's empty, so a planted leak shows it hides nothing of ours.
 	env RUSTFLAGS="-Zsanitizer=${san} -Cforce-frame-pointers=yes" \
 		"CC_x86_64_unknown_linux_gnu=${cc}" "CFLAGS_x86_64_unknown_linux_gnu=-fsanitize=${san} -fno-omit-frame-pointer -g" \
 		LIBSQLITE3_FLAGS="${lean} -DSQLITE_DEFAULT_LOOKASIDE=0,0 -DSQLITE_DEFAULT_PCACHE_INITSZ=0" \
@@ -128,8 +122,7 @@ fMiri(){
 	while IFS= read -r t; do ignored["${t}"]=1; done < <(env -u RUSTFLAGS "${cmd[@]}" -- --list --ignored 2>/dev/null | sed -n 's/: test$//p')
 	((${#tests[@]})) || { echo "sanitize-rust: Miri listed no tests" >&2; exit 1; }
 	for t in "${tests[@]}"; do if [[ -n "${ignored[${t}]:-}" ]]; then skipped+=("${t}"); fi; done
-	## GNU timeout signals its whole process group, so the test cargo
-	## started goes too.
+	## GNU timeout signals its whole process group, so the test cargo started goes too.
 	for i in "${!tests[@]}"; do
 		[[ -z "${ignored[${tests[i]}]:-}" ]] || continue
 		if ((live >= CPU_CAP)); then wait -n || true; live=$((live - 1)); fi
@@ -166,4 +159,4 @@ esac
 ##		- 2026-11-02: The build's own LIBSQLITE3_FLAGS go first.
 ##		- 2026-11-02: On the host, in the test sandbox.
 ##		- 2026-11-08: The missing nightly is found before the sandbox, so its
-##		  skip reaches the run's list.
+##		  skip is written to the run's list.

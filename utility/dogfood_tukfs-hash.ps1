@@ -1,7 +1,7 @@
 ## dogfood_tukfs-hash.ps1
 ##
 ##	Picks the newest dogfood build of tukfs-hash, on Linux, under PowerShell 7,
-##	and prints its path for dogfood_tukfs-hash to run. The pool, its rotation
+##	and prints its path for dogfood_tukfs-hash to run. The pool, its rotation,
 ##	and the fixed name are in design.md, "Build and release".
 ##
 ##	History: At bottom of script.
@@ -15,7 +15,7 @@
 .SYNOPSIS
 Prints the path of the newest dogfood build of tukfs-hash, taking a new one from the synced dogfood dir first.
 .DESCRIPTION
-The bash launcher, dogfood_tukfs-hash, runs what this prints with the arguments as typed, and its exit code comes back. PowerShell would expand wildcards and ~ in them, and can't pass a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
+The bash launcher dogfood_tukfs-hash runs the path this prints with the arguments as typed, and passes the build's exit code back. PowerShell would expand wildcards and ~ in them, and can't pass a name that isn't UTF-8, so they never go through here. --no-update prints the newest build already held and copies nothing. It's the only argument this takes. What this script has to say goes to stderr, and only on a run that took a new build or changed something.
 .EXAMPLE
 dogfood_tukfs-hash.ps1 --no-update
 #>
@@ -28,8 +28,7 @@ $SourceDirs = @(
 	(Join-Path -Path $HOME -ChildPath 'synced/0-0/common/exec/util/linux/bin')
 )
 
-## Local on purpose. Versions churn with every build and don't belong in the
-## sync tree.
+## Local on purpose. Versions churn with every build and don't belong in the sync tree.
 $InstallDir = Join-Path -Path $HOME -ChildPath '.local/bin'
 $PoolDir = Join-Path -Path $InstallDir -ChildPath "${ProgramName}_versions"
 $LinkPath = Join-Path -Path $InstallDir -ChildPath $ProgramName
@@ -38,8 +37,7 @@ $MaxVersions = 10
 $MinVersions = 5
 $MaxPoolBytes = 1GB
 
-## GFS roles, before the budget above trims them. A period role goes to the
-## last version of a period that has ended.
+## GFS roles, before the budget above trims them. A period role goes to the last version of a period that has ended.
 $KeepFrequent = 5
 $KeepHourly = 3
 $KeepDaily = 3
@@ -49,10 +47,9 @@ $KeepYearly = 1
 
 $StampFormat = 'yyyyMMdd-HHmmss'
 $VersionPattern = '^' + [regex]::Escape($ProgramName) + '_(?<stamp>\d{8}-\d{6})(_[a-z]+)?$'
-## The kernel keeps this much of a program's name as its comm.
+## The kernel stores this many bytes of a program's name as its comm.
 $CommLength = 15
-## Written and read in one culture, or a culture with another calendar writes
-## a year the read takes as a different one.
+## Stamps are written and read in the invariant culture. A culture with another calendar would write a year that reads back as a different one.
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
 function Write-Note {
@@ -89,7 +86,7 @@ function Exit-Launcher {
 function ConvertFrom-Stamp {
 	<#
 	.SYNOPSIS
-	The stamp as a date, or nothing when it names no real one, such as a 13th month.
+	The stamp as a date, or nothing when it isn't a real date, such as one with a 13th month.
 	.DESCRIPTION
 	A name like that isn't one this script wrote.
 	#>
@@ -167,7 +164,7 @@ function Copy-NewBuild {
 	.SYNOPSIS
 	Copies the source build in when nothing held matches it. True when it took one.
 	.DESCRIPTION
-	Written to a temp name and renamed, so a copy that dies partway never passes for a version. Its write time is when it came in, since the name keeps the build's. That's how Get-RunningVersion tells which version a run through the fixed name started.
+	Written to a temp name and renamed, so a copy that dies partway never passes for a version. Its write time is when it came in, since the name already has the build's time. That's how Get-RunningVersion tells which version a run through the fixed name started.
 	#>
 	[CmdletBinding()]
 	[OutputType([bool])]
@@ -191,7 +188,7 @@ function Copy-NewBuild {
 		return $true
 	} catch {
 		Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-		Write-Note -Message "could not copy the new build: $($_.Exception.Message)"
+		Write-Note -Message "couldn't copy the new build: $($_.Exception.Message)"
 		return $false
 	}
 }
@@ -219,7 +216,7 @@ function Get-PeriodKey {
 function Get-GfsRole {
 	<#
 	.SYNOPSIS
-	Each version's role, by name. A version with none is one nothing keeps.
+	Each version's role, by name. A version without a role isn't in the table.
 	.DESCRIPTION
 	The coarser role wins where 2 apply; oldest and newest win over all of them.
 	#>
@@ -262,7 +259,7 @@ function Select-Budget {
 	.SYNOPSIS
 	The names that fit the budget.
 	.DESCRIPTION
-	The newest goes in first whatever it weighs, since the fixed name points at it, then the oldest, then those with a GFS role from year down to frequent, then those without, each newest first within its group. So a burst of builds can't push out the week and day versions. A version with no role still stays while the pool is under the count and the bytes.
+	The newest goes in first whatever its size, since the fixed name points at it. Then come the oldest, the versions with a GFS role from year down to frequent, and the versions without one, newest first within each group. So a burst of builds can't push out the week and day versions. A version without a role still stays while the pool is under the version and byte limits.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]
@@ -329,7 +326,7 @@ function Get-RunningVersion {
 	.SYNOPSIS
 	The names of the versions running now.
 	.DESCRIPTION
-	One of this user's runs is found by its image path. Another user's, such as a run through sudo, has none to read, so it's found by its comm and first argument, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name in them gives its stamp, which a later rename keeps. A run through the fixed name has only that name, so it has the version the fixed name pointed at when it started: the newest that had come in by then.
+	A run by this user is found by its image path. Another user's run, such as one through sudo, has an image path this user can't read. It's found by its comm and first argument instead, as fInUse in cicd.bash does, unless that argument is a path to some other file. A version's own name there gives its stamp, and a later rename doesn't change the stamp. A run through the fixed name shows only that name, so it's taken to be the version the fixed name pointed at when it started, which is the newest one copied in by then.
 	#>
 	[CmdletBinding()]
 	[OutputType([Collections.Generic.HashSet[string]])]
@@ -339,8 +336,7 @@ function Get-RunningVersion {
 		[object[]]$Versions
 	)
 	$names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-	## A running one shows by its real path, which isn't the pool's when a
-	## link is on the way, such as a linked home.
+	## A running one shows by its real path, which isn't the pool's when a link is on the way, such as a linked home.
 	$realPool = Resolve-RealPath -Path $PoolDir
 	$byPath = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
 	$byStamp = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
@@ -356,8 +352,7 @@ function Get-RunningVersion {
 			if ($byPath.ContainsKey($image)) { $null = $names.Add($byPath[$image]) }
 			continue
 		}
-		## The comm first, since most processes are someone else's and few
-		## are this program.
+		## The comm first, since most processes are someone else's and few are this program.
 		try {
 			$comm = [IO.File]::ReadAllText("/proc/$($proc.Id)/comm").TrimEnd("`n")
 			if (-not $comm.StartsWith($fixedComm, [StringComparison]::Ordinal)) { continue }
@@ -406,7 +401,7 @@ function Invoke-Rotation {
 		try {
 			Remove-Item -LiteralPath $v.File.FullName -Force -ErrorAction Stop
 		} catch {
-			Write-Note -Message "could not remove $($v.Name): $($_.Exception.Message)"
+			Write-Note -Message "couldn't remove $($v.Name): $($_.Exception.Message)"
 		}
 	}
 	foreach ($v in $versions) {
@@ -416,7 +411,7 @@ function Invoke-Rotation {
 		if ($v.Name -ceq $want) { continue }
 		$wantPath = Join-Path -Path $PoolDir -ChildPath $want
 		if (Test-Path -LiteralPath $wantPath) { continue }
-		try { Move-Item -LiteralPath $v.File.FullName -Destination $wantPath -ErrorAction Stop } catch { Write-Note -Message "could not rename $($v.Name): $($_.Exception.Message)" }
+		try { Move-Item -LiteralPath $v.File.FullName -Destination $wantPath -ErrorAction Stop } catch { Write-Note -Message "couldn't rename $($v.Name): $($_.Exception.Message)" }
 	}
 }
 
@@ -442,7 +437,7 @@ function Update-FixedName {
 	.SYNOPSIS
 	Points the fixed name at the newest version.
 	.DESCRIPTION
-	Something else there is left alone, and said so on a run that took a new build.
+	Anything else at the fixed name is left alone, with a note on a run that took a new build.
 	.PARAMETER Fresh
 	This run took a new build.
 	#>
@@ -463,7 +458,7 @@ function Update-FixedName {
 		if ($cur) { Remove-Item -LiteralPath $LinkPath -Force -ErrorAction Stop }
 		$null = New-Item -ItemType SymbolicLink -Path $LinkPath -Target $target -ErrorAction Stop
 	} catch {
-		Write-Note -Message "could not update ${LinkPath}: $($_.Exception.Message)"
+		Write-Note -Message "couldn't update ${LinkPath}: $($_.Exception.Message)"
 		return
 	}
 	Write-Note -Message "$LinkPath -> $($versions[-1].Name)"
@@ -474,8 +469,7 @@ function Get-RunTarget {
 	.SYNOPSIS
 	The newest version by its own path, never the fixed name.
 	.DESCRIPTION
-	A run that repoints the name while this one starts can't swap the build,
-	and the process shows which version it is. The fixed name is there for PATH.
+	A run that repoints the name while this one starts can't swap the build, and the process shows which version it is. The fixed name is there for PATH.
 	#>
 	[CmdletBinding()]
 	[OutputType([string])]
@@ -501,7 +495,7 @@ if (-not $noUpdate) {
 }
 
 $exe = Get-RunTarget
-if (-not $exe) { Exit-Launcher -Message "no $ProgramName build held, and none in $($SourceDirs -join ' or ')" }
+if (-not $exe) { Exit-Launcher -Message "there's no $ProgramName build in $PoolDir or in $($SourceDirs -join ' or ')" }
 Write-Output -InputObject $exe
 
 

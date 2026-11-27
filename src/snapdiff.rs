@@ -1,11 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Compares the files a snapshot diff says changed. A real edit moves the
-// modified time. A file whose bytes changed under the same size and time was
-// changed by something that didn't go through the filesystem's write path,
-// such as bad RAM under the page cache. `cp -p`, `rsync -t`, tar and `touch -r`
-// also do it, so each hit still needs a look.
+// Compares the files a snapshot diff says changed. A real edit moves the modified time. A file whose bytes changed under the same size and time was changed by something that didn't go through the filesystem's write path, such as bad RAM under the page cache. `cp -p`, `rsync -t`, tar and `touch -r` also do it, so each hit still needs a look.
 
 use std::collections::{BTreeSet, HashMap, btree_set};
 use std::ffi::OsStr;
@@ -32,8 +28,7 @@ pub enum Source {
 	List(PathBuf),
 }
 
-/// A file to compare, by its name in each snapshot. find-new gives the inode
-/// too, which finds the old copy after a rename.
+/// A file to compare, by its name in each snapshot. find-new gives the inode too, so the old copy can be found after a rename.
 #[derive(Debug, PartialEq)]
 pub struct Pair {
 	pub old: PathBuf,
@@ -70,19 +65,13 @@ enum Entry {
 	Outside(usize, Vec<u8>),
 }
 
-// zfs diff writes odd bytes as a backslash and 4 octal digits, \0040 for a
-// space.
+// zfs diff writes odd bytes as a backslash and 4 octal digits, \0040 for a space.
 fn zfs_unescape(s: &[u8]) -> Vec<u8> {
 	let mut out = Vec::with_capacity(s.len());
 	let mut i = 0;
 	while i < s.len() {
-		if s[i] == b'\\'
-			&& i + 4 < s.len()
-			&& s[i + 1..i + 5].iter().all(|c| (b'0'..=b'7').contains(c))
-		{
-			let v = s[i + 1..i + 5]
-				.iter()
-				.fold(0u32, |a, c| a * 8 + u32::from(c - b'0'));
+		if s[i] == b'\\' && i + 4 < s.len() && s[i + 1..i + 5].iter().all(|c| (b'0'..=b'7').contains(c)) {
+			let v = s[i + 1..i + 5].iter().fold(0u32, |a, c| a * 8 + u32::from(c - b'0'));
 			out.push(v as u8);
 			i += 5;
 		} else {
@@ -100,19 +89,12 @@ fn is_time(f: &[u8]) -> bool {
 }
 
 fn is_link_delta(f: &[u8]) -> bool {
-	f.len() > 3
-		&& f[0] == b'('
-		&& matches!(f[1], b'+' | b'-')
-		&& f[f.len() - 1] == b')'
-		&& f[2..f.len() - 1].iter().all(u8::is_ascii_digit)
+	f.len() > 3 && f[0] == b'(' && matches!(f[1], b'+' | b'-') && f[f.len() - 1] == b')' && f[2..f.len() - 1].iter().all(u8::is_ascii_digit)
 }
 
 fn strip_mount(p: &[u8], mounts: &[&Path]) -> Option<PathBuf> {
 	let p = Path::new(OsStr::from_bytes(p));
-	mounts
-		.iter()
-		.find_map(|m| p.strip_prefix(m).ok())
-		.map(Path::to_path_buf)
+	mounts.iter().find_map(|m| p.strip_prefix(m).ok()).map(Path::to_path_buf)
 }
 
 enum ZfsLine {
@@ -125,9 +107,7 @@ enum ZfsLine {
 	Outside,
 }
 
-/// Takes -H or not, -t and -F. M and R lines are compared, and so is a path
-/// with both a - and a + line, which is a file replaced by a new one, as rsync,
-/// tar and atomic saves do.
+/// Takes -H or not, -t and -F. M and R lines are compared, and so is a path with both a - and a + line, which is a file replaced by a new one, as rsync, tar and atomic saves do.
 fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 	let mut f: Vec<&[u8]> = line.split(|&c| c == b'\t').collect();
 	if f.len() > 2 && is_time(f[0]) {
@@ -137,8 +117,7 @@ fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 	if !matches!(kind, b"M" | b"R" | b"-" | b"+") {
 		return ZfsLine::Unusable;
 	}
-	// Without -H a rename is "old -> new" in one field. Spaces in names are
-	// escaped, so the arrow can't be part of one.
+	// Without -H a rename is "old -> new" in one field. Spaces in names are escaped, so the arrow can't be part of one.
 	if kind == b"R"
 		&& let Some(last) = f.pop()
 	{
@@ -160,10 +139,7 @@ fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 	} else {
 		return ZfsLine::Unusable;
 	};
-	let mut rel: Vec<PathBuf> = names
-		.iter()
-		.map_while(|n| strip_mount(&zfs_unescape(n), mounts))
-		.collect();
+	let mut rel: Vec<PathBuf> = names.iter().map_while(|n| strip_mount(&zfs_unescape(n), mounts)).collect();
 	if rel.len() != names.len() {
 		return ZfsLine::Outside;
 	}
@@ -172,11 +148,7 @@ fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 	}
 	// The pops run left to right, so a rename's new name comes off first.
 	match (kind, rel.pop(), rel.pop()) {
-		(b"R", Some(new), Some(old)) => ZfsLine::Pair(Pair {
-			old,
-			new,
-			ino: None,
-		}),
+		(b"R", Some(new), Some(old)) => ZfsLine::Pair(Pair { old, new, ino: None }),
 		(b"M", Some(p), None) => ZfsLine::Pair(Pair::same(p)),
 		(b"-", Some(p), None) => ZfsLine::Removed(p),
 		(b"+", Some(p), None) => ZfsLine::Added(p),
@@ -187,23 +159,22 @@ fn zfs_diff_line(line: &[u8], mounts: &[&Path]) -> ZfsLine {
 // "inode 257 file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE name"
 fn find_new_line(line: &[u8]) -> Option<(u64, PathBuf)> {
 	let f: Vec<&[u8]> = line.splitn(17, |&c| c == b' ').collect();
-	if f.len() != 17 || f[0] != b"inode" || f[2] != b"file" || f[14] != b"flags" || f[16].is_empty()
-	{
+	if f.len() != 17 || f[0] != b"inode" || f[2] != b"file" || f[14] != b"flags" || f[16].is_empty() {
 		return None;
 	}
 	let ino = std::str::from_utf8(f[1]).ok()?.parse().ok()?;
 	Some((ino, PathBuf::from(OsStr::from_bytes(f[16]))))
 }
 
-/// Reads a change list a line at a time, so a long one takes no more memory
-/// than a short one. Only zfs diff's - and + names are held to the end, since
-/// the 2 lines of a replaced file can be far apart.
+/// Reads a change list a line at a time, so a long one takes no more memory than a short one. Only zfs diff's - and + names that can pair are kept to the end, since the 2 lines of a replaced file can be far apart.
 struct ChangeList<'a, R> {
 	input: R,
 	format: Format<'a>,
+	// --old and --new, to drop a - or + name that can't pair. None keeps them all.
+	sides: Option<(&'a Root, &'a Root)>,
 	line: Vec<u8>,
 	line_no: usize,
-	// find-new prints a line per extent, a file's all together.
+	// find-new prints a line per extent, and a file's lines come together.
 	last_name: Vec<u8>,
 	removed: BTreeSet<PathBuf>,
 	added: BTreeSet<PathBuf>,
@@ -211,10 +182,11 @@ struct ChangeList<'a, R> {
 }
 
 impl<'a, R: BufRead> ChangeList<'a, R> {
-	fn new(input: R, format: Format<'a>) -> Self {
+	fn new(input: R, format: Format<'a>, sides: Option<(&'a Root, &'a Root)>) -> Self {
 		ChangeList {
 			input,
 			format,
+			sides,
 			line: Vec::new(),
 			line_no: 0,
 			last_name: Vec::new(),
@@ -231,11 +203,15 @@ impl<'a, R: BufRead> ChangeList<'a, R> {
 			Format::ZfsDiff(mounts) => match zfs_diff_line(line, mounts) {
 				ZfsLine::Pair(p) => Some(Entry::Pair(p)),
 				ZfsLine::Removed(p) => {
-					self.removed.insert(p);
+					if can_pair(self.sides.map(|s| s.1), &p) {
+						self.removed.insert(p);
+					}
 					None
 				}
 				ZfsLine::Added(p) => {
-					self.added.insert(p);
+					if can_pair(self.sides.map(|s| s.0), &p) {
+						self.added.insert(p);
+					}
 					None
 				}
 				ZfsLine::Skip => None,
@@ -255,14 +231,9 @@ impl<'a, R: BufRead> ChangeList<'a, R> {
 				}
 				self.last_name.clear();
 				self.last_name.extend_from_slice(bytes);
-				Some(Entry::Pair(Pair {
-					ino: Some(ino),
-					..Pair::same(name)
-				}))
+				Some(Entry::Pair(Pair { ino: Some(ino), ..Pair::same(name) }))
 			}
-			Format::List => Some(Entry::Pair(Pair::same(PathBuf::from(OsStr::from_bytes(
-				line,
-			))))),
+			Format::List => Some(Entry::Pair(Pair::same(PathBuf::from(OsStr::from_bytes(line))))),
 		}
 	}
 }
@@ -300,19 +271,20 @@ impl<R: BufRead> Iterator for ChangeList<'_, R> {
 	}
 }
 
-// An absolute name makes join() drop --old and --new, so a file would be
-// compared with itself.
+// A - name pairs only with a + by that name, so --new has to have something there, and a + name needs --old to. Any other name would be kept to the end for nothing, and a mass delete gives millions of them. Only a name that isn't there at all is dropped. A symlink or mount on the way, or any other error, leaves the name in, so it's still counted as missing or not checked when it's compared.
+fn can_pair(other: Option<&Root>, rel: &Path) -> bool {
+	other.is_none_or(|root| !matches!(root.open_at(rel, libc::O_PATH), Err(e) if e.kind() == io::ErrorKind::NotFound))
+}
+
+// An absolute name makes join() drop --old and --new, so a file would be compared with itself.
 fn stays_inside(p: &Path) -> bool {
-	p.components()
-		.all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+	p.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
 /// How many runs `describe` names.
 const RUNS_SHOWN: usize = 8;
 
-/// Bytes that differ, and where, as runs of start and length. Only the runs
-/// `describe` names are kept, and counts for the rest, so a file that differs
-/// all through takes no more memory than one scribble.
+/// Bytes that differ, and where, as runs of start and length. Only the runs `describe` names are kept, and counts for the rest, so a file that differs all through takes no more memory than one scribble.
 #[derive(Debug, Default)]
 pub struct Diff {
 	pub differing: u64,
@@ -360,15 +332,11 @@ pub struct CompareBufs {
 
 impl Default for CompareBufs {
 	fn default() -> Self {
-		Self {
-			a: vec![0u8; 1 << 20],
-			b: vec![0u8; 1 << 20],
-		}
+		Self { a: vec![0u8; 1 << 20], b: vec![0u8; 1 << 20] }
 	}
 }
 
-/// Byte runs that differ. Runs a few bytes apart are merged, since a scribble
-/// rarely changes every byte it touches.
+/// Byte runs that differ. Runs a few bytes apart are merged, since a scribble rarely changes every byte it touches.
 pub fn compare(mut fa: File, mut fb: File, bufs: &mut CompareBufs) -> io::Result<Diff> {
 	let CompareBufs { a: ba, b: bb } = bufs;
 	let mut off: u64 = 0;
@@ -415,23 +383,10 @@ fn read_full(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
 
 fn describe(d: &Diff) -> String {
 	let shown: Vec<String> = d.shown.iter().map(|(s, l)| format!("{s}+{l}")).collect();
-	format!(
-		"{} bytes differ in {} run(s), {} starting on a 16-byte boundary: {}{}",
-		d.differing,
-		d.runs,
-		d.aligned,
-		shown.join(" "),
-		if d.runs > d.shown.len() as u64 {
-			" ..."
-		} else {
-			""
-		}
-	)
+	format!("{} bytes differ in {} run(s), {} starting on a 16-byte boundary: {}{}", d.differing, d.runs, d.aligned, shown.join(" "), if d.runs > d.shown.len() as u64 { " ..." } else { "" })
 }
 
-// A file whose old copy is looked for by inode once the list is read, with
-// the one under its own name to fall back on. Both sides are stat'd again
-// then, so a file held costs little more than its name.
+// A file whose old copy is looked for by inode once the list is read, with the one under its own name to fall back on. Both sides are stat'd again then, so a Held costs little more than its name.
 struct Held {
 	rel: PathBuf,
 	born: Option<SystemTime>,
@@ -449,8 +404,7 @@ struct Tally {
 }
 
 impl Tally {
-	// A file zfs diff or find-new says is there and isn't means the snapshots
-	// aren't the ones diffed, or one went away.
+	// A file zfs diff or find-new says is there and isn't means the snapshots aren't the ones diffed, or one went away.
 	fn missing(&mut self, expected: bool, name: &str, side: &str) {
 		self.missing += 1;
 		if expected {
@@ -460,8 +414,7 @@ impl Tally {
 	}
 }
 
-// What a name beneath a root is, with no symlink followed and no mount
-// crossed on the way. None when nothing is there by that path.
+// What a name beneath a root is, with no symlink followed and no mount crossed on the way. None when nothing is there by that path.
 fn stat_beneath(root: &Root, rel: &Path) -> io::Result<Option<Metadata>> {
 	// A symlink at the name itself comes back as the link, which isn't a file.
 	match root.open_at(rel, libc::O_PATH).and_then(|f| f.metadata()) {
@@ -489,7 +442,10 @@ struct SubvolInfo {
 	_uuid: [u8; 16],
 	_parent_uuid: [u8; 16],
 	received_uuid: [u8; 16],
-	_transids: [u64; 4],
+	ctransid: u64,
+	otransid: u64,
+	_stransid: u64,
+	_rtransid: u64,
 	_ctime: BtrfsTime,
 	otime: BtrfsTime,
 	_stime: BtrfsTime,
@@ -498,31 +454,26 @@ struct SubvolInfo {
 }
 
 const _: () = assert!(mem::size_of::<SubvolInfo>() == 504);
-// The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for
-// making snapshots.
+// The root item's flag. The ioctl header's BTRFS_SUBVOL_RDONLY is bit 1, for making snapshots.
 const BTRFS_ROOT_SUBVOL_RDONLY: u64 = 1;
 
-// When a read-only btrfs snapshot was taken, from its subvolume info, which
-// needs no root. Nothing born after that is in it. A received one is left
-// out, since its files are born after it.
+// When a read-only btrfs snapshot was taken, from its subvolume info, which needs no root.
 fn frozen_at(root: &Root) -> Option<SystemTime> {
 	let mut info = mem::MaybeUninit::<SubvolInfo>::zeroed();
-	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by
-	// size, and outlives the call.
-	let r = unsafe {
-		libc::ioctl(
-			root.as_raw_fd(),
-			libc::_IOR::<SubvolInfo>(0x94, 60),
-			info.as_mut_ptr(),
-		)
-	};
+	// SAFETY: SubvolInfo has the kernel's layout for this request, checked by size, and outlives the call.
+	let r = unsafe { libc::ioctl(root.as_raw_fd(), libc::_IOR::<SubvolInfo>(0x94, 60), info.as_mut_ptr()) };
 	// Some kernels return 1 from a search left over, with the info filled in.
 	if r < 0 {
 		return None;
 	}
 	// SAFETY: all zeros is a valid SubvolInfo, and the kernel filled it in.
 	let info = unsafe { info.assume_init() };
-	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] {
+	taken_at(&info)
+}
+
+// Nothing born after the snapshot was taken is in it, if it stayed read-only. A received one is left out, since its files are born after it. One made writable for a while may have had files added. Making an inode moves ctransid past otransid, as does any change to a name or to an inode's times. A write of bytes alone doesn't, and can't change a birth time.
+fn taken_at(info: &SubvolInfo) -> Option<SystemTime> {
+	if info.flags & BTRFS_ROOT_SUBVOL_RDONLY == 0 || info.received_uuid != [0; 16] || info.ctransid > info.otransid {
 		return None;
 	}
 	let otime = &info.otime;
@@ -532,15 +483,8 @@ fn frozen_at(root: &Root) -> Option<SystemTime> {
 	UNIX_EPOCH.checked_add(Duration::new(otime.sec, otime.nsec))
 }
 
-// Old copies of renamed files, found by inode. Snapshots of one btrfs
-// subvolume keep inode numbers, and the birth time rules out a number used
-// again after a delete. One walk serves every file the pair needs.
-fn find_by_inode(
-	old: &Root,
-	wanted: &mut HashMap<u64, usize>,
-	held: &mut [Held],
-	tally: &mut Tally,
-) {
+// Old copies of renamed files, found by inode. Snapshots of one btrfs subvolume keep inode numbers, and the birth time rules out a number used again after a delete. One walk finds the old copies of every file in `held`.
+fn find_by_inode(old: &Root, wanted: &mut HashMap<u64, usize>, held: &mut [Held], tally: &mut Tally) {
 	let dev = old.dev;
 	let mut dirs = vec![old.path.clone()];
 	while let Some(dir) = dirs.pop() {
@@ -563,17 +507,15 @@ fn find_by_inode(
 			};
 			let Ok(ft) = ent.file_type() else { continue };
 			if ft.is_dir() {
-				let p = ent.path();
-				if fs::symlink_metadata(&p).is_ok_and(|m| m.dev() == dev) {
-					dirs.push(p);
+				if ent.metadata().is_ok_and(|m| m.dev() == dev) {
+					dirs.push(ent.path());
 				}
 				continue;
 			}
 			let Some(&at) = wanted.get(&ent.ino()) else {
 				continue;
 			};
-			let p = ent.path();
-			let Ok(md) = fs::symlink_metadata(&p) else {
+			let Ok(md) = ent.metadata() else {
 				continue;
 			};
 			let same_birth = match (md.created(), held[at].born) {
@@ -581,7 +523,7 @@ fn find_by_inode(
 				_ => true,
 			};
 			if md.is_file() && same_birth {
-				held[at].by_inode = Some(Box::new((old.rel(&p).to_path_buf(), md)));
+				held[at].by_inode = Some(Box::new((old.rel(&ent.path()).to_path_buf(), md)));
 				wanted.remove(&ent.ino());
 				if wanted.is_empty() {
 					return;
@@ -591,8 +533,7 @@ fn find_by_inode(
 	}
 }
 
-// Compares each file as it's read off the list, holding back only the ones
-// whose old copy has to be found by inode.
+// Compares each file as it's read off the list, putting off only the ones whose old copy has to be found by inode.
 struct Checker<'a> {
 	old: &'a Root,
 	new: &'a Root,
@@ -600,6 +541,8 @@ struct Checker<'a> {
 	show_all: bool,
 	// When --old was frozen, where that's known.
 	frozen: Option<SystemTime>,
+	// When the run started. A birth time past it came from a clock that was ahead and has since been set back.
+	now: SystemTime,
 	tally: Tally,
 	bufs: CompareBufs,
 	held: Vec<Held>,
@@ -607,19 +550,14 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-	fn new(
-		old: &'a Root,
-		new: &'a Root,
-		src: &'a Source,
-		show_all: bool,
-		frozen: Option<SystemTime>,
-	) -> Self {
+	fn new(old: &'a Root, new: &'a Root, src: &'a Source, show_all: bool, frozen: Option<SystemTime>) -> Self {
 		Checker {
 			old,
 			new,
 			src,
 			show_all,
 			frozen,
+			now: SystemTime::now(),
 			tally: Tally::default(),
 			bufs: CompareBufs::default(),
 			held: Vec::new(),
@@ -627,8 +565,7 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	// Which side each listed file has to be on. zfs diff names files in both
-	// snapshots, find-new files in the new one, and a list can name anything.
+	// Which side each listed file has to be on. zfs diff names files in both snapshots, find-new files in the new one, and a list can name anything.
 	fn need_old(&self) -> bool {
 		matches!(self.src, Source::ZfsDiff(..))
 	}
@@ -638,12 +575,7 @@ impl<'a> Checker<'a> {
 	}
 
 	// A name's stat results on both sides, or None when it can't be compared.
-	fn stat_pair(
-		&mut self,
-		name: &str,
-		old_rel: &Path,
-		new_rel: &Path,
-	) -> Option<(Metadata, Option<Metadata>)> {
+	fn stat_pair(&mut self, name: &str, old_rel: &Path, new_rel: &Path) -> Option<(Metadata, Option<Metadata>)> {
 		let new_md = match stat_beneath(self.new, new_rel) {
 			Ok(Some(m)) => m,
 			Ok(None) if matches!(self.src, Source::ZfsDiff(..)) && self.is_attribute(new_rel) => {
@@ -673,31 +605,27 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	fn pair(&mut self, pair: &Pair) {
+	fn pair(&mut self, pair: Pair) {
 		let name = show_path(&pair.new);
 		let Some((new_md, by_name)) = self.stat_pair(&name, &pair.old, &pair.new) else {
 			return;
 		};
-		// The old name can be some other file, as after `mv c a`. A file born
-		// since --old was taken has no old copy to look for.
+		// The old name can be some other file, as after `mv c a`. A file born since --old was taken has no old copy to look for.
 		if let Some(ino) = pair.ino
 			&& by_name.as_ref().is_none_or(|m| m.ino() != ino)
 			&& !self.born_since_old(&new_md)
 		{
 			self.wanted.insert(ino, self.held.len());
-			self.held.push(Held {
-				rel: pair.new.clone(),
-				born: new_md.created().ok(),
-				by_inode: None,
-			});
+			self.held.push(Held { rel: pair.new, born: new_md.created().ok(), by_inode: None });
 			return;
 		}
 		let old = by_name.as_ref().map(|m| (pair.old.as_path(), m));
 		self.settle(&name, old, (&pair.new, &new_md));
 	}
 
+	// A birth time after the run started isn't trusted, as scan doesn't trust a date in the future. A file with one waits for the walk.
 	fn born_since_old(&self, md: &Metadata) -> bool {
-		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f)
+		matches!((self.frozen, md.created()), (Some(f), Ok(b)) if b > f && b <= self.now)
 	}
 
 	fn settle(&mut self, name: &str, old: Option<(&Path, &Metadata)>, new: (&Path, &Metadata)) {
@@ -708,8 +636,7 @@ impl<'a> Checker<'a> {
 		self.check(name, old, new);
 	}
 
-	// zfs diff names files in both snapshots, so one missing from --old is
-	// missing. find-new and lists can name new files.
+	// zfs diff names files in both snapshots, so one missing from --old is missing. find-new and lists can name new files.
 	fn not_in_old(&mut self, name: &str) {
 		if self.need_old() {
 			self.tally.missing(true, name, "--old");
@@ -721,16 +648,9 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	// zfs diff names attributes kept as a folder, by xattr=dir or a set too
-	// big for sa, as "<xattrdir>" beneath their file. No path reaches them, and
-	// they aren't the file's bytes. A real folder by that name is found by stat
-	// before this is asked, and an owner that isn't there is still missing.
+	// zfs diff names attributes stored as a folder, by xattr=dir or a set too big for sa, as "<xattrdir>" beneath their file. No path opens them, and they aren't the file's bytes. A real folder by that name is found by stat before this is called, and a file with attributes that isn't there is still missing.
 	fn is_attribute(&self, rel: &Path) -> bool {
-		let Some(owner) = rel
-			.ancestors()
-			.find(|a| a.file_name() == Some(OsStr::new("<xattrdir>")))
-			.and_then(Path::parent)
-		else {
+		let Some(owner) = rel.ancestors().find(|a| a.file_name() == Some(OsStr::new("<xattrdir>"))).and_then(Path::parent) else {
 			return false;
 		};
 		owner.as_os_str().is_empty() || matches!(stat_beneath(self.new, owner), Ok(Some(_)))
@@ -753,12 +673,7 @@ impl<'a> Checker<'a> {
 		}
 	}
 
-	fn check(
-		&mut self,
-		name: &str,
-		(old_rel, mo): (&Path, &Metadata),
-		(new_rel, mn): (&Path, &Metadata),
-	) {
+	fn check(&mut self, name: &str, (old_rel, mo): (&Path, &Metadata), (new_rel, mn): (&Path, &Metadata)) {
 		if !mo.is_file() {
 			return;
 		}
@@ -772,16 +687,10 @@ impl<'a> Checker<'a> {
 		}
 		if mo.len() != mn.len() {
 			self.tally.flagged += 1;
-			out!(
-				"size-changed-same-mtime\t{name}\t{} -> {} bytes",
-				mo.len(),
-				mn.len()
-			);
+			out!("size-changed-same-mtime\t{name}\t{} -> {} bytes", mo.len(), mn.len());
 			return;
 		}
-		let open_both = || -> io::Result<(File, File)> {
-			Ok((self.old.open_read(old_rel)?, self.new.open_read(new_rel)?))
-		};
+		let open_both = || -> io::Result<(File, File)> { Ok((self.old.open_read(old_rel)?, self.new.open_read(new_rel)?)) };
 		let (fa, fb) = match open_both() {
 			Ok(f) => f,
 			Err(e) => {
@@ -813,23 +722,14 @@ pub fn run(old: &Path, new: &Path, src: &Source, show_all: bool) -> Result<i32, 
 	run_with(old, new, src, show_all, frozen_at)
 }
 
-fn run_with(
-	old: &Path,
-	new: &Path,
-	src: &Source,
-	show_all: bool,
-	frozen_at: impl Fn(&Root) -> Option<SystemTime>,
-) -> Result<i32, String> {
-	// The folders themselves were named by a person and may be symlinks. Only
-	// what's beneath them is held to no symlinks and no mounts, as scan does.
+fn run_with(old: &Path, new: &Path, src: &Source, show_all: bool, frozen_at: impl Fn(&Root) -> Option<SystemTime>) -> Result<i32, String> {
+	// The folders themselves were named by a person and may be symlinks. Only the names beneath them are kept from following a symlink or crossing a mount, as scan does.
 	let open_root = |dir: &Path| -> Result<Root, String> {
 		let fail = |e: io::Error| format!("{}: {e}", show_path(dir));
 		if !fs::metadata(dir).map_err(fail)?.is_dir() {
 			return Err(format!("{}: not a folder", show_path(dir)));
 		}
-		fs::canonicalize(dir)
-			.and_then(|real| Root::open(&real))
-			.map_err(fail)
+		fs::canonicalize(dir).and_then(|real| Root::open(&real)).map_err(fail)
 	};
 	let (old, new) = (&open_root(old)?, &open_root(new)?);
 	let resolved;
@@ -851,7 +751,7 @@ fn run_with(
 	let mut checker = Checker::new(old, new, src, show_all, frozen_at(old));
 	let (mut listed, mut unusable) = (0u64, 0u64);
 	let mut outside: Option<(u64, usize, Vec<u8>)> = None;
-	for entry in ChangeList::new(input, format) {
+	for entry in ChangeList::new(input, format, Some((old, new))) {
 		match entry.map_err(read_error)? {
 			Entry::Unusable(line_no, text) => {
 				unusable += 1;
@@ -859,54 +759,33 @@ fn run_with(
 					err!("line {line_no} not understood: {}", escape_name(&text));
 				}
 			}
-			// The run fails, so the rest is only read to count them.
+			// The run fails, so the rest of the list is read only to count those lines.
 			Entry::Outside(line_no, text) => outside.get_or_insert((0, line_no, text)).0 += 1,
 			Entry::Pair(pair) => {
 				listed += 1;
 				if outside.is_some() {
 					continue;
 				}
-				if let Some(p) = [&pair.old, &pair.new]
-					.into_iter()
-					.find(|p| !stays_inside(p))
-				{
-					return Err(format!(
-						"{}: names have to be relative to --old and --new, with no ..",
-						show_path(p)
-					));
+				if let Some(p) = [&pair.old, &pair.new].into_iter().find(|p| !stays_inside(p)) {
+					return Err(format!("{}: names have to be relative to --old and --new, with no ..", show_path(p)));
 				}
-				checker.pair(&pair);
+				checker.pair(pair);
 			}
 		}
 	}
 	if let Some((count, line_no, text)) = outside
 		&& let Source::ZfsDiff(_, mount) = src
 	{
-		return Err(format!(
-			"{}: {count} line(s) aren't under --mount {}, the first at line {line_no}: {}",
-			show_path(list),
-			show_path(mount),
-			escape_name(&text)
-		));
+		return Err(format!("{}: {count} line(s) aren't under --mount {}, the first at line {line_no}: {}", show_path(list), show_path(mount), escape_name(&text)));
 	}
 	checker.finish();
 
 	let t = &checker.tally;
-	err!(
-		"{listed} listed, {} regular files in both, {} only in --new, {} flagged, {} missing, {} not checked, {unusable} lines not understood",
-		t.checked,
-		t.only_new,
-		t.flagged,
-		t.missing,
-		t.unchecked,
-	);
+	err!("{listed} listed, {} regular files in both, {} only in --new, {} flagged, {} missing, {} not checked, {unusable} lines not understood", t.checked, t.only_new, t.flagged, t.missing, t.unchecked);
 	// A list with CRLF ends, or the wrong folders, finds nothing to compare.
 	let nothing = t.checked == 0 && t.missing_new > 0;
 	if nothing {
-		err!(
-			"nothing compared: {} listed file(s) aren't in --new",
-			t.missing_new
-		);
+		err!("nothing compared: {} listed file(s) aren't in --new", t.missing_new);
 	}
 	let mut code = 0;
 	if t.flagged > 0 {
@@ -932,7 +811,7 @@ mod tests {
 
 	fn parse(text: &[u8], format: Format) -> Parsed {
 		let mut parsed = Parsed::default();
-		for entry in ChangeList::new(text, format) {
+		for entry in ChangeList::new(text, format, None) {
 			match entry.unwrap() {
 				Entry::Pair(p) => parsed.pairs.push(p),
 				Entry::Unusable(n, t) => parsed.unusable.push((n, t)),
@@ -988,10 +867,7 @@ mod tests {
 		let _id = test_id("ddy5v");
 		let text = b"M\t/\t/home/u/\nM\tF\t/home/u/a\n R\tF\t/home/u/b\t/home/u/c\n  170000.000000001\tM\tF\t/home/u/t\n+\t@\t/home/u/link\nM\t@\t/home/u/link2\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
-		assert_eq!(
-			p.unusable,
-			vec![(3, b" R\tF\t/home/u/b\t/home/u/c".to_vec())]
-		);
+		assert_eq!(p.unusable, vec![(3, b" R\tF\t/home/u/b\t/home/u/c".to_vec())]);
 		assert_eq!(p.pairs, vec![same("a"), same("t")]);
 		let p = parse_zfs_diff(b"R\tF\t/home/u/b\t/home/u/c\n", &mounts("/home/u"));
 		assert_eq!(p.pairs.len(), 1);
@@ -1023,10 +899,48 @@ mod tests {
 	#[test]
 	fn zfs_diff_replaced_files() {
 		let _id = test_id("ddy5y");
-		let text =
-			b"-\t/home/u/saved\n+\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\nM\t/home/u/\n";
+		let text = b"-\t/home/u/saved\n+\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\nM\t/home/u/\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert_eq!(p.pairs, vec![same(""), same("saved")]);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn zfs_diff_unpairable_dropped() {
+		let _id = test_id("dfk0k");
+		let dir = scratch("snapdiff_canpair");
+		let (old, new) = (dir.join("old"), dir.join("new"));
+		fs::create_dir(&old).unwrap();
+		fs::create_dir(&new).unwrap();
+		for name in ["saved", "gone", "no_plus"] {
+			fs::write(old.join(name), b"o").unwrap();
+		}
+		for name in ["saved", "born", "no_plus"] {
+			fs::write(new.join(name), b"n").unwrap();
+		}
+		fs::create_dir(new.join("now_a_folder")).unwrap();
+		// via_link/f isn't in --new through the symlink, but the compare counts that, as before.
+		fs::create_dir(new.join("real")).unwrap();
+		fs::write(new.join("real/f"), b"n").unwrap();
+		std::os::unix::fs::symlink("real", new.join("via_link")).unwrap();
+		let (old_root, new_root) = (Root::open(&old).unwrap(), Root::open(&new).unwrap());
+		let m = mounts("/home/u");
+		let text: &[u8] = b"-\t/home/u/saved\n-\t/home/u/gone\n+\t/home/u/born\n-\t/home/u/no_plus\n-\t/home/u/now_a_folder\n-\t/home/u/via_link/f\n-\t/home/u/not/there\n+\t/home/u/saved\n";
+		let mut cl = ChangeList::new(&b""[..], Format::ZfsDiff(&m), Some((&old_root, &new_root)));
+		for line in text.split(|&c| c == b'\n').filter(|l| !l.is_empty()) {
+			cl.line = line.to_vec();
+			assert!(cl.entry().is_none());
+		}
+		let names = |set: &BTreeSet<PathBuf>| set.iter().map(|p| show_path(p)).collect::<Vec<_>>();
+		assert_eq!(names(&cl.removed), ["no_plus", "now_a_folder", "saved", "via_link/f"]);
+		assert_eq!(names(&cl.added), ["saved"]);
+		let pairs: Vec<Pair> = ChangeList::new(text, Format::ZfsDiff(&m), Some((&old_root, &new_root)))
+			.map(|e| match e.unwrap() {
+				Entry::Pair(p) => p,
+				other => panic!("{other:?}"),
+			})
+			.collect();
+		assert_eq!(pairs, vec![same("saved")]);
 	}
 
 	#[test]
@@ -1035,19 +949,10 @@ mod tests {
 		let text = b"X\t/home/u/a\nM\n\nM\t/home/u/a\t/home/u/b\t/home/u/c\nM\t/home/user2/a\nR\t/home/u/a\t/elsewhere/b\n";
 		let p = parse_zfs_diff(text, &mounts("/home/u"));
 		assert!(p.pairs.is_empty());
-		assert_eq!(
-			p.unusable.iter().map(|u| u.0).collect::<Vec<_>>(),
-			vec![1, 2, 4]
-		);
-		assert_eq!(
-			p.outside.iter().map(|u| u.0).collect::<Vec<_>>(),
-			vec![5, 6]
-		);
+		assert_eq!(p.unusable.iter().map(|u| u.0).collect::<Vec<_>>(), vec![1, 2, 4]);
+		assert_eq!(p.outside.iter().map(|u| u.0).collect::<Vec<_>>(), vec![5, 6]);
 		// Either spelling of the mount point is taken.
-		let p = parse_zfs_diff(
-			b"M\t/real/u/a\n",
-			&[Path::new("/home/u"), Path::new("/real/u")],
-		);
+		let p = parse_zfs_diff(b"M\t/real/u/a\n", &[Path::new("/home/u"), Path::new("/real/u")]);
 		assert_eq!(p.pairs, vec![same("a")]);
 	}
 
@@ -1062,23 +967,8 @@ something else\n\
 transid marker was 12\n";
 		let p = parse_find_new(text);
 		// In the list's own order, which is by inode.
-		assert_eq!(
-			p.pairs,
-			vec![
-				Pair {
-					ino: Some(257),
-					..same("dir/a file")
-				},
-				Pair {
-					ino: Some(300),
-					..same("b")
-				}
-			]
-		);
-		assert_eq!(
-			p.unusable.iter().map(|u| u.0).collect::<Vec<_>>(),
-			vec![4, 5]
-		);
+		assert_eq!(p.pairs, vec![Pair { ino: Some(257), ..same("dir/a file") }, Pair { ino: Some(300), ..same("b") }]);
+		assert_eq!(p.unusable.iter().map(|u| u.0).collect::<Vec<_>>(), vec![4, 5]);
 	}
 
 	#[test]
@@ -1096,14 +986,7 @@ transid marker was 12\n";
 		let _id = test_id("ddx01");
 		let dir = scratch("snapdiff_cmp");
 		let mut bufs = CompareBufs::default();
-		let mut cmp = |a: &str, b: &str| {
-			compare(
-				File::open(dir.join(a)).unwrap(),
-				File::open(dir.join(b)).unwrap(),
-				&mut bufs,
-			)
-			.unwrap()
-		};
+		let mut cmp = |a: &str, b: &str| compare(File::open(dir.join(a)).unwrap(), File::open(dir.join(b)).unwrap(), &mut bufs).unwrap();
 		let a: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7) as u8).collect();
 		let mut b = a.clone();
 		for x in &mut b[2_097_168..2_097_184] {
@@ -1122,19 +1005,14 @@ transid marker was 12\n";
 	}
 
 	#[test]
-	fn buffers_carry_nothing_between_pairs() {
+	fn buffers_reset_between_pairs() {
 		let _id = test_id("dej04");
 		let dir = scratch("snapdiff_bufs");
 		let mut bufs = CompareBufs::default();
 		let mut cmp = |a: &[u8], b: &[u8]| {
 			fs::write(dir.join("a"), a).unwrap();
 			fs::write(dir.join("b"), b).unwrap();
-			compare(
-				File::open(dir.join("a")).unwrap(),
-				File::open(dir.join("b")).unwrap(),
-				&mut bufs,
-			)
-			.unwrap()
+			compare(File::open(dir.join("a")).unwrap(), File::open(dir.join("b")).unwrap(), &mut bufs).unwrap()
 		};
 		let big: Vec<u8> = (0..5000u32).map(|i| (i * 13) as u8).collect();
 		let other: Vec<u8> = big.iter().map(|x| !x).collect();
@@ -1153,15 +1031,9 @@ transid marker was 12\n";
 		let mut cmp = |a: &[u8], b: &[u8]| {
 			fs::write(dir.join("a"), a).unwrap();
 			fs::write(dir.join("b"), b).unwrap();
-			compare(
-				File::open(dir.join("a")).unwrap(),
-				File::open(dir.join("b")).unwrap(),
-				&mut bufs,
-			)
-			.unwrap()
+			compare(File::open(dir.join("a")).unwrap(), File::open(dir.join("b")).unwrap(), &mut bufs).unwrap()
 		};
-		// Every 8th byte differs, too far apart to merge, and the longer
-		// file's tail is a run of its own.
+		// Every 8th byte differs, too far apart to merge, and the longer file's tail is a run of its own.
 		let a: Vec<u8> = (0..8192u32).map(|i| (i * 7) as u8).collect();
 		let mut b = a.clone();
 		for x in b.iter_mut().step_by(8) {
@@ -1177,14 +1049,8 @@ transid marker was 12\n";
 			 0+1 8+1 16+1 24+1 32+1 40+1 48+1 56+1 ..."
 		));
 		let d = cmp(b"0123456789", b"0x23456789tail");
-		assert_eq!(
-			(d.runs, d.aligned, &d.shown),
-			(2, 0, &vec![(1, 1), (10, 4)])
-		);
-		assert_eq!(
-			describe(&d),
-			"5 bytes differ in 2 run(s), 0 starting on a 16-byte boundary: 1+1 10+4"
-		);
+		assert_eq!((d.runs, d.aligned, &d.shown), (2, 0, &vec![(1, 1), (10, 4)]));
+		assert_eq!(describe(&d), "5 bytes differ in 2 run(s), 0 starting on a 16-byte boundary: 1+1 10+4");
 	}
 
 	#[test]
@@ -1211,10 +1077,7 @@ transid marker was 12\n";
 			let mut c = Checker::new(&old_root, &new_root, &src, false, frozen);
 			for name in ["fresh", "saved"] {
 				let ino = fs::metadata(new.join(name)).unwrap().ino();
-				c.pair(&Pair {
-					ino: Some(ino),
-					..Pair::same(PathBuf::from(name))
-				});
+				c.pair(Pair { ino: Some(ino), ..Pair::same(PathBuf::from(name)) });
 			}
 			let held = c.held.len();
 			c.finish();
@@ -1222,9 +1085,77 @@ transid marker was 12\n";
 		};
 		// Taken before both were made, so neither waits for the walk.
 		assert_eq!(found_in(Some(before)), (0, 1, 1, 0));
-		// Not known, or taken after, and both wait for it, to the same end.
+		// When the time isn't known, or is after both, both wait for the walk and come out the same.
 		assert_eq!(found_in(None), (2, 1, 1, 0));
 		assert_eq!(found_in(Some(born + Duration::from_secs(60))), (2, 1, 1, 0));
+	}
+
+	#[test]
+	fn changed_snapshot_no_time() {
+		let _id = test_id("dfjtt");
+		let info = |flags, received: u8, ctransid, otransid| SubvolInfo {
+			_treeid: 257,
+			_name: [0; 256],
+			_parent_id: 5,
+			_dirid: 256,
+			_generation: 0,
+			flags,
+			_uuid: [0; 16],
+			_parent_uuid: [0; 16],
+			received_uuid: [received; 16],
+			ctransid,
+			otransid,
+			_stransid: 0,
+			_rtransid: 0,
+			_ctime: BtrfsTime { sec: 0, nsec: 0 },
+			otime: BtrfsTime { sec: 1_700_000_000, nsec: 5 },
+			_stime: BtrfsTime { sec: 0, nsec: 0 },
+			_rtime: BtrfsTime { sec: 0, nsec: 0 },
+			_reserved: [0; 8],
+		};
+		let taken = UNIX_EPOCH.checked_add(Duration::new(1_700_000_000, 5));
+		// Its last change was before or in the transaction that took it.
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 90, 100)), taken);
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 100, 100)), taken);
+		// Made writable, changed, and read-only again.
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 0, 101, 100)), None);
+		// Writable, or received.
+		assert_eq!(taken_at(&info(0, 0, 90, 100)), None);
+		assert_eq!(taken_at(&info(BTRFS_ROOT_SUBVOL_RDONLY, 1, 90, 100)), None);
+	}
+
+	#[test]
+	#[cfg_attr(miri, ignore = "Miri has no openat2")]
+	fn future_birth_waits() {
+		let _id = test_id("dfe66");
+		let dir = scratch("snapdiff_clock");
+		let (old, new) = (dir.join("old"), dir.join("new"));
+		fs::create_dir(&old).unwrap();
+		fs::create_dir(&new).unwrap();
+		// Renamed since --old, with a link keeping its inode.
+		fs::write(old.join("was"), b"w").unwrap();
+		fs::hard_link(old.join("was"), new.join("now")).unwrap();
+		let Ok(born) = fs::metadata(new.join("now")).and_then(|m| m.created()) else {
+			eprintln!("no birth times in {}, skipped", dir.display());
+			return;
+		};
+		let (old_root, new_root) = (Root::open(&old).unwrap(), Root::open(&new).unwrap());
+		let src = Source::FindNew(dir.join("unread"));
+		let ino = fs::metadata(new.join("now")).unwrap().ino();
+		let found_at = |now| {
+			// The clock was ahead when the file was made, and set back before --old was taken.
+			let frozen = born - Duration::from_secs(60);
+			let mut c = Checker::new(&old_root, &new_root, &src, false, Some(frozen));
+			c.now = now;
+			c.pair(Pair { ino: Some(ino), ..Pair::same(PathBuf::from("now")) });
+			let held = c.held.len();
+			c.finish();
+			(held, c.tally.only_new, c.tally.checked, c.tally.missing)
+		};
+		// Born later than now, so found by inode and compared.
+		assert_eq!(found_at(born - Duration::from_secs(30)), (1, 0, 1, 0));
+		// Once the clock is past it, it's trusted again.
+		assert_eq!(found_at(born + Duration::from_secs(30)), (0, 1, 0, 0));
 	}
 
 	#[test]
@@ -1235,18 +1166,12 @@ transid marker was 12\n";
 		let (old, new) = (dir.join("old"), dir.join("new"));
 		fs::create_dir(&old).unwrap();
 		fs::create_dir(&new).unwrap();
-		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let when = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 		let put = |p: &Path, bytes: &[u8]| {
 			fs::write(p, bytes).unwrap();
-			File::options()
-				.write(true)
-				.open(p)
-				.unwrap()
-				.set_modified(when)
-				.unwrap();
+			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
 		};
-		// `mv c a`, with a link keeping c's inode. Old a has the same size and
-		// time but other bytes, so a pairing by name flags it.
+		// `mv c a`, with a link keeping c's inode. Old a has the same size and time but other bytes, so a pairing by name flags it.
 		put(&old.join("a"), b"aaaa");
 		put(&old.join("c"), b"cccc");
 		fs::hard_link(old.join("c"), new.join("a")).unwrap();
@@ -1256,13 +1181,7 @@ transid marker was 12\n";
 		let list = dir.join("find-new");
 		let run_on = |name: &str| {
 			let ino = fs::metadata(new.join(name)).unwrap().ino();
-			fs::write(
-				&list,
-				format!(
-					"inode {ino} file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE {name}\n"
-				),
-			)
-			.unwrap();
+			fs::write(&list, format!("inode {ino} file offset 0 len 4096 disk start 0 offset 0 gen 9 flags NONE {name}\n")).unwrap();
 			run(&old, &new, &Source::FindNew(list.clone()), false).unwrap()
 		};
 		assert_eq!(run_on("a"), 0);
@@ -1278,18 +1197,12 @@ transid marker was 12\n";
 		for d in [&old, &new, &elsewhere, &new.join("in"), &old.join("out")] {
 			fs::create_dir(d).unwrap();
 		}
-		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let when = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 		let put = |p: &Path, bytes: &[u8]| {
 			fs::write(p, bytes).unwrap();
-			File::options()
-				.write(true)
-				.open(p)
-				.unwrap()
-				.set_modified(when)
-				.unwrap();
+			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
 		};
-		// Same size and time as the listed file, other bytes, so reaching it
-		// flags the file.
+		// It has the listed file's size and time with other bytes, so following the symlink to it flags the file.
 		put(&elsewhere.join("f"), b"ffff");
 		put(&new.join("in/f"), b"FFFF");
 		put(&old.join("out/f"), b"FFFF");
@@ -1326,15 +1239,10 @@ transid marker was 12\n";
 		for d in [&old, &new, &old.join("d"), &new.join("d")] {
 			fs::create_dir(d).unwrap();
 		}
-		let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		let when = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
 		let put = |p: &Path, bytes: &[u8]| {
 			fs::write(p, bytes).unwrap();
-			File::options()
-				.write(true)
-				.open(p)
-				.unwrap()
-				.set_modified(when)
-				.unwrap();
+			File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
 		};
 		put(&old.join("a"), b"aaaa");
 		put(&new.join("a"), b"aaaa");
@@ -1343,25 +1251,12 @@ transid marker was 12\n";
 		let run_on = |lines: &[&str]| {
 			let text = lines.join("\n").replace('@', mount);
 			fs::write(&list, text + "\n").unwrap();
-			run(
-				&old,
-				&new,
-				&Source::ZfsDiff(list.clone(), new.clone()),
-				false,
-			)
-			.unwrap()
+			run(&old, &new, &Source::ZfsDiff(list.clone(), new.clone()), false).unwrap()
 		};
 		// The attribute folders of a file, a folder and the dataset itself.
-		let attrs = [
-			"M\t@/a",
-			"M\t@/a/<xattrdir>",
-			"M\t@/a/<xattrdir>/user.blake3.date",
-			"-\t@/d/<xattrdir>/user.x",
-			"+\t@/d/<xattrdir>/user.x",
-			"M\tF\t@/<xattrdir>/user.y",
-		];
+		let attrs = ["M\t@/a", "M\t@/a/<xattrdir>", "M\t@/a/<xattrdir>/user.blake3.date", "-\t@/d/<xattrdir>/user.x", "+\t@/d/<xattrdir>/user.x", "M\tF\t@/<xattrdir>/user.y"];
 		assert_eq!(run_on(&attrs), 0);
-		// An owner that isn't there is still a missing file.
+		// A file that isn't there is still missing when only its attributes are listed.
 		assert_eq!(run_on(&["M\t@/a", "M\t@/gone/<xattrdir>/user.x"]), 8);
 		// A real folder by that name is compared like any other.
 		fs::create_dir(old.join("d/<xattrdir>")).unwrap();
@@ -1390,27 +1285,8 @@ transid marker was 12\n";
 	}
 
 	fn fuzz_name(r: &mut Rng, newlines: bool) -> Vec<u8> {
-		const BITS: &[&[u8]] = &[
-			b"a",
-			b"file.txt",
-			b" ",
-			b"\t",
-			b"\\",
-			b"->",
-			b" -> ",
-			b"(+1)",
-			b"\xff",
-			b"caf\xc3\xa9",
-			b"-",
-			b"\\0040",
-			b"F",
-			b"\n",
-		];
-		let bits = if newlines {
-			BITS
-		} else {
-			&BITS[..BITS.len() - 1]
-		};
+		const BITS: &[&[u8]] = &[b"a", b"file.txt", b" ", b"\t", b"\\", b"->", b" -> ", b"(+1)", b"\xff", b"caf\xc3\xa9", b"-", b"\\0040", b"F", b"\n"];
+		let bits = if newlines { BITS } else { &BITS[..BITS.len() - 1] };
 		let mut name = Vec::new();
 		for i in 0..=r.below(3) {
 			if i > 0 {
@@ -1436,11 +1312,7 @@ transid marker was 12\n";
 				assert_eq!(lines[n - 1], t.as_slice());
 			}
 		}
-		assert!(
-			p.unusable
-				.iter()
-				.all(|u| p.outside.iter().all(|o| o.0 != u.0))
-		);
+		assert!(p.unusable.iter().all(|u| p.outside.iter().all(|o| o.0 != u.0)));
 	}
 
 	#[test]
@@ -1453,19 +1325,11 @@ transid marker was 12\n";
 			let mut covered = 0;
 			let mount: &[u8] = r.pick(&[b"/home/u".as_slice(), b"/mnt/my disk", b"/"]);
 			let both = [mount, b"/real/u"];
-			let bases = if mount == b"/" {
-				&both[..1]
-			} else {
-				&both[..=r.below(2)]
-			};
-			let mounts: Vec<&Path> = bases
-				.iter()
-				.map(|b| Path::new(OsStr::from_bytes(b)))
-				.collect();
+			let bases = if mount == b"/" { &both[..1] } else { &both[..=r.below(2)] };
+			let mounts: Vec<&Path> = bases.iter().map(|b| Path::new(OsStr::from_bytes(b))).collect();
 			let (tabbed, timed, typed) = (r.one_in(2), r.one_in(3), r.one_in(2));
 			let (mut text, mut want) = (Vec::new(), Parsed::default());
-			let (mut removed, mut added, mut gone) =
-				(BTreeSet::new(), BTreeSet::new(), Vec::<Vec<u8>>::new());
+			let (mut removed, mut added, mut gone) = (BTreeSet::new(), BTreeSet::new(), Vec::<Vec<u8>>::new());
 			for i in 0..r.below(16) {
 				let line_no = i + 1;
 				if r.one_in(10) {
@@ -1474,23 +1338,12 @@ transid marker was 12\n";
 				}
 				let kind = *r.pick(b"MMR-+X");
 				let ftype = if typed { *r.pick(b"FFFF/@") } else { b'F' };
-				let name = if kind == b'+' && !gone.is_empty() && r.one_in(2) {
-					r.pick(&gone).clone()
-				} else {
-					fuzz_name(r, true)
-				};
+				let name = if kind == b'+' && !gone.is_empty() && r.one_in(2) { r.pick(&gone).clone() } else { fuzz_name(r, true) };
 				let outside = mount != b"/" && r.one_in(8);
 				let base: &[u8] = if outside { b"/other" } else { r.pick(bases) };
 				let mut line = Vec::new();
 				if timed {
-					line.extend(
-						format!(
-							"{:>10}.{:09}\t",
-							r.below(2_000_000_000),
-							r.below(1_000_000_000)
-						)
-						.bytes(),
-					);
+					line.extend(format!("{:>10}.{:09}\t", r.below(2_000_000_000), r.below(1_000_000_000)).bytes());
 					covered |= 1;
 				}
 				line.push(kind);
@@ -1522,11 +1375,7 @@ transid marker was 12\n";
 				} else if kind == b'M' {
 					want.pairs.push(same_bytes(&name));
 				} else if kind == b'R' {
-					want.pairs.push(Pair {
-						old: rel(&name),
-						new: rel(&new_name),
-						ino: None,
-					});
+					want.pairs.push(Pair { old: rel(&name), new: rel(&new_name), ino: None });
 				} else if kind == b'-' {
 					removed.insert(rel(&name));
 					gone.push(name);
@@ -1534,31 +1383,17 @@ transid marker was 12\n";
 					added.insert(rel(&name));
 				}
 			}
-			let replaced: Vec<_> = removed
-				.intersection(&added)
-				.cloned()
-				.map(Pair::same)
-				.collect();
+			let replaced: Vec<_> = removed.intersection(&added).cloned().map(Pair::same).collect();
 			if !replaced.is_empty() {
 				covered |= 128;
 			}
 			want.pairs.extend(replaced);
-			assert_eq!(
-				parse_zfs_diff(&text, &mounts),
-				want,
-				"{}",
-				escape_name(&text)
-			);
+			assert_eq!(parse_zfs_diff(&text, &mounts), want, "{}", escape_name(&text));
 			let bad = crate::testutil::mutate(r, real);
 			let p = parse_zfs_diff(&bad, &[Path::new("/home/u")]);
 			bad_lines_are_named(&bad, &p);
-			// Mount points are stripped, so no name comes out absolute. The
-			// other sources are checked for that in run.
-			assert!(
-				p.pairs
-					.iter()
-					.all(|x| !x.old.has_root() && !x.new.has_root())
-			);
+			// Mount points are stripped, so no name comes out absolute. The other sources are checked for that in run.
+			assert!(p.pairs.iter().all(|x| !x.old.has_root() && !x.new.has_root()));
 			if !p.unusable.is_empty() {
 				covered |= 256;
 			}
@@ -1581,24 +1416,17 @@ inode x file offset 0 len 4096 disk start 12 offset 0 gen 9 flags NONE c\n\
 transid marker was 12\n";
 		crate::testutil::fuzz("find-new", 0xf, |r| {
 			let mut covered = 0;
-			let (mut text, mut pairs, mut unusable, mut names) =
-				(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+			let (mut text, mut pairs, mut unusable, mut names) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 			let mut last: Option<Vec<u8>> = None;
 			for i in 0..r.below(16) {
-				// find-new prints names raw, so one with a newline can't be told apart.
-				// A file in several extents gets a line for each, one after another.
+				// find-new prints names raw, so one with a newline can't be told apart. A file in several extents gets a line for each, one after another.
 				let name = match &last {
 					Some(prev) if r.one_in(3) => prev.clone(),
 					_ => fuzz_name(r, false),
 				};
 				let ino = r.next_u64() >> r.below(64);
 				let flags = r.pick(&["NONE", "INLINE", "COMPRESS|PREALLOC"]);
-				let good = format!(
-					"inode {ino} file offset {} len 4096 disk start {} offset 0 gen {} flags {flags} ",
-					r.below(1 << 30),
-					r.below(1 << 30),
-					r.below(99)
-				);
+				let good = format!("inode {ino} file offset {} len 4096 disk start {} offset 0 gen {} flags {flags} ", r.below(1 << 30), r.below(1 << 30), r.below(99));
 				let mut line = good.clone().into_bytes();
 				match r.below(8) {
 					0 => {
@@ -1609,9 +1437,7 @@ transid marker was 12\n";
 						// Each of these is one field off.
 						let off = r.below(4);
 						line = match off {
-							0 => {
-								good.replacen(&format!("inode {ino}"), &format!("inode -{ino}"), 1)
-							}
+							0 => good.replacen(&format!("inode {ino}"), &format!("inode -{ino}"), 1),
 							1 => good.replacen(" file ", " FILE ", 1),
 							2 => good.replacen(" flags ", " flagz ", 1),
 							_ => good.clone(),
@@ -1629,10 +1455,7 @@ transid marker was 12\n";
 						if last.as_ref() == Some(&name) {
 							covered |= 4;
 						} else {
-							pairs.push(Pair {
-								ino: Some(ino),
-								..same_bytes(&name)
-							});
+							pairs.push(Pair { ino: Some(ino), ..same_bytes(&name) });
 							last = Some(name);
 						}
 					}
@@ -1641,22 +1464,9 @@ transid marker was 12\n";
 				text.push(b'\n');
 				names.push(line);
 			}
-			assert_eq!(
-				parse_find_new(&text),
-				Parsed {
-					pairs,
-					unusable,
-					outside: Vec::new()
-				},
-				"{}",
-				escape_name(&text)
-			);
+			assert_eq!(parse_find_new(&text), Parsed { pairs, unusable, outside: Vec::new() }, "{}", escape_name(&text));
 			// Each line of a list is one name, as it stands.
-			let want: Vec<Pair> = names
-				.iter()
-				.filter(|n| !n.is_empty())
-				.map(|n| same_bytes(n))
-				.collect();
+			let want: Vec<Pair> = names.iter().filter(|n| !n.is_empty()).map(|n| same_bytes(n)).collect();
 			assert_eq!(parse_list(&text).pairs, want);
 			let bad = crate::testutil::mutate(r, real);
 			let p = parse_find_new(&bad);

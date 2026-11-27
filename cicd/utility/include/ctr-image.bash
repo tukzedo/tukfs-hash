@@ -10,7 +10,7 @@
 ##			                    from then on, in place of the leak check one.
 ##			fCtrWhyNot          nothing when the image can run here, else why
 ##			                    not: it's x86_64 only, and docker (or
-##			                    TUKFS_DOCKER) counts once its daemon answers.
+##			                    TUKFS_DOCKER) counts once its daemon responds.
 ##			fCtrReady WORK      the image's tag into ctr_tag, building it
 ##			                    first if it isn't here. WORK is a scratch dir.
 ##			fCtrFetch WORK      fill CTR_CARGO_HOME, with network, with the
@@ -32,15 +32,16 @@
 ##			                    flags and SOURCE_DATE_EPOCH go in when
 ##			                    they're set.
 ##			                    Returns the script's exit, or 2.
-##		Every container is named tukfs-hash-<run>-<step>-<n> and labeled
-##		dev.project and dev.run, and every image dev.project and dev.run too.
-##		<run> is TUKFS_RUN_NAME, the cicd run's folder name, and <step> is
+##		Every container is named tukfs-hash-<run>_p<pid>-<step>-<n> and
+##		labeled dev.project, dev.run and dev.pid, and every image dev.project,
+##		dev.run and dev.pid too. <run> is TUKFS_RUN_NAME, the cicd run's
+##		folder name, <pid> TUKFS_RUN_PID, its PID, and <step> is
 ##		ctr_step, which the caller sets. cicd.bash removes a run's
-##		containers by that label at its end.
+##		containers by those labels at its end.
 ##		A build keeps the new tag and the one before it, once the new one has
-##		answered, and then removes any <none> image of ours. Docker's build
+##		passed its probe, and then removes any <none> image of ours. Docker's build
 ##		cache is left to the daemon's own gc, since every project shares it.
-##		b23 sets that in /etc/docker/daemon.json, under builder.gc.
+##		The dev box sets that in /etc/docker/daemon.json, under builder.gc.
 ##		From shcl's cicd/utility/include/ctr-image.bash.
 ##	History: At bottom of script.
 
@@ -53,15 +54,15 @@
 ctr_tag=""
 ctr_kind="leak"
 ctr_step="${ctr_step:-ctr}"
-ctr_run=""; ctr_labels=()
+ctr_run=""; ctr_pid=""; ctr_labels=()
 
-## At first use, since cicd.bash names its run after this is sourced. A
-## script run on its own, outside a cicd run, gets a name of its own.
+## At first use, since cicd.bash names its run after this is sourced. A script run on its own, outside a cicd run, gets a name of its own.
 fCtrLabels(){
 	[[ -z "${ctr_run}" ]] || return 0
-	ctr_run="${TUKFS_RUN_NAME:-}"
-	[[ "${ctr_run}" =~ ^[A-Za-z0-9_.-]+$ ]] || printf -v ctr_run '%(%Y%m%d-%H%M%S)T_p%s' -1 "$$"
-	ctr_labels=(--label "dev.project=${APP_NAME}" --label "dev.run=${ctr_run}")
+	ctr_run="${TUKFS_RUN_NAME:-}"; ctr_pid="${TUKFS_RUN_PID:-}"
+	[[ "${ctr_run}" =~ ^[A-Za-z0-9_.-]+$ ]] || printf -v ctr_run '%(%Y%m%d-%H%M%S)T' -1
+	[[ "${ctr_pid}" =~ ^[0-9]+$ ]] || ctr_pid="$$"
+	ctr_labels=(--label "dev.project=${APP_NAME}" --label "dev.run=${ctr_run}" --label "dev.pid=${ctr_pid}")
 }
 
 fCtrUseRelease(){
@@ -70,8 +71,7 @@ fCtrUseRelease(){
 	CTR_CONTEXT_EXTRA=("${REL_CTR_CONTEXT_EXTRA[@]}"); CTR_CARGO_HOME="${REL_CTR_CARGO_HOME}"
 }
 
-## An installed docker with no daemon behind it is no docker at all. The
-## timeout is for a DOCKER_HOST that never replies.
+## An installed docker with no daemon behind it is no docker at all. The timeout is for a DOCKER_HOST that never replies.
 fCtrWhyNot(){
 	local engine="${TUKFS_DOCKER:-docker}"
 	local -a limit=()
@@ -79,7 +79,7 @@ fCtrWhyNot(){
 	if [[ "$(uname -m)" != x86_64 ]]; then echo "the image is x86_64 only"; return 0; fi
 	if ! command -v "${engine}" >/dev/null 2>&1; then echo "there's no ${engine} here"; return 0; fi
 	if command -v timeout >/dev/null 2>&1; then limit=(timeout 30); fi
-	if ! "${limit[@]}" "${engine}" info >/dev/null 2>&1; then echo "${engine} doesn't answer"; fi
+	if ! "${limit[@]}" "${engine}" info >/dev/null 2>&1; then echo "${engine} doesn't respond"; fi
 	return 0
 }
 
@@ -101,7 +101,7 @@ fCtrSize(){ "${TUKFS_DOCKER:-docker}" image inspect --format '{{.Size}}' "$1" 2>
 
 ## docker run, with a cidfile a stop finds, for every container here. The
 ## cidfile goes in TUKFS_CID_DIR, else in DIR. nice on the client doesn't
-## reach a container, so each gets CPU_CAP cores at a low share, and the ones
+## apply to a container, so each gets CPU_CAP cores at a low share, and the ones
 ## that do real work run nice inside too. Each gets the memory cap with no
 ## swap, first in line for the OOM killer, and a bad CICD_MEM_CAP starts
 ## nothing. A container killed at the cap exits 137.
@@ -126,7 +126,7 @@ fCtrRun(){   ## fCtrRun DIR STEP RUN_ARG...
 		set -- "${args[@]}"
 	fi
 	stop_cidfiles+=("${cidfile}")
-	"${engine}" run --cidfile "${cidfile}" --name "${APP_NAME}-${ctr_run}-${step}-${n}" "${ctr_labels[@]}" \
+	"${engine}" run --cidfile "${cidfile}" --name "${APP_NAME}-${ctr_run}_p${ctr_pid}-${step}-${n}" "${ctr_labels[@]}" \
 		--cpus "${CPU_CAP:-1}" --cpu-shares 256 "${mem_ctr_args[@]}" "$@" || rc=$?
 	for f in "${stop_cidfiles[@]}"; do [[ "${f}" == "${cidfile}" ]] || kept+=("${f}"); done
 	stop_cidfiles=("${kept[@]}")
@@ -146,7 +146,7 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 			--build-arg "CODEQL_SHA256=${PIN_CODEQL_SHA256}" --build-arg "JOBS=${CPU_CAP:-1}")
 	fi
 	"${engine}" build -q --label "${CTR_IMAGE}" "${ctr_labels[@]}" -t "${tag}" "${args[@]}" "${ctx}" >/dev/null || return 1
-	## It has to answer before the old one goes.
+	## It has to pass a probe before the old one goes.
 	if [[ "${ctr_kind}" == leak ]]; then
 		have="$(fCtrRun "${ctx}" "${ctr_step}-probe" --rm --label "${CTR_IMAGE}" --network none "${tag}" codeql version --format=terse 2>/dev/null || true)"
 		if [[ "${have}" != "${PIN_CODEQL}" ]]; then echo "ctr-image: ${tag} has CodeQL '${have}', not ${PIN_CODEQL}" >&2; return 1; fi
@@ -162,8 +162,7 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 			echo "ctr-image: ${tag} has no ${RUST_PIN}" >&2; return 1
 		fi
 	fi
-	## The newest other tag stays too, to go back to. Not -f, so an image a
-	## container still has stays.
+	## The newest other tag stays too, to go back to. Not -f, so an image a container still has stays.
 	while IFS=$'\t' read -r _ old; do
 		[[ -n "${old}" && "${old}" != "${tag}" ]] || continue
 		if [[ -z "${prev}" ]]; then prev="${old}"; continue; fi
@@ -182,11 +181,11 @@ fCtrBuild(){   ## fCtrBuild TAG DIR
 fCtrReady(){   ## fCtrReady WORK
 	local engine="${TUKFS_DOCKER:-docker}" ctx="$1/ctx"
 	mkdir -p -- "${ctx}" || return 1
-	fCtrContext "${ctx}" || { echo "ctr-image: could not copy the image's context" >&2; return 1; }
+	fCtrContext "${ctx}" || { echo "ctr-image: couldn't copy the image's context" >&2; return 1; }
 	ctr_tag="$(fCtrTag "${ctx}")"
 	"${engine}" image inspect "${ctr_tag}" >/dev/null 2>&1 && return 0
 	echo "ctr-image: building ${ctr_tag}, which takes several minutes the first time"
-	fCtrBuild "${ctr_tag}" "${ctx}" || { echo "ctr-image: could not build ${ctr_tag}" >&2; return 1; }
+	fCtrBuild "${ctr_tag}" "${ctx}" || { echo "ctr-image: couldn't build ${ctr_tag}" >&2; return 1; }
 }
 
 ## The crates for an offline run. Most runs find the stamp current and skip it.
@@ -205,7 +204,7 @@ fCtrFetch(){   ## fCtrFetch WORK
 		"${ctr_tag}" nice -n 19 ionice -c 3 bash "${root}/cicd/utility/include/ctr-fetch.bash" "${nightly[@]}"; then
 		printf '%s\n' "${want}" > "${ch}/.fetched"
 	else
-		echo "note: could not fetch crates for the image (offline?); going on with what's cached"
+		echo "note: couldn't fetch crates for the image (offline?); going on with what's cached"
 	fi
 	return 0
 }
@@ -250,7 +249,9 @@ fCtrRunSelf(){   ## fCtrRunSelf WORK RW SCRIPT [ARG...]
 ##		  build keeps the tag before the new one, and the cache prune keeps a
 ##		  week.
 ##		- 2026-10-29: The dirty flag goes in with the build number.
-##		- 2026-11-07: No build cache prune. It reached every project's cache,
+##		- 2026-11-07: No build cache prune. It pruned every project's cache,
 ##		  and the daemon's gc trims it now.
 ##		- 2026-11-09: The memory cap from mem-cap.bash on every container,
 ##		  with no swap and --oom-score-adj 1000.
+##		- 2026-11-20: A dev.pid label, and the PID in the name, since a cicd
+##		  run's folder name is unique only in one temp root.

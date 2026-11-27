@@ -55,7 +55,7 @@ fScratchGone(){
 	## cargo's registry and a failed test can leave files read-only.
 	if ! rm -rf --one-file-system -- "${p}" 2>/dev/null; then
 		chmod -R u+rwX -- "${p}" 2>/dev/null || true
-		rm -rf --one-file-system -- "${p}" 2>/dev/null || { printf 'cleanup: could not remove all of %s\n' "${p}" >&2; return 1; }
+		rm -rf --one-file-system -- "${p}" 2>/dev/null || { printf 'cleanup: couldn'\''t remove all of %s\n' "${p}" >&2; return 1; }
 	fi
 }
 

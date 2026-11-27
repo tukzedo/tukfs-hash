@@ -9,22 +9,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Now, in microseconds since the epoch.
 pub fn now_us() -> i64 {
-	SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.map_or(0, |d| d.as_micros() as i64)
+	SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as i64)
 }
 
-/// The folder resolved and the name left alone, so a symlink stays a symlink.
-/// A scan stores names that way, walking down from a resolved root.
+/// Resolves the folder and leaves the name alone, so a symlink stays a symlink. A scan walks down from a resolved root, so it stores names the same way.
 pub fn canonical_name(p: &Path) -> Result<std::path::PathBuf, String> {
-	let parent = p
-		.parent()
-		.filter(|d| !d.as_os_str().is_empty())
-		.unwrap_or(Path::new("."));
-	let dir = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-	let name = p
-		.file_name()
-		.ok_or_else(|| format!("{}: not a file name", p.display()))?;
+	let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+	let dir = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", show_path(parent)))?;
+	let name = p.file_name().ok_or_else(|| format!("{}: not a file name", show_path(p)))?;
 	Ok(dir.join(name))
 }
 
@@ -39,11 +31,7 @@ const B64U: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 pub fn b64u_encode(data: &[u8]) -> String {
 	let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
 	for chunk in data.chunks(3) {
-		let b = [
-			chunk[0],
-			*chunk.get(1).unwrap_or(&0),
-			*chunk.get(2).unwrap_or(&0),
-		];
+		let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
 		let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
 		let chars = chunk.len() + 1;
 		for i in 0..chars {
@@ -100,17 +88,12 @@ pub fn unhex(s: &[u8]) -> Option<Vec<u8>> {
 		return None;
 	}
 	let val = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
-	s.chunks(2)
-		.map(|p| Some(val(p[0])? << 4 | val(p[1])?))
-		.collect()
+	s.chunks(2).map(|p| Some(val(p[0])? << 4 | val(p[1])?)).collect()
 }
 
-/// Values in xattrs may end in NUL (rmlint) or a newline (setfattr by hand).
+/// Trims trailing NULs and white space from an xattr value. rmlint ends one with a NUL, and setfattr by hand can leave a newline.
 pub fn trim_value(v: &[u8]) -> &[u8] {
-	let end = v
-		.iter()
-		.rposition(|&c| c != 0 && !c.is_ascii_whitespace())
-		.map_or(0, |i| i + 1);
+	let end = v.iter().rposition(|&c| c != 0 && !c.is_ascii_whitespace()).map_or(0, |i| i + 1);
 	&v[..end]
 }
 
@@ -157,15 +140,7 @@ pub fn parse_date(s: &str) -> Option<i64> {
 /// A time as local `YYYY-MM-DD HH:MM:SS`.
 pub fn fmt_local(us: i64) -> String {
 	let tm = tm_of(us);
-	format!(
-		"{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-		tm.tm_year + 1900,
-		tm.tm_mon + 1,
-		tm.tm_mday,
-		tm.tm_hour,
-		tm.tm_min,
-		tm.tm_sec
-	)
+	format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
 /// A size in binary units, such as 1.5 GiB.
@@ -177,17 +152,10 @@ pub fn human_bytes(n: u64) -> String {
 		v /= 1024.0;
 		u += 1;
 	}
-	if u == 0 {
-		format!("{n} B")
-	} else {
-		format!("{v:.1} {}", UNITS[u])
-	}
+	if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
 }
 
-/// A name as text that maps back to its bytes, so 2 names never print the same:
-/// a backslash doubled, and control characters and bytes that aren't UTF-8 as
-/// \xHH. Tabs and newlines get escaped too, which keeps tab-separated output
-/// in its columns.
+/// A name as text that maps back to its bytes, so 2 names never print the same. A backslash is doubled, and control characters and bytes that aren't UTF-8 are written as \xHH. Tabs and newlines are control characters too, so tab-separated output stays in its columns.
 pub fn escape_name(b: &[u8]) -> String {
 	let mut out = String::with_capacity(b.len());
 	let hex_byte = |out: &mut String, byte: u8| {
@@ -305,11 +273,7 @@ mod tests {
 	fn hex_and_escape_pinned() {
 		let _id = test_id("deavj");
 		let all: Vec<u8> = (0..=255).collect();
-		let want = all
-			.iter()
-			.map(|b| format!("{b:02x}"))
-			.collect::<Vec<_>>()
-			.concat();
+		let want = all.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().concat();
 		assert_eq!(hex(&all), want);
 		assert_eq!(hex(&[]), "");
 		assert_eq!(hex(&[0x0f, 0xf0, 0x5a]), "0ff05a");
@@ -346,22 +310,15 @@ mod tests {
 			let year = 1960 + r.below(8100) as i32;
 			let month = r.below(15) as i32 - 1;
 			let day = r.below(34) as i32 - 1;
-			let text = if r.one_in(4) {
-				format!("{year}-{month}-{day}")
-			} else {
-				format!("{year:04}-{month:02}-{day:02}")
-			};
-			let real = (1970..=9999).contains(&year)
-				&& (1..=12).contains(&month)
-				&& (1..=days_in(year, month)).contains(&day);
+			let text = if r.one_in(4) { format!("{year}-{month}-{day}") } else { format!("{year:04}-{month:02}-{day:02}") };
+			let real = (1970..=9999).contains(&year) && (1..=12).contains(&month) && (1..=days_in(year, month)).contains(&day);
 			let got = parse_date(&text);
 			assert_eq!(got.is_some(), real, "{text}");
 			covered |= if real { 1 } else { 2 };
 			if real && month == 2 && day == 29 {
 				covered |= 4;
 			}
-			// A zone that skips midnight would start the day at 01:00, so
-			// midnight is whatever local_midnight_us says it is.
+			// A zone that skips midnight would start the day at 01:00, so midnight is whatever local_midnight_us says it is.
 			if let Some(t) = got {
 				assert_eq!(local_midnight_us(t), t, "{text}");
 				assert_eq!(fmt_local(t)[..10], day_text(&text)[..10], "{text}");
@@ -388,10 +345,7 @@ mod tests {
 			let text = b64u_encode(&data);
 			assert_eq!(b64u_decode(text.as_bytes()).as_ref(), Some(&data));
 			assert_eq!(unhex(hex(&data).as_bytes()).as_ref(), Some(&data));
-			assert_eq!(
-				unhex(hex(&data).to_uppercase().as_bytes()).as_ref(),
-				Some(&data)
-			);
+			assert_eq!(unhex(hex(&data).to_uppercase().as_bytes()).as_ref(), Some(&data));
 			// One text per value, so what decodes encodes back the same.
 			let bad = mutate(r, text.as_bytes());
 			if let Some(v) = b64u_decode(&bad) {
@@ -410,11 +364,7 @@ mod tests {
 			// Only NUL and white space, and only off the end.
 			let t = trim_value(&bad);
 			assert!(bad.starts_with(t));
-			assert!(
-				bad[t.len()..]
-					.iter()
-					.all(|&c| c == 0 || c.is_ascii_whitespace())
-			);
+			assert!(bad[t.len()..].iter().all(|&c| c == 0 || c.is_ascii_whitespace()));
 			assert!(t.last().is_none_or(|&c| c != 0 && !c.is_ascii_whitespace()));
 			covered
 		})

@@ -29,14 +29,12 @@ proj="tukfs-hash"
 ## What the integration test calls besides coreutils.
 needs=(python3 sqlite3 getfattr setfattr b2sum)
 temp="$(realpath -e -- "${HOST_TEMP:-${TMPDIR:-/tmp}}" 2>/dev/null)" || { echo "box-side: no temp root" >&2; exit 2; }
-## The scan refuses a filesystem in memory, as on Debian's tmpfs /tmp, so
-## then the on-disk one.
+## The scan refuses a filesystem in memory, as on Debian's tmpfs /tmp, so then the on-disk one.
 case "$(stat -f -c %T -- "${temp}" 2>/dev/null)" in
 	tmpfs|ramfs) if [[ -d /var/tmp && -w /var/tmp ]]; then temp="$(realpath -e -- /var/tmp)"; fi ;;
 esac
 base="${temp}/${proj}"
-## What make leaves in each folder it makes. Without it a folder isn't ours,
-## such as a cicd run's, a kept integration test's, or one made by hand.
+## What make leaves in each folder it makes. Without it a folder isn't ours, such as a cicd run's, a kept integration test's, or one made by hand.
 mark=".box-run"
 
 ## BASE/<stamp>_<NNN>, as fMake names them.
@@ -44,8 +42,7 @@ fRunDir(){ [[ "${base}" == /?* && "${1%/*}" == "${base}" && "${1##*/}" =~ ^[0-9]
 ## A folder, ours, that fMake marked.
 fMarked(){ [[ -d "${1}" && ! -L "${1}" && -O "${1}" && -f "${1}/${mark}" && ! -L "${1}/${mark}" ]]; }
 
-## Only a run folder of this script's, right under base, with no links, ours,
-## and with the mark.
+## Only a run folder of this script's, right under base, with no links, ours, and with the mark.
 fSafeRm(){
 	local p="${1:-}" real=''
 	if [[ "${#}" -ne 1 || -z "${p}" || "${p}" == *..* || "${p}" == *//* || "${p}" == *$'\n'* ]]; then
@@ -61,8 +58,7 @@ fSafeRm(){
 	if ! fMarked "${p}"; then
 		printf 'safe-rm: refused, not one make made: %s\n' "${p}" >&2; return 1
 	fi
-	## The mark goes last, so a removal that fails partway leaves a folder the
-	## sweep still knows (2026110210514819).
+	## The mark goes last, so a removal that fails partway leaves a folder the sweep still knows (2026110210514819).
 	find "${p}" -mindepth 1 -maxdepth 1 ! -name "${mark}" -exec rm -rf --one-file-system -- {} + &&
 		rm -f -- "${p}/${mark}" && rmdir -- "${p}"
 }
@@ -72,8 +68,7 @@ fMake(){
 	for t in "${needs[@]}"; do command -v "${t}" > /dev/null 2>&1 || missing+=" ${t}"; done
 	if [[ -n "${missing}" ]]; then echo "missing=${missing# }"; return 0; fi
 	mkdir -p -- "${base}" || return 2
-	## Made by make, older than 2 days, and nothing left running from it. Not
-	## at once, since make's PID in run.pid is gone before test starts.
+	## Made by make, older than 2 days, and nothing left running from it. Not at once, since make's PID in run.pid is gone before test starts.
 	for d in "${base}"/*_[0-9][0-9][0-9]; do
 		fMarked "${d}" || continue
 		[[ -n "$(find "${d}" -maxdepth 0 -mmin +2880 2> /dev/null)" ]] || continue
@@ -88,7 +83,7 @@ fMake(){
 		n=$((n + 1)); ((n < 1000)) || { echo "box-side: no free run folder in ${base}" >&2; return 2; }
 		printf -v d '%s/%s_%03d' "${base}" "${stamp}" "${n}"
 	done
-	if ! : > "${d}/${mark}"; then rmdir -- "${d}" 2> /dev/null; echo "box-side: could not mark ${d}" >&2; return 2; fi
+	if ! : > "${d}/${mark}"; then rmdir -- "${d}" 2> /dev/null; echo "box-side: couldn't mark ${d}" >&2; return 2; fi
 	echo "$$" > "${d}/run.pid"
 	echo "dir=${d}"
 }

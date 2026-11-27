@@ -59,9 +59,9 @@ fCpuCap(){   ## fCpuCap [heavy]
 }
 
 fCpuLow(){
-	renice -n 19 -p "$$" >/dev/null 2>&1 || echo "warning: could not lower the CPU priority" >&2
+	renice -n 19 -p "$$" >/dev/null 2>&1 || echo "warning: couldn't lower the CPU priority" >&2
 	if command -v ionice >/dev/null 2>&1; then
-		ionice -c 3 -p "$$" >/dev/null 2>&1 || echo "warning: could not lower the I/O priority" >&2
+		ionice -c 3 -p "$$" >/dev/null 2>&1 || echo "warning: couldn't lower the I/O priority" >&2
 	fi
 	return 0
 }

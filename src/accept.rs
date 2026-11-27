@@ -1,9 +1,7 @@
 // Copyright © 2026 t00mietum (CryptogID: ปʬϝღถɔ4რఠΔթะ9ƾǝu)
 // Licensed under GPL-2.0-only. No warranty.
 
-// Takes what the named files read as now as good. A mismatch keeps the old
-// checksums, so without this a file changed on purpose, with its time put
-// back, is reported on every run.
+// Takes the named files' current contents as good. A mismatch leaves the old checksums in place, so without this a file changed on purpose, with its time put back, is reported on every run.
 
 use crate::db::{self, Hashed, Kind, Msg, RunStatus};
 use crate::mounts::Mount;
@@ -33,11 +31,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 	let conn = held.open()?;
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	// Its own status, so `scan --resume` never takes it for a stopped scan.
-	conn.execute(
-		"INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?1, ?2, ?3, ?4)",
-		params![now_us(), RunStatus::Accept, scan::host(), args],
-	)
-	.map_err(e)?;
+	conn.execute("INSERT INTO runs (started_us, cutoff_us, status, host, args) VALUES (?1, ?1, ?2, ?3, ?4)", params![now_us(), RunStatus::Accept, scan::host(), args]).map_err(e)?;
 	let run_id = conn.last_insert_rowid();
 	let mut buf = vec![0u8; 1 << 20];
 	let mut taken = 0;
@@ -47,15 +41,7 @@ pub fn run(db_arg: &Path, paths: &[PathBuf], args: &str) -> Result<i32, String> 
 			Err(msg) => err!("{}: {msg}", show_path(p)),
 		}
 	}
-	conn.execute(
-		"UPDATE runs SET finished_us = ?1, summary = ?2 WHERE id = ?3",
-		params![
-			now_us(),
-			format!("accepted {taken} of {}", paths.len()),
-			run_id
-		],
-	)
-	.map_err(e)?;
+	conn.execute("UPDATE runs SET finished_us = ?1, summary = ?2 WHERE id = ?3", params![now_us(), format!("accepted {taken} of {}", paths.len()), run_id]).map_err(e)?;
 	drop(held);
 	out!("run {run_id}: accepted {taken} of {}", paths.len());
 	Ok(i32::from(taken != paths.len()))
@@ -74,13 +60,7 @@ fn digest_text(d: Option<&[u8]>) -> String {
 }
 
 // The file is in the database by now, so only the attributes are left undone.
-fn xattr_failed(
-	conn: &mut Connection,
-	run_id: i64,
-	path: &[u8],
-	x: &std::io::Error,
-	what: &str,
-) -> Result<(), String> {
+fn xattr_failed(conn: &mut Connection, run_id: i64, path: &[u8], x: &std::io::Error, what: &str) -> Result<(), String> {
 	let e = |e: rusqlite::Error| format!("database: {e}");
 	let tx = conn.transaction().map_err(e)?;
 	db::apply(
@@ -95,19 +75,11 @@ fn xattr_failed(
 	)
 	.map_err(e)?;
 	tx.commit().map_err(e)?;
-	Err(format!(
-		"taken in the database, but its attributes {what}: {x}"
-	))
+	Err(format!("taken in the database, but its attributes {what}: {x}"))
 }
 
 #[allow(clippy::too_many_lines, reason = "split by 2026102308220558")]
-fn one(
-	conn: &mut Connection,
-	run_id: i64,
-	given: &Path,
-	mounts: &[Mount],
-	buf: &mut [u8],
-) -> Result<(), String> {
+fn one(conn: &mut Connection, run_id: i64, given: &Path, mounts: &[Mount], buf: &mut [u8]) -> Result<(), String> {
 	let path = canonical_name(given)?;
 	let hands_off = crate::mounts::hands_off_at(mounts, &path);
 	let e = |e: rusqlite::Error| format!("database: {e}");
@@ -122,25 +94,15 @@ fn one(
 	}
 	let fd = file.as_raw_fd();
 	let onfile = OnFile::read(fd);
-	let rmlint = onfile
-		.as_ref()
-		.ok()
-		.and_then(|of| of.b2b_current(scan::mtime_s(&before)));
+	let rmlint = onfile.as_ref().ok().and_then(|of| of.b2b_current(scan::mtime_s(&before)));
 
-	// Read twice, so a fault in memory during this read isn't what gets
-	// taken as good.
+	// Read twice, so a fault in memory during this read isn't what gets taken as good.
 	let (stop, counted) = (AtomicBool::new(false), AtomicU64::new(0));
-	let read = |buf: &mut [u8]| -> Result<Sums, String> {
-		read_sums(&file, &before, rmlint.is_some(), buf, &stop, &counted).map_err(fail_text)
-	};
+	let read = |buf: &mut [u8]| -> Result<Sums, String> { read_sums(&file, &before, rmlint.is_some(), buf, &stop, &counted).map_err(fail_text) };
 	let sums = read(buf)?;
 	let again = read(buf)?;
 	if again != sums {
-		return Err(format!(
-			"read as {}, then as {}. Nothing taken; check the RAM",
-			b64u_encode(&sums.b3),
-			b64u_encode(&again.b3)
-		));
+		return Err(format!("read as {}, then as {}. Nothing was taken; check the RAM", b64u_encode(&sums.b3), b64u_encode(&again.b3)));
 	}
 
 	let pbytes = path.as_os_str().as_bytes();
@@ -152,13 +114,9 @@ fn one(
 		"now {}; database had {}, file had {}",
 		b64u_encode(&sums.b3),
 		digest_text(prior.as_ref().map(|p| &p.b3[..])),
-		onfile.as_ref().map_or_else(
-			|_| "an unreadable set".into(),
-			|of| digest_text(of.b3.as_ref().map(|d| &d[..]))
-		),
+		onfile.as_ref().map_or_else(|_| "an unreadable set".into(), |of| digest_text(of.b3.as_ref().map(|d| &d[..]))),
 	);
-	let drop_rmlint =
-		hands_off.is_none() && matches!((rmlint, sums.b2b), (Some(old), Some(new)) if old != new);
+	let drop_rmlint = hands_off.is_none() && matches!((rmlint, sums.b2b), (Some(old), Some(new)) if old != new);
 	if drop_rmlint {
 		detail.push_str("; rmlint's blake2b removed");
 	}
@@ -184,34 +142,17 @@ fn one(
 		})),
 	)
 	.map_err(e)?;
-	db::apply(
-		&tx,
-		run_id,
-		now,
-		Msg::Event {
-			kind: Kind::Accepted,
-			path: pbytes.to_vec(),
-			detail,
-		},
-	)
-	.map_err(e)?;
+	db::apply(&tx, run_id, now, Msg::Event { kind: Kind::Accepted, path: pbytes.to_vec(), detail }).map_err(e)?;
 	tx.commit().map_err(e)?;
 
 	// A set that can't be read may be there, so it's left alone.
 	let onfile = match onfile {
 		Ok(of) => of,
 		Err(x) => {
-			return xattr_failed(
-				conn,
-				run_id,
-				pbytes,
-				&x,
-				"couldn't be read, so they were left alone",
-			);
+			return xattr_failed(conn, run_id, pbytes, &x, "couldn't be read, so they were left alone");
 		}
 	};
-	// Only a set that's already there is replaced. Where a scan left none,
-	// such as in a git work tree, accept doesn't add one.
+	// Only a set that's already there is replaced. Where a scan left none, such as in a git work tree, accept doesn't add one.
 	let mut written = Ok(());
 	if onfile.b3.is_some() && hands_off.is_none() {
 		let id = (before.dev(), before.ino());
@@ -227,15 +168,10 @@ fn one(
 	out!("accepted\t{}\t{}", show_path(&path), b64u_encode(&sums.b3));
 	// The scan's row stays as it was, and goes on being reported.
 	if prior.is_none() {
-		out!(
-			"\tno scan has a record under this name; one may have it under another, such as through a bind mount"
-		);
+		out!("\tno scan has a record under this name; there may be one under another name, such as through a bind mount");
 	}
 	if before.nlink() > 1 {
-		out!(
-			"\t{} other name(s) for this file keep their own records; accept those too",
-			before.nlink() - 1
-		);
+		out!("\t{} other name(s) for this file keep their own records; accept those too", before.nlink() - 1);
 	}
 	Ok(())
 }
