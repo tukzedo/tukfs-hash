@@ -29,6 +29,25 @@
 
 ## Issues
 
+- On a kernel before 5.6, a kept folder moved out of the root is still read through when a symlink to it is left in a folder above it.
+	- ID: 2026112710045180
+	- Type: Bug
+	- Status: Queued
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0
+	- Opened: 20261127-100451
+	- Opened by: rc.1 quick review
+	- Origin: 2026111918562704's fix.
+	- Steps to reproduce [Bug]:
+		- Without openat2, open `a/b/slow` under a root, so `a/b` is kept. Move `a` out of the root and put a symlink to it at `a`. Open `a/b/f1`.
+		- openat2 refuses it with ELOOP. The fallback reads the moved-out file.
+	- Incorrect behavior [Bug]: The kept folder's check is a stat of its path from the root, and `AT_SYMLINK_NOFOLLOW` covers only the last part, so a symlink in a middle part is followed and the inode matches.
+	- Expected behavior [Bug]: Both open paths give the same answer.
+	- Reproduced [Bug]: Yes, with a throwaway test through `both()` in `src/beneath.rs` at `804d567`.
+	- Probable fix [Bug]: Compare the kept folder's path from `/proc/self/fd/<fd>` with the root's path plus its names, which is still one call and doesn't follow anything.
+	- Note: Only files that were inside the root when the walk listed them can be read this way, plus anything put under the moved folder since. Not a release blocker.
+	- Related IDs: 2026111918562704, 2026111914041556
+
 - The xattr freshness skip trusts checksums copied from another file, or left stale, without reading the file.
 	- ID: 2026101406340902
 	- Type: Bug
