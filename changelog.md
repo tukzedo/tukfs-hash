@@ -4,6 +4,30 @@
 
 # Changelog
 
+## 1.0.0-rc.1
+
+- `install.bash` installs the newest release with one line, for the user or with `--target system`. It checks the download's sum, works with a noexec temp folder, and a cut-off download runs nothing.
+
+- A style guide and contributing.md, linked from the README.
+
+- On a kernel before 5.6, a scan keeps a folder open per root and checks it's still where its path says. A folder replaced mid-scan, or a file mounted over, is caught as it is with openat2.
+
+- A root is opened once, so a mount or symlink that appears in its path later doesn't send the scan to another filesystem.
+
+- Under sudo, the database is opened through the folder that was checked.
+
+- `--log` takes only a regular file, and refuses the database's own files. Each line is one write, so 2 scans can share a log. A full disk is warned about once, a failed plan still reaches the log, and the log isn't scanned under another name.
+
+- On a terminal, the summary keeps every event kind, and root names that aren't plain text are escaped.
+
+- A btrfs subvolume that isn't a mount point gets its percent from its own files.
+
+- Files under 128 KiB get a plain read, which costs less there than a direct read.
+
+- snapdiff `--find-new` compares a file it can't date safely: in a snapshot made writable and read-only again, or with a birth time later than the run's start. `--zfs-diff` memory stays small when the list has many deleted files.
+
+- A release run that skips a check for a missing tool doesn't record its tree or upload. A stop during publish ends the publisher before it commits.
+
 ## 1.0.0-beta.2
 
 - A scan shows how far along it is, as `~N% of SIZE`, for whole filesystems and for folders.

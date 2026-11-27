@@ -205,7 +205,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: High
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 1
 	- Origin: `93275db`, 2026102814341405's fix, which fixed only the 3 check-only modes. It's a sibling case that fix missed. Not seen before. Confirmed.
@@ -1041,7 +1041,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261124-174510
 	- Opened by: gate run
 	- Reproduced [Bug]: Yes. A loop of 3000 lock takes and drops, beside a thread that starts processes, failed 90 times.
@@ -1056,7 +1056,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 2
 	- Origin: `36ab621`, 2026111011092305's fix (round-20261110b). That fix didn't weigh this case. Not seen before. Confirmed, on real btrfs snapshots.
@@ -1090,7 +1090,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 3
 	- Origin: `8fa5810`, 2026111019430926's fix. New ground. Confirmed, the sudo case as uid 0 in a user namespace.
@@ -1124,7 +1124,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 4
 	- Origin: `f249afd`, 2026110218175402. New ground. Confirmed with a stand-in curl.
@@ -1733,7 +1733,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Avg
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 22
 	- Origin: `f249afd`. Confirmed with a noexec tmpfs at TMPDIR in a user namespace.
@@ -2808,7 +2808,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 21
 	- Origin: `9175cd9`. It was left as it was by `4bc2de4`, which gave folder roots a percent (2026111019145393). Confirmed: A folder root ends `~100% of 2 B`.
@@ -2830,7 +2830,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261120-195413
 	- Opened by: sweep for 2026112019472699
 	- Related IDs: 2026112019472699
@@ -2858,7 +2858,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261120-194726
 	- Opened by: sweep for 2026111918562717
 	- Related IDs: 2026111918562717
@@ -2884,7 +2884,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261120-173417
 	- Opened by: sweep for 2026111918562703
 	- Related IDs: 2026111918562703
@@ -2909,7 +2909,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 5
 	- Origin: `123ba47`, 2026111914041556's fix. It's a regression from round nov19. Confirmed, with openat2 refused through seccomp.
@@ -2948,7 +2948,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 6
 	- Origin: `9120949`, the fallback. No earlier round saw it. Confirmed, with an NTFS image through ntfs-3g in a user namespace.
@@ -2986,7 +2986,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 7
 	- Origin: `9120949` and `25144d2`. Code review 20261110 saw a folder above a root swapped and filed it as Decided against. Confirmed, with an NTFS image mounted over a later root's parent while the first root was scanned.
@@ -3022,7 +3022,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 8
 	- Origin: `1565fc2`, 2026111019145405. It's the bind-mount class a third time, after 2026110720070507 and 2026111011092307. Confirmed in a user namespace.
@@ -3051,7 +3051,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 9
 	- Origin: `38fa34e`. It's a regression, since 2026111700232501's fix moved `open_log` after `plan`, which undid 2026111700232502 in the same release. Confirmed.
@@ -3080,7 +3080,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 10
 	- Origin: `1565fc2`, 2026111019145405. No earlier round saw it. Confirmed in an 80-column pty.
@@ -3108,7 +3108,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 11
 	- Origin: `f05c368`. The sweep for 2026101406340924 noted these lines and never filed them. Since `--log`, they're written to the log too. Confirmed.
@@ -3136,7 +3136,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 12
 	- Origin: `63957eb`, 2026111011092301's fix. No earlier round saw it. Plausible, from reading.
@@ -3169,7 +3169,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 13
 	- Origin: `1282504`. No earlier round saw it as a stop. Confirmed with a stand-in publisher in a scratch clone.
@@ -3201,7 +3201,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 14
 	- Origin: The container labels in `ctr-image.bash`, 2026-10-25. Plausible, from reading.
@@ -3228,7 +3228,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 15
 	- Origin: `831dbfd`, 2026111011092313. Confirmed under `/tmp`. A subvolume with 1 MB ends `~0% of 552.2 GiB`, and a folder with the same file ends `~100% of 976.6 KiB`.
@@ -3255,7 +3255,7 @@
 	- Type: Bug
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 16
 	- Origin: `1565fc2`. The split write is confirmed with strace. A mixed line wasn't seen, so that part is Plausible.
@@ -3278,7 +3278,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 17
 	- Origin: `f249afd`. Confirmed: A copy at mode 644 stays at 644, and the run exits 0.
@@ -3303,7 +3303,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 18
 	- Origin: `f249afd`. Confirmed with a stand-in `mv` that sends TERM to the script.
@@ -3328,7 +3328,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 19
 	- Origin: `f249afd`. Confirmed: `HOME=/home/u/` gives "/home/u//.local/bin isn't on PATH". With `CDPATH` the `cd` prints the path, so mktemp gets 2 lines.
@@ -3351,7 +3351,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 20
 	- Origin: `f249afd`. Plausible, from reading. It needs a sudo that keeps HOME, as older Ubuntu did.
@@ -3378,7 +3378,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261117-135849
 	- Opened by: CICD review
 	- Steps to reproduce [Bug]: Run with `--keep-temp` and wait 2 days. The next run sweeps the folder, and `docker ps -a` still lists its stopped containers. There were 20 from 5 runs of 2026-11-02 and 2026-11-07 on b23.
@@ -3397,7 +3397,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261117-002325
 	- Opened by: pre-release review
 	- Origin: `born_since_old` in `src/snapdiff.rs`, from 2026111011092305. Plausible, read only.
@@ -3425,7 +3425,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261117-001615
 	- Opened by: session start
 	- Origin: `cicd/utility/lint-report.bash`, the `errs` grep. Confirmed.
@@ -5001,7 +5001,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 23
 	- Origin: `f6f4e7a`, 2026110715441806, which measured only `M` lines. Confirmed at about 110 bytes per `-` line, 111 MB for 1M and 222 MB for 2M, against 2.5 MB for 1M `M` lines.
@@ -5031,7 +5031,7 @@
 	- Type: Enhancement
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 24
 	- Origin: `1565fc2`. Confirmed on a full 8k tmpfs, with exit 0, an empty log, and no warning.
@@ -5052,7 +5052,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 25
 	- Origin: `1565fc2`. Confirmed. `--log db.sqlite` writes text after the last page, `.lock` writes into the lock file, and `-wal` is deleted by SQLite at the end of the run, log and all.
@@ -5078,7 +5078,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 26
 	- Origin: `f249afd`. Confirmed. Of 3,869 cut points, 876 exit 0 with nothing installed, 31 leave the temp folder, and 3 leave `.tukfs-hash.new.*` in `~/.local/bin`. No cut skipped the checksum.
@@ -5099,7 +5099,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 27
 	- Origin: `project/style-guide_code.md`, 2026102808215637, closed 2026-11-19. Confirmed by reading.
@@ -5118,7 +5118,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-185627
 	- Opened by: code review 20261119, item 28
 	- Origin: `2a5f505` "comment wraps" missed them. Directive of 2026-11-19. Confirmed by reading.
@@ -5137,7 +5137,7 @@
 	- Type: Enhancement
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-140415
 	- Opened by: 2026111913564333's timing
 	- Related IDs: 2026111913564333, 2026111918562704
@@ -5173,7 +5173,7 @@
 	- Closed reason: Done
 	- Needs local test suite run?: No
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-143129
 	- Opened by: 2026111913564320's timing
 	- Related IDs: 2026102809554675
@@ -5208,7 +5208,7 @@
 	- Status: Closed
 	- Closed reason: Done
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261028-082156
 	- Opened by: style and performance review
 	- Note: Queued again 2026-11-17, since the repo is public.
@@ -5234,7 +5234,7 @@
 	- Type: Feature
 	- Status: Closed
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261102-181754
 	- Opened by: CICD review
 	- Prereq IDs: 2026110218175401
@@ -7152,7 +7152,7 @@
 	- Status: Canceled
 		- It's not worth the change. Opening each folder from its parent's fd saved about 0.4 us per folder on a tree 50 deep, inside the noise.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-135643
 	- Opened by: code fixup 20261119
 	- Note: `Walker::list_dir` goes through `beneath::Root` from the root each time. Opening relative to the parent folder's fd would skip that, but it changes how the walk tracks its folders.
@@ -7173,7 +7173,7 @@
 	- Status: Canceled
 		- It's not worth the change. Keeping the first flags saves one F_GETFL per file, about 130 to 170 ns, against about 75 us per file for the read around it.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-135643
 	- Opened by: code fixup 20261119
 	- Note: `set_direct` in `scan.rs` runs F_GETFL then F_SETFL each way. Keeping the first flags would save 2 calls per file. The read itself probably swamps it, as it did for the `posix_fadvise` calls.
@@ -7194,7 +7194,7 @@
 	- Status: Canceled
 		- It's not worth the change. A map keyed by bytes saved about 0.4 us per lookup, about 1% of a small file's CPU, inside the noise of a whole scan.
 	- Priority [Feature|Enhancement] | Severity [Bug]: Low
-	- Target version: 1.0.0-beta.3
+	- Target version: 1.0.0-rc.1
 	- Opened: 20261119-135643
 	- Opened by: code fixup 20261119
 	- Note: `Shared.mount_points` is a `BTreeMap<PathBuf, _>`, looked up for every entry in `Walker::list_dir` and `bytes_under`. A `Path` compare parses both sides into parts, several times per lookup.
