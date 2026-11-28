@@ -5014,6 +5014,19 @@
 	- Acceptance signoff: Self-closed: mechanical.
 	- Closed: 20261014-090000
 
+- Release notes get a table of download links, like the sister projects.
+	- ID: 2026112717401727
+	- Type: Enhancement
+	- Status: Closed
+	- Closed reason: Done
+	- Priority [Feature|Enhancement] | Severity [Bug]: Low
+	- Target version: 1.0.0
+	- Opened: 20261127-174017
+	- Opened by: request
+	- Notes:
+		- The notes are the changelog section, then the table, then the build line. A rerun of `release-upload.bash` on a release that's already up rewrites its notes.
+		- The changelog got a pass for the writing style rules.
+
 - Keep snapdiff `--zfs-diff` memory bounded when the list has many deleted files.
 	- ID: 2026111918562722
 	- Type: Enhancement
